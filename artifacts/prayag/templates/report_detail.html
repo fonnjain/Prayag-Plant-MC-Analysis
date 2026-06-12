@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title_suffix %} — {{ report.title }}{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="flex items-center gap-2 mb-4">
+  <a href="/reports?period={{ period }}&plant={{ plant_filter }}&segment={{ segment_filter }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+     class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:rgba(31,56,100,0.08)">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1">
+    <h2 class="text-base font-bold" style="color:var(--navy)">{{ report.title }}</h2>
+    <div class="text-xs text-gray-400">{{ period_label }}</div>
+  </div>
+</div>
+
+<!-- Export PDF button -->
+<a href="/export-pdf/{{ report.id }}?period={{ period }}&plant={{ plant_filter }}&segment={{ segment_filter }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+   class="flex items-center gap-2 justify-center w-full py-2.5 rounded-xl text-sm font-semibold text-white mb-4"
+   style="background:var(--terra)">
+  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+  </svg>
+  Export PDF
+</a>
+
+<!-- Validation status -->
+{% if sub_validation %}
+{% if sub_validation.reconciled %}
+<div class="flex items-center gap-2 rounded-xl p-2.5 bg-green-50 border border-green-200 mb-3">
+  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+  </svg>
+  <span class="text-green-800 text-xs font-medium">Data reconciled ✓ — {{ sub_validation.flag_count }} flag(s)</span>
+</div>
+{% else %}
+<div class="flex items-center gap-2 rounded-xl p-2.5 bg-red-50 border border-red-200 mb-3">
+  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+  <span class="text-red-800 text-xs font-medium">⚠ Reconciliation issue — {{ sub_validation.flag_count }} flag(s)</span>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Narrative (Claude) -->
+{% if narrative %}
+<div class="kpi-card p-4 mb-4 border-l-4" style="border-color:var(--terra)">
+  <div class="flex items-center gap-1.5 mb-2">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#C55A11" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+    </svg>
+    <span class="text-xs font-semibold" style="color:var(--terra)">Management Commentary</span>
+    <span class="text-xs text-gray-400 ml-auto">AI prose · computed numbers</span>
+  </div>
+  <p class="text-sm text-gray-700 leading-relaxed">{{ narrative }}</p>
+</div>
+{% endif %}
+
+<!-- Sub-period KPIs -->
+{% set o = sub_overall %}
+<div class="grid grid-cols-3 gap-2 mb-4">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">OEE</div>
+    <div class="text-lg font-bold {% if o.oee_rating=='green' %}text-green-600{% elif o.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.oee }}%</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Output</div>
+    <div class="text-lg font-bold" style="color:var(--navy)">{{ "{:,.0f}".format(o.total_count) }}</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Reject %</div>
+    <div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Avail.</div>
+    <div class="text-base font-bold text-blue-600">{{ o.availability }}%</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Perf.</div>
+    <div class="text-base font-bold text-purple-600">{{ o.performance }}%</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Attain.</div>
+    <div class="text-base font-bold {% if o.attainment >= 90 %}text-green-600{% else %}text-amber-600{% endif %}">{{ o.attainment }}%</div>
+  </div>
+</div>
+
+<!-- Chart -->
+{% if chart_labels %}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">{{ chart_label }}</h3>
+  <div class="chart-box" style="height:{{ [chart_labels|length * 36, 180]|max }}px">
+    <canvas id="reportChart"></canvas>
+  </div>
+</div>
+{% endif %}
+
+<!-- Data Table -->
+{% if table_rows %}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Detailed Data</h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:480px">
+      <thead>
+        <tr style="background:var(--navy)">
+          {% for h in headers %}
+          <th class="text-left text-white px-3 py-2 font-semibold first:rounded-l-lg last:rounded-r-lg whitespace-nowrap">{{ h }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in table_rows %}
+        <tr class="{% if loop.index is even %}bg-gray-50{% else %}bg-white{% endif %} border-b border-gray-100">
+          {% for cell in row %}
+          <td class="px-3 py-2 text-gray-700 whitespace-nowrap">{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="kpi-card p-8 text-center mb-4">
+  <div class="text-gray-400 text-sm">No data for this period / filter combination</div>
+</div>
+{% endif %}
+
+<!-- Validation warnings detail -->
+{% if sub_validation and sub_validation.warnings %}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-2 text-amber-700">Validation Flags</h3>
+  <div class="space-y-1">
+    {% for w in sub_validation.warnings %}
+    <div class="text-xs text-amber-600 flex gap-1.5">
+      <span class="mt-0.5 flex-shrink-0">⚠</span>
+      <span>{{ w }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const chartLabels = {{ chart_labels|safe }};
+const chartValues = {{ chart_values|safe }};
+const chartLabel = {{ chart_label|tojson }};
+
+if (chartLabels.length) {
+  const ctx = document.getElementById('reportChart').getContext('2d');
+  const isHorizontal = chartLabels.length > 6;
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: chartLabels,
+      datasets: [{
+        label: chartLabel,
+        data: chartValues,
+        backgroundColor: '#1F3864',
+        borderRadius: 5,
+      }]
+    },
+    options: {
+      indexAxis: isHorizontal ? 'y' : 'x',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { ticks: { font:{size:9} }, grid: isHorizontal ? {color:'#f3f4f6'} : {display:false} },
+        y: { ticks: { font:{size:9} }, grid: isHorizontal ? {display:false} : {color:'#f3f4f6'} }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

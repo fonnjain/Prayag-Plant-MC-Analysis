@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Machine-wise{% endblock %}
+
+{% block content %}
+
+<!-- Filter bar -->
+<div class="kpi-card p-3 mb-4">
+  <form method="GET" class="flex gap-2 flex-wrap">
+    <input type="hidden" name="period" value="{{ period }}"/>
+    {% if period == 'custom' %}
+    <input type="hidden" name="from_date" value="{{ request.args.get('from_date','') }}"/>
+    <input type="hidden" name="to_date" value="{{ request.args.get('to_date','') }}"/>
+    {% endif %}
+    <select name="plant" class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white">
+      <option value="">All Plants</option>
+      {% for p in plants %}
+      <option value="{{ p }}" {% if plant_filter==p %}selected{% endif %}>{{ plant_names.get(p,p) }} ({{ p }})</option>
+      {% endfor %}
+    </select>
+    <select name="segment" class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white">
+      <option value="">All Segments</option>
+      {% for s in segments %}
+      <option value="{{ s }}" {% if segment_filter==s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="text-xs font-semibold text-white px-3 py-1.5 rounded-lg" style="background:var(--terra)">Filter</button>
+  </form>
+</div>
+
+{% if machine_items %}
+<!-- Rankings chart -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">OEE Ranking (Best → Worst)</h3>
+  <div class="chart-box" style="height: {{ [machine_items|length * 36, 200]|max }}px">
+    <canvas id="rankChart"></canvas>
+  </div>
+</div>
+
+<!-- Machine list -->
+<div class="space-y-2 mb-4">
+  {% for item in machine_items %}
+  {% set m = item.metrics %}
+  {% set rank = loop.index %}
+  <div class="kpi-card p-4">
+    <div class="flex items-start gap-3">
+      <!-- Rank badge -->
+      <div class="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold text-white
+        {% if rank == 1 %}bg-yellow-400{% elif rank == 2 %}bg-gray-300{% elif rank == 3 %}bg-amber-600{% else %}bg-gray-200 text-gray-600{% endif %}">
+        {{ rank }}
+      </div>
+
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <div class="font-semibold text-gray-800">{{ item.machine }}</div>
+            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units · {{ "{:,.0f}".format(m.downtime_min) }} min DT</div>
+          </div>
+          <span class="ml-2 text-base font-bold px-2 py-0.5 rounded-full flex-shrink-0
+            {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+            {{ m.oee }}%
+          </span>
+        </div>
+
+        <!-- A P Q Q row -->
+        <div class="grid grid-cols-4 gap-1 text-center">
+          {% for lbl, val, color in [('A', m.availability, '#22c55e'), ('P', m.performance, '#3b82f6'), ('Q', m.quality, '#8b5cf6'), ('Att.', m.attainment, '#1F3864')] %}
+          <div class="bg-gray-50 rounded-lg py-1 px-1">
+            <div class="text-xs font-bold" style="color:{{ color }}">{{ val }}%</div>
+            <div class="text-[10px] text-gray-400">{{ lbl }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="kpi-card p-8 text-center">
+  <div class="text-gray-400 text-sm">No machine data for this period / filter</div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const mLabels = {{ machine_labels|safe }};
+const mOEE = {{ machine_oee|safe }};
+
+if (mLabels.length) {
+  const ctx = document.getElementById('rankChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: mLabels,
+      datasets: [{
+        data: mOEE,
+        backgroundColor: mOEE.map(v => v >= 85 ? '#22c55e' : v >= 60 ? '#f59e0b' : '#ef4444'),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ctx.raw + '%' } }
+      },
+      scales: {
+        x: {
+          min: 0, max: 100,
+          ticks: { callback: v => v+'%', font:{size:9} },
+          grid: { color:'#f3f4f6' }
+        },
+        y: { ticks: { font:{size:10} }, grid:{display:false} }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

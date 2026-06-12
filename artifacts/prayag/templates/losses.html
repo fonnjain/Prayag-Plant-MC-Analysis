@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Losses{% endblock %}
+
+{% block content %}
+
+<div class="mb-4">
+  <h2 class="text-lg font-bold" style="color:var(--navy)">Downtime Losses</h2>
+  <div class="text-xs text-gray-400 mt-0.5">{{ period_label }}</div>
+</div>
+
+<!-- Filter bar -->
+<div class="kpi-card p-3 mb-4">
+  <form method="GET" class="flex gap-2 flex-wrap">
+    <input type="hidden" name="period" value="{{ period }}"/>
+    {% if period == 'custom' %}
+    <input type="hidden" name="from_date" value="{{ request.args.get('from_date','') }}"/>
+    <input type="hidden" name="to_date" value="{{ request.args.get('to_date','') }}"/>
+    {% endif %}
+    <select name="plant" class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white">
+      <option value="">All Plants</option>
+      {% for p in plants %}
+      <option value="{{ p }}" {% if plant_filter==p %}selected{% endif %}>{{ plant_names.get(p,p) }} ({{ p }})</option>
+      {% endfor %}
+    </select>
+    <select name="machine" class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white">
+      <option value="">All Machines</option>
+      {% for mc in machines %}
+      <option value="{{ mc }}" {% if machine_filter==mc %}selected{% endif %}>{{ mc }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="text-xs font-semibold text-white px-3 py-1.5 rounded-lg" style="background:var(--terra)">Filter</button>
+  </form>
+</div>
+
+<!-- Summary -->
+<div class="grid grid-cols-2 gap-3 mb-4">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Total Downtime</div>
+    <div class="text-xl font-bold text-red-600">{{ "{:,.0f}".format(total_downtime) }}</div>
+    <div class="text-xs text-gray-400">minutes</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Loss Reasons</div>
+    <div class="text-xl font-bold" style="color:var(--navy)">{{ pareto|length }}</div>
+    <div class="text-xs text-gray-400">categories</div>
+  </div>
+</div>
+
+{% if pareto %}
+<!-- Top 3 Losses -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Top 3 Loss Causes</h3>
+  <div class="space-y-3">
+    {% for item in top3 %}
+    <div class="flex items-center gap-3">
+      <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0
+        {% if loop.index == 1 %}bg-red-500{% elif loop.index == 2 %}bg-orange-400{% else %}bg-amber-400{% endif %}">
+        {{ loop.index }}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-800 truncate">{{ item.reason or 'Unknown' }}</div>
+        <div class="progress-bar mt-1">
+          <div class="progress-fill bg-red-400" style="width:{{ item.pct }}%"></div>
+        </div>
+      </div>
+      <div class="text-right flex-shrink-0">
+        <div class="text-sm font-bold text-gray-800">{{ "{:,.0f}".format(item.minutes) }}<span class="text-xs font-normal text-gray-400"> min</span></div>
+        <div class="text-xs text-gray-400">{{ item.pct }}%</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Pareto Chart -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Pareto Analysis</h3>
+  <div class="chart-box" style="height:{{ [pareto|length * 42, 200]|max }}px">
+    <canvas id="paretoChart"></canvas>
+  </div>
+</div>
+
+<!-- Full downtime table -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">All Loss Reasons</h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:340px">
+      <thead>
+        <tr style="background:var(--navy)">
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg">Reason</th>
+          <th class="text-right text-white px-3 py-2 font-semibold">Minutes</th>
+          <th class="text-right text-white px-3 py-2 font-semibold">%</th>
+          <th class="text-right text-white px-3 py-2 font-semibold rounded-r-lg">Cumul. %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in pareto %}
+        <tr class="{% if loop.index is even %}bg-gray-50{% else %}bg-white{% endif %} border-b border-gray-100">
+          <td class="px-3 py-2 text-gray-700">{{ item.reason or 'Unknown' }}</td>
+          <td class="px-3 py-2 text-right font-medium text-gray-800">{{ "{:,.0f}".format(item.minutes) }}</td>
+          <td class="px-3 py-2 text-right text-gray-600">{{ item.pct }}%</td>
+          <td class="px-3 py-2 text-right">
+            <span class="font-semibold {% if item.cumulative_pct <= 80 %}text-red-600{% else %}text-gray-500{% endif %}">
+              {{ item.cumulative_pct }}%
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="kpi-card p-8 text-center mb-4">
+  <div class="text-4xl mb-3">✓</div>
+  <div class="text-gray-600 font-semibold text-sm">No downtime recorded</div>
+  <div class="text-gray-400 text-xs mt-1">for this period / filter</div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const pLabels = {{ pareto_labels|safe }};
+const pMins = {{ pareto_minutes|safe }};
+const pCum = {{ pareto_cum_pct|safe }};
+
+if (pLabels.length) {
+  const ctx = document.getElementById('paretoChart').getContext('2d');
+  new Chart(ctx, {
+    data: {
+      labels: pLabels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Downtime (min)',
+          data: pMins,
+          backgroundColor: '#C55A11',
+          borderRadius: 4,
+          yAxisID: 'y',
+        },
+        {
+          type: 'line',
+          label: 'Cumulative %',
+          data: pCum,
+          borderColor: '#1F3864',
+          borderWidth: 2,
+          pointRadius: 4,
+          pointBackgroundColor: '#1F3864',
+          fill: false,
+          tension: 0.1,
+          yAxisID: 'y2',
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', labels: { font: { size: 10 } } },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        y: {
+          position: 'left',
+          ticks: { font:{size:9} },
+          grid: { color:'#f3f4f6' },
+          title: { display: false }
+        },
+        y2: {
+          position: 'right',
+          min: 0, max: 100,
+          ticks: { callback: v => v+'%', font:{size:9} },
+          grid: { drawOnChartArea: false }
+        },
+        x: {
+          ticks: {
+            font:{size:9},
+            maxRotation: 30,
+            callback: function(val, i) {
+              const label = pLabels[i] || '';
+              return label.length > 14 ? label.substring(0, 14) + '…' : label;
+            }
+          },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

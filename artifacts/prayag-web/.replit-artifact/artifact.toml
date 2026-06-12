@@ -1,0 +1,21 @@
+kind = "web"
+previewPath = "/"
+title = "Prayag Production Analytics"
+version = "1.0.0"
+id = "artifacts/prayag-web"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21800
+
+[services.development]
+run = "cd /home/runner/workspace/artifacts/prayag && PORT=21800 python3 app.py"
+
+[services.env]
+PORT = "21800"
