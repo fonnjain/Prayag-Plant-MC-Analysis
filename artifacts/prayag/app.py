@@ -121,6 +121,7 @@ def get_data(args):
 
     return {
         "rows": rows,
+        "all_rows": all_rows,
         "overall": overall,
         "validation": validation,
         "from_iso": from_iso,
@@ -137,9 +138,10 @@ def get_data(args):
 
 def _common_ctx(data: dict) -> dict:
     """Build template context that every page needs."""
-    plants = sorted(set(r.plant for r in data["rows"])) or _PLANTS
-    segments = sorted(set(r.segment for r in data["rows"]))
-    machines = sorted(set(r.machine for r in data["rows"]))
+    opt_rows = data.get("all_rows", data["rows"])
+    plants = sorted(set(r.plant for r in opt_rows)) or _PLANTS
+    segments = sorted(set(r.segment for r in opt_rows))
+    machines = sorted(set(r.machine for r in opt_rows))
     return {
         **data,
         "plants": plants,
