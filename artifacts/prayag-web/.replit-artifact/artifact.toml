@@ -19,3 +19,12 @@ run = "cd /home/runner/workspace/artifacts/prayag && PORT=21800 python3 app.py"
 
 [services.env]
 PORT = "21800"
+
+[services.production.run]
+args = ["python3", "-m", "gunicorn", "--bind", "0.0.0.0:21800", "--chdir", "/home/runner/workspace/artifacts/prayag", "--workers", "2", "app:app"]
+
+[services.production.run.env]
+PORT = "21800"
+
+[services.production.health.startup]
+path = "/health"
