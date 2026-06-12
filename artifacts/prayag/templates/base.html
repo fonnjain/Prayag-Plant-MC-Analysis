@@ -27,7 +27,7 @@
     .rating-dot-amber { background-color: #f59e0b; }
     .rating-dot-red   { background-color: #ef4444; }
     /* Sticky header + footer safe areas */
-    .main-content { padding-top: 112px; padding-bottom: 80px; }
+    .main-content { padding-top: 132px; padding-bottom: 80px; }
     /* Horizontal scroll for tables */
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     /* Bottom nav active */
@@ -48,7 +48,7 @@
 <body class="min-h-screen">
 
 <!-- ===== STICKY HEADER ===== -->
-<header class="bg-navy fixed top-0 left-0 right-0 z-50 shadow-lg">
+<header id="app-header" class="bg-navy fixed top-0 left-0 right-0 z-50 shadow-lg">
   <div class="max-w-2xl mx-auto px-3 pt-3 pb-2">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
@@ -149,7 +149,7 @@
     ] %}
     {% for href, key, label, icon_path in nav_items %}
     {% set is_active = request.path == href or (href != '/' and request.path.startswith(href)) %}
-    <a href="{{ href }}?period={{ period }}&plant={{ plant_filter }}&segment={{ segment_filter }}&machine={{ machine_filter }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+    <a href="{{ href }}?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
        class="flex-1 flex flex-col items-center py-2 {% if is_active %}nav-active{% else %}text-gray-500{% endif %}">
       <svg width="22" height="22" fill="none" viewBox="0 0 24 24"
            stroke="{% if is_active %}#C55A11{% else %}#6b7280{% endif %}" stroke-width="1.8">
@@ -163,12 +163,27 @@
 </nav>
 
 <script>
+// Offset main content by the actual sticky-header height so the filter bar
+// is never clipped, regardless of how tall the header renders.
+function syncHeaderOffset() {
+  var header = document.getElementById('app-header');
+  var main = document.querySelector('.main-content');
+  if (header && main) {
+    main.style.paddingTop = (header.offsetHeight + 12) + 'px';
+  }
+}
+
 function handlePeriodChange(sel) {
   document.getElementById('custom-dates').classList.toggle('hidden', sel.value !== 'custom');
+  syncHeaderOffset();
 }
 
 // Pass current query params to filter form action based on current page
 document.getElementById('filter-form').action = window.location.pathname;
+
+syncHeaderOffset();
+window.addEventListener('resize', syncHeaderOffset);
+window.addEventListener('orientationchange', syncHeaderOffset);
 </script>
 {% block scripts %}{% endblock %}
 </body>
