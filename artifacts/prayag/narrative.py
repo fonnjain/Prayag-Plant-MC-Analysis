@@ -59,7 +59,7 @@ Be specific and factual — reference the actual numbers provided.
 Do not use markdown formatting. Write in a professional, concise tone suitable for a factory manager."""
 
         message = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -91,7 +91,7 @@ def classify_downtime_reason(free_text: str) -> Optional[str]:
         client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         codes_list = ", ".join(f'"{c}"' for c in standard_codes)
         message = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5",
             max_tokens=30,
             messages=[{
                 "role": "user",
