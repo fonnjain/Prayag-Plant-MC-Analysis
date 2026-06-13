@@ -38,6 +38,40 @@
 <div class="rounded-xl p-3 mb-4 bg-blue-50 border border-blue-200 text-xs text-blue-800">{{ signoff_msg }}</div>
 {% endif %}
 
+<!-- Claude Sanity Check — mandatory step before sign-off -->
+{% if st != 'pass' and has_claude %}
+<div class="kpi-card p-4 mb-4 border-l-4" style="border-color:var(--navy)" id="claude-check-card">
+  <div class="flex items-center gap-2 mb-2">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+    <span class="text-sm font-bold text-navy" style="color:var(--navy)">Claude Sanity Check</span>
+    <span class="text-xs text-gray-400 ml-auto">Required before sign-off</span>
+  </div>
+  <p class="text-xs text-gray-600 mb-3">
+    Claude reviews the already-computed tier results and metrics, explains each issue in plain English, and tells you exactly what to fix in the source sheet before you sign off. No figure is recalculated — it works from the audit output only.
+  </p>
+
+  {% if claude_reviewed %}
+  <div id="claude-review-result" class="bg-gray-50 rounded-lg p-3 mb-3 text-sm text-gray-700 leading-relaxed whitespace-pre-line">{{ claude_review_text }}</div>
+  <button id="claude-check-btn" onclick="runClaudeCheck()"
+    class="text-xs font-semibold border rounded-lg px-3 py-1.5"
+    style="color:var(--navy);border-color:var(--navy)">
+    Re-check with Claude
+  </button>
+  {% else %}
+  <div id="claude-review-result" class="hidden bg-gray-50 rounded-lg p-3 mb-3 text-sm text-gray-700 leading-relaxed whitespace-pre-line"></div>
+  <button id="claude-check-btn" onclick="runClaudeCheck()"
+    class="text-sm font-semibold text-white rounded-lg px-4 py-2.5 w-full"
+    style="background:var(--navy)">
+    Send to Claude for sanity check
+  </button>
+  {% endif %}
+</div>
+{% elif st != 'pass' and not has_claude %}
+<div class="rounded-xl p-3 mb-4 bg-amber-50 border border-amber-200 text-xs text-amber-800">
+  Claude is not configured (ANTHROPIC_API_KEY missing) — sanity check unavailable. You can still sign off manually.
+</div>
+{% endif %}
+
 <!-- Manager sign-off: release withheld figures + review trail -->
 {% set released = conf.released %}
 {% set period_qs = period ~ ('&from_date=' ~ request.args.get('from_date','') ~ '&to_date=' ~ request.args.get('to_date','') if period=='custom' else '') %}
@@ -86,7 +120,15 @@
       <input type="text" name="role" placeholder="Role (optional)" class="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-terra">
     </div>
     <textarea name="note" rows="2" placeholder="Note (optional) — why is this safe to publish?" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-terra"></textarea>
-    <button type="submit" class="w-full text-sm font-semibold text-white rounded-lg px-3 py-2.5" style="background:var(--terra)">
+    {% if has_claude and not claude_reviewed %}
+    <p id="signoff-note" class="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+      Run the Claude sanity check above before signing off.
+    </p>
+    {% endif %}
+    <button type="submit" id="signoff-btn"
+      class="w-full text-sm font-semibold text-white rounded-lg px-3 py-2.5 transition-opacity"
+      style="background:var(--terra)"
+      {% if has_claude and not claude_reviewed %}disabled class="opacity-40 cursor-not-allowed"{% endif %}>
       {% if st=='error' %}Sign off &amp; publish figures{% else %}Acknowledge &amp; record{% endif %}
     </button>
   </form>
@@ -196,5 +238,67 @@
   before it is published. Detection is fully deterministic; AI is used only to match machine
   codes and write this summary.
 </div>
+
+<script>
+(function () {
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  window.runClaudeCheck = async function () {
+    var btn    = document.getElementById('claude-check-btn');
+    var result = document.getElementById('claude-review-result');
+    var sbtn   = document.getElementById('signoff-btn');
+    var snote  = document.getElementById('signoff-note');
+
+    if (!btn || !result) return;
+
+    btn.disabled   = true;
+    btn.textContent = 'Claude is analysing the data…';
+    result.classList.remove('hidden');
+    result.innerHTML =
+      '<span class="text-xs text-gray-500 animate-pulse">Reviewing all tier issues and metrics — this takes a few seconds…</span>';
+
+    var fd = new FormData();
+    fd.append('period', '{{ period | e }}');
+    {% if period == 'custom' %}
+    fd.append('from_date', '{{ request.args.get("from_date","") | e }}');
+    fd.append('to_date',   '{{ request.args.get("to_date","")   | e }}');
+    {% endif %}
+
+    try {
+      var resp = await fetch('/confirmation/claude_review', { method: 'POST', body: fd });
+      var data = await resp.json();
+
+      if (data.ok) {
+        result.textContent = data.review;
+        if (sbtn) {
+          sbtn.disabled = false;
+          sbtn.style.opacity = '1';
+          sbtn.classList.remove('opacity-40', 'cursor-not-allowed');
+        }
+        if (snote) snote.remove();
+        btn.textContent = 'Re-check with Claude';
+        btn.disabled    = false;
+        btn.style.cssText =
+          'background:none;color:var(--navy);border:1px solid var(--navy);' +
+          'padding:4px 12px;border-radius:8px;font-size:12px;font-weight:600;';
+      } else {
+        result.innerHTML =
+          '<span class="text-xs text-red-600">' + escHtml(data.error || 'Review failed — please try again.') + '</span>';
+        btn.textContent = 'Retry sanity check';
+        btn.disabled    = false;
+      }
+    } catch (e) {
+      result.innerHTML =
+        '<span class="text-xs text-red-600">Network error — please try again.</span>';
+      btn.textContent = 'Retry sanity check';
+      btn.disabled    = false;
+    }
+  };
+})();
+</script>
 
 {% endblock %}

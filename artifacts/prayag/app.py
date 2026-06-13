@@ -20,7 +20,7 @@ from metrics import (
 )
 from validate import full_validate
 from confirm import full_confirm, confirmation_fingerprint, TIER_LABELS
-from narrative import get_narrative, match_codes, summarize_confirmation
+from narrative import get_narrative, match_codes, summarize_confirmation, claude_sanity_check
 import store
 from pdf_export import generate_report_pdf
 from glossary import (
@@ -30,6 +30,11 @@ from glossary import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
+
+# In-process store: fingerprint → Claude review text.
+# Keyed by data fingerprint so a changed sheet invalidates the prior review.
+# Survives across requests; resets on server restart (cheap — user just re-runs).
+_claude_reviews: dict[str, str] = {}
 
 
 @app.errorhandler(SheetReadError)
@@ -513,6 +518,8 @@ def confirmation_view():
             conf["status"], conf["score_label"], issues_brief
         )
 
+    fingerprint = conf.get("fingerprint", "")
+    claude_review_text = _claude_reviews.get(fingerprint)
     ctx.update({
         "conf": conf,
         "conf_summary": summary,
@@ -520,6 +527,8 @@ def confirmation_view():
         "signoff_history": store.history(conf.get("period_key")),
         "signoff_store_ok": store.AVAILABLE,
         "signoff_msg": request.args.get("signoff_msg", ""),
+        "claude_reviewed": claude_review_text is not None,
+        "claude_review_text": claude_review_text or "",
     })
     return render_template("confirmation.html", **ctx)
 
@@ -548,6 +557,56 @@ def confirmation_revoke():
     return _do_signoff("revoke", request.form)
 
 
+@app.route("/confirmation/claude_review", methods=["POST"])
+def confirmation_claude_review():
+    """Run Claude sanity check on the current confirmation state. Returns JSON.
+
+    Passes ONLY the already-computed tier issues and pre-computed metrics to
+    Claude. No raw sheet data is ever sent. Result is keyed to the data
+    fingerprint and cached in _claude_reviews for the lifetime of this process.
+    """
+    if not bool(os.environ.get("ANTHROPIC_API_KEY", "")):
+        return jsonify({"ok": False, "error": "Claude is not configured."}), 400
+
+    try:
+        data = get_data(request.form)
+    except SheetReadError as e:
+        return jsonify({"ok": False, "error": f"Could not read data: {e}"}), 500
+
+    conf = data["confirmation"]
+    fingerprint = conf["fingerprint"]
+
+    if fingerprint in _claude_reviews:
+        return jsonify({"ok": True, "fingerprint": fingerprint,
+                        "review": _claude_reviews[fingerprint]})
+
+    od = data["overall"].to_dict()
+    if od.get("oee_available"):
+        metrics_summary = {
+            "OEE": f"{od['oee']}%",
+            "Availability": f"{od['availability']}%",
+            "Performance": f"{od['performance']}%",
+            "Quality": f"{od['quality']}%",
+            "Total Output (kg/pcs)": od["total_count"],
+            "Rejection %": f"{od['rejection_pct']}%",
+        }
+    else:
+        metrics_summary = {
+            "Output Efficiency": f"{od['output_efficiency']}%",
+            "Utilisation": f"{od['utilisation']}%",
+            "Total Output (kg/pcs)": od["total_count"],
+            "Rejection %": f"{od['rejection_pct']}%",
+        }
+
+    review = claude_sanity_check(conf, metrics_summary, data["period_label"])
+    if review is None:
+        return jsonify({"ok": False,
+                        "error": "Claude could not generate a review — check API key or try again."}), 500
+
+    _claude_reviews[fingerprint] = review
+    return jsonify({"ok": True, "fingerprint": fingerprint, "review": review})
+
+
 def _do_signoff(action: str, form):
     """Record a manager sign-off (or revoke) against the CURRENT data state."""
     if not store.AVAILABLE:
@@ -555,6 +614,17 @@ def _do_signoff(action: str, form):
     approver = (form.get("approver", "") or "").strip()
     if action == "approve" and not approver:
         return _redirect_to_confirmation(form, "Please enter your name to sign off.")
+
+    # Claude sanity check is mandatory before approving (when Claude is available).
+    if action == "approve" and bool(os.environ.get("ANTHROPIC_API_KEY", "")):
+        # We need the fingerprint to check — peek at the current data state.
+        _chk_data = get_data(form)
+        _chk_fp = _chk_data["confirmation"]["fingerprint"]
+        if _chk_fp not in _claude_reviews:
+            return _redirect_to_confirmation(
+                form,
+                "Please complete the Claude sanity check before signing off."
+            )
 
     # Recompute against live data so we sign off exactly what is shown now.
     data = get_data(form)

@@ -169,6 +169,94 @@ Do not use markdown. Be concise and factual."""
         return None
 
 
+def claude_sanity_check(
+    confirmation: dict,
+    computed_metrics: dict,
+    period_label: str,
+) -> Optional[str]:
+    """Deep sanity check of an ALREADY-COMPUTED confirmation result.
+
+    Claude receives the tier issues (detected by deterministic Python), the
+    completeness scores, and pre-computed metrics. It explains each issue in
+    plain English, suggests corrections, and gives a readiness verdict.
+
+    Claude is NOT passed raw sheet data and does NOT compute any figure.
+    Result is cached by fingerprint — a re-check of unchanged data is instant.
+    """
+    if not _enabled():
+        return None
+
+    fingerprint = confirmation.get("fingerprint", "")
+    ck = "sanity:" + fingerprint
+    if ck in _cache:
+        return _cache[ck]
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+        issues = confirmation.get("issues", [])
+        if issues:
+            lines = []
+            for i in issues:
+                loc_parts = []
+                if i.get("plant"):   loc_parts.append(i["plant"])
+                if i.get("machine"): loc_parts.append(i["machine"])
+                if i.get("month"):   loc_parts.append(i["month"])
+                loc = " > ".join(loc_parts) if loc_parts else "Overall"
+                lines.append(
+                    f"  [{i.get('tier_label','?')} / {i.get('severity','?')}] "
+                    f"{loc}: {i.get('message','')}"
+                )
+            issues_text = "\n".join(lines)
+        else:
+            issues_text = "  (none — all four tiers passed)"
+
+        score = confirmation.get("score", {})
+        def _pair(key): p = score.get(key, [0, 0]); return f"{p[0]}/{p[1]}"
+        completeness = (
+            f"Files {_pair('files')}, Machines {_pair('machines')}, "
+            f"Months {_pair('months')}"
+        )
+
+        metrics_text = "\n".join(f"  {k}: {v}" for k, v in computed_metrics.items())
+
+        prompt = f"""You are reviewing production data quality for a plastics manufacturing plant before a manager signs off on the figures.
+
+Period: {period_label}
+Overall status: {confirmation.get('status','?')} — {confirmation.get('score_label','')}
+Completeness: {completeness}
+
+Pre-computed performance metrics (do not recalculate):
+{metrics_text}
+
+Issues already detected by deterministic four-tier validation (do not re-detect or add new ones):
+{issues_text}
+
+Write a structured review with exactly these four sections, separated by blank lines:
+
+DATA HEALTH: One sentence summarising the overall state.
+
+ISSUE ANALYSIS: For each issue listed above, explain in plain English what it likely means physically (e.g. "hours entered in minutes instead of hours", "machine was idle or under repair", "unit mismatch between kg and tonnes"). Name the specific plant, machine, and month. If multiple issues share the same root cause, group them.
+
+CORRECTIONS NEEDED: A numbered list of the specific changes to make in the source Google Sheet, with plant name, machine code, month, and what value to fix. Only list corrections for errors — warnings can be noted as advisory.
+
+READINESS VERDICT: State clearly either "Ready to sign off" (if only advisory warnings remain after corrections) or "Must fix X before sign-off" listing what X is.
+
+Rules: Do not use markdown formatting (no bold, no asterisks, no hyphens as bullets). Do not invent figures. Do not recalculate anything. Write in plain English for a factory manager. Maximum 400 words."""
+
+        message = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = message.content[0].text.strip()
+        _cache[ck] = text
+        return text
+    except Exception:
+        return None
+
+
 def classify_downtime_reason(free_text: str) -> Optional[str]:
     """
     Map a free-text downtime note to a standard reason code using Claude.
