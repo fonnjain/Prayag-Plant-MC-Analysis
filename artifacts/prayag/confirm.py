@@ -826,6 +826,12 @@ def full_confirm(
         tiers[1].append(gap)
         issues.append(gap)
 
+    # Stable per-issue identity so a manager can acknowledge an individual issue
+    # and have that acknowledgement survive figure drift. ``issues`` and the
+    # per-tier lists hold the same dict objects, so this stamps both.
+    for i in issues:
+        i["key"] = issue_key(i)
+
     # A quarantined hard error is a NOTE, not a blocker (the row is already held
     # aside). Only un-quarantined errors gate sign-off. INFO never affects status.
     blocking = sum(1 for i in issues if i["severity"] == ERROR and not i.get("quarantined"))
@@ -850,6 +856,33 @@ def full_confirm(
         "reconciled": status == "pass",
         "summary": None,
     }
+
+
+def issue_key(issue: dict) -> str:
+    """Stable identity for a single issue, robust to changing magnitudes.
+
+    Built from the issue's structural location (tier, plant, machine, month,
+    sheet, file) plus its message with every number normalised out. A recurring
+    known anomaly — e.g. PIPE's by-design reconcile offset, or a line that runs
+    above its planned baseline (utilisation > 100%) — therefore keeps the SAME
+    key as its exact figures drift from period to period, so a manager's
+    acknowledgement of it is not silently lost on the next data pull. Pure and
+    network-free.
+    """
+    msg = re.sub(r"[0-9][0-9.,%]*", "#", str(issue.get("message", "")))
+    ident = "|".join(
+        str(x)
+        for x in (
+            issue.get("tier", ""),
+            issue.get("plant", ""),
+            issue.get("machine", ""),
+            issue.get("month", ""),
+            issue.get("sheet", ""),
+            issue.get("file", ""),
+            msg,
+        )
+    )
+    return hashlib.sha256(ident.encode("utf-8")).hexdigest()[:16]
 
 
 def confirmation_fingerprint(confirmation: dict) -> str:

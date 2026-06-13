@@ -35,3 +35,22 @@ The four-tier confirmation withholds the Overview headline figures when status =
 - **An empty period can't be released into real numbers.** Sign-off releases
   *withheld* figures that exist; it cannot manufacture data for a month with no
   rows (e.g. a current/future month not yet entered) — that just publishes zeros.
+
+## Per-issue acknowledgement (a separate, lighter mechanism)
+
+Alongside the all-or-nothing period sign-off there is per-issue acknowledgement:
+a manager accepts ONE flagged issue (with optional note); an acknowledged error
+drops out of the headline gate, and if every blocking error is acked the status
+downgrades error→warning so figures publish.
+
+- **Acks key on a STABLE issue identity, NOT the fingerprint.** `confirm.issue_key`
+  hashes structural location (tier/plant/machine/month/sheet/file) + the message
+  with all numbers normalised out. **Why:** known recurring anomalies (PIPE's
+  by-design reconcile offset, >100% utilisation) change magnitude every pull; a
+  fingerprint-bound ack would vanish each time and re-nag. **How to apply:** keep
+  the number-stripping in `issue_key`; acks are keyed by (period_key, issue_key)
+  in the separate `confirmation_issue_acks` table, so they intentionally survive
+  data drift — contrast with the period sign-off, which must re-gate on drift.
+- Same store conventions as sign-off: append-only, latest row per (period,issue)
+  wins (`ack`/`unack`), Postgres, safe no-op when DB absent.
+- The ack route recomputes live and refuses to ack an issue not present now.

@@ -185,3 +185,120 @@ def _shape(row: Dict) -> Dict:
     else:
         d["when_disp"] = str(ts or "")
     return d
+
+
+# ---------------------------------------------------------------------------
+# Per-issue acknowledgements (a lighter-weight review trail than full sign-off)
+# ---------------------------------------------------------------------------
+# A manager can mark a single flagged issue as "reviewed / accepted" with an
+# optional note. This downgrades that one issue out of the headline gate without
+# blanket-approving the whole period. Like the sign-off store this is append-only
+# and the most recent row per (period, issue) wins: an ``ack`` accepts the issue,
+# a later ``unack`` re-activates it. Acks are keyed to the period and a STABLE
+# issue identity (not the data fingerprint) so a recurring known anomaly stays
+# acknowledged as its exact magnitude drifts from one data pull to the next.
+_ACK_TABLE = "confirmation_issue_acks"
+_ack_initialised = False
+
+
+def _init_acks() -> None:
+    """Create the issue-acknowledgement table if it does not exist (idempotent)."""
+    global _ack_initialised
+    if _ack_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_ACK_TABLE} (
+        id           BIGSERIAL   PRIMARY KEY,
+        action       TEXT        NOT NULL,
+        period_key   TEXT        NOT NULL,
+        issue_key    TEXT        NOT NULL,
+        tier         INTEGER     NOT NULL DEFAULT 0,
+        severity     TEXT        NOT NULL DEFAULT '',
+        plant        TEXT        NOT NULL DEFAULT '',
+        machine      TEXT        NOT NULL DEFAULT '',
+        message      TEXT        NOT NULL DEFAULT '',
+        approver     TEXT        NOT NULL,
+        role         TEXT        NOT NULL DEFAULT '',
+        note         TEXT        NOT NULL DEFAULT '',
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_ACK_TABLE}_lookup
+        ON {_ACK_TABLE} (period_key, issue_key, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _ack_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def ack_record(
+    action: str,
+    *,
+    period_key: str,
+    issue_key: str,
+    tier: int = 0,
+    severity: str = "",
+    plant: str = "",
+    machine: str = "",
+    message: str = "",
+    approver: str,
+    role: str = "",
+    note: str = "",
+) -> None:
+    """Append an acknowledge / un-acknowledge event for one issue."""
+    if action not in ("ack", "unack"):
+        raise StoreError(f"Unknown action: {action!r}")
+    if not (approver or "").strip():
+        raise StoreError("An approver name is required.")
+    if not (issue_key or "").strip():
+        raise StoreError("An issue reference is required.")
+    _init_acks()
+    sql = f"""
+        INSERT INTO {_ACK_TABLE}
+            (action, period_key, issue_key, tier, severity, plant, machine,
+             message, approver, role, note)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+    params = (
+        action, period_key, issue_key, int(tier or 0), severity, plant, machine,
+        message, approver.strip(), (role or "").strip(), (note or "").strip(),
+    )
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+    except StoreError:
+        raise
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def acks_for(period_key: str) -> Dict[str, Dict]:
+    """Effective acknowledgements for a period: ``{issue_key: ack_dict}``.
+
+    The latest row per issue wins; only issues whose latest action is ``ack``
+    are returned. Degrades to an empty dict when no store is configured.
+    """
+    if not AVAILABLE:
+        return {}
+    try:
+        _init_acks()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT DISTINCT ON (issue_key) *
+                    FROM {_ACK_TABLE}
+                    WHERE period_key=%s
+                    ORDER BY issue_key, created_at DESC, id DESC""",
+                (period_key,),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[str, Dict] = {}
+    for r in rows:
+        if r.get("action") == "ack":
+            out[r["issue_key"]] = _shape(r)
+    return out

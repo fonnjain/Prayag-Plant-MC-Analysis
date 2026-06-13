@@ -282,6 +282,33 @@ def get_data(args):
     confirmation["period_key"] = sign_pk
     confirmation["fingerprint"] = fingerprint
     confirmation["signoff"] = signoff
+
+    # ---- Per-issue acknowledgements (accept individual known anomalies) ----
+    # A manager can mark a single issue as reviewed/accepted. Acks are keyed to
+    # the UNFILTERED period and a STABLE issue identity (not the fingerprint), so
+    # a recurring known anomaly (e.g. PIPE's by-design reconcile offset) stays
+    # acknowledged as its magnitude drifts. An acknowledged error no longer drives
+    # the headline "needs review" gate; if every blocking error is acknowledged
+    # the status is downgraded from error to warning so the figures publish.
+    acks = store.acks_for(sign_pk)
+    acked_n = 0
+    open_blocking = 0
+    for i in confirmation["issues"]:
+        a = acks.get(i.get("key"))
+        if a:
+            i["acknowledged"] = True
+            i["ack"] = a
+            acked_n += 1
+        else:
+            i["acknowledged"] = False
+            i["ack"] = None
+            if i["severity"] == "error" and not i.get("quarantined"):
+                open_blocking += 1
+    confirmation["counts"]["acknowledged"] = acked_n
+    confirmation["counts"]["error_open"] = open_blocking
+    if open_blocking == 0 and confirmation["status"] == "error":
+        confirmation["status"] = "warning"
+
     confirmation["released"] = bool(signoff) and confirmation["status"] == "error"
 
     # Flag requested months that hold no data yet (monthly path only).
@@ -569,6 +596,64 @@ def confirmation_approve():
 @app.route("/confirmation/revoke", methods=["POST"])
 def confirmation_revoke():
     return _do_signoff("revoke", request.form)
+
+
+@app.route("/confirmation/ack_issue", methods=["POST"])
+def confirmation_ack_issue():
+    return _do_ack("ack", request.form)
+
+
+@app.route("/confirmation/unack_issue", methods=["POST"])
+def confirmation_unack_issue():
+    return _do_ack("unack", request.form)
+
+
+def _do_ack(action: str, form):
+    """Acknowledge (or un-acknowledge) a single flagged issue for this period."""
+    if not store.AVAILABLE:
+        return _redirect_to_confirmation(form, "Review store is unavailable.")
+    approver = (form.get("approver", "") or "").strip()
+    if action == "ack" and not approver:
+        return _redirect_to_confirmation(
+            form, "Please enter your name to acknowledge an issue."
+        )
+    issue_k = (form.get("issue_key", "") or "").strip()
+    if not issue_k:
+        return _redirect_to_confirmation(form, "No issue specified.")
+
+    # Recompute against live data so we acknowledge an issue that exists NOW and
+    # capture its current location/wording for the trail.
+    data = get_data(form)
+    conf = data["confirmation"]
+    match = next((i for i in conf["issues"] if i.get("key") == issue_k), None)
+    if action == "ack" and match is None:
+        return _redirect_to_confirmation(
+            form, "That issue is no longer present — nothing to acknowledge."
+        )
+
+    try:
+        store.ack_record(
+            action,
+            period_key=conf["period_key"],
+            issue_key=issue_k,
+            tier=(match or {}).get("tier", 0),
+            severity=(match or {}).get("severity", ""),
+            plant=(match or {}).get("plant", ""),
+            machine=(match or {}).get("machine", ""),
+            message=(match or {}).get("message", ""),
+            approver=approver or "(removed)",
+            role=form.get("role", ""),
+            note=form.get("note", ""),
+        )
+    except store.StoreError as e:
+        return _redirect_to_confirmation(form, f"Could not save: {e}")
+
+    msg = (
+        "Issue acknowledged — it no longer drives the review gate."
+        if action == "ack"
+        else "Acknowledgement removed — the issue is active again."
+    )
+    return _redirect_to_confirmation(form, msg)
 
 
 @app.route("/confirmation/claude_review", methods=["POST"])
