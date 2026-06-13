@@ -1,5 +1,12 @@
 """Regression tests for the deterministic Data Confirmation validity tier.
 
+Tier 3 is split into:
+  * ``tier3_row_classify(rows) -> (clean, quarantined, issues)`` — physically
+    impossible rows are QUARANTINED (held aside, excluded from published metrics);
+    above-baseline-but-possible values are warnings that never quarantine.
+  * ``tier3_aggregate(computed) -> issues`` — ratio-over-100% on the published
+    metrics, downgraded to WARNING (possible, not impossible).
+
 Run: cd artifacts/prayag && python3 -m tests.test_confirm_validity
 """
 import os
@@ -8,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metrics import Record, compute_metrics
-from confirm import tier3_validity, ERROR
+from confirm import tier3_row_classify, tier3_aggregate, ERROR, WARNING
 
 
 def _oee_row(total_count: float, ideal_rate: float) -> Record:
@@ -30,10 +37,25 @@ def _oee_row(total_count: float, ideal_rate: float) -> Record:
     )
 
 
-def test_performance_over_100_is_a_tier3_error():
+def _monthly_hours_row(actual_hours: float, ideal_hours: float,
+                       period: str = "2026-05") -> Record:
+    """A monthly grid row carrying logged vs planned run-hours directly."""
+    return Record(
+        grain="monthly",
+        plant="PIPE",
+        machine="M/C-4",
+        period=period,
+        total_count=1000.0,
+        reject_count=0.0,
+        actual_hours=actual_hours,
+        ideal_hours=ideal_hours,
+    )
+
+
+def test_aggregate_performance_over_100_is_a_warning():
     # Output (1500) far exceeds the theoretical ideal (1000/hr * 1hr) → raw
-    # performance = 150%. The displayed performance is clamped to 100%, but the
-    # validity tier must still flag the impossible raw value as an ERROR.
+    # performance = 150%. Displayed performance is clamped to 100%, but the
+    # aggregate check flags the impossible raw value — now a WARNING, not an error.
     rows = [_oee_row(total_count=1500.0, ideal_rate=1000.0)]
     computed = compute_metrics(rows)
 
@@ -41,39 +63,89 @@ def test_performance_over_100_is_a_tier3_error():
     assert abs(computed.performance - 1.0) < 1e-9, "displayed performance is clamped"
     assert computed.performance_raw > 1.0, "raw performance must be unclamped"
 
-    issues = tier3_validity(rows, computed)
-    perf_errors = [
+    issues = tier3_aggregate(computed)
+    perf = [
         i for i in issues
-        if i["severity"] == ERROR and "Performance" in i["message"] and "100%" in i["message"]
+        if "Performance" in i["message"] and "100%" in i["message"]
     ]
-    assert perf_errors, f"expected a Tier-3 performance>100% error, got: {issues}"
-    print("PASS: performance>100% produces a Tier-3 error")
+    assert perf, f"expected a Tier-3 performance>100% issue, got: {issues}"
+    assert all(i["severity"] == WARNING for i in perf), (
+        f"ratio>100% must be a warning, not an error: {perf}")
+    print("PASS: aggregate performance>100% produces a Tier-3 warning")
 
 
-def test_clean_performance_has_no_error():
+def test_clean_performance_has_no_aggregate_issue():
     rows = [_oee_row(total_count=800.0, ideal_rate=1000.0)]
     computed = compute_metrics(rows)
-    issues = tier3_validity(rows, computed)
-    perf_errors = [i for i in issues if "Performance" in i["message"]]
-    assert not perf_errors, f"clean data should not flag performance: {perf_errors}"
-    print("PASS: clean performance produces no error")
+    issues = tier3_aggregate(computed)
+    perf = [i for i in issues if "Performance" in i["message"]]
+    assert not perf, f"clean data should not flag performance: {perf}"
+    print("PASS: clean performance produces no aggregate issue")
 
 
-def test_rejects_exceed_zero_output_is_a_tier3_error():
+def test_rejects_exceed_zero_output_quarantines_the_row():
     # Output is 0 but rejects are 5 — impossible regardless of zero output.
-    rows = [Record(grain="monthly", plant="PIPE", machine="M/C-1",
-                   period="2025-04", total_count=0.0, reject_count=5.0)]
-    computed = compute_metrics(rows)
-    issues = tier3_validity(rows, computed)
+    row = Record(grain="monthly", plant="PIPE", machine="M/C-1",
+                 period="2026-05", total_count=0.0, reject_count=5.0)
+    clean, quarantined, issues = tier3_row_classify([row])
+
     rej_errors = [
-        i for i in issues if i["severity"] == ERROR and "Rejects" in i["message"]
+        i for i in issues
+        if i["severity"] == ERROR and "Rejects" in i["message"]
     ]
     assert rej_errors, f"expected a rejects>output error, got: {issues}"
-    print("PASS: rejects exceeding zero output produces a Tier-3 error")
+    assert all(i.get("quarantined") for i in rej_errors), "hard errors must quarantine"
+    assert quarantined == [row], "the impossible row must be held aside"
+    assert clean == [], "the impossible row must not stay in the clean set"
+    print("PASS: rejects exceeding zero output quarantines the row")
+
+
+def test_hours_over_calendar_quarantines_the_row():
+    # 1527 logged hours in May (744 calendar hours) is physically impossible.
+    row = _monthly_hours_row(actual_hours=1527.0, ideal_hours=500.0, period="2026-05")
+    clean, quarantined, issues = tier3_row_classify([row])
+
+    hard = [
+        i for i in issues
+        if i["severity"] == ERROR and "calendar maximum" in i["message"]
+    ]
+    assert hard, f"expected a calendar-ceiling error, got: {issues}"
+    assert all(i.get("quarantined") for i in hard), "calendar overflow must quarantine"
+    assert quarantined == [row] and clean == [], "impossible row held aside, not published"
+    print("PASS: hours above the calendar ceiling quarantines the row")
+
+
+def test_hours_over_ideal_within_calendar_is_a_warning_not_quarantined():
+    # 507 logged hours vs a 500h planned ideal — above plan but well within the
+    # 744h calendar ceiling. Possible (overtime / under-set ideal) → WARNING only,
+    # and the row must STILL be published (not quarantined).
+    row = _monthly_hours_row(actual_hours=507.0, ideal_hours=500.0, period="2026-05")
+    clean, quarantined, issues = tier3_row_classify([row])
+
+    warns = [
+        i for i in issues
+        if i["severity"] == WARNING and "over 100%" in i["message"]
+    ]
+    assert warns, f"expected a utilisation-over-100% warning, got: {issues}"
+    assert not any(i["severity"] == ERROR for i in issues), "must not be a hard error"
+    assert clean == [row], "above-plan-but-possible row must remain published"
+    assert quarantined == [], "above-plan-but-possible row must not be quarantined"
+    print("PASS: hours above ideal but within calendar is a warning, not quarantined")
+
+
+def test_clean_hours_row_has_no_issue():
+    row = _monthly_hours_row(actual_hours=480.0, ideal_hours=500.0, period="2026-05")
+    clean, quarantined, issues = tier3_row_classify([row])
+    assert issues == [], f"clean hours should produce no Tier-3 issue: {issues}"
+    assert clean == [row] and quarantined == []
+    print("PASS: clean hours row produces no issue")
 
 
 if __name__ == "__main__":
-    test_performance_over_100_is_a_tier3_error()
-    test_clean_performance_has_no_error()
-    test_rejects_exceed_zero_output_is_a_tier3_error()
+    test_aggregate_performance_over_100_is_a_warning()
+    test_clean_performance_has_no_aggregate_issue()
+    test_rejects_exceed_zero_output_quarantines_the_row()
+    test_hours_over_calendar_quarantines_the_row()
+    test_hours_over_ideal_within_calendar_is_a_warning_not_quarantined()
+    test_clean_hours_row_has_no_issue()
     print("\nAll validity regression tests passed.")

@@ -33,7 +33,13 @@ def _fake_data(fingerprint, status="error"):
 
 
 def _run(posted_fp, current_fp, approver="A. Manager", status="error"):
-    """POST an approval; return (recorded_actions, redirect_location)."""
+    """POST an approval; return (recorded_actions, redirect_location).
+
+    The mandatory Claude sanity check (when an API key is present) gates sign-off
+    before the fingerprint check, so we seed ``_claude_reviews`` for the live
+    fingerprint to simulate that the reviewer already ran it — keeping the focus
+    of these tests on the fingerprint re-gating and approver rules.
+    """
     recorded = []
     orig_get_data, orig_record, orig_avail = (
         appmod.get_data, appmod.store.record, appmod.store.AVAILABLE,
@@ -41,6 +47,7 @@ def _run(posted_fp, current_fp, approver="A. Manager", status="error"):
     appmod.get_data = lambda form: _fake_data(current_fp, status)
     appmod.store.AVAILABLE = True
     appmod.store.record = lambda action, **kw: recorded.append((action, kw))
+    appmod._claude_reviews[current_fp] = "stubbed review"
     try:
         client = appmod.app.test_client()
         resp = client.post("/confirmation/approve", data={
@@ -51,6 +58,7 @@ def _run(posted_fp, current_fp, approver="A. Manager", status="error"):
         appmod.get_data = orig_get_data
         appmod.store.record = orig_record
         appmod.store.AVAILABLE = orig_avail
+        appmod._claude_reviews.pop(current_fp, None)
 
 
 def test_stale_fingerprint_is_rejected():

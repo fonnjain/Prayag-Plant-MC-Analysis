@@ -27,11 +27,20 @@
         {% if conf.counts.error %}{{ conf.counts.error }} error(s){% endif %}
         {% if conf.counts.error and conf.counts.warning %} · {% endif %}
         {% if conf.counts.warning %}{{ conf.counts.warning }} warning(s){% endif %}
+        {% if conf.counts.quarantined %}{% if conf.counts.error or conf.counts.warning %} · {% endif %}{{ conf.counts.quarantined }} held aside{% endif %}
         {% if not conf.counts.total %}All four checks passed — figures are safe to publish.{% endif %}
       </div>
     </div>
   </div>
 </div>
+
+<!-- Quarantine note: physically-impossible rows held aside -->
+{% if conf.counts.quarantined %}
+<div class="rounded-xl p-3 mb-4 bg-orange-50 border border-orange-200 text-xs text-orange-800 leading-relaxed">
+  <span class="font-semibold">{{ conf.counts.quarantined }} row(s) held aside.</span>
+  These hold physically-impossible values (e.g. more run-hours than the calendar month allows) and have been excluded from the published figures — the rest of the period publishes normally. The raw values are listed below with their source. Fix them in the Google Sheet; the next data pull clears them automatically. Nothing is auto-corrected.
+</div>
+{% endif %}
 
 <!-- Status message after an approve/revoke action -->
 {% if signoff_msg %}
@@ -51,13 +60,16 @@
   </p>
 
   {% if claude_reviewed %}
-  <div id="claude-review-result" class="bg-gray-50 rounded-lg p-3 mb-3 text-sm text-gray-700 leading-relaxed whitespace-pre-line">{{ claude_review_text }}</div>
-  <button id="claude-check-btn" onclick="runClaudeCheck()"
-    class="text-xs font-semibold border rounded-lg px-3 py-1.5"
-    style="color:var(--navy);border-color:var(--navy)">
-    Re-check with Claude
-  </button>
+  <div class="flex items-center gap-1.5 mb-2">
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+    <span class="text-xs font-semibold text-green-700">Claude has reviewed this data and suggested the corrections below.</span>
+  </div>
+  <div id="claude-review-result" class="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 leading-relaxed whitespace-pre-line">{{ claude_review_text }}</div>
   {% else %}
+  <div id="claude-done-banner" class="hidden items-center gap-1.5 mb-2">
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+    <span class="text-xs font-semibold text-green-700">Claude has reviewed this data and suggested the corrections below.</span>
+  </div>
   <div id="claude-review-result" class="hidden bg-gray-50 rounded-lg p-3 mb-3 text-sm text-gray-700 leading-relaxed whitespace-pre-line"></div>
   <button id="claude-check-btn" onclick="runClaudeCheck()"
     class="text-sm font-semibold text-white rounded-lg px-4 py-2.5 w-full"
@@ -168,7 +180,7 @@
 {% endif %}
 
 <!-- Issues by tier -->
-{% set sev_style = {'error': ('bg-red-50','text-red-700','#b91c1c'), 'warning': ('bg-amber-50','text-amber-700','#b45309')} %}
+{% set sev_style = {'error': ('bg-red-50','text-red-700','#b91c1c'), 'warning': ('bg-amber-50','text-amber-700','#b45309'), 'info': ('bg-blue-50','text-blue-700','#1d4ed8')} %}
 {% for tier_num in [1, 2, 3, 4] %}
 {% set tier_issues = conf.tiers[tier_num] %}
 <div class="kpi-card p-4 mb-3">
@@ -189,8 +201,11 @@
     {% for i in tier_issues %}
     {% set ss = sev_style.get(i.severity, ('bg-gray-50','text-gray-700','#6b7280')) %}
     <div class="rounded-lg p-2.5 {{ ss[0] }}">
-      <div class="flex items-start gap-2">
+      <div class="flex items-start gap-2 flex-wrap">
         <span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded {{ ss[1] }} bg-white flex-shrink-0 mt-0.5">{{ i.severity }}</span>
+        {% if i.quarantined %}
+        <span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-orange-700 bg-orange-100 flex-shrink-0 mt-0.5">held aside</span>
+        {% endif %}
         <span class="text-xs {{ ss[1] }}">{{ i.message }}</span>
       </div>
       {% set loc = [] %}
@@ -274,17 +289,17 @@
 
       if (data.ok) {
         result.textContent = data.review;
+        result.classList.remove('hidden');
+        var banner = document.getElementById('claude-done-banner');
+        if (banner) { banner.classList.remove('hidden'); banner.classList.add('flex'); }
         if (sbtn) {
           sbtn.disabled = false;
           sbtn.style.opacity = '1';
           sbtn.classList.remove('opacity-40', 'cursor-not-allowed');
         }
         if (snote) snote.remove();
-        btn.textContent = 'Re-check with Claude';
-        btn.disabled    = false;
-        btn.style.cssText =
-          'background:none;color:var(--navy);border:1px solid var(--navy);' +
-          'padding:4px 12px;border-radius:8px;font-size:12px;font-weight:600;';
+        // No re-check: the review is final for this data state. Remove the button.
+        if (btn) btn.remove();
       } else {
         result.innerHTML =
           '<span class="text-xs text-red-600">' + escHtml(data.error || 'Review failed — please try again.') + '</span>';

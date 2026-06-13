@@ -28,9 +28,11 @@ Severity → gating
 """
 from __future__ import annotations
 
+import calendar
 import datetime
 import hashlib
 import json
+import math
 import re
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -48,6 +50,7 @@ TIER_LABELS = {
 
 ERROR = "error"
 WARNING = "warning"
+INFO = "info"
 
 # Plausibility thresholds (deterministic, documented).
 OUTLIER_HIGH = 6.0       # machine output > 6× the plant median → flag
@@ -70,6 +73,7 @@ def _issue(
     month: str = "",
     file: str = "",
     sheet: str = "",
+    quarantined: bool = False,
 ) -> dict:
     return {
         "tier": tier,
@@ -81,7 +85,48 @@ def _issue(
         "month": month,
         "file": file,
         "sheet": sheet,
+        # A quarantined hard-error row is held aside and excluded from the
+        # published metrics. It is surfaced as a NOTE, never as a sign-off blocker.
+        "quarantined": quarantined,
     }
+
+
+def _calendar_hours(period_ym: str) -> float:
+    """Physical maximum run-hours in the calendar month of ``period_ym``.
+
+    ``days_in_month × 24`` (e.g. May = 31×24 = 744). Returns 0.0 when the label
+    cannot be parsed, in which case the calendar-ceiling check is skipped.
+    """
+    try:
+        parts = str(period_ym).split("-")
+        y, mo = int(parts[0]), int(parts[1])
+        return calendar.monthrange(y, mo)[1] * 24.0
+    except Exception:
+        return 0.0
+
+
+def _month_due(ym: str, as_of: datetime.date) -> bool:
+    """True if the calendar month has fully ended on/before ``as_of``.
+
+    The current (in-progress) month and any future month are NOT due.
+    """
+    try:
+        y, mo = int(str(ym)[:4]), int(str(ym)[5:7])
+        last = datetime.date(y, mo, calendar.monthrange(y, mo)[1])
+        return last < as_of
+    except Exception:
+        return False
+
+
+def _median(values: List[float]) -> float:
+    vals = sorted(v for v in values if v is not None)
+    n = len(vals)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    if n % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2.0
 
 
 def _norm_code(label: str) -> str:
@@ -336,20 +381,35 @@ def tier1_completeness(
                 plant=plant,
             ))
 
-    # --- Months populated (FY coverage) + overdue period months ---
+    # --- Months populated vs months DUE ---
+    # An in-progress (current) month and any future month are not yet due, so a
+    # blank there is expected and must NOT count against completeness. The score
+    # denominator is the count of FY months that have actually ended.
     fy_have = set(fy_months_with_data)
-    months_populated = len([m for m in sources.FY_MONTHS if m in fy_have])
-    months_expected = len(sources.FY_MONTHS)
+    due_months = [m for m in sources.FY_MONTHS if _month_due(m, as_of)]
+    months_expected = len(due_months)
+    months_populated = len([m for m in due_months if m in fy_have])
 
     as_of_ym = f"{as_of.year:04d}-{as_of.month:02d}"
     for m in period_months:
-        if m <= as_of_ym and m not in fy_have:
+        if m in fy_have:
+            continue
+        if m == as_of_ym:
+            # Current period — still in progress. Informational, never a blocker.
             issues.append(_issue(
-                1, WARNING,
-                f"Month {m} is within the requested period and overdue, but holds "
-                "no data yet.",
+                1, INFO,
+                f"Month {m} is the current period and still in progress — partial "
+                "or no data is expected.",
                 month=m,
             ))
+        elif _month_due(m, as_of):
+            # Ended but no data present — a genuine completeness gap.
+            issues.append(_issue(
+                1, WARNING,
+                f"Month {m} has ended but holds no data yet.",
+                month=m,
+            ))
+        # Future months (not yet due, not current) are not expected — no issue.
 
     # --- Required cells non-blank (don't treat a blank as zero) ---
     for r in period_rows:
@@ -475,54 +535,108 @@ def tier2_reconciliation(
 
 
 # ---------------------------------------------------------------------------
-# Tier 3 — Validity (impossible values)
+# Tier 3 — Validity (physical possibility, not the planned baseline)
 # ---------------------------------------------------------------------------
-def tier3_validity(period_rows: List[Record], computed) -> List[dict]:
+# Two distinct classes:
+#   HARD ERROR  — physically impossible. The row is QUARANTINED: held aside with
+#                 its raw value + provenance and excluded from published metrics.
+#                 (actual hours > calendar-month hours, reject > output, negatives,
+#                 a required numeric cell that is not a number.)
+#   WARNING     — possible but worth review; shown, NOT quarantined, NOT a blocker.
+#                 (ran above the planned ideal baseline — utilisation/efficiency
+#                 over 100% but still within the calendar ceiling.)
+# The app never auto-corrects a flagged value — corrections happen in the source
+# sheet and the next pull resolves them.
+def tier3_row_classify(
+    period_rows: List[Record],
+) -> Tuple[List[Record], List[Record], List[dict]]:
+    """Pure row-level Tier-3 classification.
+
+    Returns ``(clean_rows, quarantined_rows, issues)``. A row is quarantined when
+    it carries at least one physically-impossible value. Warnings never quarantine.
+    """
+    clean: List[Record] = []
+    quarantined: List[Record] = []
     issues: List[dict] = []
+
     for r in period_rows:
         m = r.period or r.date
         loc = dict(plant=r.plant, machine=r.machine or r.mould, month=m,
                    file=r.source_file, sheet=r.source_tab)
+        hard: List[str] = []
+        warn_msg: Optional[str] = None
+
+        # Non-numeric required cell (a NaN that slipped past the parsers).
+        if any(isinstance(x, float) and math.isnan(x)
+               for x in (r.total_count, r.reject_count, r.actual_hours, r.downtime_min)):
+            hard.append("A required numeric cell is not a number.")
+
         if r.downtime_min < 0:
-            issues.append(_issue(3, ERROR, f"Negative downtime ({r.downtime_min:.0f} min).", **loc))
+            hard.append(f"Negative downtime ({r.downtime_min:.0f} min).")
         if r.total_count < 0:
-            issues.append(_issue(3, ERROR, f"Negative output ({r.total_count:.0f}).", **loc))
+            hard.append(f"Negative output ({r.total_count:.0f}).")
         if r.reject_count < 0:
-            issues.append(_issue(3, ERROR, f"Negative reject count ({r.reject_count:.0f}).", **loc))
+            hard.append(f"Negative reject count ({r.reject_count:.0f}).")
         if r.reject_count > r.total_count and r.reject_count > 0:
-            issues.append(_issue(
-                3, ERROR,
-                f"Rejects ({r.reject_count:.0f}) exceed output ({r.total_count:.0f}).",
-                **loc,
-            ))
+            hard.append(
+                f"Rejects ({r.reject_count:.0f}) exceed output ({r.total_count:.0f}).")
+
         ppt = r.shift_len_min - r.planned_stops_min
         if r.grain == "daily" and r.shift_len_min > 0 and r.downtime_min > ppt > 0:
-            issues.append(_issue(
-                3, ERROR,
+            hard.append(
                 f"Downtime ({r.downtime_min:.0f} min) exceeds planned production time "
-                f"({ppt:.0f} min).",
-                **loc,
-            ))
-        if r.grain == "monthly" and r.ideal_hours > 0 and r.actual_hours > r.ideal_hours * 1.001:
-            issues.append(_issue(
-                3, ERROR,
-                f"Actual hours ({r.actual_hours:.0f}) exceed ideal ({r.ideal_hours:.0f}) "
-                "— utilisation over 100% (impossible).",
-                **loc,
-            ))
+                f"({ppt:.0f} min).")
 
-    # Aggregate impossible ratios (a ratio over 100% is an invalid value).
+        # Monthly hours: the physical ceiling is the calendar month, NOT the
+        # planned ideal. Above-calendar = impossible (quarantine); above-ideal but
+        # within calendar = utilisation over 100% (warning only).
+        if r.grain == "monthly" and r.actual_hours > 0:
+            cal = _calendar_hours(m)
+            if cal > 0 and r.actual_hours > cal * 1.001:
+                hard.append(
+                    f"Actual hours ({r.actual_hours:.0f}) exceed the calendar maximum "
+                    f"for {m} ({cal:.0f}h) — physically impossible.")
+            elif r.ideal_hours > 0 and r.actual_hours > r.ideal_hours * 1.001:
+                warn_msg = (
+                    f"Utilisation over 100% — ran above the planned baseline "
+                    f"(ideal {r.ideal_hours:.0f}h, actual {r.actual_hours:.0f}h). "
+                    "Verify the ideal-hours baseline or the logged hours.")
+
+        for hm in hard:
+            issues.append(_issue(3, ERROR, hm, quarantined=True, **loc))
+        if warn_msg:
+            issues.append(_issue(3, WARNING, warn_msg, **loc))
+
+        if hard:
+            quarantined.append(r)
+        else:
+            clean.append(r)
+
+    return clean, quarantined, issues
+
+
+def tier3_aggregate(computed) -> List[dict]:
+    """Aggregate ratio checks on the PUBLISHED (post-quarantine) metrics.
+
+    A ratio over 100% within the calendar ceiling means the line ran above its
+    planned baseline — possible, so a WARNING, never a hard error.
+    """
+    issues: List[dict] = []
     if computed.oee_available and computed.performance_raw > 1.0:
-        issues.append(_issue(3, ERROR,
-            f"Performance ({computed.performance_raw * 100:.1f}%) exceeds 100% — check ideal rates."))
+        issues.append(_issue(
+            3, WARNING,
+            f"Performance ({computed.performance_raw * 100:.1f}%) exceeds 100% — ran "
+            "above the planned baseline; verify the ideal rates."))
     if computed.utilisation > 1.0:
-        issues.append(_issue(3, ERROR,
-            f"Utilisation ({computed.utilisation_pct:.1f}%) exceeds 100% — actual hours "
-            "exceed ideal."))
+        issues.append(_issue(
+            3, WARNING,
+            f"Utilisation ({computed.utilisation_pct:.1f}%) exceeds 100% — ran above "
+            "the planned ideal hours; verify the ideal-hours baseline."))
     if computed.output_efficiency > 1.0:
-        issues.append(_issue(3, ERROR,
+        issues.append(_issue(
+            3, WARNING,
             f"Output efficiency ({computed.output_efficiency_pct:.1f}%) exceeds 100% — "
-            "actual output exceeds ideal."))
+            "output above the planned ideal; verify the ideal-output baseline."))
     return issues
 
 
@@ -534,6 +648,7 @@ def tier4_plausibility(
     master_rows: List[Record],
     period_months: List[str],
     masters: dict,
+    daily_used: bool = False,
 ) -> List[dict]:
     issues: List[dict] = []
 
@@ -574,6 +689,23 @@ def tier4_plausibility(
             ))
 
     # Output outliers: a machine far from its plant's median machine output.
+    # Tempering: a structurally high/low machine (consistently so across its own
+    # prior months) is not a data error. For monthly-grain views we additionally
+    # compare each machine to ITS OWN prior-month baseline and only flag when it is
+    # an outlier on BOTH the plant median AND its own history — this cuts false
+    # positives for machines that are simply bigger or smaller than their peers.
+    own_monthly: Dict[tuple, List[float]] = {}   # (plant,mc) -> prior monthly outputs
+    if not daily_used:
+        for r in master_rows:
+            if r.period in period_months:
+                continue
+            if r.machine and r.total_count > 0:
+                own_monthly.setdefault((r.plant, r.machine), []).append(r.total_count)
+    months_present: Dict[tuple, set] = {}        # (plant,mc) -> in-period months seen
+    for r in period_rows:
+        if r.machine:
+            months_present.setdefault((r.plant, r.machine), set()).add(r.period or r.date)
+
     by_plant_machine: Dict[str, Dict[str, float]] = {}
     for r in period_rows:
         if not r.machine:
@@ -591,13 +723,26 @@ def tier4_plausibility(
             if v <= 0:
                 continue
             ratio = v / med
-            if ratio > OUTLIER_HIGH or ratio < OUTLIER_LOW:
-                issues.append(_issue(
-                    4, WARNING,
-                    f"{mc}: output {v:,.0f} is {ratio:.1f}× the plant median "
-                    f"({med:,.0f}) — looks like an outlier.",
-                    plant=plant, machine=mc,
-                ))
+            if not (ratio > OUTLIER_HIGH or ratio < OUTLIER_LOW):
+                continue
+            # Temper against the machine's own prior-month baseline (monthly grain).
+            own = own_monthly.get((plant, mc))
+            if own:
+                own_med = _median(own)
+                n_mon = max(len(months_present.get((plant, mc), ())), 1)
+                expected = own_med * n_mon
+                if expected > 0:
+                    own_ratio = v / expected
+                    if OUTLIER_LOW <= own_ratio <= OUTLIER_HIGH:
+                        # Consistent with its own history — structurally high/low,
+                        # not a data error.
+                        continue
+            issues.append(_issue(
+                4, WARNING,
+                f"{mc}: output {v:,.0f} is {ratio:.1f}× the plant median "
+                f"({med:,.0f}) — looks like an outlier.",
+                plant=plant, machine=mc,
+            ))
 
     # Sudden zeros: a machine with prior-FY history but no output this period.
     hist_by_machine: Dict[tuple, float] = {}
@@ -654,13 +799,19 @@ def full_confirm(
     """
     masters = build_masters(master_rows)
 
+    # Tier 3 row-level: split physically-impossible rows into quarantine. The
+    # clean rows are what publish; the quarantined ones are surfaced as notes.
+    # ``computed`` is expected to already be the post-quarantine (published)
+    # metrics so the self-reconcile and aggregate checks agree with clean_rows.
+    clean_rows, _quarantined_rows, t3_rows = tier3_row_classify(period_rows)
+
     t1, score = tier1_completeness(
         period_months, period_rows, source_reports, masters,
         fy_months_with_data, daily_used, as_of, matcher=matcher,
     )
-    t2 = tier2_reconciliation(source_reports, period_rows, computed)
-    t3 = tier3_validity(period_rows, computed)
-    t4 = tier4_plausibility(period_rows, master_rows, period_months, masters)
+    t2 = tier2_reconciliation(source_reports, clean_rows, computed)
+    t3 = t3_rows + tier3_aggregate(computed)
+    t4 = tier4_plausibility(clean_rows, master_rows, period_months, masters, daily_used)
 
     # Read-time reconcile notes not already captured structurally.
     for w in extra_recon_warnings or []:
@@ -675,9 +826,13 @@ def full_confirm(
         tiers[1].append(gap)
         issues.append(gap)
 
-    err = sum(1 for i in issues if i["severity"] == ERROR)
+    # A quarantined hard error is a NOTE, not a blocker (the row is already held
+    # aside). Only un-quarantined errors gate sign-off. INFO never affects status.
+    blocking = sum(1 for i in issues if i["severity"] == ERROR and not i.get("quarantined"))
+    quarantined_n = sum(1 for i in issues if i.get("quarantined"))
     warn = sum(1 for i in issues if i["severity"] == WARNING)
-    status = ERROR if err else (WARNING if warn else "pass")
+    info = sum(1 for i in issues if i["severity"] == INFO)
+    status = ERROR if blocking else (WARNING if (warn or quarantined_n) else "pass")
 
     return {
         "status": status,
@@ -685,7 +840,13 @@ def full_confirm(
         "score_label": _score_label(score),
         "issues": issues,
         "tiers": tiers,
-        "counts": {"error": err, "warning": warn, "total": len(issues)},
+        "counts": {
+            "error": blocking,
+            "warning": warn,
+            "quarantined": quarantined_n,
+            "info": info,
+            "total": len(issues),
+        },
         "reconciled": status == "pass",
         "summary": None,
     }

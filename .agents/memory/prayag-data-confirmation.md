@@ -16,10 +16,16 @@ The dashboard gates every published figure behind a deterministic four-tier chec
   **Why:** otherwise a UI filter makes the dataset look incomplete and trips false flags.
 - **Machine-presence scope is grain-aware.** Daily grain only holds daily-capable plants accountable; monthly grain expects every plant.
   **Why:** sub-monthly views deliberately cover only the daily-capable plants, so demanding every plant's machines would always read as massively incomplete.
-- **Months score denominator is the full FY (X/12)**; overdue period months with no data are flagged as individual completeness issues.
-  **Why:** matches the spec's "1/12 months" score shape while still surfacing actionable per-month gaps.
-- **Severity → gating (spec-mandated):** validity failures (negatives, reject>output, downtime>available-time, ANY ratio over 100%), internal engine self-reconcile mismatch, and no-data-at-all = `error` ("needs review"). Completeness gaps, sheet-reconcile-off, and plausibility (duplicates, outliers, sudden zeros, unit mismatch, very-high rejection) = `warning`.
-  **Why:** a ratio over 100% is explicitly an *invalid value*, not a soft flag — it must gate the figure. A high rejection rate is possible (so warning), not impossible.
+- **Months score denominator = months that have actually ENDED (due), not the full FY.** The current in-progress month and future months are excluded from the denominator; a blank there is expected, never counted against completeness.
+  **Why:** flagging the in-progress month as "overdue/missing" was a false positive; only ended months are genuinely due.
+  **How to apply:** `_month_due(ym, as_of)` = last calendar day of the month < today. In-progress month (== as_of YYYY-MM) → `INFO` "still in progress"; ended-and-empty → `WARNING`; future → no issue.
+- **Severity model (validity, revised):** the physical ceiling for monthly run-hours is the CALENDAR MONTH (`days×24`), NOT the planned ideal. `actual_hours > calendar_hours` (and negatives, reject>output, daily downtime>planned-production-time, NaN) = **hard error → QUARANTINE**. `ideal < actual ≤ calendar` (utilisation/efficiency over 100% within calendar) = **warning only**. Aggregate ratio-over-100% = warning (was error).
+  **Why:** running above the planned baseline is possible (overtime/under-set ideal), so it must NOT be a hard error or it blocks legitimate sign-off; only the calendar-impossible case is a true error.
+- **Quarantine = exclude, don't block.** A hard-error row is held aside (`quarantined=True`), EXCLUDED from every published metric, while the rest of the period publishes normally. Status is `error` only when there are *un-quarantined* (blocking) errors; quarantined rows + warnings → `warning`. `INFO` never affects status/gating. Raw values are surfaced with provenance; nothing is ever auto-corrected.
+  **Why:** one impossible cell shouldn't gate an otherwise-clean month — hold the bad row aside and let the good data through.
+  **How to apply:** `tier3_row_classify(period_rows)` returns `(clean, quarantined, issues)` and is the single source of the split — called in both `get_data` (publishes `clean_all`) and `full_confirm` (self-reconcile + aggregates run on clean). Fix happens in the sheet; next pull clears it.
+- **Tier-4 outlier tempering:** a plant-median outlier is only flagged if ALSO an outlier vs the machine's OWN prior-month baseline (monthly grain only). 
+  **Why:** structurally large/small machines (e.g. GARDEN M/C-3) tripped false outliers against peers despite being consistent with their own history.
 
 ## Claude boundary (hard rule)
 
@@ -27,9 +33,10 @@ The ONLY AI in this layer fuzzy-matches leftover machine codes (after determinis
 
 ## Validity checks must use UNCLAMPED metrics
 
-`compute_metrics` clamps `performance = min(raw, 1.0)` for display, so a validity
+`compute_metrics` clamps `performance = min(raw, 1.0)` for display, so a ratio
 check on `computed.performance > 1.0` can NEVER fire. The engine exposes an
-unclamped `performance_raw` specifically for the ratio-over-100% validity check.
+unclamped `performance_raw` specifically for the aggregate ratio-over-100% check
+(now a `warning` in `tier3_aggregate`, not an error).
 **Why:** any display-facing metric that is bounded/clamped is useless for "is this
 value impossible?" detection — gate on the raw, unbounded value, not the rendered one.
 **How to apply:** when adding a new validity (Tier-3) check on any ratio, confirm the

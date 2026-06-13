@@ -19,7 +19,12 @@ from metrics import (
     rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
 )
 from validate import full_validate
-from confirm import full_confirm, confirmation_fingerprint, TIER_LABELS
+from confirm import (
+    full_confirm,
+    confirmation_fingerprint,
+    tier3_row_classify,
+    TIER_LABELS,
+)
 from narrative import get_narrative, match_codes, summarize_confirmation, claude_sanity_check
 import store
 from pdf_export import generate_report_pdf
@@ -226,7 +231,14 @@ def get_data(args):
         if daily_err:
             recon_warnings = list(recon_warnings or []) + [daily_err]
 
-    rows = all_rows
+    # Quarantine physically-impossible rows (Tier 3 hard errors): they are held
+    # aside with their raw value + provenance and EXCLUDED from every published
+    # figure, while the rest of the period publishes normally. ``raw_all`` keeps
+    # the full set for confirmation detection; ``clean_all`` is what we publish.
+    raw_all = all_rows
+    clean_all, quarantined_all, _q_issues = tier3_row_classify(raw_all)
+
+    rows = clean_all
     if plant_filter:
         rows = [r for r in rows if r.plant == plant_filter]
     if segment_filter:
@@ -240,16 +252,17 @@ def get_data(args):
     # ---- Four-tier data confirmation (deterministic) ----
     # Completeness is measured against the full-FY monthly grid as the master
     # roster. Confirmation always runs on the UNFILTERED period rows so a plant
-    # or machine filter never makes the dataset look incomplete.
+    # or machine filter never makes the dataset look incomplete. Detection runs on
+    # the raw set; the published metrics it reconciles against exclude quarantine.
     has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
     try:
         master_rows = get_records(FY_MONTHS)[0]
     except SheetReadError:
-        master_rows = list(all_rows)
-    confirm_overall = compute_metrics(all_rows)
+        master_rows = list(raw_all)
+    confirm_overall = compute_metrics(clean_all)
     confirmation = full_confirm(
         period_months=months,
-        period_rows=all_rows,
+        period_rows=raw_all,
         source_reports=source_reports or [],
         master_rows=master_rows,
         fy_months_with_data=months_with_data(),
@@ -291,7 +304,8 @@ def get_data(args):
 
     return {
         "rows": rows,
-        "all_rows": all_rows,
+        "all_rows": clean_all,
+        "quarantined": quarantined_all,
         "overall": overall,
         "validation": validation,
         "confirmation": confirmation,
