@@ -193,9 +193,12 @@ def get_data(args):
     have = set(months_with_data())
     empty_months = [m for m in months if m not in have]
     banner = pinfo["banner"]
-    if empty_months and len(empty_months) < len(months):
+    if empty_months:
         disp = ", ".join(_month_disp(m) for m in empty_months)
-        note = f"No data yet for {disp}."
+        if len(empty_months) == len(months):
+            note = f"No data yet for this period ({disp})."
+        else:
+            note = f"No data yet for {disp}."
         banner = f"{banner} {note}".strip()
 
     return {
@@ -330,16 +333,19 @@ def plant_view():
         })
 
     plant_labels = [item["plant"] for item in plant_items]
-    plant_oee = [item["metrics"]["oee"] for item in plant_items]
+    plant_headline = [item["metrics"]["headline"] for item in plant_items]
     plant_output = [item["metrics"]["total_count"] for item in plant_items]
     plant_attainment = [item["metrics"]["attainment"] for item in plant_items]
 
+    od = ctx["overall_dict"]
     ctx.update({
         "plant_items": plant_items,
         "plant_labels": _safe_json(plant_labels),
-        "plant_oee": _safe_json(plant_oee),
+        "plant_oee": _safe_json(plant_headline),
         "plant_output": _safe_json(plant_output),
         "plant_attainment": _safe_json(plant_attainment),
+        "oee_available": od["oee_available"],
+        "headline_label": od["headline_label"],
     })
     return render_template("plant.html", **ctx)
 
@@ -352,17 +358,20 @@ def machine_view():
     by_machine = rollup_by_machine(data["rows"])
     machine_items = sorted(
         [{"machine": k, "metrics": v.to_dict()} for k, v in by_machine.items()],
-        key=lambda x: x["metrics"]["oee"],
+        key=lambda x: x["metrics"]["headline"],
         reverse=True,
     )
 
     machine_labels = [x["machine"] for x in machine_items]
-    machine_oee = [x["metrics"]["oee"] for x in machine_items]
+    machine_headline = [x["metrics"]["headline"] for x in machine_items]
 
+    od = ctx["overall_dict"]
     ctx.update({
         "machine_items": machine_items,
         "machine_labels": _safe_json(machine_labels),
-        "machine_oee": _safe_json(machine_oee),
+        "machine_oee": _safe_json(machine_headline),
+        "oee_available": od["oee_available"],
+        "headline_label": od["headline_label"],
     })
     return render_template("machine.html", **ctx)
 
@@ -384,6 +393,7 @@ def losses():
         "pareto_cum_pct": _safe_json(cum_pct),
         "top3": pareto[:3],
         "total_downtime": sum(minutes),
+        "oee_available": ctx["overall_dict"]["oee_available"],
     })
     return render_template("losses.html", **ctx)
 
@@ -496,6 +506,7 @@ def _build_report_table(report_id: str, rows, data: dict):
 
     elif report_id == "injection_summary":
         by_machine = rollup_by_machine(rows)
+        oee_av = any(r.has_oee for r in rows)
         headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Output (pcs)", "Reject %", "Runner %", "Utilisation %"]
         table_rows = []
         chart_labels, chart_values = [], []
@@ -506,8 +517,8 @@ def _build_report_table(report_id: str, rows, data: dict):
                                 f"{m.rejection_pct_display:.2f}%", f"{round(m.runner_pct*100,2):.2f}%",
                                 f"{m.utilisation_pct:.1f}%"])
             chart_labels.append(mc)
-            chart_values.append(m.oee_pct)
-        return headers, table_rows, chart_labels, chart_values, "OEE %"
+            chart_values.append(m.oee_pct if m.oee_available else m.output_efficiency_pct)
+        return headers, table_rows, chart_labels, chart_values, ("OEE %" if oee_av else "Output Efficiency %")
 
     elif report_id == "mould_summary":
         by_mould = rollup_by_mould(rows)
@@ -587,14 +598,15 @@ def _build_report_table(report_id: str, rows, data: dict):
 
     elif report_id == "utilisation":
         by_machine = rollup_by_machine(rows)
-        headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Utilisation %", "OEE %"]
+        headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Utilisation %", "Output Eff %", "OEE %"]
         table_rows = []
         chart_labels, chart_values = [], []
         for mc, m in sorted(by_machine.items()):
             ideal_hrs = m.shift_len_min / 60
             actual_hrs = m.run_time / 60
+            oee_cell = f"{m.oee_pct:.1f}%" if m.oee_available else "n/a"
             table_rows.append([mc, f"{ideal_hrs:.1f}", f"{actual_hrs:.1f}",
-                                f"{m.utilisation_pct:.1f}%", f"{m.oee_pct:.1f}%"])
+                                f"{m.utilisation_pct:.1f}%", f"{m.output_efficiency_pct:.1f}%", oee_cell])
             chart_labels.append(mc)
             chart_values.append(m.utilisation_pct)
         return headers, table_rows, chart_labels, chart_values, "Utilisation %"

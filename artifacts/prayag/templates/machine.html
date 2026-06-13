@@ -37,10 +37,13 @@
 {% if machine_items %}
 <!-- Rankings chart -->
 <div class="kpi-card p-4 mb-4">
-  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">OEE Ranking (Best → Worst)</h3>
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">{{ headline_label }} Ranking (Best → Worst)</h3>
   <div class="chart-box" style="height: {{ [machine_items|length * 36, 200]|max }}px">
     <canvas id="rankChart"></canvas>
   </div>
+  {% if not oee_available %}
+  <div class="text-[11px] text-gray-400 mt-2">Monthly data — ranked by Output Efficiency. True OEE needs daily shift logs.</div>
+  {% endif %}
 </div>
 
 <!-- Machine list -->
@@ -60,18 +63,19 @@
         <div class="flex items-center justify-between mb-2">
           <div>
             <div class="font-semibold text-gray-800">{{ item.machine }}</div>
-            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units{{ info('UNITS') }} · {{ "{:,.0f}".format(m.downtime_min) }} min DT{{ info('DT') }}</div>
+            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units{{ info('UNITS') }}{% if m.oee_available %} · {{ "{:,.0f}".format(m.downtime_min) }} min DT{{ info('DT') }}{% endif %}</div>
           </div>
           <div class="ml-2 flex items-center gap-1 flex-shrink-0">
-            <span class="text-[10px] text-gray-400 uppercase tracking-wide">OEE</span>{{ info('OEE') }}
+            <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ m.headline_label }}</span>{{ info('OEE' if m.oee_available else 'OUTPUT_EFF') }}
             <span class="text-base font-bold px-2 py-0.5 rounded-full
-              {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
-              {{ m.oee }}%
+              {% if m.headline_rating=='green' %}rating-green{% elif m.headline_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+              {{ m.headline }}%
             </span>
           </div>
         </div>
 
-        <!-- A P Q Q row -->
+        {% if m.oee_available %}
+        <!-- A P Q + Attainment row (daily grain only) -->
         <div class="grid grid-cols-4 gap-1 text-center">
           {% for lbl, val, color, tkey in [('A', m.availability, '#22c55e', 'A'), ('P', m.performance, '#3b82f6', 'P'), ('Q', m.quality, '#8b5cf6', 'Q'), ('Att.', m.attainment, '#1F3864', 'ATT')] %}
           <div class="bg-gray-50 rounded-lg py-1 px-1">
@@ -80,6 +84,17 @@
           </div>
           {% endfor %}
         </div>
+        {% else %}
+        <!-- Monthly grain: Utilisation / Output Eff / Reject / Attainment (no A/P/Q) -->
+        <div class="grid grid-cols-4 gap-1 text-center">
+          {% for lbl, val, color, tkey in [('Util.', m.utilisation, '#22c55e', 'UTIL'), ('Out.Eff', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF'), ('Rej.', m.rejection_pct, '#ef4444', 'REJECT_PCT'), ('Att.', m.attainment, '#1F3864', 'ATT')] %}
+          <div class="bg-gray-50 rounded-lg py-1 px-1">
+            <div class="text-xs font-bold" style="color:{{ color }}">{{ val }}%</div>
+            <div class="text-[10px] text-gray-400">{{ lbl }}{{ info(tkey) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>

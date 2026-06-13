@@ -31,10 +31,13 @@
 <!-- Plant OEE Bar Chart -->
 {% if plant_items %}
 <div class="kpi-card p-4 mb-4">
-  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">OEE by Plant</h3>
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">{{ headline_label }} by Plant</h3>
   <div class="chart-box" style="height:180px">
     <canvas id="plantOeeChart"></canvas>
   </div>
+  {% if not oee_available %}
+  <div class="text-[11px] text-gray-400 mt-2">Monthly data — showing Output Efficiency. True OEE needs daily shift logs.</div>
+  {% endif %}
 </div>
 
 <!-- Plant Cards -->
@@ -48,14 +51,15 @@
         <div class="text-xs text-gray-400">{{ item.plant }}</div>
       </div>
       <div class="flex items-center gap-1">
-        <span class="text-[10px] text-gray-400 uppercase tracking-wide">OEE</span>{{ info('OEE') }}
-        <span class="text-lg font-bold px-3 py-1 rounded-full {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
-          {{ m.oee }}%
+        <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ m.headline_label }}</span>{{ info('OEE' if m.oee_available else 'OUTPUT_EFF') }}
+        <span class="text-lg font-bold px-3 py-1 rounded-full {% if m.headline_rating=='green' %}rating-green{% elif m.headline_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+          {{ m.headline }}%
         </span>
       </div>
     </div>
 
-    <!-- A P Q mini bars -->
+    {% if m.oee_available %}
+    <!-- A P Q mini bars (daily grain only) -->
     <div class="grid grid-cols-3 gap-2 mb-3">
       {% for lbl, val, color, tkey in [('A', m.availability, '#22c55e', 'A'), ('P', m.performance, '#3b82f6', 'P'), ('Q', m.quality, '#8b5cf6', 'Q')] %}
       <div>
@@ -69,6 +73,22 @@
       </div>
       {% endfor %}
     </div>
+    {% else %}
+    <!-- Monthly grain: Utilisation + Output Efficiency (no A/P/Q without daily logs) -->
+    <div class="grid grid-cols-2 gap-2 mb-3">
+      {% for lbl, val, color, tkey in [('Utilisation', m.utilisation, '#22c55e', 'UTIL'), ('Output Eff.', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF')] %}
+      <div>
+        <div class="flex justify-between text-xs mb-0.5">
+          <span class="text-gray-500">{{ lbl }}{{ info(tkey) }}</span>
+          <span class="font-semibold">{{ val }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:{{ [val,100]|min }}%;background:{{ color }}"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
 
     <!-- Stats row -->
     <div class="grid grid-cols-3 gap-2 text-center border-t border-gray-100 pt-3">

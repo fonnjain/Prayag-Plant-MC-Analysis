@@ -18,6 +18,21 @@ _MONTHS3 = {
 # A per-machine detail tab title, e.g. "M/C-1", "M/C - 12".
 DETAIL_TAB_RE = re.compile(r"^M\s*/?\s*C\s*-\s*\d+$", re.IGNORECASE)
 
+# How the per-machine detail headers map onto canonical Record fields.
+# Surfaced on the Detected Sources screen so the mapping is auditable.
+# Stored ratio cells (Utilization %, Output Efficiency %) are deliberately
+# absent here — they are IGNORED and every ratio is recomputed downstream.
+MC_DETAIL_FIELD_MAP = [
+    {"header": "Ideal Hours", "field": "ideal_hours", "note": "carried forward across month rows"},
+    {"header": "Actual Hours", "field": "actual_hours", "note": "run time"},
+    {"header": "Actual Output (KG) / Output (KG) / Output (PCS)", "field": "total_count", "note": "raw produced quantity"},
+    {"header": "Ideal Output", "field": "ideal_rate", "note": "ideal kg/hr → ideal_output = actual_hrs × rate"},
+    {"header": "Rejection (KG) / Rejection", "field": "reject_count", "note": "% reject recomputed, never read"},
+    {"header": "Runner", "field": "runner_lumps", "note": "moulding layout only"},
+    {"header": "Month label column", "field": "period", "note": "e.g. APR'26 → 2026-04"},
+    {"header": "Machine / Mould Machine", "field": "machine", "note": "carried forward; merged label cell"},
+]
+
 
 def num(val) -> float:
     """Coerce a sheet cell to float; handles commas, ₹, %, blanks."""

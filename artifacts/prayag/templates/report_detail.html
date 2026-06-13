@@ -65,8 +65,8 @@
 {% set o = sub_overall %}
 <div class="grid grid-cols-3 gap-2 mb-4">
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">OEE{{ info('OEE') }}</div>
-    <div class="text-lg font-bold {% if o.oee_rating=='green' %}text-green-600{% elif o.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.oee }}%</div>
+    <div class="text-xs text-gray-500 mb-1">{% if o.oee_available %}OEE{{ info('OEE') }}{% else %}Out.Eff{{ info('OUTPUT_EFF') }}{% endif %}</div>
+    <div class="text-lg font-bold {% if o.headline_rating=='green' %}text-green-600{% elif o.headline_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.headline }}%</div>
   </div>
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Output{{ info('UNITS') }}</div>
@@ -76,6 +76,7 @@
     <div class="text-xs text-gray-500 mb-1">Reject %{{ info('REJECT_PCT') }}</div>
     <div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
   </div>
+  {% if o.oee_available %}
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Avail.{{ info('A') }}</div>
     <div class="text-base font-bold text-blue-600">{{ o.availability }}%</div>
@@ -84,11 +85,24 @@
     <div class="text-xs text-gray-500 mb-1">Perf.{{ info('P') }}</div>
     <div class="text-base font-bold text-purple-600">{{ o.performance }}%</div>
   </div>
+  {% else %}
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Util.{{ info('UTIL') }}</div>
+    <div class="text-base font-bold text-blue-600">{{ o.utilisation }}%</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xs text-gray-500 mb-1">Runner %</div>
+    <div class="text-base font-bold text-purple-600">{{ o.runner_pct }}%</div>
+  </div>
+  {% endif %}
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Attain.{{ info('ATT') }}</div>
     <div class="text-base font-bold {% if o.attainment >= 90 %}text-green-600{% else %}text-amber-600{% endif %}">{{ o.attainment }}%</div>
   </div>
 </div>
+{% if not o.oee_available %}
+<div class="text-[11px] text-gray-400 mb-4 -mt-2 px-1">Monthly source — Output Efficiency & Utilisation shown. True OEE (with A/P/Q) needs daily shift logs.</div>
+{% endif %}
 
 <!-- Chart -->
 {% if chart_labels %}

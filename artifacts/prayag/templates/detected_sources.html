@@ -76,6 +76,39 @@
   </div>
   {% endif %}
 
+  {% if r.field_map %}
+  <details class="mt-2 group">
+    <summary class="text-xs font-medium text-gray-500 cursor-pointer select-none flex items-center gap-1">
+      <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" class="transition-transform group-open:rotate-90"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Header → field mapping
+    </summary>
+    <div class="mt-2 overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="text-left text-gray-400">
+            <th class="py-1 pr-2 font-medium">Sheet header</th>
+            <th class="py-1 pr-2 font-medium">Maps to</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for fm in r.field_map %}
+          <tr class="border-t border-gray-50 align-top">
+            <td class="py-1 pr-2 text-gray-700">{{ fm.header }}</td>
+            <td class="py-1 pr-2">
+              <span class="font-mono text-navy" style="color:var(--navy)">{{ fm.field }}</span>
+              {% if fm.note %}<div class="text-gray-400">{{ fm.note }}</div>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="text-[10px] text-gray-400 mt-1.5">
+        Stored % cells (Utilisation %, Output Efficiency %) are ignored — every ratio is recomputed from raw hours and output.
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
   <div class="mt-2 text-[10px] text-gray-300 break-all">file: {{ r.file_id }}</div>
 </div>
 {% endfor %}

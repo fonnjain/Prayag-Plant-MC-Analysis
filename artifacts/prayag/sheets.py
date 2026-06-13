@@ -211,6 +211,7 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
         "segment": src["segment"],
         "plant": src["plant"],
         "reconcile": recon,
+        "field_map": parsers.MC_DETAIL_FIELD_MAP,
     }
     return records, report
 
@@ -221,7 +222,14 @@ def _load_live_monthly(token: str) -> dict:
     warnings: List[str] = []
 
     for src in sources.ANNUAL_SOURCES:
-        recs, report = _load_annual_family(src, token)
+        try:
+            recs, report = _load_annual_family(src, token)
+        except SheetReadError as e:
+            raise SheetReadError(
+                f"Couldn't read {src['title']} "
+                f"(family '{src['family']}', tab '{src['tab']}', "
+                f"file {src['file_id']}): {e}"
+            ) from e
         all_records.extend(recs)
         reports.append(report)
 

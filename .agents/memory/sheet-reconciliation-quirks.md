@@ -24,3 +24,12 @@ When cross-checking parsed per-machine OUTPUT against a family grid's `TOTAL` ro
 
 - **Fiscal year is Apr–Mar.** When resolving a bare month number to a year,
   Apr–Dec map to the FY start year and Jan–Mar to the FY start year + 1.
+
+- **Monthly-grain data has no true OEE** (no per-shift availability/performance/
+  quality), so OEE/A/P/Q must never be shown as real numbers at that grain.
+  **Why:** the monthly grids record total hours+output only; A/P/Q would read 0%
+  and mislead. **How to apply:** every view/report/template must branch on
+  `MetricsResult.oee_available` and fall back to the `headline`/`headline_label`/
+  `headline_rating` props (OEE when available, else Output Efficiency) plus
+  Utilisation; hide A/P/Q, downtime, and the loss Pareto. New surfaces that show
+  OEE are incomplete until they honour this flag.

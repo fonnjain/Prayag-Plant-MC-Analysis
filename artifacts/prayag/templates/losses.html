@@ -34,6 +34,7 @@
 </div>
 
 <!-- Summary -->
+{% if oee_available %}
 <div class="grid grid-cols-2 gap-3 mb-4">
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Total Downtime{{ info('DT') }}</div>
@@ -46,6 +47,7 @@
     <div class="text-xs text-gray-400">categories</div>
   </div>
 </div>
+{% endif %}
 
 {% if pareto %}
 <!-- Top 3 Losses -->
@@ -112,6 +114,15 @@
   </div>
 </div>
 
+{% elif not oee_available %}
+<div class="kpi-card p-8 text-center mb-4">
+  <div class="text-4xl mb-3">🗓️</div>
+  <div class="text-gray-600 font-semibold text-sm">Downtime breakdown not available at this grain</div>
+  <div class="text-gray-400 text-xs mt-1 leading-relaxed">
+    The current source is monthly, which records total hours but not the reason-by-reason
+    downtime log. Daily shift logs are needed for a loss Pareto.
+  </div>
+</div>
 {% else %}
 <div class="kpi-card p-8 text-center mb-4">
   <div class="text-4xl mb-3">✓</div>
