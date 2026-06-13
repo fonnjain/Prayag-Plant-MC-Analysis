@@ -291,6 +291,49 @@ def tier1_completeness(
                 plant=plant, machine=dc,
             ))
 
+    # --- Segments & moulds present vs master roster (both ways) ---
+    seg_by_plant: Dict[str, set] = {}
+    mould_by_plant: Dict[str, set] = {}
+    for r in period_rows:
+        if r.segment:
+            seg_by_plant.setdefault(r.plant, set()).add(r.segment)
+        if r.mould:
+            mould_by_plant.setdefault(r.plant, set()).add(r.mould)
+
+    for plant in sorted(scope):
+        m_segs = masters["segments"].get(plant, set())
+        present_segs = seg_by_plant.get(plant, set())
+        for s in sorted(m_segs - present_segs):
+            issues.append(_issue(
+                1, WARNING,
+                f"Segment/line '{s}' is in the master roster but has no data this "
+                "period (shown as a gap, not a zero).",
+                plant=plant,
+            ))
+        for s in sorted(present_segs - m_segs):
+            issues.append(_issue(
+                1, WARNING,
+                f"Segment/line '{s}' appears in the data but is not in the master "
+                "roster.",
+                plant=plant,
+            ))
+
+        m_moulds = masters["moulds"].get(plant, set())
+        present_moulds = mould_by_plant.get(plant, set())
+        for mo in sorted(m_moulds - present_moulds):
+            issues.append(_issue(
+                1, WARNING,
+                f"Mould '{mo}' is in the master roster but has no data this period "
+                "(shown as a gap, not a zero).",
+                plant=plant,
+            ))
+        for mo in sorted(present_moulds - m_moulds):
+            issues.append(_issue(
+                1, WARNING,
+                f"Mould '{mo}' appears in the data but is not in the master roster.",
+                plant=plant,
+            ))
+
     # --- Months populated (FY coverage) + overdue period months ---
     fy_have = set(fy_months_with_data)
     months_populated = len([m for m in sources.FY_MONTHS if m in fy_have])
@@ -355,6 +398,60 @@ def tier2_reconciliation(
                 f"{recon['grid_total']:.0f} ({recon['diff_pct']:.1f}% off).",
                 plant=rep.get("plant", ""), file=rep.get("file_id", ""),
                 sheet=rep.get("tab", ""),
+            ))
+
+    # Hierarchy reconciliation: segment == Σ its lines/machines, and the plant
+    # rolls up cleanly. Output recorded outside any segment, or a machine split
+    # across segments, means a segment total will not reconcile to its machines.
+    mc_segments: Dict[tuple, set] = {}
+    orphan_by_plant: Dict[str, float] = {}
+    seg_total: Dict[tuple, float] = {}
+    mc_total: Dict[tuple, float] = {}
+    for r in period_rows:
+        if r.total_count <= 0:
+            continue
+        if r.segment:
+            seg_total[(r.plant, r.segment)] = (
+                seg_total.get((r.plant, r.segment), 0.0) + r.total_count
+            )
+        else:
+            orphan_by_plant[r.plant] = orphan_by_plant.get(r.plant, 0.0) + r.total_count
+        if r.machine:
+            mc_segments.setdefault((r.plant, r.machine), set()).add(r.segment)
+            if r.segment:
+                mc_total[(r.plant, r.segment, r.machine)] = (
+                    mc_total.get((r.plant, r.segment, r.machine), 0.0) + r.total_count
+                )
+
+    for (plant, mc), segs in mc_segments.items():
+        real = {s for s in segs if s}
+        if len(real) > 1:
+            issues.append(_issue(
+                2, WARNING,
+                f"{mc} is split across segments {', '.join(sorted(real))} — segment "
+                "totals cannot reconcile cleanly to machine totals.",
+                plant=plant, machine=mc,
+            ))
+
+    for (plant, seg), tot in seg_total.items():
+        lines_sum = sum(
+            v for (p, s, _m), v in mc_total.items() if p == plant and s == seg
+        )
+        if abs(tot - lines_sum) > 0.01:
+            issues.append(_issue(
+                2, WARNING,
+                f"Segment '{seg}' total ({tot:,.0f}) does not equal the sum of its "
+                f"lines ({lines_sum:,.0f}).",
+                plant=plant,
+            ))
+
+    for plant, orphan in orphan_by_plant.items():
+        if orphan > 0:
+            issues.append(_issue(
+                2, WARNING,
+                f"{orphan:,.0f} units of output have no segment/line assigned — they "
+                "roll up to the plant but not to any segment.",
+                plant=plant,
             ))
 
     # Engine self-reconcile: published total must equal the row sum exactly.
