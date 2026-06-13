@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "RKa4QV-9UkeJTb5VDCpi9"
+uri = "file://confirmation_signoffs_fields.csv"
+type = "table"
+title = "confirmation_signoffs — all columns & their sources"

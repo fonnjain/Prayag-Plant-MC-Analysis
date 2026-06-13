@@ -1,0 +1,17 @@
+column,type,required,source,description
+id,BIGSERIAL,auto,Database,Auto-incrementing primary key — set by Postgres; never supplied by the caller.
+action,TEXT,yes,App (route),Either "approve" (releases figures) or "revoke" (re-gates figures). Set by which button the manager clicks.
+period_key,TEXT,yes,App (computed),Unfiltered period identifier e.g. "2026-04-01_2027-03-31___". Derived from the period selector; filters (plant/machine) are stripped so a sign-off covers the full dataset.
+from_iso,TEXT,yes,App (computed),Period start date in ISO format (YYYY-MM-DD) e.g. "2026-04-01". Derived from the period selector.
+to_iso,TEXT,yes,App (computed),Period end date in ISO format (YYYY-MM-DD) e.g. "2027-03-31". Derived from the period selector.
+period_label,TEXT,yes,App (computed),Human-readable period name e.g. "Current FY" or "Apr 2026". Derived from the period selector.
+fingerprint,TEXT,yes,App (computed),"SHA-256 (first 16 hex chars) of the sorted issue identities + confirmation status at the moment of sign-off. Changes automatically if the underlying sheet data changes, which re-gates the figures and invalidates this sign-off."
+status_at,TEXT,yes,App (computed),Confirmation status at the time of sign-off: "pass" / "warning" / "error". Taken from the live confirmation result.
+score_label,TEXT,yes,App (computed),Confirmation score label at the time of sign-off e.g. "4/4 files". Taken from the live confirmation result.
+error_count,INTEGER,yes,App (computed),Number of error-severity issues at the time of sign-off. Taken from the live confirmation result.
+warning_count,INTEGER,yes,App (computed),Number of warning-severity issues at the time of sign-off. Taken from the live confirmation result.
+issue_count,INTEGER,yes,App (computed),Total issue count (errors + warnings) at the time of sign-off. Taken from the live confirmation result.
+approver,TEXT,yes,User (form field — required),Name of the manager signing off. Typed into the "Your name" field on the Confirmation screen. Cannot be blank.
+role,TEXT,no,User (form field — optional),Job title or role of the approver e.g. "Plant Head". Typed into the "Role / designation" field. Left blank if not entered.
+note,TEXT,no,User (form field — optional),Free-text rationale or comment e.g. "Reviewed gaps — FY still in progress". Typed into the "Note (optional)" field. Left blank if not entered.
+created_at,TIMESTAMPTZ,auto,Database,Timestamp (with time zone) when the row was inserted. Set automatically by Postgres DEFAULT now(); never supplied by the caller.
