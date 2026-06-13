@@ -1,6 +1,6 @@
-# [Project name]
+# Prayag Production Analytics
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A mobile-first Flask dashboard that reads Prayag's real production Google Sheets (by explicit file ID) and computes OEE / utilisation / efficiency / rejection metrics deterministically — Claude only writes narrative prose from already-computed numbers.
 
 ## Run & Operate
 

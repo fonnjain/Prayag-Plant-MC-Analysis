@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Data Sources{% endblock %}
+
+{% block content %}
+{% set o = overall_dict %}
+
+<div class="kpi-card p-4 mb-4">
+  <h2 class="text-base font-bold text-navy mb-1" style="color:var(--navy)">Detected Data Sources</h2>
+  <p class="text-xs text-gray-500 leading-relaxed">
+    Every workbook the engine reads, mapped to a plant/segment with its grain and the
+    months that currently hold data. All ratios are recomputed from raw hours and output —
+    the stored % cells in the sheets are never trusted.
+  </p>
+  {% if demo_mode %}
+  <div class="mt-2 text-xs text-terra font-semibold" style="color:var(--terra)">
+    Showing demo data — connect the Google Sheets account to read the live workbooks.
+  </div>
+  {% endif %}
+</div>
+
+{% for r in reports %}
+<div class="kpi-card p-4 mb-3">
+  <div class="flex items-start justify-between gap-2 mb-2">
+    <div class="min-w-0">
+      <div class="text-sm font-semibold text-gray-900 truncate">{{ r.title }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">
+        {{ plant_names.get(r.plant, r.plant) }} · {{ r.segment }}
+      </div>
+    </div>
+    <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full flex-shrink-0
+      {% if r.grain == 'monthly' %}bg-blue-50 text-blue-700{% else %}bg-purple-50 text-purple-700{% endif %}">
+      {{ r.grain }}
+    </span>
+  </div>
+
+  <div class="grid grid-cols-2 gap-2 text-xs mb-2">
+    <div>
+      <div class="text-gray-400">Months with data</div>
+      <div class="text-gray-800 font-medium">
+        {% if r.months_available %}{{ r.months_available|length }} month(s){% else %}—{% endif %}
+      </div>
+    </div>
+    <div>
+      <div class="text-gray-400">Records parsed</div>
+      <div class="text-gray-800 font-medium">{{ r.record_count }}</div>
+    </div>
+  </div>
+
+  {% if r.months_available %}
+  <div class="flex flex-wrap gap-1 mb-2">
+    {% for m in r.months_available %}
+    <span class="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{{ m }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if r.detail_tabs %}
+  <div class="text-xs text-gray-400 mb-1">Machine / detail tabs ({{ r.detail_tabs|length }})</div>
+  <div class="flex flex-wrap gap-1 mb-2">
+    {% for t in r.detail_tabs %}
+    <span class="text-[10px] bg-navy bg-opacity-5 text-navy px-1.5 py-0.5 rounded" style="color:var(--navy)">{{ t }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if r.reconcile %}
+  <div class="mt-2 rounded-lg p-2 text-xs flex items-center gap-2
+    {% if r.reconcile.ok %}bg-green-50{% else %}bg-amber-50{% endif %}">
+    {% if r.reconcile.ok %}
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+    <span class="text-green-800">Reconciled to grid TOTAL ({{ r.reconcile.detail_total }} vs {{ r.reconcile.grid_total }})</span>
+    {% else %}
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+    <span class="text-amber-800">Off grid TOTAL by {{ r.reconcile.diff_pct }}% ({{ r.reconcile.detail_total }} vs {{ r.reconcile.grid_total }})</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="mt-2 text-[10px] text-gray-300 break-all">file: {{ r.file_id }}</div>
+</div>
+{% endfor %}
+
+{% if not reports %}
+<div class="kpi-card p-6 text-center text-sm text-gray-400">No sources detected.</div>
+{% endif %}
+
+<div class="text-center text-xs text-gray-400 mt-4 mb-2">
+  Daily-grain workbooks register here once their file IDs are added to the source registry.
+</div>
+
+{% endblock %}

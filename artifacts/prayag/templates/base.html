@@ -89,6 +89,14 @@
         {% if demo_mode %}
         <span class="bg-terra text-white text-xs font-bold px-2 py-1 rounded-full">DEMO DATA</span>
         {% endif %}
+        <a href="/sources?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+           aria-label="Detected data sources"
+           class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/sources' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
+           style="{% if request.path != '/sources' %}background:rgba(255,255,255,0.15){% endif %}">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+          </svg>
+        </a>
         <a href="/glossary?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
            aria-label="Glossary &amp; metric help"
            class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/glossary' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
@@ -140,6 +148,16 @@
 
 <!-- ===== MAIN CONTENT ===== -->
 <main class="main-content max-w-2xl mx-auto px-3 py-4">
+
+  <!-- Grain / period resolution banner -->
+  {% if grain_banner %}
+  <div class="mb-3 rounded-xl p-3 bg-blue-50 border border-blue-200 flex items-start gap-2">
+    <svg width="16" height="16" class="mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <span class="text-xs" style="color:var(--navy)">{{ grain_banner }}</span>
+  </div>
+  {% endif %}
 
   <!-- Validation status banner -->
   {% set vw = validation.get('warnings', []) %}

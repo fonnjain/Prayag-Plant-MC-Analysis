@@ -1,24 +1,33 @@
 """
-Data layer: Google Sheets reader (via Replit Google Sheets connection) + demo
-data fallback. No data passes through any AI model.
+Data layer: live Google Sheets reader (via the Replit Google Sheets connection)
+plus a deterministic demo fallback. No data passes through any AI model.
 
 Reads use the Replit "Google Sheets" connector (blueprint id: google-sheet):
-we fetch a short-lived OAuth access token from the Replit connectors API on
-every read (tokens auto-refresh, so we never cache them), then call the public
-Google Sheets REST API directly.
+we fetch a short-lived OAuth access token from the Replit connectors API and
+reuse it until shortly before it expires, then call the public Google Sheets
+REST API directly, reading each workbook by its pinned file ID (see sources.py).
 """
 from __future__ import annotations
 import os
 import json
+import time
 import random
 import datetime
 import urllib.request
 import urllib.parse
 import urllib.error
-from typing import List, Optional
-from metrics import ShiftRow
+from typing import List, Optional, Tuple
 
-DEMO_MODE = False  # set at runtime
+from metrics import Record
+import parsers
+import sources
+
+# ---------------------------------------------------------------------------
+# Connection + token (cached within the process until near expiry)
+# ---------------------------------------------------------------------------
+_token_cache: dict = {"token": None, "exp": 0.0}
+_data_cache: dict = {}          # months_key -> (ts, payload)
+_DATA_TTL = 120.0               # seconds
 
 
 class SheetReadError(RuntimeError):
@@ -31,8 +40,12 @@ def _connector_available() -> bool:
     return bool(host and has_token)
 
 
-def _get_access_token() -> Optional[str]:
-    """Fetch a fresh Google OAuth access token from the Replit connectors API."""
+def is_demo_mode() -> bool:
+    """Live mode needs an authorized Google Sheets connection; else demo data."""
+    return not _connector_available()
+
+
+def _fetch_token() -> Tuple[Optional[str], float]:
     host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
     repl_identity = os.environ.get("REPL_IDENTITY")
     web_renewal = os.environ.get("WEB_REPL_RENEWAL")
@@ -41,9 +54,9 @@ def _get_access_token() -> Optional[str]:
     elif web_renewal:
         xtoken = "depl " + web_renewal
     else:
-        return None
+        return None, 0.0
     if not host:
-        return None
+        return None, 0.0
 
     url = (
         f"https://{host}/api/v2/connection"
@@ -60,267 +73,331 @@ def _get_access_token() -> Optional[str]:
             "Couldn't verify the Google Sheets connection. "
             "Please reconnect it and try again."
         ) from e
+
     items = data.get("items", [])
     if not items:
-        return None
+        return None, 0.0
     settings = items[0].get("settings", {}) or {}
     token = settings.get("access_token")
+    expires_at = settings.get("expires_at")
     if not token:
         oauth = settings.get("oauth", {}) or {}
         creds = oauth.get("credentials", {}) if isinstance(oauth, dict) else {}
         token = creds.get("access_token")
+        expires_at = expires_at or creds.get("expires_at") or creds.get("expiry_date")
+
+    # Resolve expiry to an epoch seconds value; default to a short TTL.
+    exp_epoch = time.time() + 240.0
+    if isinstance(expires_at, (int, float)):
+        exp_epoch = expires_at / 1000.0 if expires_at > 1e12 else float(expires_at)
+    elif isinstance(expires_at, str):
+        try:
+            exp_epoch = datetime.datetime.fromisoformat(
+                expires_at.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            pass
+    return token, exp_epoch
+
+
+def _get_access_token() -> Optional[str]:
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["exp"] - 60:
+        return _token_cache["token"]
+    token, exp = _fetch_token()
+    if token:
+        _token_cache["token"] = token
+        _token_cache["exp"] = exp
     return token
 
 
-def _coerce_float(val) -> float:
-    if val is None or val == "":
-        return 0.0
-    s = str(val).strip().replace(",", "").replace("₹", "").split()[0]
-    try:
-        return float(s)
-    except (ValueError, IndexError):
-        return 0.0
-
-
-def _normalise_date(val: str) -> str:
-    """Accept dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd → always return yyyy-mm-dd."""
-    val = str(val).strip()
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
-        try:
-            return datetime.datetime.strptime(val, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return val
-
-
-def is_demo_mode() -> bool:
-    """Live mode requires both a configured Sheet ID and an authorized
-    Google Sheets connection. Otherwise we serve deterministic demo data."""
-    sid = os.environ.get("SHEET_ID", "").strip()
-    return not (sid and _connector_available())
-
-
-def _fetch_sheet_values(sheet_id: str, tab: str, token: str) -> List[list]:
-    """Call the Google Sheets REST API and return the raw value matrix."""
-    rng = urllib.parse.quote(tab, safe="")
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{rng}"
+# ---------------------------------------------------------------------------
+# Generic Sheets REST helpers
+# ---------------------------------------------------------------------------
+def _api_get(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.load(r)
+            return json.load(r)
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            raise SheetReadError(
-                f"Couldn't find a tab named \u201c{tab}\u201d in that spreadsheet. "
-                "Check the tab name and the SHEET_ID."
-            ) from e
+            raise SheetReadError("Spreadsheet or tab not found (404).") from e
         if e.code in (401, 403):
             raise SheetReadError(
-                "The Google account doesn't have access to that spreadsheet, "
-                "or the connection needs to be re-authorized."
+                "The Google account doesn't have access to a configured "
+                "spreadsheet, or the connection needs to be re-authorized."
             ) from e
         raise SheetReadError(f"Google Sheets API error ({e.code}).") from e
     except urllib.error.URLError as e:
         raise SheetReadError("Couldn't reach Google Sheets. Please try again.") from e
-    return data.get("values", []) or []
 
 
-def read_sheet(tab: str, from_date: str, to_date: str) -> List[dict]:
-    """
-    Read rows from a Google Sheet tab for the given ISO date range.
-    Falls back to demo data when no live sheet is configured.
-    """
-    if is_demo_mode():
-        return _demo_shift_log(from_date, to_date) if tab == "Shift Log" else []
+def list_tabs(file_id: str, token: str) -> List[str]:
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}"
+        "?fields=sheets.properties.title"
+    )
+    data = _api_get(url, token)
+    return [s.get("properties", {}).get("title", "") for s in data.get("sheets", [])]
 
-    sheet_id = os.environ["SHEET_ID"].strip()
+
+def read_values(file_id: str, tab: str, token: str) -> List[list]:
+    rng = urllib.parse.quote(tab, safe="")
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values/{rng}"
+    return _api_get(url, token).get("values", []) or []
+
+
+def batch_get(file_id: str, tabs: List[str], token: str) -> dict:
+    """Return {tab_title: value_matrix} for many tabs in one HTTP call."""
+    if not tabs:
+        return {}
+    q = "&".join("ranges=" + urllib.parse.quote(t, safe="") for t in tabs)
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values:batchGet?{q}"
+    data = _api_get(url, token)
+    out = {}
+    for tab, vr in zip(tabs, data.get("valueRanges", [])):
+        out[tab] = vr.get("values", []) or []
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Live monthly load — annual M/C summary workbooks
+# ---------------------------------------------------------------------------
+def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
+    """Read one annual family workbook → (records, source_report)."""
+    file_id = src["file_id"]
+    tabs = list_tabs(file_id, token)
+    detail_tabs = [t for t in tabs if parsers.DETAIL_TAB_RE.match(t.strip())]
+
+    want = list(detail_tabs)
+    if src["tab"] in tabs:
+        want.append(src["tab"])
+    matrices = batch_get(file_id, want, token)
+
+    records: List[Record] = []
+    for t in detail_tabs:
+        records.extend(parsers.parse_mc_detail(
+            matrices.get(t, []),
+            plant=src["plant"],
+            segment=src["segment"],
+            unit=src["unit"],
+            source_file=file_id,
+            source_tab=t,
+        ))
+
+    # Reconcile summed detail output vs the grid TOTAL row.
+    recon = None
+    grid_total = parsers.grid_total_output(matrices.get(src["tab"], []))
+    detail_total = sum(r.total_count for r in records)
+    if grid_total is not None and grid_total > 0:
+        diff = abs(detail_total - grid_total) / grid_total
+        recon = {
+            "grid_total": round(grid_total, 1),
+            "detail_total": round(detail_total, 1),
+            "diff_pct": round(diff * 100, 2),
+            "ok": diff <= 0.02,
+        }
+
+    months = sorted({r.period for r in records})
+    report = {
+        "family": src["family"],
+        "title": src["title"],
+        "file_id": file_id,
+        "tab": src["tab"],
+        "detail_tabs": detail_tabs,
+        "grain": "monthly",
+        "months_available": months,
+        "record_count": len(records),
+        "segment": src["segment"],
+        "plant": src["plant"],
+        "reconcile": recon,
+    }
+    return records, report
+
+
+def _load_live_monthly(token: str) -> dict:
+    all_records: List[Record] = []
+    reports: List[dict] = []
+    warnings: List[str] = []
+
+    for src in sources.ANNUAL_SOURCES:
+        recs, report = _load_annual_family(src, token)
+        all_records.extend(recs)
+        reports.append(report)
+
+        # Surface silent layout drift: a family that parses nothing despite
+        # having detail tabs almost certainly means the parser/header detection
+        # broke, not that the factory produced zero output.
+        if report["record_count"] == 0:
+            if report["detail_tabs"]:
+                warnings.append(
+                    f"{report['title']}: found {len(report['detail_tabs'])} machine "
+                    "tab(s) but parsed 0 rows — sheet layout may have changed."
+                )
+            else:
+                warnings.append(
+                    f"{report['title']}: no machine (M/C-n) tabs found in the workbook."
+                )
+
+        recon = report.get("reconcile")
+        if recon is None and report["record_count"] > 0:
+            # Reconciliation could not run — the grid TOTAL row/tab was missing
+            # or unreadable, so we cannot cross-check the parsed totals.
+            warnings.append(
+                f"{report['title']}: could not read the grid TOTAL row, so parsed "
+                "totals were not reconciled against the source."
+            )
+        elif recon and not recon["ok"]:
+            warnings.append(
+                f"{report['title']}: month rows sum to {recon['detail_total']:.0f} "
+                f"but grid TOTAL is {recon['grid_total']:.0f} "
+                f"({recon['diff_pct']:.1f}% off)"
+            )
+
+    return {
+        "records": all_records,
+        "reports": reports,
+        "recon_warnings": warnings,
+        "grain": "monthly",
+    }
+
+
+def _live_payload() -> dict:
+    """Cached full live monthly payload (all families, all FY months)."""
+    now = time.time()
+    cached = _data_cache.get("live")
+    if cached and now - cached[0] < _DATA_TTL:
+        return cached[1]
     token = _get_access_token()
     if not token:
         raise SheetReadError(
             "The Google Sheets connection isn't authorized. "
             "Reconnect it from the integrations panel and try again."
         )
-
-    values = _fetch_sheet_values(sheet_id, tab, token)
-    if not values:
-        return []
-
-    headers = [str(h).strip() for h in values[0]]
-    result = []
-    for raw in values[1:]:
-        row = {headers[i]: (raw[i] if i < len(raw) else "") for i in range(len(headers))}
-        raw_date = row.get("date", row.get("Date", ""))
-        if not raw_date:
-            continue
-        iso = _normalise_date(str(raw_date))
-        if from_date <= iso <= to_date:
-            result.append(row)
-    return result
+    payload = _load_live_monthly(token)
+    _data_cache["live"] = (now, payload)
+    return payload
 
 
-def rows_to_shift_rows(raw_rows: List[dict]) -> List[ShiftRow]:
-    """Parse raw dicts into typed ShiftRow objects with deterministic cleaning."""
-    result = []
-    for row in raw_rows:
-        def g(key, alt=""):
-            for k in [key, key.lower(), key.replace(" ", "_").lower()]:
-                if k in row:
-                    return row[k]
-            return alt
+def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]:
+    """Return (records filtered to ``months``, source reports, recon warnings).
 
-        date_raw = g("date") or g("Date")
-        iso_date = _normalise_date(str(date_raw)) if date_raw else ""
-        if not iso_date:
-            continue
+    Falls back to deterministic demo data when no connection is available.
+    """
+    if is_demo_mode():
+        recs = _demo_records_for_months(months)
+        return recs, _demo_reports(), []
 
-        sr = ShiftRow(
-            date=iso_date,
-            plant=str(g("plant") or g("Plant") or "").strip(),
-            machine=str(g("machine") or g("Machine") or "").strip(),
-            mould=str(g("mould") or g("Mould") or "").strip(),
-            segment=str(g("segment") or g("Segment") or "").strip(),
-            product=str(g("product") or g("Product") or "").strip(),
-            shift=str(g("shift") or g("Shift") or "").strip(),
-            ideal_rate=_coerce_float(g("ideal_rate") or g("Ideal Rate")),
-            shift_len_min=_coerce_float(g("shift_len_min") or g("Shift Length (Min)")),
-            planned_stops_min=_coerce_float(g("planned_stops_min") or g("Planned Stops (Min)")),
-            downtime_min=_coerce_float(g("downtime_min") or g("Downtime (Min)")),
-            downtime_reason=str(g("downtime_reason") or g("Downtime Reason") or "").strip(),
-            total_count=_coerce_float(g("total_count") or g("Total Count")),
-            reject_count=_coerce_float(g("reject_count") or g("Reject Count")),
-            planned_output=_coerce_float(g("planned_output") or g("Planned Output")),
-            unit=str(g("unit") or g("Unit") or "pcs").strip(),
-            labour_cost=_coerce_float(g("labour_cost") or g("Labour Cost")),
-            power_cost=_coerce_float(g("power_cost") or g("Power Cost")),
-            solar_cost=_coerce_float(g("solar_cost") or g("Solar Cost")),
-            runner_lumps=_coerce_float(g("runner_lumps") or g("Runner/Lumps")),
-            compound_type=str(g("compound_type") or g("Compound Type") or "").strip(),
-        )
-        # Skip rows that are entirely zeroed-out or look like totals
-        if sr.shift_len_min == 0 and sr.total_count == 0:
-            continue
-        result.append(sr)
-    return result
+    payload = _live_payload()
+    wanted = set(months)
+    recs = [r for r in payload["records"] if r.period in wanted]
+    return recs, payload["reports"], payload["recon_warnings"]
+
+
+def detected_sources() -> List[dict]:
+    """Reviewable mapping of every source the engine reads."""
+    if is_demo_mode():
+        return _demo_reports()
+    return _live_payload()["reports"]
+
+
+def months_with_data() -> List[str]:
+    """All FY months that currently hold any real data (for the period engine)."""
+    if is_demo_mode():
+        return sorted({d for d in _demo_month_index()})
+    return sorted({r.period for r in _live_payload()["records"]})
 
 
 # ---------------------------------------------------------------------------
-# Demo data generator — deterministic seed for reproducibility
+# Demo data (deterministic) — daily grain so OEE path is exercised offline
 # ---------------------------------------------------------------------------
-_PLANTS = ["KH", "VN", "WB"]
-_PLANT_NAMES = {"KH": "Khed", "VN": "Verna", "WB": "West Bengal"}
-
-_MACHINES = {
-    "KH": [
-        {"id": "EX-KH1", "seg": "Pipe", "ideal": 280, "unit": "kg"},
-        {"id": "EX-KH2", "seg": "Garden Pipe", "ideal": 180, "unit": "kg"},
-        {"id": "IM-KH1", "seg": "PTMT", "ideal": 450, "unit": "pcs"},
-        {"id": "IM-KH2", "seg": "CP", "ideal": 380, "unit": "pcs"},
-        {"id": "TK-KH1", "seg": "Tanks", "ideal": 12, "unit": "pcs"},
-    ],
-    "VN": [
-        {"id": "EX-VN1", "seg": "HDPE", "ideal": 260, "unit": "kg"},
-        {"id": "IM-VN1", "seg": "PTMT", "ideal": 420, "unit": "pcs"},
-        {"id": "IM-VN2", "seg": "CP", "ideal": 360, "unit": "pcs"},
-        {"id": "TK-VN1", "seg": "Tanks", "ideal": 10, "unit": "pcs"},
-    ],
-    "WB": [
-        {"id": "EX-WB1", "seg": "Pipe", "ideal": 240, "unit": "kg"},
-        {"id": "IM-WB1", "seg": "PTMT", "ideal": 400, "unit": "pcs"},
-        {"id": "IM-WB2", "seg": "CP", "ideal": 340, "unit": "pcs"},
-    ],
+_DEMO_PLANTS = {
+    "PIPE": [("PIPE EX-1", "Pipe", 280, "kg"), ("PIPE EX-2", "Pipe", 240, "kg")],
+    "GARDEN": [("GARDEN M/C-1", "Garden Pipe", 180, "kg")],
+    "HDPE": [("HDPE M/C-1", "HDPE", 260, "kg")],
+    "MOULDING": [("MOULDING M/C-1", "Moulding", 450, "pcs"),
+                 ("MOULDING M/C-2", "Moulding", 380, "pcs")],
 }
-
-_MOULDS = {
-    "PTMT": ["MT-25mm", "MT-32mm", "MT-40mm"],
-    "CP": ["CP-15mm", "CP-20mm", "CP-25mm"],
-    "Pipe": [""],
-    "HDPE": [""],
-    "Garden Pipe": [""],
-    "Tanks": ["TK-200L", "TK-500L", "TK-1000L", "TK-2000L", "TK-5000L"],
-}
-
-_PRODUCTS = {
-    "PTMT": ["Ball Valve 25mm", "Elbow 32mm", "Tee 40mm"],
-    "CP": ["CP Tap 15mm", "Shower 20mm", "Bib Cock 25mm"],
-    "Pipe": ["Pipe 110mm SWR", "Pipe 75mm SWR", "Pipe 50mm CPVC"],
-    "HDPE": ["HDPE 63mm", "HDPE 90mm", "HDPE 110mm"],
-    "Garden Pipe": ["Garden Hose 1/2\"", "Garden Hose 3/4\""],
-    "Tanks": ["Loft Tank 200L", "Storage 500L", "Tank 1000L", "Tank 2000L", "Tank 5000L"],
-}
-
-_DOWNTIME_REASONS = [
+_DEMO_REASONS = [
     "Mould Change", "Material Change", "Breakdown - Hydraulic",
-    "Breakdown - Electrical", "Die Head Change", "Colour Change",
-    "Trial Run", "Power Failure", "Operator Absence", ""
+    "Breakdown - Electrical", "Colour Change", "Power Failure", "",
 ]
+_DEMO_SHIFTS = ["A", "B", "C"]
 
-_SHIFTS = ["A", "B", "C"]
 
-
-def _demo_shift_log(from_date: str, to_date: str) -> List[dict]:
-    rng = random.Random(42)  # fixed seed for reproducibility
-    rows = []
-
-    start = datetime.date.fromisoformat(from_date)
-    end = datetime.date.fromisoformat(to_date)
+def _demo_records_range(from_iso: str, to_iso: str) -> List[Record]:
+    rng = random.Random(42)
+    rows: List[Record] = []
+    start = datetime.date.fromisoformat(from_iso)
+    end = datetime.date.fromisoformat(to_iso)
     day = start
     while day <= end:
-        for plant, machines in _MACHINES.items():
-            for shift in _SHIFTS:
-                for mc in machines:
-                    seg = mc["seg"]
-                    mould_list = _MOULDS.get(seg, [""])
-                    mould = rng.choice(mould_list)
-                    product = rng.choice(_PRODUCTS.get(seg, [seg]))
-
-                    shift_len = 480  # 8h
+        for plant, machines in _DEMO_PLANTS.items():
+            for shift in _DEMO_SHIFTS:
+                for mc_id, seg, ideal, unit in machines:
+                    shift_len = 480
                     planned_stops = rng.choice([0, 15, 20, 30])
                     ppt = shift_len - planned_stops
-                    max_dt = int(ppt * 0.35)
-                    downtime = rng.randint(0, max_dt)
-                    run_time = ppt - downtime
-                    dt_reason = rng.choice(_DOWNTIME_REASONS) if downtime > 0 else ""
-
-                    ideal = mc["ideal"]
-                    run_hrs = run_time / 60.0
-                    ideal_output = run_hrs * ideal
-                    # Performance between 0.70–0.98
-                    perf = rng.uniform(0.70, 0.98)
-                    total = round(ideal_output * perf, 2)
-                    # Quality between 0.93–0.995
-                    qual = rng.uniform(0.93, 0.995)
-                    reject = round(total * (1 - qual), 2)
-                    runner = round(total * rng.uniform(0.005, 0.02), 2) if seg in ["PTMT", "CP"] else 0.0
-
-                    planned = round(ideal * (ppt / 60.0) * 0.90, 2)
-
-                    # Costs
-                    labour = round(rng.uniform(800, 1800), 2)
-                    power = round(total * rng.uniform(2.5, 5.0), 2)
-                    solar = round(power * rng.uniform(0.1, 0.3), 2)
-
-                    rows.append({
-                        "date": day.isoformat(),
-                        "plant": plant,
-                        "machine": mc["id"],
-                        "mould": mould,
-                        "segment": seg,
-                        "product": product,
-                        "shift": shift,
-                        "ideal_rate": ideal,
-                        "shift_len_min": shift_len,
-                        "planned_stops_min": planned_stops,
-                        "downtime_min": downtime,
-                        "downtime_reason": dt_reason,
-                        "total_count": total,
-                        "reject_count": reject,
-                        "planned_output": planned,
-                        "unit": mc["unit"],
-                        "labour_cost": labour,
-                        "power_cost": power,
-                        "solar_cost": solar,
-                        "runner_lumps": runner,
-                        "compound_type": seg if seg in ["PTMT", "CP", "HDPE"] else "",
-                    })
+                    downtime = rng.randint(0, int(ppt * 0.35))
+                    run = ppt - downtime
+                    reason = rng.choice(_DEMO_REASONS) if downtime > 0 else ""
+                    run_hrs = run / 60.0
+                    ideal_out = run_hrs * ideal
+                    total = round(ideal_out * rng.uniform(0.70, 0.98), 2)
+                    reject = round(total * (1 - rng.uniform(0.93, 0.995)), 2)
+                    runner = round(total * rng.uniform(0.005, 0.02), 2) if unit == "pcs" else 0.0
+                    rows.append(Record(
+                        grain="daily", has_oee=True,
+                        period=day.strftime("%Y-%m"), date=day.isoformat(),
+                        plant=plant, segment=seg, machine=mc_id, unit=unit,
+                        shift=shift, ideal_rate=ideal, shift_len_min=shift_len,
+                        planned_stops_min=planned_stops, downtime_min=downtime,
+                        downtime_reason=reason, total_count=total,
+                        reject_count=reject, runner_lumps=runner,
+                        planned_output=round(ideal * (ppt / 60.0) * 0.9, 2),
+                        labour_cost=round(rng.uniform(800, 1800), 2),
+                        power_cost=round(total * rng.uniform(2.5, 5.0), 2),
+                        solar_cost=round(total * rng.uniform(0.4, 1.2), 2),
+                        source_family=seg, source_file="demo", source_tab="demo",
+                    ))
         day += datetime.timedelta(days=1)
     return rows
+
+
+def _demo_month_index() -> List[str]:
+    return ["2026-04", "2026-05", "2026-06"]
+
+
+def _demo_records_for_months(months: List[str]) -> List[Record]:
+    out: List[Record] = []
+    for ym in months:
+        if ym not in _demo_month_index():
+            continue
+        y, m = int(ym[:4]), int(ym[5:7])
+        first = datetime.date(y, m, 1)
+        if m == 12:
+            nxt = datetime.date(y + 1, 1, 1)
+        else:
+            nxt = datetime.date(y, m + 1, 1)
+        last = nxt - datetime.timedelta(days=1)
+        out.extend(_demo_records_range(first.isoformat(), last.isoformat()))
+    return out
+
+
+def _demo_reports() -> List[dict]:
+    reports = []
+    for plant, machines in _DEMO_PLANTS.items():
+        reports.append({
+            "family": plant.lower(),
+            "title": f"DEMO — {sources.PLANT_NAMES.get(plant, plant)}",
+            "file_id": "demo",
+            "tab": "demo daily log",
+            "detail_tabs": [m[0] for m in machines],
+            "grain": "daily",
+            "months_available": _demo_month_index(),
+            "record_count": 0,
+            "segment": machines[0][1],
+            "plant": plant,
+            "reconcile": None,
+        })
+    return reports

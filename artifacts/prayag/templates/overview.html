@@ -7,25 +7,36 @@
 
 <!-- KPI Grid -->
 <div class="grid grid-cols-2 gap-3 mb-4">
-  <!-- OEE Big Card -->
+  <!-- Headline Big Card: OEE (daily) or Output Efficiency (monthly) -->
   <div class="col-span-2 kpi-card p-4">
     <div class="flex items-center justify-between mb-3">
       <div>
-        <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">Overall OEE{{ info('OEE') }}</div>
-        <div class="text-4xl font-bold text-navy mt-1" style="color:var(--navy)">{{ o.oee }}%</div>
+        <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">
+          {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% else %}Output Efficiency{{ info('OUTPUT_EFF') }}{% endif %}
+        </div>
+        <div class="text-4xl font-bold text-navy mt-1" style="color:var(--navy)">{{ o.headline }}%</div>
+        {% if not o.oee_available %}
+        <div class="text-xs text-gray-400 mt-1">Monthly data — OEE (availability × performance × quality) needs daily shift logs</div>
+        {% endif %}
       </div>
       <!-- Doughnut gauge -->
       <div class="w-24 h-24 relative flex-shrink-0">
         <canvas id="oeeGauge"></canvas>
         <div class="absolute inset-0 flex items-center justify-center">
-          <span class="text-xs font-bold {% if o.oee_rating=='green' %}text-green-600{% elif o.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
-            {{ o.oee_rating|upper }}
+          <span class="text-xs font-bold {% if o.headline_rating=='green' %}text-green-600{% elif o.headline_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
+            {{ o.headline_rating|upper }}
           </span>
         </div>
       </div>
     </div>
-    <!-- A P Q progress bars -->
-    {% for label, val, color, tkey in [('Availability', o.availability, '#22c55e', 'A'), ('Performance', o.performance, '#3b82f6', 'P'), ('Quality', o.quality, '#8b5cf6', 'Q')] %}
+    {% if o.oee_available %}
+    <!-- A P Q progress bars (daily grain) -->
+    {% set bars = [('Availability', o.availability, '#22c55e', 'A'), ('Performance', o.performance, '#3b82f6', 'P'), ('Quality', o.quality, '#8b5cf6', 'Q')] %}
+    {% else %}
+    <!-- Utilisation / Output Efficiency bars (monthly grain) -->
+    {% set bars = [('Utilisation', o.utilisation, '#22c55e', 'UTIL'), ('Output Efficiency', o.output_efficiency, '#3b82f6', 'EFF')] %}
+    {% endif %}
+    {% for label, val, color, tkey in bars %}
     <div class="mb-2">
       <div class="flex justify-between text-xs mb-1">
         <span class="text-gray-600">{{ label }}{{ info(tkey) }}</span>
@@ -85,10 +96,10 @@
 </div>
 {% endif %}
 
-<!-- OEE Trend Chart -->
+<!-- Trend Chart (monthly headline) -->
 <div class="kpi-card p-4 mb-4">
   <div class="flex items-center justify-between mb-3">
-    <h3 class="text-sm font-semibold text-navy" style="color:var(--navy)">OEE Daily Trend</h3>
+    <h3 class="text-sm font-semibold text-navy" style="color:var(--navy)">{{ trend_label }} — Monthly Trend</h3>
     <span class="text-xs text-gray-400">vs 85% target</span>
   </div>
   <div class="chart-box" style="height:180px">
@@ -107,15 +118,15 @@
     {% for pcode, pm in by_plant.items() %}
     <a href="/plant?period={{ period }}&plant={{ pcode }}&plant_filter={{ pcode }}"
        class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 transition">
-      <div class="w-2 h-2 rounded-full flex-shrink-0 {% if pm.oee_rating=='green' %}rating-dot-green{% elif pm.oee_rating=='amber' %}rating-dot-amber{% else %}rating-dot-red{% endif %}"></div>
+      <div class="w-2 h-2 rounded-full flex-shrink-0 {% if pm.headline_rating=='green' %}rating-dot-green{% elif pm.headline_rating=='amber' %}rating-dot-amber{% else %}rating-dot-red{% endif %}"></div>
       <div class="flex-1 min-w-0">
         <div class="text-sm font-medium text-gray-800 truncate">{{ plant_names.get(pcode, pcode) }} ({{ pcode }})</div>
       </div>
       <div class="text-right flex-shrink-0">
-        <span class="text-sm font-bold {% if pm.oee_rating=='green' %}text-green-600{% elif pm.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
-          {{ pm.oee }}%
+        <span class="text-sm font-bold {% if pm.headline_rating=='green' %}text-green-600{% elif pm.headline_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
+          {{ pm.headline }}%
         </span>
-        <div class="text-xs text-gray-400">OEE</div>
+        <div class="text-xs text-gray-400">{{ pm.headline_label }}</div>
       </div>
       <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#9ca3af" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
@@ -133,8 +144,8 @@
 
 {% block scripts %}
 <script>
-// OEE Gauge (Doughnut)
-const oeeVal = {{ overall_dict.oee }};
+// Headline Gauge (Doughnut) — OEE when available, else Output Efficiency
+const oeeVal = {{ overall_dict.headline }};
 const gCtx = document.getElementById('oeeGauge').getContext('2d');
 new Chart(gCtx, {
   type: 'doughnut',
@@ -155,17 +166,17 @@ new Chart(gCtx, {
   }
 });
 
-// OEE Trend
+// Monthly headline trend
 const tCtx = document.getElementById('trendChart').getContext('2d');
-const dlabels = {{ daily_labels|safe }};
-const doee = {{ daily_oee|safe }};
+const dlabels = {{ trend_labels|safe }};
+const doee = {{ trend_values|safe }};
 new Chart(tCtx, {
   type: 'line',
   data: {
     labels: dlabels,
     datasets: [
       {
-        label: 'OEE %',
+        label: {{ trend_label|tojson }},
         data: doee,
         borderColor: '#1F3864',
         backgroundColor: 'rgba(31,56,100,0.08)',
@@ -213,7 +224,7 @@ new Chart(pCtx, {
   data: {
     labels: pLabels,
     datasets: [{
-      label: 'OEE %',
+      label: {{ trend_label|tojson }},
       data: pOEE,
       backgroundColor: pOEE.map(v => v >= 85 ? '#22c55e' : v >= 60 ? '#f59e0b' : '#ef4444'),
       borderRadius: 6,

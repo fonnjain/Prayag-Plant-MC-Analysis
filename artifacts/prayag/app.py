@@ -10,12 +10,13 @@ from functools import lru_cache
 from flask import Flask, render_template, request, jsonify, Response, abort
 
 from sheets import (
-    read_sheet, rows_to_shift_rows, is_demo_mode, SheetReadError,
-    _PLANTS, _PLANT_NAMES, _MACHINES,
+    get_records, detected_sources, months_with_data,
+    is_demo_mode, SheetReadError,
 )
+from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
-    rollup_by_segment, rollup_by_date, downtime_pareto,
+    rollup_by_segment, rollup_by_period, downtime_pareto,
 )
 from validate import full_validate
 from narrative import get_narrative
@@ -58,35 +59,62 @@ def _today() -> datetime.date:
     return datetime.date.today()
 
 
-def parse_period(args) -> tuple[str, str, str]:
+def _fmt(d: datetime.date) -> str:
+    return d.strftime("%d-%m-%Y")
+
+
+def _months_between(f: datetime.date, t: datetime.date) -> list[str]:
+    out, y, m = [], f.year, f.month
+    while (y, m) <= (t.year, t.month):
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return out
+
+
+def _month_disp(ym: str) -> str:
+    try:
+        return datetime.date(int(ym[:4]), int(ym[5:7]), 1).strftime("%b %Y")
+    except (ValueError, IndexError):
+        return ym
+
+
+def parse_period(args) -> dict:
+    """Resolve the requested period to calendar months (the source grain).
+
+    Returns a dict with from/to ISO dates, a human label, the list of overlapped
+    months, and a banner explaining any sub-monthly → monthly resolution.
     """
-    Returns (from_iso, to_iso, label_ddmmyyyy).
-    """
-    period = args.get("period", "yesterday")
+    period = args.get("period", "current_fy")
     today = _today()
     yesterday = today - datetime.timedelta(days=1)
+    sub_monthly = False
 
     if period == "yesterday":
         f = t = yesterday
         label = f"Yesterday ({_fmt(yesterday)})"
+        sub_monthly = True
     elif period == "last_week":
         t = yesterday
         f = t - datetime.timedelta(days=6)
         label = f"Last 7 days: {_fmt(f)} to {_fmt(t)}"
+        sub_monthly = True
     elif period == "last_month":
         t = yesterday
         f = t - datetime.timedelta(days=29)
         label = f"Last 30 days: {_fmt(f)} to {_fmt(t)}"
+        sub_monthly = True
     elif period == "current_fy":
         year = today.year if today.month >= 4 else today.year - 1
         f = datetime.date(year, 4, 1)
         t = datetime.date(year + 1, 3, 31)
-        label = f"FY {year}-{str(year+1)[2:]} ({_fmt(f)} to {_fmt(t)})"
+        label = f"FY {year}-{str(year+1)[2:]}"
     elif period == "prior_fy":
         year = (today.year if today.month >= 4 else today.year - 1) - 1
         f = datetime.date(year, 4, 1)
         t = datetime.date(year + 1, 3, 31)
-        label = f"FY {year}-{str(year+1)[2:]} ({_fmt(f)} to {_fmt(t)})"
+        label = f"FY {year}-{str(year+1)[2:]}"
     elif period == "custom":
         try:
             f = datetime.date.fromisoformat(args.get("from_date", str(yesterday)))
@@ -94,28 +122,42 @@ def parse_period(args) -> tuple[str, str, str]:
         except ValueError:
             f = t = yesterday
         label = f"Custom: {_fmt(f)} to {_fmt(t)}"
+        sub_monthly = (t - f).days < 27
     elif period in [str(m) for m in range(1, 13)]:
         m = int(period)
-        year = today.year
+        # FY runs Apr–Mar: Apr–Dec map to the FY start year, Jan–Mar to the next.
+        fy_start = today.year if today.month >= 4 else today.year - 1
+        year = fy_start if m >= 4 else fy_start + 1
         f = datetime.date(year, m, 1)
-        last_day = (datetime.date(year, m % 12 + 1, 1) - datetime.timedelta(days=1)) if m < 12 else datetime.date(year, 12, 31)
-        t = last_day
-        label = f"{datetime.date(year, m, 1).strftime('%B %Y')}: {_fmt(f)} to {_fmt(t)}"
+        t = (datetime.date(year, m % 12 + 1, 1) - datetime.timedelta(days=1)) if m < 12 else datetime.date(year, 12, 31)
+        label = datetime.date(year, m, 1).strftime("%B %Y")
     else:
-        f = t = yesterday
-        label = f"Yesterday ({_fmt(yesterday)})"
+        year = today.year if today.month >= 4 else today.year - 1
+        f = datetime.date(year, 4, 1)
+        t = datetime.date(year + 1, 3, 31)
+        label = f"FY {year}-{str(year+1)[2:]}"
 
-    # Never go into the future
-    if t > today:
-        t = today
     if f > t:
         f = t
 
-    return f.isoformat(), t.isoformat(), label
+    months = _months_between(f, t)
 
+    banner = ""
+    if sub_monthly:
+        disp = ", ".join(_month_disp(m) for m in months)
+        banner = (
+            f"{label} → showing monthly totals for {disp}. The source data is "
+            "monthly, so a daily breakdown isn't available yet."
+        )
 
-def _fmt(d: datetime.date) -> str:
-    return d.strftime("%d-%m-%Y")
+    return {
+        "from_iso": f.isoformat(),
+        "to_iso": t.isoformat(),
+        "label": label,
+        "months": months,
+        "banner": banner,
+        "period": period,
+    }
 
 
 def _period_key(from_iso: str, to_iso: str, plant: str, segment: str, machine: str) -> str:
@@ -123,20 +165,19 @@ def _period_key(from_iso: str, to_iso: str, plant: str, segment: str, machine: s
 
 
 # ---------------------------------------------------------------------------
-# Data pipeline (read → clean → filter → compute → validate)
+# Data pipeline (read → filter → compute → validate)
 # ---------------------------------------------------------------------------
 
 def get_data(args):
-    from_iso, to_iso, period_label = parse_period(args)
+    pinfo = parse_period(args)
+    months = pinfo["months"]
 
     plant_filter = args.get("plant", "")
     segment_filter = args.get("segment", "")
     machine_filter = args.get("machine", "")
 
-    raw = read_sheet("Shift Log", from_iso, to_iso)
-    all_rows = rows_to_shift_rows(raw)
+    all_rows, source_reports, recon_warnings = get_records(months)
 
-    # Apply filters
     rows = all_rows
     if plant_filter:
         rows = [r for r in rows if r.plant == plant_filter]
@@ -146,17 +187,29 @@ def get_data(args):
         rows = [r for r in rows if r.machine == machine_filter]
 
     overall = compute_metrics(rows)
-    validation = full_validate(rows, overall)
+    validation = full_validate(rows, overall, extra_warnings=recon_warnings)
+
+    # Flag requested months that hold no data yet.
+    have = set(months_with_data())
+    empty_months = [m for m in months if m not in have]
+    banner = pinfo["banner"]
+    if empty_months and len(empty_months) < len(months):
+        disp = ", ".join(_month_disp(m) for m in empty_months)
+        note = f"No data yet for {disp}."
+        banner = f"{banner} {note}".strip()
 
     return {
         "rows": rows,
         "all_rows": all_rows,
         "overall": overall,
         "validation": validation,
-        "from_iso": from_iso,
-        "to_iso": to_iso,
-        "period_label": period_label,
-        "period": args.get("period", "yesterday"),
+        "from_iso": pinfo["from_iso"],
+        "to_iso": pinfo["to_iso"],
+        "period_label": pinfo["label"],
+        "period": pinfo["period"],
+        "months": months,
+        "grain_banner": banner,
+        "source_reports": source_reports,
         "plant_filter": plant_filter,
         "segment_filter": segment_filter,
         "machine_filter": machine_filter,
@@ -183,13 +236,13 @@ def inject_glossary():
 def _common_ctx(data: dict) -> dict:
     """Build template context that every page needs."""
     opt_rows = data.get("all_rows", data["rows"])
-    plants = sorted(set(r.plant for r in opt_rows)) or _PLANTS
+    plants = sorted(set(r.plant for r in opt_rows))
     segments = sorted(set(r.segment for r in opt_rows))
     machines = sorted(set(r.machine for r in opt_rows))
     return {
         **data,
         "plants": plants,
-        "plant_names": _PLANT_NAMES,
+        "plant_names": PLANT_NAMES,
         "segments": segments,
         "machines": machines,
         "overall_dict": data["overall"].to_dict(),
@@ -205,42 +258,55 @@ def overview():
     data = get_data(request.args)
     ctx = _common_ctx(data)
 
-    # Daily OEE trend
-    by_date = rollup_by_date(data["rows"])
-    daily_labels = sorted(by_date.keys())
-    daily_oee = [round(by_date[d].oee * 100, 1) for d in daily_labels]
-    daily_labels_fmt = [datetime.date.fromisoformat(d).strftime("%d-%m") for d in daily_labels]
+    od = ctx["overall_dict"]
+    oee_available = od["oee_available"]
+
+    # Trend over the period's months (headline = OEE when available, else efficiency)
+    by_period = rollup_by_period(data["rows"])
+    trend_keys = sorted(by_period.keys())
+    trend_labels = [_month_disp(k) for k in trend_keys]
+    trend_values = [round(by_period[k].headline * 100, 1) for k in trend_keys]
+    trend_label = "OEE %" if oee_available else "Output Efficiency %"
 
     # Plant overview
     by_plant = rollup_by_plant(data["rows"])
     plant_labels = sorted(by_plant.keys())
-    plant_oee = [round(by_plant[p].oee * 100, 1) for p in plant_labels]
+    plant_headline = [round(by_plant[p].headline * 100, 1) for p in plant_labels]
     plant_output = [round(by_plant[p].total_count, 0) for p in plant_labels]
+    plant_names_disp = [PLANT_NAMES.get(p, p) for p in plant_labels]
 
     # Narrative
     narrative = None
     if ctx["has_claude"] and data["rows"]:
-        od = ctx["overall_dict"]
-        narrative = get_narrative(
-            view="Overview",
-            period_label=data["period_label"],
-            period_key=_period_key(data["from_iso"], data["to_iso"], "", "", ""),
-            metrics_summary={
+        if oee_available:
+            summary = {
                 "OEE": f"{od['oee']}%",
                 "Availability": f"{od['availability']}%",
                 "Performance": f"{od['performance']}%",
                 "Quality": f"{od['quality']}%",
-                "Total Output": od['total_count'],
+                "Total Output": od["total_count"],
                 "Rejection %": f"{od['rejection_pct']}%",
-                "Plan Attainment": f"{od['attainment']}%",
-            },
+            }
+        else:
+            summary = {
+                "Output Efficiency": f"{od['output_efficiency']}%",
+                "Utilisation": f"{od['utilisation']}%",
+                "Total Output": od["total_count"],
+                "Rejection %": f"{od['rejection_pct']}%",
+            }
+        narrative = get_narrative(
+            view="Overview",
+            period_label=data["period_label"],
+            period_key=_period_key(data["from_iso"], data["to_iso"], "", "", ""),
+            metrics_summary=summary,
         )
 
     ctx.update({
-        "daily_labels": _safe_json(daily_labels_fmt),
-        "daily_oee": _safe_json(daily_oee),
-        "plant_labels": _safe_json(plant_labels),
-        "plant_oee": _safe_json(plant_oee),
+        "trend_labels": _safe_json(trend_labels),
+        "trend_values": _safe_json(trend_values),
+        "trend_label": trend_label,
+        "plant_labels": _safe_json(plant_names_disp),
+        "plant_oee": _safe_json(plant_headline),
         "plant_output": _safe_json(plant_output),
         "by_plant": {p: by_plant[p].to_dict() for p in plant_labels},
         "narrative": narrative,
@@ -259,7 +325,7 @@ def plant_view():
         m = by_plant[p]
         plant_items.append({
             "plant": p,
-            "name": _PLANT_NAMES.get(p, p),
+            "name": PLANT_NAMES.get(p, p),
             "metrics": m.to_dict(),
         })
 
@@ -327,6 +393,19 @@ def glossary_view():
     data = get_data(request.args)
     ctx = _common_ctx(data)
     return render_template("glossary.html", **ctx)
+
+
+@app.route("/sources")
+def sources_view():
+    data = get_data(request.args)
+    ctx = _common_ctx(data)
+    reports = ctx.get("source_reports") or detected_sources()
+    ctx.update({
+        "reports": reports,
+        "annual_sources": ANNUAL_SOURCES,
+        "daily_sources": DAILY_SOURCES,
+    })
+    return render_template("detected_sources.html", **ctx)
 
 
 # ---------------------------------------------------------------------------
