@@ -1,1 +1,2 @@
 - [Jinja macro import in child templates](jinja-macro-import.md) — `{% from %}` imports must live inside `{% block content %}`, not at file top, in templates that extend a base.
+- [Replit connectors from Python](replit-connectors-python.md) — SDK is JS-only; from Python call the connectors credential API directly to get a fresh OAuth token.

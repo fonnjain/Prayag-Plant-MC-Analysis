@@ -52,8 +52,14 @@ def _get_access_token() -> Optional[str]:
     req = urllib.request.Request(
         url, headers={"Accept": "application/json", "X_REPLIT_TOKEN": xtoken}
     )
-    with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.load(r)
+    except (urllib.error.URLError, ValueError) as e:
+        raise SheetReadError(
+            "Couldn't verify the Google Sheets connection. "
+            "Please reconnect it and try again."
+        ) from e
     items = data.get("items", [])
     if not items:
         return None

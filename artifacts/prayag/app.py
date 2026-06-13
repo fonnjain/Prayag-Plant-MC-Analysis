@@ -34,6 +34,22 @@ def _handle_sheet_error(err):
     """Show a clear message instead of a 500 when the live sheet can't be read."""
     return render_template("sheet_error.html", message=str(err)), 200
 
+
+def _safe_json(obj) -> str:
+    """JSON for safe embedding inside a <script> tag.
+
+    Escapes characters that could break out of the script context, so values
+    coming from an externally-editable Google Sheet cannot inject markup.
+    """
+    return (
+        json.dumps(obj)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
 # ---------------------------------------------------------------------------
 # Period helpers
 # ---------------------------------------------------------------------------
@@ -221,11 +237,11 @@ def overview():
         )
 
     ctx.update({
-        "daily_labels": json.dumps(daily_labels_fmt),
-        "daily_oee": json.dumps(daily_oee),
-        "plant_labels": json.dumps(plant_labels),
-        "plant_oee": json.dumps(plant_oee),
-        "plant_output": json.dumps(plant_output),
+        "daily_labels": _safe_json(daily_labels_fmt),
+        "daily_oee": _safe_json(daily_oee),
+        "plant_labels": _safe_json(plant_labels),
+        "plant_oee": _safe_json(plant_oee),
+        "plant_output": _safe_json(plant_output),
         "by_plant": {p: by_plant[p].to_dict() for p in plant_labels},
         "narrative": narrative,
     })
@@ -254,10 +270,10 @@ def plant_view():
 
     ctx.update({
         "plant_items": plant_items,
-        "plant_labels": json.dumps(plant_labels),
-        "plant_oee": json.dumps(plant_oee),
-        "plant_output": json.dumps(plant_output),
-        "plant_attainment": json.dumps(plant_attainment),
+        "plant_labels": _safe_json(plant_labels),
+        "plant_oee": _safe_json(plant_oee),
+        "plant_output": _safe_json(plant_output),
+        "plant_attainment": _safe_json(plant_attainment),
     })
     return render_template("plant.html", **ctx)
 
@@ -279,8 +295,8 @@ def machine_view():
 
     ctx.update({
         "machine_items": machine_items,
-        "machine_labels": json.dumps(machine_labels),
-        "machine_oee": json.dumps(machine_oee),
+        "machine_labels": _safe_json(machine_labels),
+        "machine_oee": _safe_json(machine_oee),
     })
     return render_template("machine.html", **ctx)
 
@@ -297,9 +313,9 @@ def losses():
 
     ctx.update({
         "pareto": pareto,
-        "pareto_labels": json.dumps(labels),
-        "pareto_minutes": json.dumps(minutes),
-        "pareto_cum_pct": json.dumps(cum_pct),
+        "pareto_labels": _safe_json(labels),
+        "pareto_minutes": _safe_json(minutes),
+        "pareto_cum_pct": _safe_json(cum_pct),
         "top3": pareto[:3],
         "total_downtime": sum(minutes),
     })
@@ -372,8 +388,8 @@ def report_detail(report_id: str):
         "report": rpt,
         "headers": headers,
         "table_rows": table_rows,
-        "chart_labels": json.dumps(chart_labels),
-        "chart_values": json.dumps(chart_values),
+        "chart_labels": _safe_json(chart_labels),
+        "chart_values": _safe_json(chart_values),
         "chart_label": chart_label,
         "sub_overall": sub_dict,
         "sub_validation": sub_validation,
