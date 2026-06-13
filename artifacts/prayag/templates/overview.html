@@ -4,6 +4,8 @@
 {% block content %}
 {% from "_macros.html" import info %}
 {% set o = overall_dict %}
+{% set blocked = confirmation and confirmation.status=='error' %}
+{% set review_href = "/confirmation?period=" ~ period ~ ("&from_date=" ~ request.args.get('from_date','') ~ "&to_date=" ~ request.args.get('to_date','') if period=='custom' else "") %}
 
 <!-- KPI Grid -->
 <div class="grid grid-cols-2 gap-3 mb-4">
@@ -14,9 +16,8 @@
         <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">
           {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% else %}Output Efficiency{{ info('OUTPUT_EFF') }}{% endif %}
         </div>
-        {% if confirmation and confirmation.status=='error' %}
-        <a href="/confirmation?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
-           class="block mt-1">
+        {% if blocked %}
+        <a href="{{ review_href }}" class="block mt-1">
           <span class="inline-flex items-center gap-1.5 text-xl font-bold text-red-700">
             <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
             Needs review
@@ -32,14 +33,25 @@
       </div>
       <!-- Doughnut gauge -->
       <div class="w-24 h-24 relative flex-shrink-0">
+        {% if blocked %}
+        <div class="w-full h-full rounded-full border-4 border-dashed border-gray-200 flex items-center justify-center text-center">
+          <span class="text-[10px] font-semibold text-gray-400 px-1">Needs<br>review</span>
+        </div>
+        {% else %}
         <canvas id="oeeGauge"></canvas>
         <div class="absolute inset-0 flex items-center justify-center">
           <span class="text-xs font-bold {% if o.headline_rating=='green' %}text-green-600{% elif o.headline_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
             {{ o.headline_rating|upper }}
           </span>
         </div>
+        {% endif %}
       </div>
     </div>
+    {% if blocked %}
+    <div class="rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-700">
+      Availability, Performance, Quality and efficiency figures are withheld until the data errors are resolved.
+    </div>
+    {% else %}
     {% if o.oee_available %}
     <!-- A P Q progress bars (daily grain) -->
     {% set bars = [('Availability', o.availability, '#22c55e', 'A'), ('Performance', o.performance, '#3b82f6', 'P'), ('Quality', o.quality, '#8b5cf6', 'Q')] %}
@@ -58,6 +70,7 @@
       </div>
     </div>
     {% endfor %}
+    {% endif %}
   </div>
 
   <!-- Output -->
@@ -113,15 +126,26 @@
     <h3 class="text-sm font-semibold text-navy" style="color:var(--navy)">{{ trend_label }} — Monthly Trend</h3>
     <span class="text-xs text-gray-400">vs 85% target</span>
   </div>
+  {% if blocked %}
+  <a href="{{ review_href }}" class="block chart-box flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50" style="height:180px">
+    <span class="text-xs font-semibold text-gray-400 text-center px-4">Trend withheld — {{ trend_label }} needs review until data errors are resolved →</span>
+  </a>
+  {% else %}
   <div class="chart-box" style="height:180px">
     <canvas id="trendChart"></canvas>
   </div>
+  {% endif %}
 </div>
 
 <!-- Plant Summary -->
 {% if by_plant %}
 <div class="kpi-card p-4 mb-4">
   <h3 class="text-sm font-semibold text-navy mb-3" style="color:var(--navy)">Plant Summary</h3>
+  {% if blocked %}
+  <a href="{{ review_href }}" class="block chart-box mb-2 flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50" style="height:160px">
+    <span class="text-xs font-semibold text-gray-400 text-center px-4">Per-plant {{ trend_label }} withheld until data errors are resolved →</span>
+  </a>
+  {% else %}
   <div class="chart-box mb-4" style="height:160px">
     <canvas id="plantChart"></canvas>
   </div>
@@ -145,6 +169,7 @@
     </a>
     {% endfor %}
   </div>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -154,10 +179,14 @@
 {% endblock %}
 
 {% block scripts %}
+{% if not (confirmation and confirmation.status=='error') %}
 <script>
-// Headline Gauge (Doughnut) — OEE when available, else Output Efficiency
+// Headline Gauge (Doughnut) — OEE when available, else Output Efficiency.
+// Skipped entirely when the headline figure is blocked (status==error).
+const gaugeEl = document.getElementById('oeeGauge');
+if (gaugeEl) {
 const oeeVal = {{ overall_dict.headline }};
-const gCtx = document.getElementById('oeeGauge').getContext('2d');
+const gCtx = gaugeEl.getContext('2d');
 new Chart(gCtx, {
   type: 'doughnut',
   data: {
@@ -176,9 +205,12 @@ new Chart(gCtx, {
     animation: { duration: 800 },
   }
 });
+}
 
-// Monthly headline trend
-const tCtx = document.getElementById('trendChart').getContext('2d');
+// Monthly headline trend (skipped when the headline figure is blocked)
+const trendEl = document.getElementById('trendChart');
+if (trendEl) {
+const tCtx = trendEl.getContext('2d');
 const dlabels = {{ trend_labels|safe }};
 const doee = {{ trend_values|safe }};
 new Chart(tCtx, {
@@ -225,9 +257,12 @@ new Chart(tCtx, {
     }
   }
 });
+}
 
-// Plant Bar Chart
-const pCtx = document.getElementById('plantChart').getContext('2d');
+// Plant Bar Chart (skipped when the headline figure is blocked)
+const plantEl = document.getElementById('plantChart');
+if (plantEl) {
+const pCtx = plantEl.getContext('2d');
 const pLabels = {{ plant_labels|safe }};
 const pOEE = {{ plant_oee|safe }};
 new Chart(pCtx, {
@@ -254,5 +289,7 @@ new Chart(pCtx, {
     }
   }
 });
+}
 </script>
+{% endif %}
 {% endblock %}
