@@ -444,7 +444,21 @@ def glossary_view():
 def sources_view():
     data = get_data(request.args)
     ctx = _common_ctx(data)
-    reports = ctx.get("source_reports") or detected_sources()
+    # Always show the full configured inventory (annual + daily workbooks),
+    # independent of the selected period. Overlay any reconciliation results
+    # from the current period's loaded reports, keyed by file+tab.
+    reports = detected_sources()
+    overlays = {
+        (r.get("file_id"), r.get("tab")): r
+        for r in (data.get("source_reports") or [])
+        if r.get("reconcile")
+    }
+    for r in reports:
+        ov = overlays.get((r.get("file_id"), r.get("tab")))
+        if ov:
+            r["reconcile"] = ov["reconcile"]
+            if ov.get("record_count"):
+                r["record_count"] = ov["record_count"]
     ctx.update({
         "reports": reports,
         "annual_sources": ANNUAL_SOURCES,

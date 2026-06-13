@@ -35,6 +35,10 @@
 
   <div class="grid grid-cols-2 gap-2 text-xs mb-2">
     <div>
+      <div class="text-gray-400">Data sheet used</div>
+      <div class="text-gray-800 font-medium break-words">{% if r.tab %}{{ r.tab }}{% else %}—{% endif %}</div>
+    </div>
+    <div>
       <div class="text-gray-400">Months with data</div>
       <div class="text-gray-800 font-medium">
         {% if r.months_available %}{{ r.months_available|length }} month(s){% else %}—{% endif %}
@@ -45,6 +49,10 @@
       <div class="text-gray-800 font-medium">{{ r.record_count }}</div>
     </div>
   </div>
+
+  {% if r.note %}
+  <div class="text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2 mb-2 leading-relaxed">{{ r.note }}</div>
+  {% endif %}
 
   {% if r.months_available %}
   <div class="flex flex-wrap gap-1 mb-2">
