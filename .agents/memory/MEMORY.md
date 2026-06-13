@@ -1,1 +1,2 @@
 - [Prayag daily/monthly grain](prayag-grain-engine.md) — two distinct daily Record types in compute_metrics; matrix rows must carry hours directly or metrics silently zero out.
+- [Prayag Data Confirmation](prayag-data-confirmation.md) — four-tier audit gating; master = full-FY grid, runs on unfiltered rows, grain-aware scope; Claude only matches codes + writes prose, never reads figures.

@@ -13,13 +13,14 @@ from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
     is_demo_mode, SheetReadError,
 )
-from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES
+from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
     rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
 )
 from validate import full_validate
-from narrative import get_narrative
+from confirm import full_confirm, TIER_LABELS
+from narrative import get_narrative, match_codes, summarize_confirmation
 from pdf_export import generate_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -217,6 +218,29 @@ def get_data(args):
     overall = compute_metrics(rows)
     validation = full_validate(rows, overall, extra_warnings=recon_warnings)
 
+    # ---- Four-tier data confirmation (deterministic) ----
+    # Completeness is measured against the full-FY monthly grid as the master
+    # roster. Confirmation always runs on the UNFILTERED period rows so a plant
+    # or machine filter never makes the dataset look incomplete.
+    has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+    try:
+        master_rows = get_records(FY_MONTHS)[0]
+    except SheetReadError:
+        master_rows = list(all_rows)
+    confirm_overall = compute_metrics(all_rows)
+    confirmation = full_confirm(
+        period_months=months,
+        period_rows=all_rows,
+        source_reports=source_reports or [],
+        master_rows=master_rows,
+        fy_months_with_data=months_with_data(),
+        computed=confirm_overall,
+        daily_used=daily_used,
+        as_of=_today(),
+        extra_recon_warnings=recon_warnings,
+        matcher=(match_codes if has_claude else None),
+    )
+
     # Flag requested months that hold no data yet (monthly path only).
     banner = grain_banner
     if not daily_used:
@@ -235,6 +259,7 @@ def get_data(args):
         "all_rows": all_rows,
         "overall": overall,
         "validation": validation,
+        "confirmation": confirmation,
         "from_iso": pinfo["from_iso"],
         "to_iso": pinfo["to_iso"],
         "period_label": pinfo["label"],
@@ -438,6 +463,31 @@ def glossary_view():
     data = get_data(request.args)
     ctx = _common_ctx(data)
     return render_template("glossary.html", **ctx)
+
+
+@app.route("/confirmation")
+def confirmation_view():
+    data = get_data(request.args)
+    ctx = _common_ctx(data)
+    conf = data["confirmation"]
+
+    # Plain-English summary from Claude (from already-computed issues only).
+    summary = None
+    if ctx["has_claude"]:
+        issues_brief = [
+            f"[{i['tier_label']}/{i['severity']}] {i['message']}"
+            for i in conf["issues"]
+        ]
+        summary = summarize_confirmation(
+            conf["status"], conf["score_label"], issues_brief
+        )
+
+    ctx.update({
+        "conf": conf,
+        "conf_summary": summary,
+        "tier_labels": TIER_LABELS,
+    })
+    return render_template("confirmation.html", **ctx)
 
 
 @app.route("/sources")

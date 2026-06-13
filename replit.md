@@ -22,6 +22,7 @@ A mobile-first Flask dashboard that reads Prayag's real production Google Sheets
 
 ## Where things live
 
+- `artifacts/prayag/confirm.py` — deterministic four-tier Data Confirmation engine. `build_masters` (roster from full-FY grid), `expected_files_for`, `tier1_completeness`/`tier2_reconciliation`/`tier3_validity`/`tier4_plausibility`, `full_confirm(...)` → {status, score, score_label, issues, tiers, counts, reconciled, summary}. Pure; no network. Caller may pass an optional `matcher` (Claude) used only to fuzzy-map leftover machine codes.
 - `artifacts/prayag/sources.py` — real Google Sheet file IDs (`ANNUAL_SOURCES`, `DAILY_SOURCES`), `PLANT_NAMES`, `FY_MONTHS`. Source of truth for what gets read.
 - `artifacts/prayag/sheets.py` — Drive/Sheets readers + caching. Monthly grid (`get_records`) and daily matrix (`get_daily_records`, `_load_daily`). `detected_sources()` lists everything wired up.
 - `artifacts/prayag/parsers.py` — deterministic layout parsers: `parse_mc_detail`/`grid_total_output` (monthly), `parse_daily_matrix` (wide per-date matrix).
@@ -37,6 +38,7 @@ A mobile-first Flask dashboard that reads Prayag's real production Google Sheets
 - Per-day ideal hours = monthly ideal hours ÷ the machine's active days that month, so a full-month daily rollup reconciles exactly to the monthly grid (verified: 831 actual / 5000 ideal hrs both paths).
 - In `compute_metrics`, daily rows with `shift_len_min > 0` are true shift-logs (time model, feed OEE); daily-matrix rows (`shift_len_min == 0`) carry hours/output directly like monthly rows.
 - For sub-monthly windows, monthly totals cannot be sliced into a partial month, so `get_data` shows only daily-capable plants and banners the omission rather than mixing in non-sliceable monthly totals.
+- Data Confirmation runs four deterministic tiers on every page over the UNFILTERED period rows (a plant/machine filter never makes the dataset look incomplete). The full-FY monthly grid is the master roster; a blank in a later period is a completeness *gap*, never an implicit zero. Severity gating: validity / internal-reconcile-mismatch / no-data = error (figure shows "needs review"); completeness, sheet-reconcile-off, plausibility = warning. Claude (`match_codes`, `summarize_confirmation` in `narrative.py`) only fuzzy-matches leftover machine codes and writes prose from the already-computed issue list — it never reads or computes a figure.
 
 ## Product
 

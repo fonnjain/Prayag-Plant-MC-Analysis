@@ -14,7 +14,14 @@
         <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">
           {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% else %}Output Efficiency{{ info('OUTPUT_EFF') }}{% endif %}
         </div>
-        <div class="text-4xl font-bold text-navy mt-1" style="color:var(--navy)">{{ o.headline }}%</div>
+        <div class="text-4xl font-bold mt-1 {% if confirmation and confirmation.status=='error' %}text-gray-400{% else %}text-navy{% endif %}"
+             style="{% if not (confirmation and confirmation.status=='error') %}color:var(--navy){% endif %}">{{ o.headline }}%</div>
+        {% if confirmation and confirmation.status=='error' %}
+        <a href="/confirmation?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}" class="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
+          <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          Needs review
+        </a>
+        {% endif %}
         {% if not o.oee_available %}
         <div class="text-xs text-gray-400 mt-1">Monthly data — OEE (availability × performance × quality) needs daily shift logs</div>
         {% endif %}

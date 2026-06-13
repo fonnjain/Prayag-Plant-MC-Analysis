@@ -97,6 +97,18 @@
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
           </svg>
         </a>
+        <a href="/confirmation?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+           aria-label="Data confirmation &amp; audit"
+           class="relative w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/confirmation' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
+           style="{% if request.path != '/confirmation' %}background:rgba(255,255,255,0.15){% endif %}">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+          </svg>
+          {% if confirmation and confirmation.status != 'pass' %}
+          <span class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-navy"
+                style="background:{% if confirmation.status=='error' %}var(--red){% else %}var(--amber){% endif %}"></span>
+          {% endif %}
+        </a>
         <a href="/glossary?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
            aria-label="Glossary &amp; metric help"
            class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/glossary' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
@@ -159,30 +171,36 @@
   </div>
   {% endif %}
 
-  <!-- Validation status banner -->
-  {% set vw = validation.get('warnings', []) %}
-  {% if vw %}
-  <div class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-200">
-    <div class="flex items-center gap-2 mb-1">
-      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-      </svg>
-      <span class="text-amber-800 text-xs font-semibold">{{ vw|length }} Validation Flag(s)</span>
-    </div>
-    {% for w in vw[:3] %}
-    <div class="text-amber-700 text-xs">• {{ w }}</div>
-    {% endfor %}
-    {% if vw|length > 3 %}
-    <div class="text-amber-600 text-xs mt-1">…and {{ vw|length - 3 }} more</div>
-    {% endif %}
-  </div>
+  <!-- Confirmation status badge (links to the full Data Confirmation screen) -->
+  {% set conf_link = '/confirmation?period=' ~ period %}
+  {% if period=='custom' %}{% set conf_link = conf_link ~ '&from_date=' ~ request.args.get('from_date','') ~ '&to_date=' ~ request.args.get('to_date','') %}{% endif %}
+  {% if confirmation and request.path != '/confirmation' %}
+  {% set cst = confirmation.status %}
+  {% if cst == 'error' %}
+  <a href="{{ conf_link }}" class="mb-3 rounded-xl p-3 bg-red-50 border border-red-200 flex items-center gap-2">
+    <svg width="16" height="16" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <span class="text-red-800 text-xs font-semibold">Needs review — {{ confirmation.counts.total }} issue(s)</span>
+    <span class="text-red-500 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.score_label }} ›</span>
+  </a>
+  {% elif cst == 'warning' %}
+  <a href="{{ conf_link }}" class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-200 flex items-center gap-2">
+    <svg width="16" height="16" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <span class="text-amber-800 text-xs font-semibold">{{ confirmation.counts.total }} flag(s)</span>
+    <span class="text-amber-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.score_label }} ›</span>
+  </a>
   {% elif rows %}
-  <div class="mb-3 rounded-xl p-2 bg-green-50 border border-green-200 flex items-center gap-2">
-    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5">
+  <a href="{{ conf_link }}" class="mb-3 rounded-xl p-2 bg-green-50 border border-green-200 flex items-center gap-2">
+    <svg width="14" height="14" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5">
       <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
     </svg>
-    <span class="text-green-800 text-xs font-medium">Data reconciled ✓ — No flags</span>
-  </div>
+    <span class="text-green-800 text-xs font-medium">Data reconciled ✓</span>
+    <span class="text-green-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.score_label }} ›</span>
+  </a>
+  {% endif %}
   {% endif %}
 
   {% block content %}{% endblock %}
