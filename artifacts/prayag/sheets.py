@@ -9,6 +9,7 @@ REST API directly, reading each workbook by its pinned file ID (see sources.py).
 """
 from __future__ import annotations
 import os
+import re
 import json
 import time
 import random
@@ -302,11 +303,224 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
     return recs, payload["reports"], payload["recon_warnings"]
 
 
+# ---------------------------------------------------------------------------
+# Live daily load — per-month workbooks (true day-level data)
+# ---------------------------------------------------------------------------
+_daily_cache: dict = {}          # (plant, ym) -> (ts, (records, report))
+# Daily-matrix tab titles, in preference order (layout varies by plant).
+_DAILY_TAB_PREF = ["Report-5", "Daily Report"]
+
+
+_MC_RE = re.compile(r"M\s*/?\s*C\s*-?\s*(\d+)", re.I)
+_MACHINE_RE = re.compile(r"\bMACHINE\s*-?\s*(\d+)\b", re.I)
+
+
+def _mc_key(label) -> Optional[int]:
+    """Primary-extruder join key from a machine label.
+
+    Matches only the main machines — ``M/C-n`` (Pipe/grid) or ``MACHINE-n``
+    (Garden) — and returns their number. Auxiliary/die rows in the daily sheet
+    (SOCKET-n, Grinder-1, die codes like ``A02``) return None so they are NOT
+    mis-joined onto a monthly machine of the same trailing number.
+    """
+    m = _MC_RE.search(str(label))
+    if m:
+        return int(m.group(1))
+    m = _MACHINE_RE.search(str(label))
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _daily_plants() -> List[str]:
+    """Plants we ingest at daily grain: those with BOTH a daily workbook AND a
+    monthly grid. The monthly grid supplies the per-machine ideal rate/hours, so
+    daily figures reconcile with the monthly engine by construction."""
+    grid_plants = {s["plant"] for s in sources.ANNUAL_SOURCES}
+    return [p for p in sources.DAILY_SOURCES if p in grid_plants
+            and sources.DAILY_SOURCES[p].get("files")]
+
+
+def _daily_seg_unit(plant: str) -> Tuple[str, str]:
+    for s in sources.ANNUAL_SOURCES:
+        if s["plant"] == plant:
+            return s["segment"], s["unit"]
+    return plant.title(), "kg"
+
+
+def _load_daily(plant: str, ym: str, token: str) -> Tuple[List[Record], Optional[dict]]:
+    """Read one plant's daily workbook for month ``ym`` → (records, report).
+
+    Only machines that also appear in the monthly grid are kept (so we have an
+    ideal rate and the daily totals reconcile against the monthly engine). The
+    per-day ideal hours = the machine's monthly ideal hours / its active days.
+    """
+    file_id = sources.DAILY_SOURCES.get(plant, {}).get("files", {}).get(ym)
+    if not file_id:
+        return [], None
+
+    # Per-machine ideal rate + monthly ideal hours from the (cached) grid.
+    payload = _live_payload()
+    ideal_map: dict = {}
+    mon_out_by_mc: dict = {}
+    for r in payload["records"]:
+        if r.plant == plant and r.period == ym:
+            k = _mc_key(r.machine)
+            if k is None:
+                continue
+            if r.ideal_rate > 0:
+                ideal_map[k] = (r.ideal_rate, r.ideal_hours)
+            mon_out_by_mc[k] = mon_out_by_mc.get(k, 0.0) + r.total_count
+
+    seg, unit = _daily_seg_unit(plant)
+    report = {
+        "family": plant.lower(),
+        "title": f"{sources.PLANT_NAMES.get(plant, plant)} — daily ({ym})",
+        "file_id": file_id,
+        "tab": "",
+        "detail_tabs": [],
+        "grain": "daily",
+        "months_available": [ym],
+        "record_count": 0,
+        "segment": seg,
+        "plant": plant,
+        "reconcile": None,
+        "warning": None,
+    }
+    if not ideal_map:
+        report["warning"] = (
+            f"{plant} {ym}: no monthly grid baseline, so daily rows can't be "
+            "reconciled — skipped."
+        )
+        return [], report
+
+    tabs = list_tabs(file_id, token)
+    tab = next((t for t in _DAILY_TAB_PREF if t in tabs), None)
+    if not tab:
+        report["warning"] = (
+            f"{plant} {ym}: no daily matrix tab ({'/'.join(_DAILY_TAB_PREF)}) "
+            "found in the workbook."
+        )
+        return [], report
+    report["tab"] = tab
+
+    raw = parsers.parse_daily_matrix(
+        read_values(file_id, tab, token),
+        plant=plant, segment=seg, unit=unit, year_month=ym,
+        source_file=file_id, source_tab=tab,
+    )
+    matched = [r for r in raw if _mc_key(r.machine) in ideal_map]
+    skipped = len({r.machine for r in raw if _mc_key(r.machine) not in ideal_map})
+
+    active: dict = {}
+    for r in matched:
+        active.setdefault(_mc_key(r.machine), set()).add(r.date)
+
+    for r in matched:
+        k = _mc_key(r.machine)
+        rate, ih_month = ideal_map[k]
+        r.ideal_rate = rate
+        r.ideal_hours = ih_month / max(len(active.get(k, ())), 1)
+        r.ideal_output = r.actual_hours * rate
+
+    report["detail_tabs"] = sorted({r.machine for r in matched})
+    report["record_count"] = len(matched)
+
+    # Reconcile daily output vs the monthly grid (same machines).
+    daily_out = sum(r.total_count for r in matched)
+    grid_out = sum(mon_out_by_mc.get(k, 0.0) for k in active)
+    if grid_out > 0:
+        diff = abs(daily_out - grid_out) / grid_out
+        report["reconcile"] = {
+            "grid_total": round(grid_out, 1),
+            "detail_total": round(daily_out, 1),
+            "diff_pct": round(diff * 100, 2),
+            "ok": diff <= 0.05,
+        }
+    if skipped:
+        report["warning"] = (
+            f"{plant} {ym}: {skipped} daily machine(s) not in the monthly grid "
+            "were skipped (no ideal-rate baseline)."
+        )
+    return matched, report
+
+
+def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]:
+    """True day-level Records for ``months`` across all daily-capable plants."""
+    if is_demo_mode():
+        recs = _demo_records_for_months(months)
+        return recs, _demo_reports(), []
+
+    token = _get_access_token()
+    if not token:
+        raise SheetReadError(
+            "The Google Sheets connection isn't authorized. "
+            "Reconnect it from the integrations panel and try again."
+        )
+
+    now = time.time()
+    all_recs: List[Record] = []
+    reports: List[dict] = []
+    warnings: List[str] = []
+    for plant in _daily_plants():
+        for ym in months:
+            if ym not in sources.DAILY_SOURCES[plant]["files"]:
+                continue
+            key = (plant, ym)
+            cached = _daily_cache.get(key)
+            if cached and now - cached[0] < _DATA_TTL:
+                recs, report = cached[1]
+            else:
+                recs, report = _load_daily(plant, ym, token)
+                _daily_cache[key] = (now, (recs, report))
+            all_recs.extend(recs)
+            if report:
+                reports.append(report)
+                if report.get("warning"):
+                    warnings.append(report["warning"])
+                recon = report.get("reconcile")
+                if recon and not recon["ok"]:
+                    warnings.append(
+                        f"{report['title']}: daily rows sum to {recon['detail_total']:.0f} "
+                        f"but the monthly grid is {recon['grid_total']:.0f} "
+                        f"({recon['diff_pct']:.1f}% off)"
+                    )
+    return all_recs, reports, warnings
+
+
 def detected_sources() -> List[dict]:
-    """Reviewable mapping of every source the engine reads."""
+    """Reviewable mapping of every source the engine reads (monthly + daily)."""
     if is_demo_mode():
         return _demo_reports()
-    return _live_payload()["reports"]
+    reports = list(_live_payload()["reports"])
+    # Document the daily workbooks too (descriptors only — no extra network).
+    for plant in sources.DAILY_SOURCES:
+        files = sources.DAILY_SOURCES[plant].get("files", {})
+        if not files:
+            continue
+        seg, _unit = _daily_seg_unit(plant)
+        capable = plant in _daily_plants()
+        reports.append({
+            "family": f"{plant.lower()}-daily",
+            "title": f"{sources.PLANT_NAMES.get(plant, plant)} — daily workbooks",
+            "file_id": next(iter(files.values()), ""),
+            "tab": "/".join(_DAILY_TAB_PREF),
+            "detail_tabs": [],
+            "grain": "daily",
+            "months_available": sorted(files.keys()),
+            "record_count": 0,
+            "segment": seg,
+            "plant": plant,
+            "reconcile": None,
+            "field_map": parsers.MC_DETAIL_FIELD_MAP,
+            "note": (
+                "Per-date matrix; ideal rate/hours joined from the monthly grid."
+                if capable else
+                "Daily file present but no monthly grid baseline yet — not "
+                "ingested (sub-monthly falls back to monthly)."
+            ),
+        })
+    return reports
 
 
 def months_with_data() -> List[str]:

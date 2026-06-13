@@ -192,6 +192,136 @@ def parse_mc_detail(
     return recs
 
 
+def _day_from_label(s) -> Optional[int]:
+    """Extract a day-of-month (1..31) from a per-date column header.
+
+    Handles both live layouts: ``"01-Apr-26"`` (day-first) and ``"Apr, 1"`` /
+    ``"Apr,1"`` (month-first). Returns None for non-date cells (merged blanks,
+    summary labels), which is how we detect where each per-date column group
+    starts.
+    """
+    if s is None or s == "":
+        return None
+    t = str(s).strip()
+    m = re.match(r"^\s*(\d{1,2})\s*[-/ ]\s*[A-Za-z]{3}", t)  # 01-Apr-26
+    if m:
+        d = int(m.group(1))
+        return d if 1 <= d <= 31 else None
+    m = re.search(r"[A-Za-z]{3,9}\.?\s*,?\s*(\d{1,2})\s*$", t)  # Apr, 1
+    if m:
+        d = int(m.group(1))
+        return d if 1 <= d <= 31 else None
+    return None
+
+
+# Row labels that are subtotals / headers, never real machines.
+_DAILY_SKIP_LABELS = {"TOTAL", "PART-1", "PART-2", "%AGE", "%", "MACHINE", "M/C NO.", "S.NO."}
+
+
+def parse_daily_matrix(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    year_month: str,
+    source_file: str,
+    source_tab: str,
+) -> List[Record]:
+    """Parse a wide per-date daily matrix into raw daily-grain Records.
+
+    These tabs ("Report-5" for Pipe/PTMT, "Daily Report" for Garden/HDPE/Tank)
+    carry one row per machine and a repeating group of per-date columns. Each
+    group starts at a date label (``"Apr, 1"`` / ``"01-Apr-26"``) and contains
+    sub-columns for Run Hours / Output / Rejection (order and presence vary by
+    layout — detected from the sub-header row, never assumed).
+
+    Only the raw triplet (run hours, output, rejection) is read here; the ideal
+    rate and ideal hours-per-day are joined from the monthly grid in
+    ``sheets._load_daily`` so daily figures reconcile with the monthly engine.
+    """
+    if not values:
+        return []
+
+    # Locate the date-label header row: the row with the most date-like cells.
+    date_row_idx = -1
+    best = 1
+    for i, row in enumerate(values[:8]):
+        cnt = sum(1 for c in row if _day_from_label(c) is not None)
+        if cnt > best:
+            best, date_row_idx = cnt, i
+    if date_row_idx < 0:
+        return []
+    date_row = values[date_row_idx]
+    sub_row = values[date_row_idx + 1] if date_row_idx + 1 < len(values) else []
+
+    # Per-date column groups: (start_col, day). Group spans to the next start.
+    starts = [(c, _day_from_label(v)) for c, v in enumerate(date_row)
+              if _day_from_label(v) is not None]
+    if not starts:
+        return []
+    first_group_col = starts[0][0]
+
+    def sub(c):
+        return str(sub_row[c]).strip().upper() if 0 <= c < len(sub_row) else ""
+
+    groups = []  # (day, run_c, out_c, rej_c)
+    for gi, (c0, day) in enumerate(starts):
+        c1 = starts[gi + 1][0] if gi + 1 < len(starts) else max(len(date_row), len(sub_row))
+        run_c = out_c = rej_c = -1
+        for c in range(c0, c1):
+            h = sub(c)
+            if run_c < 0 and "RUN" in h:
+                run_c = c
+            elif out_c < 0 and "OUTPUT" in h:
+                out_c = c
+            elif rej_c < 0 and "REJECT" in h:
+                rej_c = c
+        groups.append((day, run_c, out_c, rej_c))
+
+    # Machine label column: a header cell == "MACHINE" or containing "M/C NO".
+    mc_c = -1
+    for r in values[:date_row_idx + 2]:
+        for c, v in enumerate(r[:first_group_col]):
+            u = str(v).strip().upper()
+            if u == "MACHINE" or "M/C NO" in u:
+                mc_c = c
+                break
+        if mc_c >= 0:
+            break
+    if mc_c < 0:
+        mc_c = 1
+
+    recs: List[Record] = []
+    for row in values[date_row_idx + 2:]:
+        label = str(row[mc_c]).strip() if mc_c < len(row) else ""
+        if not label or label.upper() in _DAILY_SKIP_LABELS or label.upper().startswith("PART"):
+            continue
+        machine = f"{plant} {label}".strip()
+        for day, run_c, out_c, rej_c in groups:
+            run = num(row[run_c]) if 0 <= run_c < len(row) else 0.0
+            out = num(row[out_c]) if 0 <= out_c < len(row) else 0.0
+            rej = num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
+            if run <= 0 and out <= 0:
+                continue  # day not yet produced — don't fabricate
+            recs.append(Record(
+                grain="daily",
+                period=year_month,
+                date=f"{year_month}-{day:02d}",
+                plant=plant,
+                segment=segment,
+                unit=unit,
+                machine=machine,
+                actual_hours=run,
+                total_count=out,
+                reject_count=rej,
+                source_family=segment,
+                source_file=source_file,
+                source_tab=source_tab,
+            ))
+    return recs
+
+
 def grid_total_output(values: List[list]) -> Optional[float]:
     """Sum the OUTPUT columns on the grid's TOTAL row, for reconciliation.
 

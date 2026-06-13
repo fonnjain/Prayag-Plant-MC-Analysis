@@ -10,13 +10,13 @@ from functools import lru_cache
 from flask import Flask, render_template, request, jsonify, Response, abort
 
 from sheets import (
-    get_records, detected_sources, months_with_data,
+    get_records, get_daily_records, detected_sources, months_with_data,
     is_demo_mode, SheetReadError,
 )
 from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
-    rollup_by_segment, rollup_by_period, downtime_pareto,
+    rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
 )
 from validate import full_validate
 from narrative import get_narrative
@@ -157,6 +157,7 @@ def parse_period(args) -> dict:
         "months": months,
         "banner": banner,
         "period": period,
+        "sub_monthly": sub_monthly,
     }
 
 
@@ -176,7 +177,34 @@ def get_data(args):
     segment_filter = args.get("segment", "")
     machine_filter = args.get("machine", "")
 
-    all_rows, source_reports, recon_warnings = get_records(months)
+    # Prefer true daily data for sub-monthly windows; fall back to monthly.
+    daily_used = False
+    daily_err = None
+    grain_banner = pinfo["banner"]
+    all_rows = source_reports = recon_warnings = None
+    if pinfo.get("sub_monthly"):
+        try:
+            drecs, dreports, dwarn = get_daily_records(months)
+        except SheetReadError as e:
+            drecs, dreports, dwarn = [], [], []
+            daily_err = f"Daily data could not be read ({e}); fell back to monthly totals."
+        fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
+        win = [r for r in drecs if fwin <= r.date <= twin]
+        if win:
+            all_rows, source_reports, recon_warnings = win, dreports, dwarn
+            daily_used = True
+            disp_plants = ", ".join(
+                PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
+            )
+            grain_banner = (
+                f"{pinfo['label']} → true daily data for {disp_plants}. "
+                "Other plants don't have a daily baseline yet, so they're omitted "
+                "from this sub-monthly view."
+            )
+    if not daily_used:
+        all_rows, source_reports, recon_warnings = get_records(months)
+        if daily_err:
+            recon_warnings = list(recon_warnings or []) + [daily_err]
 
     rows = all_rows
     if plant_filter:
@@ -189,17 +217,18 @@ def get_data(args):
     overall = compute_metrics(rows)
     validation = full_validate(rows, overall, extra_warnings=recon_warnings)
 
-    # Flag requested months that hold no data yet.
-    have = set(months_with_data())
-    empty_months = [m for m in months if m not in have]
-    banner = pinfo["banner"]
-    if empty_months:
-        disp = ", ".join(_month_disp(m) for m in empty_months)
-        if len(empty_months) == len(months):
-            note = f"No data yet for this period ({disp})."
-        else:
-            note = f"No data yet for {disp}."
-        banner = f"{banner} {note}".strip()
+    # Flag requested months that hold no data yet (monthly path only).
+    banner = grain_banner
+    if not daily_used:
+        have = set(months_with_data())
+        empty_months = [m for m in months if m not in have]
+        if empty_months:
+            disp = ", ".join(_month_disp(m) for m in empty_months)
+            if len(empty_months) == len(months):
+                note = f"No data yet for this period ({disp})."
+            else:
+                note = f"No data yet for {disp}."
+            banner = f"{banner} {note}".strip()
 
     return {
         "rows": rows,
@@ -212,6 +241,7 @@ def get_data(args):
         "period": pinfo["period"],
         "months": months,
         "grain_banner": banner,
+        "daily_used": daily_used,
         "source_reports": source_reports,
         "plant_filter": plant_filter,
         "segment_filter": segment_filter,
@@ -264,11 +294,16 @@ def overview():
     od = ctx["overall_dict"]
     oee_available = od["oee_available"]
 
-    # Trend over the period's months (headline = OEE when available, else efficiency)
-    by_period = rollup_by_period(data["rows"])
-    trend_keys = sorted(by_period.keys())
-    trend_labels = [_month_disp(k) for k in trend_keys]
-    trend_values = [round(by_period[k].headline * 100, 1) for k in trend_keys]
+    # Trend: per-day when showing true daily data, else per-month.
+    if data.get("daily_used"):
+        by_t = rollup_by_date(data["rows"])
+        trend_keys = sorted(by_t.keys())
+        trend_labels = [_fmt(datetime.date.fromisoformat(k)) for k in trend_keys]
+    else:
+        by_t = rollup_by_period(data["rows"])
+        trend_keys = sorted(by_t.keys())
+        trend_labels = [_month_disp(k) for k in trend_keys]
+    trend_values = [round(by_t[k].headline * 100, 1) for k in trend_keys]
     trend_label = "OEE %" if oee_available else "Output Efficiency %"
 
     # Plant overview

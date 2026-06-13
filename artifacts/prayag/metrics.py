@@ -241,7 +241,9 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
         m.power_cost += r.power_cost
         m.solar_cost += r.solar_cost
 
-        if r.grain == "daily":
+        if r.grain == "daily" and r.shift_len_min > 0:
+            # True shift-log row (mixer/shift log): derive worked vs available
+            # hours from the time model. These rows also feed OEE below.
             row_ppt = r.shift_len_min - r.planned_stops_min
             row_run = max(row_ppt - r.downtime_min, 0.0)
             m.actual_hours += row_run / 60.0
@@ -249,6 +251,8 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             m.ideal_output += (row_run / 60.0) * r.ideal_rate
             m.downtime_min += r.downtime_min
         else:
+            # Monthly-grain rows AND daily-matrix rows (per-date production
+            # grids) both carry hours/output directly — no shift timing to model.
             m.actual_hours += r.actual_hours
             m.ideal_hours += r.ideal_hours
             m.ideal_output += r.ideal_output

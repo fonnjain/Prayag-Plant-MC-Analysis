@@ -1,1 +1,1 @@
-- [Sheet reconciliation quirks](sheet-reconciliation-quirks.md) — Prayag M/C grids: trailing grand-total OUTPUT column double-counts; drive.file can't list folders; never trust stored % cells; FY is Apr–Mar.
+- [Prayag daily/monthly grain](prayag-grain-engine.md) — two distinct daily Record types in compute_metrics; matrix rows must carry hours directly or metrics silently zero out.
