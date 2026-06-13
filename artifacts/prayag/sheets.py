@@ -29,6 +29,7 @@ import sources
 _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
 _DATA_TTL = 120.0               # seconds
+_last_fetch_status: dict = {}   # stale/failed info from the most recent live attempt
 
 
 class SheetReadError(RuntimeError):
@@ -44,6 +45,21 @@ def _connector_available() -> bool:
 def is_demo_mode() -> bool:
     """Live mode needs an authorized Google Sheets connection; else demo data."""
     return not _connector_available()
+
+
+def last_fetch_status() -> dict:
+    """Return info about the most recent live fetch attempt.
+
+    Keys (all optional / may be absent):
+      stale          bool  – True when serving cached data because the live
+                             fetch failed.
+      stale_age_seconds int – seconds since the cached snapshot was taken.
+      stale_error    str  – the error message from the failed live fetch.
+      failed_plants  list – plants that could not be loaded in the latest
+                            (partial or stale) fetch; each entry is a dict
+                            with keys ``plant``, ``title``, ``error``.
+    """
+    return dict(_last_fetch_status)
 
 
 def _fetch_token() -> Tuple[Optional[str], float]:
@@ -221,16 +237,22 @@ def _load_live_monthly(token: str) -> dict:
     all_records: List[Record] = []
     reports: List[dict] = []
     warnings: List[str] = []
+    failed_plants: List[dict] = []
 
     for src in sources.ANNUAL_SOURCES:
         try:
             recs, report = _load_annual_family(src, token)
         except SheetReadError as e:
-            raise SheetReadError(
-                f"Couldn't read {src['title']} "
-                f"(family '{src['family']}', tab '{src['tab']}', "
-                f"file {src['file_id']}): {e}"
-            ) from e
+            failed_plants.append({
+                "plant": src["plant"],
+                "title": src["title"],
+                "error": str(e),
+            })
+            warnings.append(
+                f"{src['title']}: could not load ({e}). "
+                "Figures for this plant are absent from this view."
+            )
+            continue
         all_records.extend(recs)
         reports.append(report)
 
@@ -268,24 +290,58 @@ def _load_live_monthly(token: str) -> dict:
         "reports": reports,
         "recon_warnings": warnings,
         "grain": "monthly",
+        "failed_plants": failed_plants,
     }
 
 
 def _live_payload() -> dict:
-    """Cached full live monthly payload (all families, all FY months)."""
+    """Cached full live monthly payload (all families, all FY months).
+
+    Recovery behaviour when the live fetch fails:
+    - Per-plant failures (partial read): ``_load_live_monthly`` already
+      continues past them; the returned payload contains whatever plants
+      succeeded plus a ``failed_plants`` list.
+    - Full connector failure (auth down, network, etc.): if a stale cache
+      entry exists it is returned with ``stale=True`` and metadata so the
+      UI can show a banner; otherwise ``SheetReadError`` is re-raised.
+    """
+    global _last_fetch_status
     now = time.time()
     cached = _data_cache.get("live")
     if cached and now - cached[0] < _DATA_TTL:
         return cached[1]
-    token = _get_access_token()
-    if not token:
-        raise SheetReadError(
-            "The Google Sheets connection isn't authorized. "
-            "Reconnect it from the integrations panel and try again."
-        )
-    payload = _load_live_monthly(token)
-    _data_cache["live"] = (now, payload)
-    return payload
+
+    try:
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError(
+                "The Google Sheets connection isn't authorized. "
+                "Reconnect it from the integrations panel and try again."
+            )
+        payload = _load_live_monthly(token)
+        _data_cache["live"] = (now, payload)
+        _last_fetch_status = {
+            "stale": False,
+            "failed_plants": payload.get("failed_plants", []),
+        }
+        return payload
+    except SheetReadError as exc:
+        if cached:
+            age_s = int(now - cached[0])
+            stale = dict(cached[1])   # shallow copy — don't mutate cached entry
+            stale["stale"] = True
+            stale["stale_age_seconds"] = age_s
+            stale["stale_error"] = str(exc)
+            _last_fetch_status = {
+                "stale": True,
+                "stale_age_seconds": age_s,
+                "stale_error": str(exc),
+                "failed_plants": stale.get("failed_plants", []),
+            }
+            return stale
+        # No cache at all — let the Flask error handler surface it clearly.
+        _last_fetch_status = {"stale": False, "failed_plants": []}
+        raise
 
 
 def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]:

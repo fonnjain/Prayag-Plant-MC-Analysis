@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    is_demo_mode, SheetReadError,
+    is_demo_mode, SheetReadError, last_fetch_status,
 )
 from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS
 from metrics import (
@@ -80,6 +80,19 @@ def _month_disp(ym: str) -> str:
         return datetime.date(int(ym[:4]), int(ym[5:7]), 1).strftime("%b %Y")
     except (ValueError, IndexError):
         return ym
+
+
+def _fmt_age(seconds: int) -> str:
+    """Human-readable age string, e.g. '3m', '2h 15m', '1d 4h'."""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        h, m = seconds // 3600, (seconds % 3600) // 60
+        return f"{h}h {m}m" if m else f"{h}h"
+    d, h = seconds // 86400, (seconds % 86400) // 3600
+    return f"{d}d {h}h" if h else f"{d}d"
 
 
 def parse_period(args) -> dict:
@@ -266,6 +279,11 @@ def get_data(args):
                 note = f"No data yet for {disp}."
             banner = f"{banner} {note}".strip()
 
+    # ---- Fetch status (stale cache / partial plant recovery) ----
+    fs = last_fetch_status()
+    if fs.get("stale"):
+        fs["stale_age_disp"] = _fmt_age(fs.get("stale_age_seconds", 0))
+
     return {
         "rows": rows,
         "all_rows": all_rows,
@@ -285,6 +303,7 @@ def get_data(args):
         "machine_filter": machine_filter,
         "demo_mode": is_demo_mode(),
         "has_claude": bool(os.environ.get("ANTHROPIC_API_KEY", "")),
+        "fetch_status": fs,
     }
 
 
