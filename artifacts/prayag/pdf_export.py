@@ -35,6 +35,16 @@ def _rating_color(oee_pct: float):
     return colors.Color(*RED)
 
 
+def _confirm_status_bits(status: str, counts: Dict[str, Any]):
+    """Map a four-tier confirmation status → (label, reportlab color)."""
+    total = (counts or {}).get("total", 0)
+    if status == "error":
+        return f"⚠ Needs review — {total} issue(s)", colors.Color(*RED)
+    if status == "warning":
+        return f"⚠ {total} flag(s)", colors.Color(*AMBER)
+    return "✓ Data reconciled — all checks passed", colors.Color(*GREEN)
+
+
 def generate_report_pdf(
     title: str,
     period_label: str,
@@ -43,6 +53,8 @@ def generate_report_pdf(
     table_headers: List[str],
     narrative: str | None = None,
     validation_status: Dict | None = None,
+    confirmation: Dict | None = None,
+    confirmation_summary: str | None = None,
 ) -> bytes:
     """Return PDF bytes for a report page."""
     if not REPORTLAB_AVAILABLE:
@@ -80,8 +92,80 @@ def generate_report_pdf(
     story.append(HRFlowable(width="100%", thickness=1,
                              color=colors.Color(*NAVY), spaceAfter=8))
 
-    # Validation status
-    if validation_status:
+    # Data Confirmation (four-tier deterministic audit) — primary trust signal.
+    if confirmation:
+        status_text, status_color = _confirm_status_bits(
+            confirmation.get("status", "pass"), confirmation.get("counts"),
+        )
+        story.append(Paragraph("Data Confirmation", ParagraphStyle(
+            "conf_h", fontSize=11, textColor=colors.Color(*NAVY),
+            spaceAfter=3, fontName="Helvetica-Bold",
+        )))
+        story.append(Paragraph(status_text, ParagraphStyle(
+            "conf_status", fontSize=10, textColor=status_color,
+            spaceAfter=2, fontName="Helvetica-Bold",
+        )))
+        score_label = confirmation.get("score_label")
+        if score_label:
+            story.append(Paragraph(
+                f"Completeness: {score_label}",
+                ParagraphStyle("conf_score", fontSize=8.5,
+                               textColor=colors.Color(*NAVY),
+                               spaceAfter=4, fontName="Helvetica"),
+            ))
+        if confirmation_summary:
+            story.append(Paragraph(
+                confirmation_summary,
+                ParagraphStyle("conf_sum", fontSize=8.5, textColor=colors.black,
+                               spaceAfter=4, fontName="Helvetica", leading=12),
+            ))
+
+        # Key issues: errors first, then warnings; cap the list to keep it tidy.
+        issues = confirmation.get("issues") or []
+        ordered = (
+            [i for i in issues if i.get("severity") == "error"]
+            + [i for i in issues if i.get("severity") != "error"]
+        )
+        max_show = 8
+        issue_style = ParagraphStyle(
+            "conf_issue", fontSize=8, textColor=colors.black,
+            spaceAfter=2, fontName="Helvetica", leading=11,
+        )
+        for i in ordered[:max_show]:
+            sev = "✗" if i.get("severity") == "error" else "•"
+            sev_color = RED if i.get("severity") == "error" else AMBER
+            tier = i.get("tier_label", "")
+            scope = " ".join(
+                p for p in [i.get("plant", ""), i.get("machine", "")] if p
+            )
+            scope_txt = f"{scope} — " if scope else ""
+            msg = i.get("message", "")
+            hex_col = "#%02X%02X%02X" % (
+                int(sev_color[0] * 255), int(sev_color[1] * 255),
+                int(sev_color[2] * 255),
+            )
+            story.append(Paragraph(
+                f'<font color="{hex_col}">{sev}</font> '
+                f"<b>[{tier}]</b> {scope_txt}{msg}",
+                issue_style,
+            ))
+        remaining = len(ordered) - max_show
+        if remaining > 0:
+            story.append(Paragraph(
+                f"…and {remaining} more issue(s) — see the in-app Data Confirmation page.",
+                ParagraphStyle("conf_more", fontSize=8,
+                               textColor=colors.grey, spaceAfter=2,
+                               fontName="Helvetica-Oblique"),
+            ))
+        if confirmation.get("status") == "pass" and not ordered:
+            story.append(Paragraph(
+                "All four tiers (completeness, reconciliation, validity, plausibility) passed.",
+                issue_style,
+            ))
+        story.append(Spacer(1, 4 * mm))
+
+    # Validation status (legacy reconciliation) — fallback when no confirmation.
+    elif validation_status:
         if validation_status.get("reconciled"):
             status_text = f"✓ Data reconciled | Flags: {validation_status.get('flag_count', 0)}"
             status_color = colors.Color(*GREEN)

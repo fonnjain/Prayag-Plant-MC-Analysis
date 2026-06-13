@@ -922,6 +922,7 @@ def export_pdf(report_id: str):
     sub_validation = full_validate(rows, sub_overall)
 
     narrative = None
+    conf_summary = None
     if data.get("has_claude") and rows:
         sub_dict = sub_overall.to_dict()
         narrative = get_narrative(
@@ -929,6 +930,15 @@ def export_pdf(report_id: str):
             period_label=data["period_label"],
             period_key=_period_key(data["from_iso"], data["to_iso"], "", report_id, ""),
             metrics_summary={k: v for k, v in sub_dict.items() if isinstance(v, (int, float))},
+        )
+    conf = data.get("confirmation")
+    if data.get("has_claude") and conf:
+        issues_brief = [
+            f"[{i['tier_label']}/{i['severity']}] {i['message']}"
+            for i in conf.get("issues", [])
+        ]
+        conf_summary = summarize_confirmation(
+            conf["status"], conf["score_label"], issues_brief
         )
 
     pdf_bytes = generate_report_pdf(
@@ -939,6 +949,8 @@ def export_pdf(report_id: str):
         table_headers=headers,
         narrative=narrative,
         validation_status=sub_validation,
+        confirmation=data.get("confirmation"),
+        confirmation_summary=conf_summary,
     )
 
     return Response(
