@@ -1,16 +1,69 @@
 """
-Data layer: Google Sheets reader (via gspread service-account) + demo data fallback.
-No data passes through any AI model.
+Data layer: Google Sheets reader (via Replit Google Sheets connection) + demo
+data fallback. No data passes through any AI model.
+
+Reads use the Replit "Google Sheets" connector (blueprint id: google-sheet):
+we fetch a short-lived OAuth access token from the Replit connectors API on
+every read (tokens auto-refresh, so we never cache them), then call the public
+Google Sheets REST API directly.
 """
 from __future__ import annotations
 import os
 import json
 import random
 import datetime
+import urllib.request
+import urllib.parse
+import urllib.error
 from typing import List, Optional
 from metrics import ShiftRow
 
 DEMO_MODE = False  # set at runtime
+
+
+class SheetReadError(RuntimeError):
+    """Raised when a real Google Sheet is configured but cannot be read."""
+
+
+def _connector_available() -> bool:
+    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+    has_token = bool(os.environ.get("REPL_IDENTITY") or os.environ.get("WEB_REPL_RENEWAL"))
+    return bool(host and has_token)
+
+
+def _get_access_token() -> Optional[str]:
+    """Fetch a fresh Google OAuth access token from the Replit connectors API."""
+    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+    repl_identity = os.environ.get("REPL_IDENTITY")
+    web_renewal = os.environ.get("WEB_REPL_RENEWAL")
+    if repl_identity:
+        xtoken = "repl " + repl_identity
+    elif web_renewal:
+        xtoken = "depl " + web_renewal
+    else:
+        return None
+    if not host:
+        return None
+
+    url = (
+        f"https://{host}/api/v2/connection"
+        "?include_secrets=true&connector_names=google-sheet"
+    )
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "X_REPLIT_TOKEN": xtoken}
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.load(r)
+    items = data.get("items", [])
+    if not items:
+        return None
+    settings = items[0].get("settings", {}) or {}
+    token = settings.get("access_token")
+    if not token:
+        oauth = settings.get("oauth", {}) or {}
+        creds = oauth.get("credentials", {}) if isinstance(oauth, dict) else {}
+        token = creds.get("access_token")
+    return token
 
 
 def _coerce_float(val) -> float:
@@ -35,36 +88,61 @@ def _normalise_date(val: str) -> str:
 
 
 def is_demo_mode() -> bool:
-    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    """Live mode requires both a configured Sheet ID and an authorized
+    Google Sheets connection. Otherwise we serve deterministic demo data."""
     sid = os.environ.get("SHEET_ID", "").strip()
-    return not (sa and sid)
+    return not (sid and _connector_available())
+
+
+def _fetch_sheet_values(sheet_id: str, tab: str, token: str) -> List[list]:
+    """Call the Google Sheets REST API and return the raw value matrix."""
+    rng = urllib.parse.quote(tab, safe="")
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{rng}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise SheetReadError(
+                f"Couldn't find a tab named \u201c{tab}\u201d in that spreadsheet. "
+                "Check the tab name and the SHEET_ID."
+            ) from e
+        if e.code in (401, 403):
+            raise SheetReadError(
+                "The Google account doesn't have access to that spreadsheet, "
+                "or the connection needs to be re-authorized."
+            ) from e
+        raise SheetReadError(f"Google Sheets API error ({e.code}).") from e
+    except urllib.error.URLError as e:
+        raise SheetReadError("Couldn't reach Google Sheets. Please try again.") from e
+    return data.get("values", []) or []
 
 
 def read_sheet(tab: str, from_date: str, to_date: str) -> List[dict]:
     """
     Read rows from a Google Sheet tab for the given ISO date range.
-    Falls back to demo data if credentials are absent.
+    Falls back to demo data when no live sheet is configured.
     """
     if is_demo_mode():
         return _demo_shift_log(from_date, to_date) if tab == "Shift Log" else []
 
-    sa_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    sheet_id = os.environ["SHEET_ID"]
+    sheet_id = os.environ["SHEET_ID"].strip()
+    token = _get_access_token()
+    if not token:
+        raise SheetReadError(
+            "The Google Sheets connection isn't authorized. "
+            "Reconnect it from the integrations panel and try again."
+        )
 
-    import gspread
-    from google.oauth2.service_account import Credentials
+    values = _fetch_sheet_values(sheet_id, tab, token)
+    if not values:
+        return []
 
-    scopes = ["https://spreadsheets.google.com/feeds",
-              "https://www.googleapis.com/auth/drive.readonly"]
-    creds_dict = json.loads(sa_json)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(sheet_id)
-    ws = sh.worksheet(tab)
-    rows = ws.get_all_records(default_blank="")
-    # Filter by date
+    headers = [str(h).strip() for h in values[0]]
     result = []
-    for row in rows:
+    for raw in values[1:]:
+        row = {headers[i]: (raw[i] if i < len(raw) else "") for i in range(len(headers))}
         raw_date = row.get("date", row.get("Date", ""))
         if not raw_date:
             continue

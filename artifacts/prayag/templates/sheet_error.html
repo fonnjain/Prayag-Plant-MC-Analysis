@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Connection issue{% endblock %}
+
+{% block content %}
+<div class="kpi-card p-6 text-center mt-6">
+  <div class="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
+       style="background:rgba(197,90,17,0.12)">
+    <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="#C55A11" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+  </div>
+  <h2 class="text-base font-bold mb-1" style="color:var(--navy)">Couldn't load your Google Sheet</h2>
+  <p class="text-sm text-gray-500 leading-snug">{{ message }}</p>
+</div>
+{% endblock %}

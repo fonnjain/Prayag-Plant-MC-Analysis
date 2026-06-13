@@ -9,7 +9,10 @@ import json
 from functools import lru_cache
 from flask import Flask, render_template, request, jsonify, Response, abort
 
-from sheets import read_sheet, rows_to_shift_rows, is_demo_mode, _PLANTS, _PLANT_NAMES, _MACHINES
+from sheets import (
+    read_sheet, rows_to_shift_rows, is_demo_mode, SheetReadError,
+    _PLANTS, _PLANT_NAMES, _MACHINES,
+)
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
     rollup_by_segment, rollup_by_date, downtime_pareto,
@@ -24,6 +27,12 @@ from glossary import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
+
+
+@app.errorhandler(SheetReadError)
+def _handle_sheet_error(err):
+    """Show a clear message instead of a 500 when the live sheet can't be read."""
+    return render_template("sheet_error.html", message=str(err)), 200
 
 # ---------------------------------------------------------------------------
 # Period helpers
