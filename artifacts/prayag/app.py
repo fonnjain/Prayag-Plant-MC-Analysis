@@ -7,7 +7,7 @@ import os
 import datetime
 import json
 from functools import lru_cache
-from flask import Flask, render_template, request, jsonify, Response, abort
+from flask import Flask, render_template, request, jsonify, Response, abort, redirect
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
@@ -19,8 +19,9 @@ from metrics import (
     rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
 )
 from validate import full_validate
-from confirm import full_confirm, TIER_LABELS
+from confirm import full_confirm, confirmation_fingerprint, TIER_LABELS
 from narrative import get_narrative, match_codes, summarize_confirmation
+import store
 from pdf_export import generate_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -240,6 +241,17 @@ def get_data(args):
         extra_recon_warnings=recon_warnings,
         matcher=(match_codes if has_claude else None),
     )
+
+    # ---- Manager sign-off (release of error-gated figures) ----
+    # The sign-off is keyed to the UNFILTERED period and the exact data state
+    # (fingerprint), so a filter never changes it and a data change re-gates it.
+    sign_pk = _period_key(pinfo["from_iso"], pinfo["to_iso"], "", "", "")
+    fingerprint = confirmation_fingerprint(confirmation)
+    signoff = store.effective(sign_pk, fingerprint)
+    confirmation["period_key"] = sign_pk
+    confirmation["fingerprint"] = fingerprint
+    confirmation["signoff"] = signoff
+    confirmation["released"] = bool(signoff) and confirmation["status"] == "error"
 
     # Flag requested months that hold no data yet (monthly path only).
     banner = grain_banner
@@ -486,8 +498,82 @@ def confirmation_view():
         "conf": conf,
         "conf_summary": summary,
         "tier_labels": TIER_LABELS,
+        "signoff_history": store.history(conf.get("period_key")),
+        "signoff_store_ok": store.AVAILABLE,
+        "signoff_msg": request.args.get("signoff_msg", ""),
     })
     return render_template("confirmation.html", **ctx)
+
+
+def _redirect_to_confirmation(args, msg: str = ""):
+    """Redirect back to the confirmation screen, preserving the period."""
+    qs = f"period={args.get('period', 'current_fy')}"
+    if args.get("period") == "custom":
+        qs += (
+            f"&from_date={args.get('from_date', '')}"
+            f"&to_date={args.get('to_date', '')}"
+        )
+    if msg:
+        from urllib.parse import quote
+        qs += f"&signoff_msg={quote(msg)}"
+    return redirect(f"/confirmation?{qs}")
+
+
+@app.route("/confirmation/approve", methods=["POST"])
+def confirmation_approve():
+    return _do_signoff("approve", request.form)
+
+
+@app.route("/confirmation/revoke", methods=["POST"])
+def confirmation_revoke():
+    return _do_signoff("revoke", request.form)
+
+
+def _do_signoff(action: str, form):
+    """Record a manager sign-off (or revoke) against the CURRENT data state."""
+    if not store.AVAILABLE:
+        return _redirect_to_confirmation(form, "Sign-off store is unavailable.")
+    approver = (form.get("approver", "") or "").strip()
+    if action == "approve" and not approver:
+        return _redirect_to_confirmation(form, "Please enter your name to sign off.")
+
+    # Recompute against live data so we sign off exactly what is shown now.
+    data = get_data(form)
+    conf = data["confirmation"]
+    posted_fp = form.get("fingerprint", "")
+    if posted_fp and posted_fp != conf["fingerprint"]:
+        return _redirect_to_confirmation(
+            form, "The data changed since you opened this page — review it again."
+        )
+    if action == "approve" and conf["status"] == "pass":
+        return _redirect_to_confirmation(form, "Nothing to sign off — data is clean.")
+
+    try:
+        store.record(
+            action,
+            period_key=conf["period_key"],
+            fingerprint=conf["fingerprint"],
+            from_iso=data["from_iso"],
+            to_iso=data["to_iso"],
+            period_label=data["period_label"],
+            status_at=conf["status"],
+            score_label=conf["score_label"],
+            error_count=conf["counts"]["error"],
+            warning_count=conf["counts"]["warning"],
+            issue_count=conf["counts"]["total"],
+            approver=approver or "(revoked)",
+            role=form.get("role", ""),
+            note=form.get("note", ""),
+        )
+    except store.StoreError as e:
+        return _redirect_to_confirmation(form, f"Could not save: {e}")
+
+    msg = (
+        "Figures published under your sign-off."
+        if action == "approve"
+        else "Sign-off revoked — figures are withheld again."
+    )
+    return _redirect_to_confirmation(form, msg)
 
 
 @app.route("/sources")

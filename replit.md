@@ -27,7 +27,8 @@ A mobile-first Flask dashboard that reads Prayag's real production Google Sheets
 - `artifacts/prayag/sheets.py` — Drive/Sheets readers + caching. Monthly grid (`get_records`) and daily matrix (`get_daily_records`, `_load_daily`). `detected_sources()` lists everything wired up.
 - `artifacts/prayag/parsers.py` — deterministic layout parsers: `parse_mc_detail`/`grid_total_output` (monthly), `parse_daily_matrix` (wide per-date matrix).
 - `artifacts/prayag/metrics.py` — `Record` (grain-agnostic), `compute_metrics` (recomputes every ratio), `rollup_by_*`.
-- `artifacts/prayag/app.py` — Flask routes; `parse_period` (period→months + `sub_monthly`), `get_data` (grain-aware daily-vs-monthly resolution).
+- `artifacts/prayag/store.py` — durable manager sign-off store (Replit Postgres via psycopg2, append-only `confirmation_signoffs` table). `record`/`effective`/`history`; degrades to a safe no-op (gate stays ON) when `DATABASE_URL` is absent. A sign-off is keyed to (unfiltered period_key, confirmation fingerprint); the latest `approve`/`revoke` row wins.
+- `artifacts/prayag/app.py` — Flask routes; `parse_period` (period→months + `sub_monthly`), `get_data` (grain-aware daily-vs-monthly resolution; also stamps `confirmation` with `period_key`/`fingerprint`/`signoff`/`released`). `/confirmation/approve` + `/confirmation/revoke` (POST) record sign-offs against the live data state.
 - `artifacts/prayag/templates/*.html` — grain-aware UI.
 
 ## Architecture decisions
@@ -54,6 +55,7 @@ Mobile-first dashboard over Prayag's real production sheets: OEE/utilisation/out
 - PIPE daily Output is net-of-rejection while the monthly grid Output is gross, so PIPE output reconciliation is ~6.6% off by design — surfaced as an honest warning, not hidden. GARDEN reconciles exactly.
 - Daily ingestion currently covers PIPE + GARDEN only (the plants with both a daily file and a monthly grid).
 - Run the app via the workflow (`PORT=21800 python3 app.py`); for ad-hoc curl use `localhost:80/...` through the shared proxy.
+- Manager sign-off releases the ERROR gate only (warnings already publish). There is no login, so the approver name is typed into the form and recorded as-is — it is an attestation, not authenticated identity. A sign-off binds to the exact data state (fingerprint); any change to the underlying sheets re-gates the figures automatically and the prior sign-off no longer applies.
 
 ## Pointers
 

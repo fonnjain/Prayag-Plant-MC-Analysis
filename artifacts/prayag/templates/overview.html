@@ -4,8 +4,17 @@
 {% block content %}
 {% from "_macros.html" import info %}
 {% set o = overall_dict %}
-{% set blocked = confirmation and confirmation.status=='error' %}
+{% set released = confirmation and confirmation.released %}
+{% set blocked = confirmation and confirmation.status=='error' and not released %}
 {% set review_href = "/confirmation?period=" ~ period ~ ("&from_date=" ~ request.args.get('from_date','') ~ "&to_date=" ~ request.args.get('to_date','') if period=='custom' else "") %}
+
+{% if released %}
+<a href="{{ review_href }}" class="mb-3 rounded-xl p-2.5 bg-amber-50 border border-amber-200 flex items-center gap-2">
+  <svg width="15" height="15" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <span class="text-amber-800 text-xs font-medium">Published under sign-off by {{ confirmation.signoff.approver }}{% if confirmation.signoff.role %} ({{ confirmation.signoff.role }}){% endif %} · {{ confirmation.signoff.when_disp }}</span>
+  <span class="text-amber-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.counts.total }} flag(s) ›</span>
+</a>
+{% endif %}
 
 <!-- KPI Grid -->
 <div class="grid grid-cols-2 gap-3 mb-4">
@@ -179,7 +188,7 @@
 {% endblock %}
 
 {% block scripts %}
-{% if not (confirmation and confirmation.status=='error') %}
+{% if not (confirmation and confirmation.status=='error' and not confirmation.released) %}
 <script>
 // Headline Gauge (Doughnut) — OEE when available, else Output Efficiency.
 // Skipped entirely when the headline figure is blocked (status==error).

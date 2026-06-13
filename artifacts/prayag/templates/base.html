@@ -176,7 +176,15 @@
   {% if period=='custom' %}{% set conf_link = conf_link ~ '&from_date=' ~ request.args.get('from_date','') ~ '&to_date=' ~ request.args.get('to_date','') %}{% endif %}
   {% if confirmation and request.path != '/confirmation' %}
   {% set cst = confirmation.status %}
-  {% if cst == 'error' %}
+  {% if cst == 'error' and confirmation.released %}
+  <a href="{{ conf_link }}" class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-200 flex items-center gap-2">
+    <svg width="16" height="16" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <span class="text-amber-800 text-xs font-semibold">Published under sign-off — {{ confirmation.signoff.approver }}</span>
+    <span class="text-amber-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.signoff.when_disp }} ›</span>
+  </a>
+  {% elif cst == 'error' %}
   <a href="{{ conf_link }}" class="mb-3 rounded-xl p-3 bg-red-50 border border-red-200 flex items-center gap-2">
     <svg width="16" height="16" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2">
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>

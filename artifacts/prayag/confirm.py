@@ -29,6 +29,8 @@ Severity → gating
 from __future__ import annotations
 
 import datetime
+import hashlib
+import json
 import re
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -687,3 +689,27 @@ def full_confirm(
         "reconciled": status == "pass",
         "summary": None,
     }
+
+
+def confirmation_fingerprint(confirmation: dict) -> str:
+    """A stable, deterministic hash of the data state a manager would sign off on.
+
+    Built from the overall status and every issue's identity (tier, severity,
+    plant, machine, month, sheet, file, message). If the underlying data later
+    changes — an error is fixed, a new gap appears — the fingerprint changes, so
+    a prior sign-off no longer applies and the figures re-gate automatically.
+    Pure and network-free.
+    """
+    ident = sorted(
+        (
+            i.get("tier"), i.get("severity"), i.get("plant", ""),
+            i.get("machine", ""), i.get("month", ""), i.get("sheet", ""),
+            i.get("file", ""), i.get("message", ""),
+        )
+        for i in confirmation.get("issues", [])
+    )
+    payload = json.dumps(
+        {"status": confirmation.get("status"), "issues": ident},
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
