@@ -25,6 +25,24 @@ The dashboard gates every published figure behind a deterministic four-tier chec
 
 The ONLY AI in this layer fuzzy-matches leftover machine codes (after deterministic exact + trailing-number matching fails) and writes prose from the already-computed status/score/issue list. **Neither call ever receives raw sheet cells or computes a figure.** Both no-op without the API key, and the matcher only runs when deterministic matching leaves unmatched codes.
 
+## Validity checks must use UNCLAMPED metrics
+
+`compute_metrics` clamps `performance = min(raw, 1.0)` for display, so a validity
+check on `computed.performance > 1.0` can NEVER fire. The engine exposes an
+unclamped `performance_raw` specifically for the ratio-over-100% validity check.
+**Why:** any display-facing metric that is bounded/clamped is useless for "is this
+value impossible?" detection — gate on the raw, unbounded value, not the rendered one.
+**How to apply:** when adding a new validity (Tier-3) check on any ratio, confirm the
+field you read is not clamped/floored in `metrics.py`; if it is, add a `*_raw` sibling.
+The reject>output check also fires when output is 0 (`reject_count > total_count and
+reject_count > 0`), since rejects with zero output are impossible, not just a gap.
+
+## Hierarchy reconciliation (Tier-2)
+
+Beyond sheet-TOTAL-vs-detail and engine self-reconcile, Tier-2 also checks segment ==
+Σ its lines: a machine split across >1 segment, a segment total ≠ Σ of its machines,
+and output recorded with no segment assigned (rolls to plant but not to any segment).
+
 ## Reconciliation note
 
 PIPE's ~6.6% daily-vs-monthly offset is by design (daily Output is net-of-rejection) and surfaces as an honest warning, never hidden.

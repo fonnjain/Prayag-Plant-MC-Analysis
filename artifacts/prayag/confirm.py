@@ -487,7 +487,7 @@ def tier3_validity(period_rows: List[Record], computed) -> List[dict]:
             issues.append(_issue(3, ERROR, f"Negative output ({r.total_count:.0f}).", **loc))
         if r.reject_count < 0:
             issues.append(_issue(3, ERROR, f"Negative reject count ({r.reject_count:.0f}).", **loc))
-        if r.reject_count > r.total_count and r.total_count > 0:
+        if r.reject_count > r.total_count and r.reject_count > 0:
             issues.append(_issue(
                 3, ERROR,
                 f"Rejects ({r.reject_count:.0f}) exceed output ({r.total_count:.0f}).",
@@ -510,9 +510,9 @@ def tier3_validity(period_rows: List[Record], computed) -> List[dict]:
             ))
 
     # Aggregate impossible ratios (a ratio over 100% is an invalid value).
-    if computed.oee_available and computed.performance > 1.0:
+    if computed.oee_available and computed.performance_raw > 1.0:
         issues.append(_issue(3, ERROR,
-            f"Performance ({computed.performance_pct:.1f}%) exceeds 100% — check ideal rates."))
+            f"Performance ({computed.performance_raw * 100:.1f}%) exceeds 100% — check ideal rates."))
     if computed.utilisation > 1.0:
         issues.append(_issue(3, ERROR,
             f"Utilisation ({computed.utilisation_pct:.1f}%) exceeds 100% — actual hours "

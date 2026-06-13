@@ -100,6 +100,7 @@ class MetricsResult:
     # Rates (0..1)
     availability: float = 0.0
     performance: float = 0.0
+    performance_raw: float = 0.0  # unclamped — for validity checks (>100% = invalid)
     quality: float = 0.0
     oee: float = 0.0
     rejection_pct: float = 0.0
@@ -286,7 +287,8 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             oee_total += r.total_count
             oee_good += (r.total_count - r.reject_count)
         ideal_theoretical = weighted_ideal / 60.0
-        m.performance = min(_safe_div(oee_total, ideal_theoretical), 1.0)
+        m.performance_raw = _safe_div(oee_total, ideal_theoretical)
+        m.performance = min(m.performance_raw, 1.0)
         m.quality = _safe_div(oee_good, oee_total)
         m.oee = m.availability * m.performance * m.quality
         m.oee_available = True
