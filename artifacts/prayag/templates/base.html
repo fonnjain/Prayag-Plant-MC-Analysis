@@ -43,6 +43,29 @@
     /* Smooth transitions */
     * { -webkit-tap-highlight-color: transparent; }
     select, input { font-size: 16px; } /* prevent zoom on iOS */
+    /* Info (i) affordance for metric tooltips */
+    .info-btn { display:inline-flex; align-items:center; justify-content:center;
+      vertical-align:middle; padding:2px; margin-left:1px; border:0; background:none;
+      color:#9ca3af; cursor:pointer; line-height:0; }
+    .info-btn svg { width:13px; height:13px; }
+    .info-btn:active { color: var(--terra); }
+    .info-btn-light { color: rgba(255,255,255,0.85); }
+    .info-btn-light:active { color:#fff; }
+    /* Glossary bottom-sheet */
+    .gs-overlay { position:fixed; inset:0; z-index:100; background:rgba(15,23,42,0.45);
+      opacity:0; transition:opacity .2s ease; display:flex; align-items:flex-end; justify-content:center; }
+    .gs-overlay.gs-open { opacity:1; }
+    .gs-sheet { width:100%; max-width:42rem; background:#fff; border-radius:18px 18px 0 0;
+      padding:18px 18px calc(20px + env(safe-area-inset-bottom)); box-shadow:0 -4px 24px rgba(0,0,0,0.18);
+      transform:translateY(100%); transition:transform .22s cubic-bezier(.32,.72,0,1); }
+    .gs-overlay.gs-open .gs-sheet { transform:translateY(0); }
+    .gs-handle { width:40px; height:4px; border-radius:2px; background:#d1d5db; margin:0 auto 14px; }
+    .gs-term { font-size:15px; font-weight:700; color:var(--navy); }
+    .gs-meaning { font-size:13px; color:#4b5563; margin-top:6px; line-height:1.5; }
+    .gs-formula { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+      color:#374151; background:#f3f4f6; border-radius:8px; padding:8px 10px; margin-top:10px; }
+    .gs-unit { font-size:12px; color:#6b7280; margin-top:10px; }
+    .gs-more { display:inline-block; margin-top:14px; font-size:13px; font-weight:600; color:var(--terra); }
   </style>
 </head>
 <body class="min-h-screen">
@@ -62,9 +85,19 @@
           <div class="text-blue-200 text-xs leading-none mt-0.5">Production Dashboard</div>
         </div>
       </div>
-      {% if demo_mode %}
-      <span class="bg-terra text-white text-xs font-bold px-2 py-1 rounded-full">DEMO DATA</span>
-      {% endif %}
+      <div class="flex items-center gap-2 flex-shrink-0">
+        {% if demo_mode %}
+        <span class="bg-terra text-white text-xs font-bold px-2 py-1 rounded-full">DEMO DATA</span>
+        {% endif %}
+        <a href="/glossary?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
+           aria-label="Glossary &amp; metric help"
+           class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/glossary' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
+           style="{% if request.path != '/glossary' %}background:rgba(255,255,255,0.15){% endif %}">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </a>
+      </div>
     </div>
 
     <!-- Period selector row -->
@@ -184,6 +217,57 @@ document.getElementById('filter-form').action = window.location.pathname;
 syncHeaderOffset();
 window.addEventListener('resize', syncHeaderOffset);
 window.addEventListener('orientationchange', syncHeaderOffset);
+</script>
+
+<!-- ===== GLOSSARY BOTTOM-SHEET (tooltips) ===== -->
+<div id="gs-overlay" class="gs-overlay hidden" role="dialog" aria-modal="true">
+  <div class="gs-sheet" role="document">
+    <div class="gs-handle"></div>
+    <div id="gs-term" class="gs-term"></div>
+    <div id="gs-meaning" class="gs-meaning"></div>
+    <div id="gs-formula" class="gs-formula hidden"></div>
+    <div id="gs-unit" class="gs-unit hidden"></div>
+    <a id="gs-more" class="gs-more" href="#">Open full glossary →</a>
+  </div>
+</div>
+<script>
+(function() {
+  var GLOSSARY = {{ glossary_data|tojson }};
+  var glossaryUrl = "/glossary?period={{ period }}";
+  var overlay = document.getElementById('gs-overlay');
+  var elTerm = document.getElementById('gs-term');
+  var elMeaning = document.getElementById('gs-meaning');
+  var elFormula = document.getElementById('gs-formula');
+  var elUnit = document.getElementById('gs-unit');
+  var elMore = document.getElementById('gs-more');
+
+  function openSheet(key) {
+    var g = GLOSSARY[key];
+    if (!g) return;
+    elTerm.textContent = g.term;
+    elMeaning.textContent = g.meaning;
+    if (g.formula) { elFormula.textContent = g.formula; elFormula.classList.remove('hidden'); }
+    else { elFormula.classList.add('hidden'); }
+    if (g.unit) { elUnit.textContent = 'Unit: ' + g.unit; elUnit.classList.remove('hidden'); }
+    else { elUnit.classList.add('hidden'); }
+    elMore.href = glossaryUrl + '#term-' + key;
+    overlay.classList.remove('hidden');
+    requestAnimationFrame(function() { overlay.classList.add('gs-open'); });
+  }
+  function closeSheet() {
+    overlay.classList.remove('gs-open');
+    setTimeout(function() { overlay.classList.add('hidden'); }, 220);
+  }
+
+  // Tap on any (i) affordance — event delegation
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest ? e.target.closest('.info-btn') : null;
+    if (btn) { e.preventDefault(); e.stopPropagation(); openSheet(btn.getAttribute('data-term')); }
+  });
+  // Tap-away to dismiss
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeSheet(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSheet(); });
+})();
 </script>
 {% block scripts %}{% endblock %}
 </body>

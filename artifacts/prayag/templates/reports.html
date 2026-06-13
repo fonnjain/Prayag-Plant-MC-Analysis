@@ -2,6 +2,7 @@
 {% block title_suffix %} — Reports{% endblock %}
 
 {% block content %}
+{% from "_macros.html" import info %}
 
 <div class="mb-4">
   <h2 class="text-lg font-bold" style="color:var(--navy)">FY Reports</h2>
@@ -35,21 +36,21 @@
   <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Period Summary</h3>
   <div class="grid grid-cols-2 gap-3">
     <div class="bg-gray-50 rounded-xl p-3">
-      <div class="text-xs text-gray-500 mb-1">Overall OEE</div>
+      <div class="text-xs text-gray-500 mb-1">Overall OEE{{ info('OEE') }}</div>
       <div class="text-xl font-bold {% if o.oee_rating=='green' %}text-green-600{% elif o.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">
         {{ o.oee }}%
       </div>
     </div>
     <div class="bg-gray-50 rounded-xl p-3">
-      <div class="text-xs text-gray-500 mb-1">Total Output</div>
+      <div class="text-xs text-gray-500 mb-1">Total Output{{ info('UNITS') }}</div>
       <div class="text-xl font-bold" style="color:var(--navy)">{{ "{:,.0f}".format(o.total_count) }}</div>
     </div>
     <div class="bg-gray-50 rounded-xl p-3">
-      <div class="text-xs text-gray-500 mb-1">Plan Attainment</div>
+      <div class="text-xs text-gray-500 mb-1">Plan Attainment{{ info('ATT') }}</div>
       <div class="text-xl font-bold {% if o.attainment >= 90 %}text-green-600{% else %}text-amber-600{% endif %}">{{ o.attainment }}%</div>
     </div>
     <div class="bg-gray-50 rounded-xl p-3">
-      <div class="text-xs text-gray-500 mb-1">Rejection %</div>
+      <div class="text-xs text-gray-500 mb-1">Rejection %{{ info('REJECT_PCT') }}</div>
       <div class="text-xl font-bold {% if o.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
     </div>
   </div>

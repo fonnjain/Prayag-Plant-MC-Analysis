@@ -2,6 +2,7 @@
 {% block title_suffix %} — {{ report.title }}{% endblock %}
 
 {% block content %}
+{% from "_macros.html" import info %}
 
 <!-- Header -->
 <div class="flex items-center gap-2 mb-4">
@@ -64,27 +65,27 @@
 {% set o = sub_overall %}
 <div class="grid grid-cols-3 gap-2 mb-4">
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">OEE</div>
+    <div class="text-xs text-gray-500 mb-1">OEE{{ info('OEE') }}</div>
     <div class="text-lg font-bold {% if o.oee_rating=='green' %}text-green-600{% elif o.oee_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.oee }}%</div>
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Output</div>
+    <div class="text-xs text-gray-500 mb-1">Output{{ info('UNITS') }}</div>
     <div class="text-lg font-bold" style="color:var(--navy)">{{ "{:,.0f}".format(o.total_count) }}</div>
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Reject %</div>
+    <div class="text-xs text-gray-500 mb-1">Reject %{{ info('REJECT_PCT') }}</div>
     <div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Avail.</div>
+    <div class="text-xs text-gray-500 mb-1">Avail.{{ info('A') }}</div>
     <div class="text-base font-bold text-blue-600">{{ o.availability }}%</div>
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Perf.</div>
+    <div class="text-xs text-gray-500 mb-1">Perf.{{ info('P') }}</div>
     <div class="text-base font-bold text-purple-600">{{ o.performance }}%</div>
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Attain.</div>
+    <div class="text-xs text-gray-500 mb-1">Attain.{{ info('ATT') }}</div>
     <div class="text-base font-bold {% if o.attainment >= 90 %}text-green-600{% else %}text-amber-600{% endif %}">{{ o.attainment }}%</div>
   </div>
 </div>
@@ -108,7 +109,7 @@
       <thead>
         <tr style="background:var(--navy)">
           {% for h in headers %}
-          <th class="text-left text-white px-3 py-2 font-semibold first:rounded-l-lg last:rounded-r-lg whitespace-nowrap">{{ h }}</th>
+          <th class="text-left text-white px-3 py-2 font-semibold first:rounded-l-lg last:rounded-r-lg whitespace-nowrap">{{ h }}{% set tk = header_term_map.get(h) %}{% if tk %} {{ info(tk, light=true) }}{% endif %}</th>
           {% endfor %}
         </tr>
       </thead>

@@ -1,0 +1,70 @@
+Add an in-app **Glossary & metric help** to the existing Prayag Production Analytics dashboard, mobile-first, so users can see what every term means and how it's calculated without leaving the app. Two parts:
+
+## 1) Tappable info tooltips on every metric label
+Wherever a metric label appears (the machine card's A / P / Q / OEE / Att., the KPI cards, and report column headers), add a small **(i)** info affordance. Tapping it opens a lightweight popover/bottom-sheet (mobile-friendly, dismiss on tap-away) showing the term's short definition, its formula, and its unit. Keep it to 1–3 lines. Examples:
+- **OEE** — Overall Equipment Effectiveness. How effectively a machine runs vs ideal. Formula: A × P × Q. Unit: %.
+- **A — Availability** — Share of planned time the machine was actually running. A = Run Time ÷ Planned Production Time. %.
+- **P — Performance** — Actual speed vs ideal speed. P = Total ÷ ((Run Time ÷ 60) × Ideal rate). %.
+- **Q — Quality** — Share of output that was good. Q = Good ÷ Total. %.
+- **Att. — Attainment** — Actual output vs planned/target. Att. = Actual ÷ Planned. %.
+- **DT — Downtime** — Minutes stopped during planned time. Unit: minutes.
+- **units — Output** — Total quantity produced (pcs / kg / ltr).
+
+## 2) A full "Glossary" screen
+Add a **Glossary** entry reachable from the app (a "?" / help icon in the top header, and/or an item under a "More" tab). It's a mobile-first scrollable page with three sections, using the app's styling (navy #1F3864, terracotta #C55A11 accents, green/amber/red rating colours), cards/tables that scroll horizontally if needed.
+
+**Section A — Glossary** (term · meaning · unit · where used):
+OEE = Overall Equipment Effectiveness (A×P×Q), %, all OEE views.
+A = Availability — planned time actually running; %, machine card.
+P = Performance — actual vs ideal speed; %, machine card.
+Q = Quality — good ÷ total; %, machine card.
+Att. = Attainment — actual ÷ planned output; %, machine/plant.
+DT = Downtime — minutes stopped in planned time; minutes; losses.
+units = Output — total produced; pcs/kg/ltr; everywhere.
+PPT = Planned Production Time — shift length − planned stops; minutes.
+Run Time = PPT − downtime; minutes.
+Good = Total − Reject; pcs/kg.
+Ideal rate = standard output per hour; units/hr.
+Reject % = Reject ÷ Total; %.
+Runner % = runner produce ÷ total; kg/%; moulding & PTMT.
+Lumps = start-up/purge waste; kg; PTMT.
+Utilisation = actual hours ÷ ideal hours; %; machine/mould.
+Output efficiency = actual vs ideal output (or run-hours); %.
+Mould age-in-efficiency = efficiency % tracked vs mould age; %.
+Weight-loss % = (material in − out) ÷ material in; %; compound.
+Labour cost/kg = wages ÷ output; ₹/kg. Cost/hour = wages ÷ paid hours; ₹/hr.
+FY = Financial Year (Apr–Mar). YoY = year-on-year vs prior FY.
+Plant/Unit = KH, VN, WB or Unit-1/2/3. Segment = CP, PTMT, Sink, Hinges, Pipe & Fitting, Garden, HDPE, Tank.
+M/C = machine. Mould = tool with cavity/cycle/pc-weight.
+Machine code = type-plant+number, e.g. TK-VN1 = Tank line, VN plant, machine 1.
+
+**Section B — Formulas** (render the formula text in a monospace font):
+PPT = Shift length − Planned stops
+Run Time = PPT − Downtime
+Good = Total − Reject
+A = Run Time ÷ PPT
+P = Total ÷ ((Run Time ÷ 60) × Ideal rate)
+Q = Good ÷ Total
+OEE = A × P × Q
+Att. = Actual output ÷ Planned output
+Reject % = Reject ÷ Total
+Runner % = Runner ÷ Total
+Utilisation = Actual hours ÷ Ideal hours
+Output efficiency = Actual output ÷ Ideal output
+Avg output/hour = Output ÷ Run hours
+Weight-loss % = (Material in − Material out) ÷ Material in
+Labour cost/kg = Wages ÷ Output(kg); Labour cost/hour = Wages ÷ Paid hours
+Include a worked example: "TK-VN1: A 87.6% × P 88.2% × Q 97.0% = OEE 74.8%."
+Add a one-line note: all numbers are computed by deterministic code, never by the AI.
+
+**Section C — OEE rating bands** (with colour swatches):
+World-class — OEE ≥ 85% — green (#548235)
+Good — 60%–85% — amber (#BF8F00)
+Needs action — OEE < 60% — red (#C00000)
+Note that the same colours apply to Attainment and other rated metrics.
+
+## Requirements
+- Mobile-first: tooltips as bottom-sheets on small screens; the Glossary screen scrolls; large touch targets.
+- Make the definitions a single source in the code (e.g. one `GLOSSARY`/`FORMULAS` data object) and have both the tooltips and the Glossary screen read from it, so there's one place to edit.
+- Don't change any calculations — this is presentation only.
+

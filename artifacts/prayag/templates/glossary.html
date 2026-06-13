@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Glossary{% endblock %}
+
+{% block content %}
+
+<div class="mb-4">
+  <h2 class="text-lg font-bold" style="color:var(--navy)">Glossary &amp; Metric Help</h2>
+  <div class="text-xs text-gray-400 mt-0.5">What every term means and how it's calculated.</div>
+</div>
+
+<!-- ===== Section A — Glossary ===== -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--navy)">
+    <span class="w-5 h-5 rounded-md flex items-center justify-center text-white text-xs font-bold" style="background:var(--terra)">A</span>
+    Glossary
+  </h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:520px">
+      <thead>
+        <tr style="background:var(--navy)">
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg whitespace-nowrap">Term</th>
+          <th class="text-left text-white px-3 py-2 font-semibold">Meaning</th>
+          <th class="text-left text-white px-3 py-2 font-semibold whitespace-nowrap">Unit</th>
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-r-lg whitespace-nowrap">Where used</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in glossary %}
+        <tr id="term-{{ g.key }}" class="{% if loop.index is even %}bg-gray-50{% else %}bg-white{% endif %} border-b border-gray-100 align-top">
+          <td class="px-3 py-2 font-semibold text-gray-800 whitespace-nowrap">{{ g.term }}</td>
+          <td class="px-3 py-2 text-gray-600">
+            {{ g.meaning }}
+            {% if g.formula %}<div class="mt-1 font-mono text-[11px] text-gray-500">{{ g.formula }}</div>{% endif %}
+          </td>
+          <td class="px-3 py-2 text-gray-700 whitespace-nowrap">{{ g.unit }}</td>
+          <td class="px-3 py-2 text-gray-500 whitespace-nowrap">{{ g.where }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== Section B — Formulas ===== -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--navy)">
+    <span class="w-5 h-5 rounded-md flex items-center justify-center text-white text-xs font-bold" style="background:var(--terra)">B</span>
+    Formulas
+  </h3>
+  <div class="space-y-1.5">
+    {% for f in formulas %}
+    <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-xs bg-gray-50 rounded-lg px-3 py-1.5">
+      <span class="font-semibold" style="color:var(--navy)">{{ f.name }}</span>
+      <span class="text-gray-400">=</span>
+      <span class="text-gray-700">{{ f.formula }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Worked example -->
+  <div class="mt-3 rounded-lg p-3 border-l-4" style="border-color:var(--terra);background:rgba(197,90,17,0.06)">
+    <div class="text-[11px] font-semibold mb-1" style="color:var(--terra)">Worked example</div>
+    <div class="font-mono text-xs text-gray-700">{{ worked_example }}</div>
+  </div>
+
+  <!-- Determinism note -->
+  <div class="mt-3 flex items-start gap-2 text-xs text-gray-500">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="2.5" class="flex-shrink-0 mt-0.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+    </svg>
+    <span>{{ compute_note }}</span>
+  </div>
+</div>
+
+<!-- ===== Section C — OEE rating bands ===== -->
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--navy)">
+    <span class="w-5 h-5 rounded-md flex items-center justify-center text-white text-xs font-bold" style="background:var(--terra)">C</span>
+    OEE rating bands
+  </h3>
+  <div class="space-y-2">
+    {% for b in rating_bands %}
+    <div class="flex items-center gap-3 rounded-lg px-3 py-2 bg-gray-50">
+      <span class="w-5 h-5 rounded-md flex-shrink-0" style="background:{{ b.hex }}"></span>
+      <span class="text-sm font-semibold text-gray-800 flex-1">{{ b.label }}</span>
+      <span class="text-xs font-medium text-gray-500">{{ b.range }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mt-3 text-xs text-gray-500">{{ rating_note }}</div>
+</div>
+
+{% endblock %}

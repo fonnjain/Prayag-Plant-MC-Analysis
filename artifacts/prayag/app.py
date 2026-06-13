@@ -17,6 +17,10 @@ from metrics import (
 from validate import full_validate
 from narrative import get_narrative
 from pdf_export import generate_report_pdf
+from glossary import (
+    GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
+    WORKED_EXAMPLE, COMPUTE_NOTE, HEADER_TERM_MAP,
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
@@ -133,6 +137,21 @@ def get_data(args):
         "machine_filter": machine_filter,
         "demo_mode": is_demo_mode(),
         "has_claude": bool(os.environ.get("ANTHROPIC_API_KEY", "")),
+    }
+
+
+@app.context_processor
+def inject_glossary():
+    """Make the single-source glossary available to every template."""
+    return {
+        "glossary": GLOSSARY,
+        "glossary_data": GLOSSARY_BY_KEY,
+        "formulas": FORMULAS,
+        "rating_bands": RATING_BANDS,
+        "rating_note": RATING_NOTE,
+        "worked_example": WORKED_EXAMPLE,
+        "compute_note": COMPUTE_NOTE,
+        "header_term_map": HEADER_TERM_MAP,
     }
 
 
@@ -276,6 +295,13 @@ def losses():
         "total_downtime": sum(minutes),
     })
     return render_template("losses.html", **ctx)
+
+
+@app.route("/glossary")
+def glossary_view():
+    data = get_data(request.args)
+    ctx = _common_ctx(data)
+    return render_template("glossary.html", **ctx)
 
 
 # ---------------------------------------------------------------------------

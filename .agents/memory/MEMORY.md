@@ -1,0 +1,1 @@
+- [Jinja macro import in child templates](jinja-macro-import.md) — `{% from %}` imports must live inside `{% block content %}`, not at file top, in templates that extend a base.

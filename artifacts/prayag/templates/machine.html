@@ -2,6 +2,7 @@
 {% block title_suffix %} — Machine-wise{% endblock %}
 
 {% block content %}
+{% from "_macros.html" import info %}
 
 <!-- Filter bar -->
 <div class="kpi-card p-3 mb-4">
@@ -59,20 +60,23 @@
         <div class="flex items-center justify-between mb-2">
           <div>
             <div class="font-semibold text-gray-800">{{ item.machine }}</div>
-            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units · {{ "{:,.0f}".format(m.downtime_min) }} min DT</div>
+            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units{{ info('UNITS') }} · {{ "{:,.0f}".format(m.downtime_min) }} min DT{{ info('DT') }}</div>
           </div>
-          <span class="ml-2 text-base font-bold px-2 py-0.5 rounded-full flex-shrink-0
-            {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
-            {{ m.oee }}%
-          </span>
+          <div class="ml-2 flex items-center gap-1 flex-shrink-0">
+            <span class="text-[10px] text-gray-400 uppercase tracking-wide">OEE</span>{{ info('OEE') }}
+            <span class="text-base font-bold px-2 py-0.5 rounded-full
+              {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+              {{ m.oee }}%
+            </span>
+          </div>
         </div>
 
         <!-- A P Q Q row -->
         <div class="grid grid-cols-4 gap-1 text-center">
-          {% for lbl, val, color in [('A', m.availability, '#22c55e'), ('P', m.performance, '#3b82f6'), ('Q', m.quality, '#8b5cf6'), ('Att.', m.attainment, '#1F3864')] %}
+          {% for lbl, val, color, tkey in [('A', m.availability, '#22c55e', 'A'), ('P', m.performance, '#3b82f6', 'P'), ('Q', m.quality, '#8b5cf6', 'Q'), ('Att.', m.attainment, '#1F3864', 'ATT')] %}
           <div class="bg-gray-50 rounded-lg py-1 px-1">
             <div class="text-xs font-bold" style="color:{{ color }}">{{ val }}%</div>
-            <div class="text-[10px] text-gray-400">{{ lbl }}</div>
+            <div class="text-[10px] text-gray-400">{{ lbl }}{{ info(tkey) }}</div>
           </div>
           {% endfor %}
         </div>

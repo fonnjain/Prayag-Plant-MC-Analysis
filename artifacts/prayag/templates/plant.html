@@ -2,6 +2,7 @@
 {% block title_suffix %} — Plant-wise{% endblock %}
 
 {% block content %}
+{% from "_macros.html" import info %}
 
 <!-- Filter bar -->
 <div class="kpi-card p-3 mb-4">
@@ -46,17 +47,20 @@
         <div class="text-base font-bold" style="color:var(--navy)">{{ plant_names.get(item.plant, item.plant) }}</div>
         <div class="text-xs text-gray-400">{{ item.plant }}</div>
       </div>
-      <span class="text-lg font-bold px-3 py-1 rounded-full {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
-        {{ m.oee }}%
-      </span>
+      <div class="flex items-center gap-1">
+        <span class="text-[10px] text-gray-400 uppercase tracking-wide">OEE</span>{{ info('OEE') }}
+        <span class="text-lg font-bold px-3 py-1 rounded-full {% if m.oee_rating=='green' %}rating-green{% elif m.oee_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+          {{ m.oee }}%
+        </span>
+      </div>
     </div>
 
     <!-- A P Q mini bars -->
     <div class="grid grid-cols-3 gap-2 mb-3">
-      {% for lbl, val, color in [('A', m.availability, '#22c55e'), ('P', m.performance, '#3b82f6'), ('Q', m.quality, '#8b5cf6')] %}
+      {% for lbl, val, color, tkey in [('A', m.availability, '#22c55e', 'A'), ('P', m.performance, '#3b82f6', 'P'), ('Q', m.quality, '#8b5cf6', 'Q')] %}
       <div>
         <div class="flex justify-between text-xs mb-0.5">
-          <span class="text-gray-500">{{ lbl }}</span>
+          <span class="text-gray-500">{{ lbl }}{{ info(tkey) }}</span>
           <span class="font-semibold">{{ val }}%</span>
         </div>
         <div class="progress-bar">
@@ -70,15 +74,15 @@
     <div class="grid grid-cols-3 gap-2 text-center border-t border-gray-100 pt-3">
       <div>
         <div class="text-sm font-bold text-gray-800">{{ "{:,.0f}".format(m.total_count) }}</div>
-        <div class="text-xs text-gray-400">Output</div>
+        <div class="text-xs text-gray-400">Output{{ info('UNITS') }}</div>
       </div>
       <div>
         <div class="text-sm font-bold {% if m.attainment >= 90 %}text-green-600{% elif m.attainment >= 75 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.attainment }}%</div>
-        <div class="text-xs text-gray-400">Attainment</div>
+        <div class="text-xs text-gray-400">Attainment{{ info('ATT') }}</div>
       </div>
       <div>
         <div class="text-sm font-bold {% if m.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>
-        <div class="text-xs text-gray-400">Reject</div>
+        <div class="text-xs text-gray-400">Reject{{ info('REJECT_PCT') }}</div>
       </div>
     </div>
 

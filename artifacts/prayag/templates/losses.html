@@ -2,6 +2,7 @@
 {% block title_suffix %} — Losses{% endblock %}
 
 {% block content %}
+{% from "_macros.html" import info %}
 
 <div class="mb-4">
   <h2 class="text-lg font-bold" style="color:var(--navy)">Downtime Losses</h2>
@@ -35,7 +36,7 @@
 <!-- Summary -->
 <div class="grid grid-cols-2 gap-3 mb-4">
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Total Downtime</div>
+    <div class="text-xs text-gray-500 mb-1">Total Downtime{{ info('DT') }}</div>
     <div class="text-xl font-bold text-red-600">{{ "{:,.0f}".format(total_downtime) }}</div>
     <div class="text-xs text-gray-400">minutes</div>
   </div>
@@ -88,7 +89,7 @@
       <thead>
         <tr style="background:var(--navy)">
           <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg">Reason</th>
-          <th class="text-right text-white px-3 py-2 font-semibold">Minutes</th>
+          <th class="text-right text-white px-3 py-2 font-semibold">Minutes{{ info('DT', light=true) }}</th>
           <th class="text-right text-white px-3 py-2 font-semibold">%</th>
           <th class="text-right text-white px-3 py-2 font-semibold rounded-r-lg">Cumul. %</th>
         </tr>

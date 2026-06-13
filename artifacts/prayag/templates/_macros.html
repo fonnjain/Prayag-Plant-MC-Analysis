@@ -1,0 +1,4 @@
+{# Reusable tappable (i) info affordance. Opens the glossary bottom-sheet.
+   term_key must match a key in glossary.py GLOSSARY.
+   light=true for use on dark/navy backgrounds (e.g. table headers). #}
+{% macro info(term_key, light=false) %}<button type="button" class="info-btn{% if light %} info-btn-light{% endif %}" data-term="{{ term_key }}" aria-label="What does this mean?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 11v5"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor" stroke="none"/></svg></button>{% endmacro %}
