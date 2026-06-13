@@ -12,3 +12,15 @@ id = "kth2-evGtmaT-01_vmrMs"
 uri = "file://prayag_input_fields.csv"
 type = "table"
 title = "Prayag — all input data fields"
+
+[[outputs]]
+id = "TgdzV6FAng4ApvpvKi7be"
+uri = "file://prayag_legacy_monthly_input.csv"
+type = "table"
+title = "Monthly data input template (Apr–Jun 2026)"
+
+[[outputs]]
+id = "cJNM4prsX5buKpKvjUK7f"
+uri = "file://prayag_legacy_daily_input.csv"
+type = "table"
+title = "Daily data input template (Apr–Jun 2026)"

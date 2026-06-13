@@ -1,0 +1,47 @@
+MONTHLY DATA INPUT TEMPLATE — Annual Summary Workbooks (one per plant)
+Where to enter: Each plant's annual workbook > per-machine tab (M/C-1 / M/C-2 / …)
+Months to fill for FY 26-27 up to today: APR'26 · MAY'26 · JUN'26 (in-progress)
+Format rules: Ideal Hours & Actual Hours in decimal hours (e.g. 480 hrs/month). Output & Rejection in KG (or PCS for Moulding). Ideal Output column = ideal rate in KG/HR (or PCS/HR) — NOT total ideal output; the engine computes total = actual_hours × rate.
+,,,,,,,,,,
+plant,workbook_title,tab_name,machine_label,mould_or_material_code,month_label,ideal_hours,actual_hours,actual_output_kg_or_pcs,ideal_output_rate_kg_hr_or_pcs_hr,rejection_kg_or_pcs,runner_lumps_kg (Moulding only — leave blank for all other plants)
+,,,,,,,,,,
+PIPE — Pipe & Fitting M/C Summary (26-27) | Tab: Pipe M/C 26-27 > per-machine tabs M/C-1 … M/C-n,,,,,,,,,,
+PIPE,Pipe M/C Summary (26-27),M/C-1,M/C-1,,APR'26,[fill ideal hrs],[fill actual hrs],[fill output kg],[fill ideal rate kg/hr],[fill rejection kg],
+PIPE,Pipe M/C Summary (26-27),M/C-1,M/C-1,,MAY'26,[fill ideal hrs],[fill actual hrs],[fill output kg],[fill ideal rate kg/hr],[fill rejection kg],
+PIPE,Pipe M/C Summary (26-27),M/C-1,M/C-1,,JUN'26,[partial — enter actuals to date],[partial],[partial],[same rate],[partial],
+PIPE,Pipe M/C Summary (26-27),M/C-2,M/C-2,,APR'26,[fill],[fill],[fill],[fill],[fill],
+PIPE,Pipe M/C Summary (26-27),M/C-2,M/C-2,,MAY'26,[fill],[fill],[fill],[fill],[fill],
+PIPE,Pipe M/C Summary (26-27),M/C-2,M/C-2,,JUN'26,[partial],[partial],[partial],[same rate],[partial],
+[add one row per additional Pipe machine × month],,,,,,,,,,
+,,,,,,,,,,
+GARDEN — Garden Pipe M/C Summary (26-27) | Tab: GARDEN M/C 26-27 > per-machine tabs M/C-1 … M/C-n,,,,,,,,,,
+GARDEN,Garden Pipe M/C Summary (26-27),M/C-1,M/C-1,,APR'26,[fill],[fill],[fill],[fill],[fill],
+GARDEN,Garden Pipe M/C Summary (26-27),M/C-1,M/C-1,,MAY'26,[fill],[fill],[fill],[fill],[fill],
+GARDEN,Garden Pipe M/C Summary (26-27),M/C-1,M/C-1,,JUN'26,[partial],[partial],[partial],[same rate],[partial],
+[add one row per additional Garden machine × month],,,,,,,,,,
+,,,,,,,,,,
+HDPE — HDPE M/C Summary (26-27) | Tab: HDPE M/C 26-27 > per-machine tabs M/C-1 … M/C-n,,,,,,,,,,
+HDPE,HDPE M/C Summary (26-27),M/C-1,M/C-1,,APR'26,[fill],[fill],[fill],[fill],[fill],
+HDPE,HDPE M/C Summary (26-27),M/C-1,M/C-1,,MAY'26,[fill],[fill],[fill],[fill],[fill],
+HDPE,HDPE M/C Summary (26-27),M/C-1,M/C-1,,JUN'26,[partial],[partial],[partial],[same rate],[partial],
+[add one row per additional HDPE machine × month],,,,,,,,,,
+,,,,,,,,,,
+MOULDING — Moulding M/C Summary (26-27) | Tab: Moulding M/C 26-27 > per-machine tabs M/C-1 … M/C-n,,,,,,,,,,
+MOULDING,Moulding M/C Summary (26-27),M/C-1,M/C-1,[mould/material code],APR'26,[fill],[fill],[fill pcs],[fill pcs/hr],[fill pcs],[fill runner kg]
+MOULDING,Moulding M/C Summary (26-27),M/C-1,M/C-1,[mould/material code],MAY'26,[fill],[fill],[fill pcs],[fill pcs/hr],[fill pcs],[fill runner kg]
+MOULDING,Moulding M/C Summary (26-27),M/C-1,M/C-1,[mould/material code],JUN'26,[partial],[partial],[partial pcs],[same rate],[partial pcs],[partial runner]
+[add one row per additional Moulding machine × mould × month],,,,,,,,,,
+,,,,,,,,,,
+FIELD GUIDE,,,,,,,,,,
+field,required,format,example,notes
+plant,yes,text code,PIPE,"PIPE / GARDEN / HDPE / MOULDING / PTMT / CP / TANK"
+tab_name,yes,text,M/C-1,Must match the tab name in the Google Sheet exactly (e.g. M/C-1)
+machine_label,yes,text,M/C-1,"Appears in the MACHINE column (merged cell). Format must be M/C-n or MACHINE-n so the daily-join key can match it."
+mould_or_material_code,optional,text,CPVC,Only for Moulding (or plants that track material per machine). Left blank = no mould/material breakdown.
+month_label,yes,text,APR'26,"Month labels the parser understands: APR'26 · MAY'26 · JUN'26 · JUL'26 etc. Also APR-26 or APR 26."
+ideal_hours,yes,decimal hours,480,"Total planned/available machine hours for the month (e.g. 30 days × 16 hrs = 480). Merged cell — only one entry per machine per sheet; the engine carries it forward across all months."
+actual_hours,yes,decimal hours,412.5,Actual run hours recorded that month.
+actual_output_kg_or_pcs,yes,number,85400,"KG for extrusion plants (Pipe/Garden/HDPE). PCS for Moulding. This is the GROSS output for monthly; for PIPE daily the engine reconciles net vs gross."
+ideal_output_rate_kg_hr_or_pcs_hr,yes,number,207,"Ideal rate per hour (kg/hr or pcs/hr). Merged cell — one entry per machine. The engine computes ideal_output = actual_hours × this rate. Do NOT enter total ideal output here."
+rejection_kg_or_pcs,optional,number,1250,"Rejection quantity. The engine recomputes rejection % = rejection ÷ output — the stored % cell in the sheet is ignored."
+runner_lumps_kg,optional (Moulding only),number,320,"Runner/lumps weight for Moulding machines. Blank for all extrusion plants."

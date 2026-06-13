@@ -1,0 +1,84 @@
+DAILY DATA INPUT TEMPLATE — Per-Month Daily Workbooks (one workbook per plant per month)
+Where to enter: Each plant's monthly daily workbook > "Report-5" tab (Pipe/PTMT) OR "Daily Report" tab (Garden/HDPE/Tank)
+Active daily plants (have both a daily workbook AND a monthly grid baseline): PIPE · GARDEN
+Months to fill up to today: 2026-04 (complete) · 2026-05 (complete) · 2026-06 (days 1–13)
+NOTE: Ideal rate and ideal hours are NOT entered here — the engine joins them automatically from the monthly grid above.
+,,,,,,,,,,
+plant,workbook_title,tab_name,machine_label,date_dd_mmm_yy,run_hours,output_kg,rejection_kg
+,,,,,,,,,,
+PIPE — daily workbooks (one per month in the Pipe daily folder),,,,,,,,,,
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,01-Apr-26,[fill run hrs],[fill output kg],[fill rejection kg]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,02-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,03-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,04-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,05-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,06-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,07-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,08-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,09-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,10-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,11-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,12-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,13-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,14-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,15-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,16-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,17-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,18-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,19-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,20-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,21-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,22-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,23-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,24-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,25-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,26-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,27-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,28-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,29-Apr-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Apr-26,Report-5,M/C-1,30-Apr-26,[fill],[fill],[fill]
+[repeat above 30 rows for M/C-2 · M/C-3 … (one block per machine)],,,,,,,
+PIPE,Pipe Daily Report May-26,Report-5,M/C-1,01-May-26,[fill],[fill],[fill]
+[… 31 rows per machine for May 2026],,,,,,,
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,01-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,02-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,03-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,04-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,05-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,06-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,07-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,08-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,09-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,10-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,11-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,12-Jun-26,[fill],[fill],[fill]
+PIPE,Pipe Daily Report Jun-26,Report-5,M/C-1,13-Jun-26,[fill],[fill],[fill]
+[repeat per machine],,,,,,,
+,,,,,,,,,,
+GARDEN — daily workbooks (one per month in the Garden daily folder),,,,,,,,,,
+GARDEN,Garden Daily Report Apr-26,Daily Report,MACHINE-1,01-Apr-26,[fill run hrs],[fill output kg],[fill rejection kg]
+GARDEN,Garden Daily Report Apr-26,Daily Report,MACHINE-1,02-Apr-26,[fill],[fill],[fill]
+[… 30 rows per machine for April 2026],,,,,,,
+GARDEN,Garden Daily Report May-26,Daily Report,MACHINE-1,01-May-26,[fill],[fill],[fill]
+[… 31 rows per machine for May 2026],,,,,,,
+GARDEN,Garden Daily Report Jun-26,Daily Report,MACHINE-1,01-Jun-26,[fill],[fill],[fill]
+[… 13 rows per machine for June 1–13 2026],,,,,,,
+,,,,,,,,,,
+DAILY DATA — FIELD GUIDE,,,,,,,,,,
+field,required,format,accepted_date_formats,notes
+plant,yes,text code,—,"PIPE or GARDEN (the two plants with active daily workbooks). HDPE / PTMT / TANK have daily files registered but no monthly grid baseline yet — they are ingested as monthly-only until a monthly grid is added."
+workbook_title,yes,text,—,"Friendly name only — used here for reference. The actual workbook is identified by its Google Drive file ID pinned in sources.py. When a new monthly file is created in Drive its file ID must be added to DAILY_SOURCES in sources.py."
+tab_name,yes,text,—,"Report-5 for Pipe/PTMT layout. Daily Report for Garden/HDPE/Tank layout. The engine tries both in that order and takes whichever tab exists."
+machine_label,yes,text,—,"Row label in the wide matrix. Must contain M/C-n (e.g. M/C-1) for Pipe or MACHINE-n (e.g. MACHINE-1) for Garden. Rows labelled TOTAL / PART-1 / PART-2 / %AGE are skipped automatically. The label must match the corresponding machine in the monthly grid — the join is on the numeric suffix only (M/C-3 matches PIPE M/C-3)."
+date_dd_mmm_yy,yes,date,"""01-Apr-26"" or ""Apr, 1"" or ""Apr,1""","Column header in the wide matrix (repeated for each date). The engine auto-detects the date format. Both day-first (01-Apr-26) and month-first (Apr, 1) work. Leave future dates blank — blank or zero rows are skipped."
+run_hours,yes,decimal hours,—,"Actual run hours for that machine on that date. Sub-column header must contain RUN. Rows where both run_hours and output are 0 or blank are skipped (treated as non-production day)."
+output_kg,yes,number,—,"Actual output in KG for that machine on that date. Sub-column header must contain OUTPUT. IMPORTANT for PIPE: the daily sheet records NET output (gross minus rejects). The monthly grid records GROSS. This causes a ~6.6% reconciliation gap for PIPE — this is expected and surfaced as an honest warning, not an error."
+rejection_kg,optional,number,—,"Rejection in KG for that machine on that date. Sub-column header must contain REJECT. Blank = 0. Rejection % is always recomputed (rejection ÷ output) — any stored % column in the sheet is ignored."
+,,,,,,,,,,
+RECONCILIATION NOTE,,,,,,,,,,
+"Once all monthly and daily data are entered, the four-tier Data Confirmation engine will check:","","","",""
+"Tier 1 — Completeness: are all expected machines present for all months?","","","",""
+"Tier 2 — Internal reconciliation: does the sum of per-machine monthly rows match the grid TOTAL row? Does daily output reconcile with monthly (within 5% tolerance for PIPE due to net-vs-gross)?","","","",""
+"Tier 3 — Validity: no performance > 100%, no rejection > output","","","",""
+"Tier 4 — Plausibility: any month with < 50% utilisation is flagged for review","","","",""
+"Navigate to /confirmation in the dashboard to see the full audit report after data entry.","","","",""
