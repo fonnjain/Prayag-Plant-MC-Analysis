@@ -11,9 +11,9 @@ Monthly and FY headline totals are summed from the authoritative daily tabs (one
 
 **How to apply (the invariants that keep it honest):**
 - Grid is the headline ONLY for a month that has no daily workbook at all (append for those `grid_only_months`, disjoint from daily months → no double count).
-- A TOTAL daily outage (every workbook read failed) is the only time monthly/FY shows the grid as a fallback, and it must be loudly labelled "summary sheet … it undercounts". Sub-monthly never substitutes the grid at all.
-- `daily_used=True` now drives monthly/FY confirmation scope too. That path is built for daily grain (rosterless plants like PTMT/TANK scored honestly; a roster machine that never ran = WARNING, not a blocker).
-- `get_daily_records` MUST isolate per-(plant,ym) read failures and only raise when ALL fail. Otherwise a single transient 429 on a cold multi-month (FY) read nukes the whole period and forces the grid fallback — i.e. it reconciles down by accident.
+- A TOTAL daily outage (every workbook read failed) shows NO production data with an honest error banner — the grid is NEVER substituted, on monthly/FY OR sub-monthly. `get_data` refuses any grid substitution under the daily-only rule. (The lower grid total must never silently replace a daily outage; the regression test is `test_total_daily_outage_shows_nothing_not_grid`.)
+- `daily_used=True` now drives monthly/FY confirmation scope too. That path is built for daily grain (rosterless plants like TANK scored honestly; a roster machine that never ran = WARNING, not a blocker).
+- `get_daily_records` MUST isolate per-(plant,ym) read failures and only raise when ALL fail. Otherwise a single transient 429 on a cold multi-month (FY) read nukes the whole period — which now shows NO data for it (an honest but avoidable outage), never a grid substitution.
 
 ## Known caveat: month-completeness is still grid-based
 

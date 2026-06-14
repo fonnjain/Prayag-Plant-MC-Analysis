@@ -1589,8 +1589,8 @@ def build_state():
                       f"get_data error: {_e2}")
 
         # --- Current-month data: GARDEN + TANK ---
-        # HDPE May already in _rows_may above (1 aggregated row per machine).
-        # TANK May is empty (no data entered); TANK June has rows — use June.
+        # HDPE May already in _rows_may above (per-date matrix rows from "Daily
+        # Report"). TANK May is empty (no data entered); TANK June has rows — use June.
         _cur_ym = _today().strftime("%Y-%m")
         _rows_jun: list = []
         _jun_err: str = ""
@@ -1599,11 +1599,16 @@ def build_state():
         except Exception as _e:
             _jun_err = str(_e)
 
-        # #6  HDPE parser — verify using May (confirmed data month)
-        _hdpe_may_n = sum(1 for r in _rows_may if r.plant == "HDPE")
-        _chk(6, "HDPE daily rows parsed > 0 (using 2026-05, the latest data month)",
-             _hdpe_may_n > 0, "> 0", _hdpe_may_n,
-             "HDPE parser not finished")
+        # #6  HDPE parser — verify using May (confirmed data month). HDPE reads the
+        # "Daily Report" matrix and supplies its own in-sheet baseline, so every
+        # produced row must carry an efficiency baseline (ideal_source != "none").
+        _hdpe_may = [r for r in _rows_may if r.plant == "HDPE"]
+        _hdpe_may_n = len(_hdpe_may)
+        _hdpe_based = _hdpe_may_n > 0 and all(r.ideal_source != "none" for r in _hdpe_may)
+        _chk(6, "HDPE daily rows > 0 with in-sheet baseline (2026-05, latest data month)",
+             _hdpe_based, "rows>0 & ideal_source!=none",
+             f"rows={_hdpe_may_n} sources={sorted({r.ideal_source for r in _hdpe_may})}",
+             "HDPE parser not finished or baseline missing")
 
         if _jun_err:
             _chk(7, f"GARDEN {_cur_ym} rows > 0  AND  TANK {_cur_ym} rows > 0",

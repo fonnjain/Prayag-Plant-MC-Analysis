@@ -496,16 +496,26 @@ _DAILY_LAYOUTS: dict = {
             ),
         },
     ],
-    # GARDEN/HDPE daily workbooks keep one tab PER MACHINE ("MACHINE 2", ...),
-    # each a date×production block (no run hours). The single "Daily Report" tab
-    # that used to be read is empty — real output lives in these per-machine tabs.
+    # GARDEN keeps one tab PER MACHINE ("MACHINE 2", ...), each a date×production
+    # block (no run hours); its single "Daily Report" tab is empty, so real output
+    # lives in these per-machine tabs.
     "GARDEN": [{
         "emit": "GARDEN", "layout": "blocks",
         "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "GARDEN M/C - ",
     }],
+    # HDPE has a populated "Daily Report" matrix (one row per machine, per-date
+    # Run Hours / Output / Rejection) — the same family as PTMT Report-5 — so it is
+    # read there, NOT from the per-machine MACHINE 1-6 block tabs (the DANA M/C tab
+    # is a granulator/support and is excluded). HDPE supplies its OWN per-machine
+    # baselines in that matrix: "Ideal Output" (kg/hr) drives output-efficiency and
+    # "M/C Run Hour" (monthly available hours) drives utilisation — so HDPE needs no
+    # baselines.json entry. The machine id is the canonical column ("MACHINE" =
+    # M/C-1…6); the alias column to its left is ignored by the matrix parser.
     "HDPE": [{
-        "emit": "HDPE", "layout": "blocks",
-        "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "HDPE M/C - ",
+        "emit": "HDPE", "tab": "Daily Report", "layout": "matrix",
+        "ideal_output_col": ("contains", "IDEAL OUTPUT"),
+        "ideal_hours_col": ("contains", "M/C RUN HOUR"),
+        "summary_mc_header": ("eq", "MACHINE"),
     }],
     "PTMT": [{
         "emit": "PTMT", "tab": "Report-5", "layout": "matrix",
@@ -608,6 +618,19 @@ def _has_date_header(values: List[list]) -> bool:
     return any(
         str(c).strip().upper() == "DATE"
         for row in values[:12] for c in row
+    )
+
+
+def _matrix_has_dates(values: List[list]) -> bool:
+    """True if a wide per-date matrix header row is recognisable (≥2 date labels).
+
+    The matrix layout (HDPE/PTMT "Daily Report") labels its date columns "Jun, 1"
+    rather than a literal "DATE" cell, so ``_has_date_header`` can't see it. This
+    distinguishes a recognised-but-idle report (header present, all zeros → no
+    rows) from a genuine parse failure (no date header at all)."""
+    return any(
+        sum(1 for c in row if parsers._day_from_label(c) is not None) >= 2
+        for row in values[:8]
     )
 
 
@@ -715,10 +738,11 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
                 token: str) -> Tuple[List[Record], dict]:
     """Read and baseline one logical plant's daily rows from a workbook tab.
 
-    Ideal-denominator precedence per machine: monthly grid → in-sheet ideal
-    column → config baseline → none ("no baseline set"). A no-baseline machine
-    still reports run hours + output; its ratio is suppressed downstream rather
-    than shown as a misleading 0%.
+    Ideal-denominator precedence per machine: in-sheet ideal-OUTPUT rate (a plant
+    that publishes its own per-machine Ideal Output, e.g. HDPE) → monthly grid →
+    in-sheet ideal-HOURS column (e.g. PTMT) → config baseline → none ("no baseline
+    set"). A no-baseline machine still reports run hours + output; its ratio is
+    suppressed downstream rather than shown as a misleading 0%.
     """
     seg, unit = _daily_seg_unit(emit)
     layout = spec["layout"]
@@ -763,6 +787,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         raw = parsers.parse_daily_matrix(
             values, plant=emit, segment=seg, unit=unit, year_month=ym,
             source_file=file_id, source_tab=tab,
+            mc_header_spec=spec.get("summary_mc_header"),
         )
 
     # PTMT runs several processes on one Report-5 matrix; route each machine to
@@ -773,13 +798,39 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
             code = r.machine[len(emit) + 1:] if r.machine.startswith(emit + " ") else r.machine
             r.segment, r.is_finishing = _ptmt_group(code)
 
+    # No rows extracted: a file that opened with a recognisable matrix header but
+    # no production is IDLE (no output recorded yet) — never "missing". Only an
+    # unrecognisable layout is a parse failure.
+    if not raw:
+        report["warning"] = (
+            f"{emit} {ym}: the daily report is present but no production has been "
+            "recorded for this period yet."
+            if _matrix_has_dates(values) else
+            f"{emit} {ym}: the daily report could not be parsed "
+            "(date/output layout not recognised)."
+        )
+        report["record_count"] = 0
+        return raw, report
+
     # Baseline sources, in precedence order.
     grid_ideal, _ = _grid_ideal_for(emit, ym)  # grid_total no longer used (daily-only rule)
-    sheet_ideal: dict = {}
+    summary_mc = spec.get("summary_mc_header", ("contains", "M/C NO"))
+    sheet_ideal: dict = {}  # in-sheet ideal HOURS  (PTMT "IDEAL HOUR")    → utilisation
+    sheet_rate: dict = {}   # in-sheet ideal OUTPUT rate, units/hr (HDPE) → efficiency
+    sheet_hours: dict = {}  # in-sheet available HOURS/month (HDPE)       → utilisation
     if spec.get("ideal_col"):
-        labels = parsers.parse_matrix_summary_col(values, header_spec=spec["ideal_col"])
+        labels = parsers.parse_matrix_summary_col(
+            values, header_spec=spec["ideal_col"], mc_header_spec=summary_mc)
         # Re-key onto the machine names the matrix parser emitted ("PLANT label").
         sheet_ideal = {f"{emit} {lbl}".strip(): hrs for lbl, hrs in labels.items()}
+    if spec.get("ideal_output_col"):
+        labels = parsers.parse_matrix_summary_col(
+            values, header_spec=spec["ideal_output_col"], mc_header_spec=summary_mc)
+        sheet_rate = {f"{emit} {lbl}".strip(): v for lbl, v in labels.items()}
+    if spec.get("ideal_hours_col"):
+        labels = parsers.parse_matrix_summary_col(
+            values, header_spec=spec["ideal_hours_col"], mc_header_spec=summary_mc)
+        sheet_hours = {f"{emit} {lbl}".strip(): v for lbl, v in labels.items()}
 
     # Active days per machine (full month) so per-day ideal hours reconcile to
     # the monthly figure.
@@ -790,7 +841,20 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
     for r in raw:
         k = _mc_key(r.machine)
         days = max(len(active.get(r.machine, ())), 1)
-        if k is not None and k in grid_ideal:
+        if sheet_rate.get(r.machine, 0) > 0:
+            # A plant that publishes its OWN per-machine "Ideal Output" rate in the
+            # daily matrix (HDPE today) is authoritative — its in-sheet rate drives
+            # efficiency and its in-sheet "M/C Run Hour" drives utilisation, so it
+            # takes precedence over any monthly-grid baseline and needs no
+            # baselines.json entry. Only HDPE populates sheet_rate, so other plants
+            # (PIPE/MOULDING/GARDEN) keep monthly-grid precedence below.
+            rate = sheet_rate[r.machine]
+            r.ideal_rate = rate
+            r.ideal_output = r.actual_hours * rate
+            ih_month = sheet_hours.get(r.machine, 0.0)
+            r.ideal_hours = (ih_month / days) if ih_month > 0 else 0.0
+            r.ideal_source = "sheet"
+        elif k is not None and k in grid_ideal:
             rate, ih_month = grid_ideal[k]
             r.ideal_rate = rate
             r.ideal_hours = ih_month / days

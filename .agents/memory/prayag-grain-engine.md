@@ -29,7 +29,7 @@ Each plant declares its daily tab + layout (`matrix` = wide per-date grid, or `l
 
 # Ideal-denominator precedence + the "no baseline set" honest fallback
 
-Per-machine ideal hours/output resolve in strict order: **monthly grid → in-sheet ideal column (e.g. PTMT) → baseline master → none**. When none resolves, utilisation/output-efficiency are *suppressed* (not computed as a misleading 0%) and the figure is flagged "No baseline set"; raw hours + output are still shown.
+Per-machine ideal hours/output resolve in strict order: **in-sheet ideal-OUTPUT rate (a plant publishing its own per-machine Ideal Output, e.g. HDPE — also takes its M/C Run Hour for utilisation) → monthly grid → in-sheet ideal-HOURS column (e.g. PTMT) → baseline master → none**. When none resolves, utilisation/output-efficiency are *suppressed* (not computed as a misleading 0%) and the figure is flagged "No baseline set"; raw hours + output are still shown.
 
 **How to apply:** metrics expose `util_available`/`eff_available`/`headline_available` and `headline` falls OEE→eff→util→"No baseline set". Templates must gate on these flags, **not just `oee_available`** — the OEE-vs-OutputEfficiency binary is wrong for util-only and no-baseline plants. Use `headline_label`-style branching (OEE / Output Efficiency / Utilisation / No baseline) for the headline caption everywhere it appears.
 
@@ -43,9 +43,9 @@ A sub-monthly window must serve daily grain whenever a daily workbook exists for
 
 # No-roster daily plants count their own reporting machines (never 0/0)
 
-PTMT and TANK have a daily file but NO monthly-grid roster (not in `ANNUAL_SOURCES`). In a daily view their completeness must count the daily-reporting machines as both expected and present, or the card shows "0/0 machines" despite real data.
+TANK has a daily file but NO grid roster AND no fixed register, so its completeness counts the daily-reporting items as both expected and present, or the card shows "0/0" despite real data. (PTMT is NO LONGER in this bucket: it has the fixed 55-machine register in `sources.PTMT_GROUPS` — held to all 55 — see `prayag-ptmt-roster.md`. HDPE has a real monthly grid in `ANNUAL_SOURCES`, so its roster comes from the grid like PIPE/GARDEN/MOULDING.)
 
-**Why:** the master roster comes only from the full-FY monthly grid, so plants absent from it contribute 0 expected → the completeness loop's `if not master_codes: continue` zeroed them. The daily file is the only roster we hold for those plants.
+**Why:** the master roster comes from the full-FY monthly grid (plus the PTMT fixed register), so a plant with neither a grid nor a register contributes 0 expected → the completeness loop's `if not master_codes: continue` zeroed it. The daily file is the only roster we hold for such a plant (today: TANK only).
 
 **How to apply:** in `tier1_completeness`, when `daily_used` and `master_codes` is empty but daily rows are present, add `len(present)` to both present and expected (honest coverage); a separate note already records there's no grid to cross-check.
 
@@ -73,4 +73,4 @@ Some daily plants report with NO machine identity (e.g. TANK, logged per item: `
 
 PTMT mixes processes with incomparable output scales (Injection vs Blow vs Corrugator vs Grinding). A plant-wide median flags whole small-output processes as "outliers". Compare each machine to the median of its own `(plant, segment)` group instead.
 
-**Note:** PTMT's daily file has no monthly grid, so its 52-machine roster + process-group segments (`_ptmt_group`: GRIND→Grinding[is_finishing], BLOW→Blow Moulding, CORRUGAT→Corrugator, N-→Injection N-line, else Injection standard) are DYNAMIC from the reporting machines — never hardcode a count. The stale `replit.md` gotcha that HDPE/PTMT/TANK are "skipped" is wrong; all daily-file plants are ingested via per-plant layout dispatch (`blocks`/`tank`/`matrix`/`long`).
+**Note:** PTMT's daily file has no monthly grid, but its roster is NOT dynamic — it is the authoritative 55-machine register in `sources.PTMT_GROUPS` (see `prayag-ptmt-roster.md`), so completeness is held to all 55 (a never-reporting machine is a gap). Each machine's process group + finishing flag come from that register; `_ptmt_group`'s string heuristic (GRIND→Grinding[is_finishing], BLOW→Blow Moulding, CORRUGAT→Corrugator, N-→Injection N-line, else Injection standard) is kept only as a fallback for unknown codes. Only TANK has a truly dynamic plant-level roster (its reporting items). The stale `replit.md` gotcha that HDPE/PTMT/TANK are "skipped" is wrong; all daily-file plants are ingested via per-plant layout dispatch (`blocks`/`tank`/`matrix`/`long`).

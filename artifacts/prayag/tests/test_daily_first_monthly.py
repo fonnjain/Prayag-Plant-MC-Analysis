@@ -3,9 +3,9 @@
 The daily files are the source of truth for EVERY period. A monthly or FY view
 must compute its headline totals by summing the authoritative daily tabs, not the
 monthly summary grid — the grid is only a reconciliation reference and is never
-allowed to reduce the daily figures ("never reconcile down"). The grid is the
-headline ONLY for a month that has no daily workbook at all, and a total daily
-read outage degrades to the grid with an explicit "it undercounts" banner.
+allowed to reduce the daily figures ("never reconcile down"). Under the
+daily-only rule a total daily read outage on a monthly/FY view shows NO data with
+an honest banner — the lower monthly summary grid is never substituted in.
 
 Run: cd artifacts/prayag && python3 -m tests.test_daily_first_monthly
 """
@@ -96,9 +96,11 @@ def test_monthly_view_sums_daily_not_grid():
         _restore(saved)
 
 
-def test_total_daily_outage_falls_back_to_grid_labelled():
-    """If the daily read fails ENTIRELY, the view degrades to the grid but says so
-    explicitly (it undercounts) — it never silently presents grid as daily."""
+def test_total_daily_outage_shows_nothing_not_grid():
+    """If the daily read fails ENTIRELY, a monthly/FY view shows NO production data
+    — under the daily-only rule the monthly summary grid is never substituted in;
+    an honest error banner explains the outage instead of silently presenting the
+    lower grid total as if it were daily."""
     def daily(months):
         raise SheetReadError("Google Sheets API error (429).")
 
@@ -110,14 +112,14 @@ def test_total_daily_outage_falls_back_to_grid_labelled():
         d = app.get_data({"period": "5"})
         assert d["daily_used"] is False, d["daily_used"]
         total = sum(r.total_count for r in d["rows"])
-        assert total == 111.0, total
-        assert "monthly summary sheet instead" in d["grain_banner"], d["grain_banner"]
-        print("PASS: total daily outage degrades to grid with an explicit banner")
+        assert total == 0.0, total                       # grid (111) is NOT substituted
+        assert "monthly summary is not" in d["grain_banner"], d["grain_banner"]
+        print("PASS: total daily outage shows nothing; grid is never substituted")
     finally:
         _restore(saved)
 
 
 if __name__ == "__main__":
     test_monthly_view_sums_daily_not_grid()
-    test_total_daily_outage_falls_back_to_grid_labelled()
+    test_total_daily_outage_shows_nothing_not_grid()
     print("\nAll daily-first monthly/FY regression tests passed.")

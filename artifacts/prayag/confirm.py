@@ -174,6 +174,13 @@ def build_masters(master_rows: List[Record]) -> dict:
     for code in sources.ptmt_roster_ids():
         machines.setdefault("PTMT", set()).add(code)
 
+    # NOTE: HDPE is NOT injected here. Unlike PTMT/TANK it HAS a monthly grid (it
+    # is in sources.ANNUAL_SOURCES), so its roster is derived from master_rows like
+    # every other gridded plant (PIPE/GARDEN/MOULDING). Its daily figures come from
+    # the "Daily Report" matrix (6 machines; the separate DANA support tab is never
+    # read), but completeness is held to the grid roster — injecting a fixed roster
+    # would wrongly expand HDPE's expected machines in a monthly/FY view.
+
     return {
         "machines": machines,
         "segments": segments,

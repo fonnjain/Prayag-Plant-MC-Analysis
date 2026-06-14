@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from parsers import parse_daily_long, parse_daily_blocks, _long_date_day
+from parsers import parse_daily_long, parse_daily_blocks, parse_daily_matrix, _long_date_day
 from sheets import _mc_key
 
 
@@ -256,6 +256,37 @@ def test_long_date_day_all_formats():
 # _mc_key
 # ---------------------------------------------------------------------------
 
+def test_matrix_mc_header_spec_picks_canonical_over_alias():
+    # HDPE "Daily Report" has an alias machine column to the LEFT of the canonical
+    # "MACHINE" column. Here the alias header ("M/C NO.") is one the generic
+    # heuristic would mis-match — so without a spec the parser would key off the
+    # alias and silently break the in-sheet ideal-rate/hours join. With the
+    # layout's mc_header_spec=("eq","MACHINE") the canonical column must win.
+    values = [
+        ["M/C NO.", "MACHINE", "Apr, 1", "", "", "Apr, 2", "", ""],
+        ["",        "",        "RUN HRS", "OUTPUT", "REJECT", "RUN HRS", "OUTPUT", "REJECT"],
+        ["A1",      "M/C-1",   "8", "1000", "10", "8", "1100", "12"],
+        ["A2",      "M/C-2",   "8",  "900",  "5", "8",  "950",  "6"],
+    ]
+    common = dict(
+        plant="HDPE", segment="HDPE", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Daily Report",
+    )
+    spec_recs = parse_daily_matrix(values, mc_header_spec=("eq", "MACHINE"), **common)
+    machines = {r.machine for r in spec_recs}
+    assert machines == {"HDPE M/C-1", "HDPE M/C-2"}, \
+        f"spec must select canonical MACHINE column, got {machines}"
+
+    # Without the spec, the generic heuristic mis-matches the alias header and
+    # keys off the alias column instead — the regression this guards against.
+    fallback_recs = parse_daily_matrix(values, **common)
+    fb_machines = {r.machine for r in fallback_recs}
+    assert fb_machines == {"HDPE A1", "HDPE A2"}, \
+        f"fallback heuristic keys off alias header here, got {fb_machines}"
+    print("PASS: matrix mc_header_spec selects the canonical MACHINE column over a "
+          "decoy alias column the generic heuristic would mis-match")
+
+
 def test_mc_key_joins_main_machines_only():
     assert _mc_key("M/C-1") == 1
     assert _mc_key("M / C - 12") == 12
@@ -275,5 +306,6 @@ if __name__ == "__main__":
     test_blocks_parser_picks_total_kg_over_per_metre_and_consumption_decoys()
     test_blocks_parser_no_output_column_returns_empty()
     test_long_date_day_all_formats()
+    test_matrix_mc_header_spec_picks_canonical_over_alias()
     test_mc_key_joins_main_machines_only()
     print("\nAll daily parser/normalisation unit tests passed.")

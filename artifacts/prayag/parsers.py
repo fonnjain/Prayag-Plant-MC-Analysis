@@ -407,6 +407,7 @@ def parse_daily_matrix(
     year_month: str,
     source_file: str,
     source_tab: str,
+    mc_header_spec=None,
 ) -> List[Record]:
     """Parse a wide per-date daily matrix into raw daily-grain Records.
 
@@ -459,12 +460,21 @@ def parse_daily_matrix(
                 rej_c = c
         groups.append((day, run_c, out_c, rej_c))
 
-    # Machine label column: a header cell == "MACHINE" or containing "M/C NO".
+    # Machine label column. When the layout names its canonical machine-id header
+    # (e.g. HDPE "MACHINE"), match it exactly via ``mc_header_spec`` so this daily
+    # parser and the in-sheet summary reader (``parse_matrix_summary_col``) always
+    # select the SAME column — an alias column to its left can never be picked by
+    # accident, which would silently break the sheet_rate/sheet_hours key join.
+    # Otherwise fall back to the generic heuristic ("MACHINE" or "M/C NO").
     mc_c = -1
     for r in values[:date_row_idx + 2]:
         for c, v in enumerate(r[:first_group_col]):
-            u = str(v).strip().upper()
-            if u == "MACHINE" or "M/C NO" in u:
+            if mc_header_spec is not None:
+                hit = _match_header(v, mc_header_spec)
+            else:
+                u = str(v).strip().upper()
+                hit = u == "MACHINE" or "M/C NO" in u
+            if hit:
                 mc_c = c
                 break
         if mc_c >= 0:
