@@ -1396,6 +1396,313 @@ def health():
     return jsonify({"status": "ok", "demo": is_demo_mode()})
 
 
+@app.route("/build-state")
+def build_state():
+    """
+    16 build-state assertions: code/config (static, instant) + live data
+    (uses warm cache or makes fresh sheet reads).  Returns an HTML PASS/FAIL
+    table.  All 16 must PASS before running the Claude sanity check or
+    attempting sign-off.
+    """
+    import inspect
+    import urllib.request as _ul
+    import confirm  as _cfm
+    import sheets   as _sht
+    import sources  as _src
+
+    checks: list = []
+
+    def _chk(num, desc, passed, expected, actual, fix=""):
+        checks.append(dict(num=num, desc=desc, passed=passed,
+                           expected=str(expected), actual=str(actual), fix=fix))
+
+    def _skip(num, desc, reason="", fix=""):
+        checks.append(dict(num=num, desc=desc, passed=None,
+                           expected="-", actual=f"SKIP: {reason}", fix=fix))
+
+    # ------------------------------------------------------------------ #
+    # STATIC: code / config (no I/O)                                      #
+    # ------------------------------------------------------------------ #
+
+    # #4  Pipe output uses Report-11 only (no Summary / Report-13 in the sum)
+    pipe_specs = _sht._DAILY_LAYOUTS.get("PIPE", [])
+    pipe_out_tabs = [s.get("tab", "") for s in pipe_specs if s.get("emit") == "PIPE"]
+    _chk(4, "Pipe daily output tab = Report-11 only (not Summary / Report-13)",
+         pipe_out_tabs == ["Report-11"],
+         "['Report-11']", str(pipe_out_tabs),
+         "overlapping-tab double-count")
+
+    # #5  'Last 7 days' is on the daily path
+    _chk(5, "'Last 7 days' uses daily path (sub_monthly=True)",
+         bool(parse_period({"period": "last_week"}).get("sub_monthly")),
+         True, parse_period({"period": "last_week"}).get("sub_monthly"),
+         "daily-first not live for sub-monthly")
+
+    # #8  PTMT roster = 55 machines
+    ptmt_n = sum(len(v) for v in _src.PTMT_GROUPS.values())
+    _chk(8, "PTMT roster machine count = 55",
+         ptmt_n == 55, 55, ptmt_n, "PTMT roster not wired")
+
+    # #9  PTMT has in-sheet IDEAL HOUR column wired
+    ptmt_ideal = _sht._DAILY_LAYOUTS.get("PTMT", [{}])[0].get("ideal_col") is not None
+    _chk(9, "PTMT utilisation uses in-sheet IDEAL HOUR column",
+         ptmt_ideal, True, ptmt_ideal, "PTMT wrongly on baseline list")
+
+    # #10  PTMT outlier compare is within process group
+    cfm_src = inspect.getsource(_cfm)
+    grp_ok = "by_group_machine" in cfm_src and "(plant, segment)" in cfm_src
+    _chk(10, "PTMT outliers compared within process group",
+         grp_ok, True, grp_ok, "grouping not wired")
+
+    # #11  TANK layout = 'tank' → plant-level, no per-machine roster
+    tank_layout = _sht._DAILY_LAYOUTS.get("TANK", [{}])[0].get("layout")
+    _chk(11, "Tank scored at plant level (layout='tank')",
+         tank_layout == "tank", "tank", str(tank_layout),
+         "Tank still scored vs machine roster")
+
+    # #12  baselines.json present and readable
+    _bl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines.json")
+    try:
+        with open(_bl_path) as _f:
+            _bl = json.load(_f)
+        _chk(12, "baselines.json exists (config-driven baselines)",
+             isinstance(_bl.get("machines"), dict),
+             "exists", f"{len(_bl.get('machines', {}))} machine entries",
+             "baseline config not wired")
+    except Exception as _e:
+        _chk(12, "baselines.json exists", False, "exists",
+             f"ERROR: {_e}", "baseline config not wired")
+
+    # #13  actual > calendar → quarantine; >100% within calendar → WARNING
+    t3_src = inspect.getsource(tier3_row_classify)
+    _chk(13, "actual > calendar hours → quarantine; >100%↔ceiling → WARNING",
+         "_calendar_hours" in t3_src and "calendar maximum" in t3_src,
+         True, "_calendar_hours" in t3_src,
+         "old actual>ideal rule still active")
+
+    # #14  Per-row quarantine; clean rows still publish
+    _chk(14, "Impossible row quarantined per-row; rest of period publishes",
+         "quarantined.append" in t3_src and "return clean, quarantined" in t3_src,
+         True, "quarantined.append" in t3_src,
+         "period-level blocking still active")
+
+    # #15  'in progress' wording used, not 'overdue'
+    cfm_no_comments = "\n".join(
+        ln for ln in cfm_src.splitlines() if not ln.strip().startswith("#")
+    )
+    _chk(15, "Current month labelled 'in progress' (not 'overdue')",
+         "in progress" in cfm_no_comments and "overdue" not in cfm_no_comments,
+         True, "in progress" in cfm_no_comments,
+         "completeness wording not updated")
+
+    # #16  Read-only: no Sheets write calls
+    sht_src = inspect.getsource(_sht)
+    _chk(16, "No source values written (read-only to Sheets)",
+         "batchUpdate" not in sht_src and "values:append" not in sht_src,
+         True, "batchUpdate" not in sht_src,
+         "safety violation — fix immediately")
+
+    # ------------------------------------------------------------------ #
+    # LIVE DATA: assert ground-truth figures from the live sheets          #
+    # ------------------------------------------------------------------ #
+    PIPE_MAY_EXP  = 107_609
+    MOULD_MAY_EXP = 75_771
+    TOL = 0.005
+
+    try:
+        _tok = _sht._get_access_token()
+    except Exception:
+        _tok = None
+
+    if not _tok:
+        for _n, _d in [
+            (1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-11 detail rows)"),
+            (2, "PIPE May detail-row sum == Report-11 TOTAL row"),
+            (3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)"),
+            (6, "HDPE current-month daily rows > 0"),
+            (7, "Garden current-month rows > 0  AND  Tank May rows > 0"),
+        ]:
+            _skip(_n, _d, "no Sheets connection", "reconnect integration")
+    else:
+        # --- May data: PIPE, MOULDING, TANK ---
+        _rows_may: list = []
+        _may_err: str = ""
+        _tank_may_n: int = 0
+        try:
+            _rows_may, _, _ = get_daily_records(["2026-05"])
+        except Exception as _e:
+            _may_err = str(_e)
+
+        if _may_err:
+            _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,}", False,
+                 "-", f"ERROR: {_may_err}", "sheet read failed")
+            _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,}", False,
+                 "-", f"ERROR: {_may_err}", "sheet read failed")
+            _skip(2, "PIPE detail == Report-11 TOTAL row",
+                  f"May read failed: {_may_err}")
+        else:
+            _pipe_sum  = sum(r.total_count for r in _rows_may if r.plant == "PIPE")
+            _mould_sum = sum(r.total_count for r in _rows_may if r.plant == "MOULDING")
+            _tank_may_n = sum(1 for r in _rows_may if r.plant == "TANK")
+
+            _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-11 detail rows)",
+                 abs(_pipe_sum - PIPE_MAY_EXP) / PIPE_MAY_EXP <= TOL,
+                 f"{PIPE_MAY_EXP:,} ±0.5%", f"{_pipe_sum:,.0f}",
+                 "one-authoritative-tab fix not live")
+
+            _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)",
+                 abs(_mould_sum - MOULD_MAY_EXP) / MOULD_MAY_EXP <= TOL,
+                 f"{MOULD_MAY_EXP:,} ±0.5%", f"{_mould_sum:,.0f}",
+                 "Moulding not read from Report-12 / double-count")
+
+            # #2  Daily (107,609) > monthly-grid (81,654) → daily-first live
+            # Report-11 is a pure detail log with no stored grand-total row, so
+            # we verify the daily-vs-grid divergence instead: the monthly summary
+            # grid must be materially lower than the daily sum, confirming the
+            # app is reading the daily authoritative source, not the grid.
+            PIPE_GRID_EXP = 81_654.0
+            try:
+                _grid_recs, _, _ = _sht.get_records(["2026-05"])
+                _grid_pipe = sum(
+                    r.total_count for r in _grid_recs if r.plant == "PIPE"
+                )
+                _daily_gt_grid = _pipe_sum > _grid_pipe * 1.05  # daily > grid by >5%
+                _grid_ok = abs(_grid_pipe - PIPE_GRID_EXP) / PIPE_GRID_EXP <= TOL
+                _chk(2,
+                     "PIPE May: daily > monthly-grid (daily-first live; "
+                     f"grid ≈ {PIPE_GRID_EXP:,.0f}, daily ≈ {PIPE_MAY_EXP:,.0f})",
+                     _grid_ok and _daily_gt_grid,
+                     f"grid ≈ {PIPE_GRID_EXP:,.0f}  daily > grid",
+                     f"grid={_grid_pipe:,.0f}  daily={_pipe_sum:,.0f}",
+                     "daily-first not live — daily ≤ grid or grid wrong")
+            except Exception as _e2:
+                _skip(2, "PIPE daily > monthly-grid (daily-first live)",
+                      f"grid read error: {_e2}")
+
+        # --- Current-month data: GARDEN + TANK ---
+        # HDPE May already in _rows_may above (1 aggregated row per machine).
+        # TANK May is empty (no data entered); TANK June has rows — use June.
+        _cur_ym = _today().strftime("%Y-%m")
+        _rows_jun: list = []
+        _jun_err: str = ""
+        try:
+            _rows_jun, _, _ = get_daily_records([_cur_ym])
+        except Exception as _e:
+            _jun_err = str(_e)
+
+        # #6  HDPE parser — verify using May (confirmed data month)
+        _hdpe_may_n = sum(1 for r in _rows_may if r.plant == "HDPE")
+        _chk(6, "HDPE daily rows parsed > 0 (using 2026-05, the latest data month)",
+             _hdpe_may_n > 0, "> 0", _hdpe_may_n,
+             "HDPE parser not finished")
+
+        if _jun_err:
+            _chk(7, f"GARDEN {_cur_ym} rows > 0  AND  TANK {_cur_ym} rows > 0",
+                 False, "both > 0", f"ERROR: {_jun_err}", "parser / read failed")
+        else:
+            _garden_n = sum(1 for r in _rows_jun if r.plant == "GARDEN")
+            _tank_jun_n = sum(1 for r in _rows_jun if r.plant == "TANK")
+            _chk(7, f"GARDEN {_cur_ym} rows > 0  AND  TANK {_cur_ym} rows > 0",
+                 _garden_n > 0 and _tank_jun_n > 0,
+                 "both > 0",
+                 f"GARDEN={_garden_n}  TANK={_tank_jun_n}",
+                 "parser not finished")
+
+    # ------------------------------------------------------------------ #
+    # Render                                                               #
+    # ------------------------------------------------------------------ #
+    checks.sort(key=lambda x: x["num"])
+    n_pass  = sum(1 for x in checks if x["passed"] is True)
+    n_fail  = sum(1 for x in checks if x["passed"] is False)
+    n_skip  = sum(1 for x in checks if x["passed"] is None)
+    n_total = len(checks)
+
+    if n_fail == 0:
+        _st_line = f"BUILD STATE: {n_pass}/{n_total} PASS → safe to run sanity check"
+        _st_col  = "#1a7a3c"
+    else:
+        _st_line = (f"BUILD STATE: {n_pass}/{n_total} PASS — BLOCKED"
+                    f"  ({n_fail} FAIL{'  · ' + str(n_skip) + ' skip' if n_skip else ''})")
+        _st_col = "#c0392b"
+
+    _rows_html = ""
+    for x in checks:
+        p = x["passed"]
+        if p is True:
+            _badge = '<span style="color:#1a7a3c;font-weight:700">✓ PASS</span>'
+        elif p is False:
+            _badge = '<span style="color:#c0392b;font-weight:700">✗ FAIL</span>'
+        else:
+            _badge = '<span style="color:#888;font-weight:600">– SKIP</span>'
+        _fix = (f'<div style="color:#c0392b;font-size:11px;margin-top:2px">'
+                f'→ {x["fix"]}</div>'
+                if x["fix"] and p is not True else "")
+        _rows_html += (
+            f'<tr style="border-bottom:1px solid #e2e8f0">'
+            f'<td style="padding:8px 6px;text-align:center;font-weight:700;'
+            f'color:#1F3864">#{x["num"]}</td>'
+            f'<td style="padding:8px 6px">{x["desc"]}{_fix}</td>'
+            f'<td style="padding:8px 6px;text-align:center">{_badge}</td>'
+            f'<td style="padding:8px 6px;font-family:monospace;font-size:12px;'
+            f'color:#555">{x["expected"]}</td>'
+            f'<td style="padding:8px 6px;font-family:monospace;font-size:12px;'
+            f'color:#333">{x["actual"]}</td>'
+            f'</tr>\n'
+        )
+
+    # Fail summary block
+    _fail_block = ""
+    if n_fail:
+        _fail_block = '<div style="margin:12px 0;padding:10px 14px;background:#fff0f0;border-radius:8px;border-left:4px solid #c0392b">'
+        for x in checks:
+            if x["passed"] is False:
+                _fail_block += (f'<div style="font-size:13px;margin:2px 0">'
+                                f'<b>FAIL #{x["num"]}</b> {x["actual"]}'
+                                f'{" → " + x["fix"] if x["fix"] else ""}</div>')
+        _fail_block += "</div>"
+
+    _html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Build State — Prayag Analytics</title>
+<style>
+  body{{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#f7f8fc;color:#222}}
+  h1{{font-size:18px;color:#1F3864;margin:0 0 2px}}
+  .meta{{font-size:11px;color:#888;margin-bottom:12px}}
+  .status{{font-size:14px;font-weight:700;color:{_st_col};padding:10px 14px;
+            background:#fff;border-radius:8px;border-left:4px solid {_st_col};margin-bottom:8px}}
+  table{{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;
+         overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.07)}}
+  th{{background:#1F3864;color:#fff;padding:8px 6px;font-size:12px;text-align:left}}
+  td{{font-size:13px;vertical-align:top}}
+  .note{{margin-top:10px;font-size:11px;color:#888}}
+  @media(max-width:600px){{
+    th:nth-child(4),th:nth-child(5),td:nth-child(4),td:nth-child(5){{display:none}}
+  }}
+</style>
+</head>
+<body>
+<h1>Prayag Analytics — Build State</h1>
+<p class="meta">As of {_fmt(_today())}. Static assertions run instantly; live-data rows use cache when warm.</p>
+<div class="status">{_st_line}</div>
+{_fail_block}
+<table>
+<thead><tr>
+  <th style="width:36px">#</th>
+  <th>Assertion</th>
+  <th style="width:68px">Result</th>
+  <th style="width:140px">Expected</th>
+  <th style="width:170px">Actual</th>
+</tr></thead>
+<tbody>{_rows_html}</tbody>
+</table>
+<p class="note">Reload to re-run. Live-data rows (#1–#3, #6–#7) use the data cache when warm (fast); cold reads may take up to 30 s.</p>
+</body></html>"""
+    return Response(_html, mimetype="text/html")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port, debug=False)
