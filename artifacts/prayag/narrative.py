@@ -85,7 +85,15 @@ def _create_text(model: str, max_tokens: int, prompt: str) -> tuple[str, str]:
     back to) and the exception propagates to the caller's graceful handler.
     """
     import anthropic
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # Bound the call hard: the narrative is optional (callers degrade to None on
+    # error), so it must never hang a web worker. Without this the SDK default
+    # timeout is ~10 minutes, which blows past the gunicorn worker timeout and
+    # turns a slow Claude response into a 500 for the whole page.
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        timeout=20.0,
+        max_retries=1,
+    )
     try:
         msg = client.messages.create(
             model=model, max_tokens=max_tokens,

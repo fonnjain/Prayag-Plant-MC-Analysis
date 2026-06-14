@@ -4,3 +4,4 @@
 - [Prayag Data Verification](prayag-verification.md) — read-only reconciliation layer (distinct from Confirmation gating); surfaces computed figures + provenance, 3 checks at 0.5% tol, only write is append-only audit log; never corrects a fact.
 - [Prayag model tiering](prayag-model-tiering.md) — every per-data Claude cache key MUST include the resolved model (two separate caches had this bug); provenance must show the model actually used after fallback.
 - [PTMT authoritative roster](prayag-ptmt-roster.md) — 55-machine register (sources.PTMT_GROUPS) is PTMT's roster (no monthly grid); merged into masters, monthly scope from ANNUAL_SOURCES; non-per-machine plants (TANK) get no fabricated gaps.
+- [Prayag deploy timeouts](prayag-deploy-timeouts.md) — heavy views 500 in prod only when request wall time > gunicorn worker timeout; bound gunicorn (gthread+timeout) AND every external call (Claude SDK, sheet cache single-flight).

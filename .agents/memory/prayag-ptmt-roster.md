@@ -30,8 +30,3 @@ authoritative 55 lets completeness surface a never-reporting machine as a gap.
 "appears in data but not in master roster" for segments/moulds when that plant
 actually HAS a roster for that dimension (`if m_segs` / `if m_moulds`); a
 plant-level item log like TANK has none, so it scores plant-level 1/1.
-
-**Next task (not done):** the source-priority spec — daily-first (P1) read
-order, summary fallback (P2) + prior-year (P3), `source_tier` provenance on every
-row, CP plant, prior-year YoY history. Deferred until all daily parsers are
-verified; do not change read-order on unverified parsers.

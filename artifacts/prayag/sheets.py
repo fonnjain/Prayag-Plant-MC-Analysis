@@ -17,6 +17,7 @@ import datetime
 import urllib.request
 import urllib.parse
 import urllib.error
+import threading
 from typing import List, Optional, Tuple
 
 from metrics import Record
@@ -31,6 +32,11 @@ _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
 _DATA_TTL = 120.0               # seconds
 _last_fetch_status: dict = {}   # stale/failed info from the most recent live attempt
+# Single-flight lock: under threaded gunicorn workers (gthread) concurrent cold
+# requests would each run the full, slow Sheets fetch (a cache stampede). The
+# lock serialises fills so the first request does the work and the rest reuse
+# its result. Warm cache hits are checked BEFORE the lock, so they never block.
+_fetch_lock = threading.Lock()
 
 
 class SheetReadError(RuntimeError):
@@ -324,6 +330,19 @@ def _live_payload() -> dict:
     if cached and now - cached[0] < _DATA_TTL:
         return cached[1]
 
+    with _fetch_lock:
+        # Re-check: another thread may have filled the cache while we waited.
+        now = time.time()
+        cached = _data_cache.get("live")
+        if cached and now - cached[0] < _DATA_TTL:
+            return cached[1]
+        return _fetch_live_payload(now, cached)
+
+
+def _fetch_live_payload(now: float, cached) -> dict:
+    """Do the actual (slow) live monthly fetch and cache it. Always called while
+    holding ``_fetch_lock`` so only one thread fetches at a time."""
+    global _last_fetch_status
     try:
         token = _get_access_token()
         if not token:
@@ -805,8 +824,15 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
             if cached and now - cached[0] < _DATA_TTL:
                 results = cached[1]
             else:
-                results = _load_daily(plant, ym, token)
-                _daily_cache[key] = (now, results)
+                with _fetch_lock:
+                    # Re-check under the lock so concurrent threads don't each
+                    # run the same slow per-plant fetch (cache stampede).
+                    cached = _daily_cache.get(key)
+                    if cached and time.time() - cached[0] < _DATA_TTL:
+                        results = cached[1]
+                    else:
+                        results = _load_daily(plant, ym, token)
+                        _daily_cache[key] = (time.time(), results)
             for recs, report in results:
                 all_recs.extend(recs)
                 if not report:
