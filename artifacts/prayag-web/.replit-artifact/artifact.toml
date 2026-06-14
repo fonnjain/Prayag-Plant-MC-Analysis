@@ -21,7 +21,7 @@ run = "cd /home/runner/workspace/artifacts/prayag && PORT=21800 python3 app.py"
 PORT = "21800"
 
 [services.production.run]
-args = ["python3", "-m", "gunicorn", "--bind", "0.0.0.0:21800", "--chdir", "/home/runner/workspace/artifacts/prayag", "--workers", "2", "--threads", "4", "--worker-class", "gthread", "--timeout", "120", "--graceful-timeout", "30", "app:app"]
+args = ["python3", "-m", "gunicorn", "--bind", "0.0.0.0:21800", "--chdir", "/home/runner/workspace/artifacts/prayag", "--workers", "1", "--threads", "8", "--worker-class", "gthread", "--timeout", "120", "--graceful-timeout", "30", "app:app"]
 
 [services.production.run.env]
 PORT = "21800"

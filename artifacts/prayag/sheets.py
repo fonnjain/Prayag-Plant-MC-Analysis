@@ -30,7 +30,7 @@ import baselines
 # ---------------------------------------------------------------------------
 _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
-_DATA_TTL = 120.0               # seconds
+_DATA_TTL = 300.0               # seconds (5 min — keeps data warm across page-to-page navigation)
 _last_fetch_status: dict = {}   # stale/failed info from the most recent live attempt
 # Single-flight lock: under threaded gunicorn workers (gthread) concurrent cold
 # requests would each run the full, slow Sheets fetch (a cache stampede). The

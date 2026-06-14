@@ -41,3 +41,23 @@ TIMEOUT` → the worker is killed → the user sees a bare "Internal Server Erro
   cold fills happen once. Keep that pattern if you add another live cache.
 - Config changes to artifact.toml only take effect on the next publish/deploy;
   a dev workflow restart does not exercise the production gunicorn command.
+
+## Cross-worker cache isolation (cross-page re-fetching)
+
+With `--workers 2`, each gunicorn process has its own in-process cache. A
+request routed to worker-2 after worker-1 warmed the cache causes a full
+cold re-fetch — users see the spinner on every page change even when the
+data period hasn't changed.
+
+**Rule:** For a low-traffic internal dashboard whose hot data fits in one
+process's RAM, use **`--workers 1 --threads N`** (single process, N threads).
+One shared cache means any page visit that fills the cache benefits all
+subsequent page navigations in the same session.
+
+**Why N threads still gives concurrency:** the Sheets fetch is I/O-bound;
+gthread threads release the GIL during HTTP waits, so `/health` and other
+quick requests are served concurrently. The `_fetch_lock` already serialises
+concurrent cold fills so only one Sheets fetch runs at a time.
+
+**Cache TTL:** `_DATA_TTL = 300.0` (5 min) so a browsing session across
+Overview → Plant → Machine → Reports stays warm throughout.
