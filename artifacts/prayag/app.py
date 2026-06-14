@@ -307,7 +307,7 @@ def get_data(args):
             drecs, dreports, dwarn = get_daily_records(months)
         except SheetReadError as e:
             drecs, dreports, dwarn = [], [], []
-            daily_err = f"Daily data could not be read ({e}); fell back to monthly totals."
+            daily_err = f"Daily data could not be read: {e}"
         if daily_file_months and not daily_err:
             # "last_updated" period: narrow to the actual last date with data.
             if pinfo["period"] == "last_updated":
@@ -344,16 +344,28 @@ def get_data(args):
                         "this window yet."
                     )
     if not daily_used:
-        all_rows, source_reports, recon_warnings = get_records(months)
-        _apply_baselines(all_rows)
-        if pinfo.get("sub_monthly") and not daily_err:
-            disp = ", ".join(_month_disp(m) for m in months)
-            grain_banner = (
-                f"{pinfo['label']} → no daily workbook is available for this window, "
-                f"so monthly totals for {disp} are shown instead."
-            )
-        if daily_err:
-            recon_warnings = list(recon_warnings or []) + [daily_err]
+        if pinfo.get("sub_monthly"):
+            # Sub-monthly windows never silently substitute the monthly-grid numbers.
+            # A missing or failed daily fetch is shown as "no data for this window"
+            # with an honest banner — the monthly summary is not blended in.
+            all_rows = []
+            source_reports = []
+            recon_warnings = [daily_err] if daily_err else []
+            if daily_err:
+                grain_banner = (
+                    f"{pinfo['label']} → daily data could not be fetched. "
+                    "Showing no production data — monthly totals are not "
+                    "substituted for a daily window."
+                )
+            else:
+                disp = ", ".join(_month_disp(m) for m in months)
+                grain_banner = (
+                    f"{pinfo['label']} → no daily workbook is configured for {disp}. "
+                    "No data for this window."
+                )
+        else:
+            all_rows, source_reports, recon_warnings = get_records(months)
+            _apply_baselines(all_rows)
 
     # Quarantine physically-impossible rows (Tier 3 hard errors): they are held
     # aside with their raw value + provenance and EXCLUDED from every published
