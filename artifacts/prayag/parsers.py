@@ -547,26 +547,34 @@ def parse_daily_blocks(
 
     # Output and rejection columns are detected from the header band.  Some tabs
     # put all column names on the same row as DATE ("single-row header"); others
-    # use a second sub-header row below it.  Scan BOTH rows so either layout is
-    # handled.  The output column matches any header that contains "KG" but is
-    # not a rate label ("KG/H", "KG/HR", "PER KG") to avoid mis-binding a
-    # run-rate column.
+    # use a second sub-header row below it.
+    # A block tab has a TWO-ROW header band: a label row ("TOTAL") above a unit
+    # row ("KG"). Read both as one logical column name so the cumulative output
+    # column ("TOTAL" / "KG") is told apart from two decoys that also mention KG:
+    #   - a per-metre weight column ("KG" / "MTR")  -> NOT output
+    #   - a raw-material consumption column ("RP CONSUMPTION" / "KG") -> NOT output
+    # The cumulative-total column is preferred; otherwise the last plain KG column
+    # wins, since the date band lists per-unit columns before the running total.
+    sub_row = values[header_idx + 1] if header_idx + 1 < len(values) else []
+    width = max(len(values[header_idx]), len(sub_row))
+
     out_c = -1
     rej_c = -1
-    for scan_row in (
-        values[header_idx],
-        values[header_idx + 1] if header_idx + 1 < len(values) else [],
-    ):
-        for c, v in enumerate(scan_row):
-            h = str(v).strip().upper()
-            if out_c < 0 and "KG" in h and not any(
-                x in h for x in ("KG/H", "/KG", "RATE", "PER KG")
-            ):
-                out_c = c
-            elif rej_c < 0 and "REJECT" in h:
-                rej_c = c
-        if out_c >= 0:
-            break
+    out_is_total = False
+    for c in range(width):
+        head = str(values[header_idx][c]).strip().upper() if c < len(values[header_idx]) else ""
+        sub = str(sub_row[c]).strip().upper() if c < len(sub_row) else ""
+        combined = f"{head} {sub}".strip()
+        if rej_c < 0 and "REJECT" in combined:
+            rej_c = c
+            continue
+        is_rate = any(x in combined for x in ("KG/H", "/KG", "RATE", "PER KG"))
+        is_per_mtr = "KG" in head and "MTR" in sub          # per-metre weight
+        is_consumption = any(x in combined for x in ("CONSUM", "RP ", "RAW", " RM"))
+        if "KG" in combined and not (is_rate or is_per_mtr or is_consumption):
+            prefers = "TOTAL" in combined
+            if out_c < 0 or (prefers and not out_is_total):
+                out_c, out_is_total = c, prefers
     if out_c < 0:
         return []
 

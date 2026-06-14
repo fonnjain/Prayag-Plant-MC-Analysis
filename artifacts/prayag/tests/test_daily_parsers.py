@@ -167,6 +167,54 @@ def test_blocks_parser_two_row_header_plain_kg():
     print("PASS: blocks parser backward-compat: two-row header with plain KG sub-header")
 
 
+def test_blocks_parser_picks_total_kg_over_per_metre_and_consumption_decoys():
+    # The REAL HDPE/GARDEN layout has TWO decoy columns that also say "KG":
+    #   - a per-metre weight column  (header "KG"  / sub "MTR", e.g. 0.188)
+    #   - a raw-material consumption (header "RP CONSUMPTION" / sub "KG")
+    # The true output is the cumulative column (header "TOTAL" / sub "KG").
+    # Grabbing the first "KG" picked the per-metre decoy and collapsed HDPE
+    # May from 1,369 KG to ~1 and GARDEN to a tiny fraction of its real output.
+    hdpe = [
+        ["HDPE PIPE PRODUCTION REPORTS"],
+        [],
+        ["MACHINE NO : 001"],
+        ["DATE", "SIZE", "LENGTH", "NOS", "TOTAL", "KG", "TOTAL", "TOTAL"],
+        ["",     "",     "MTR",    "PCS", "MTR",   "MTR", "REJECTION", "KG"],
+        ["May 1, 2026", "PE100PN8DN32", "300", "14", "4200", "0.188", "", "789.60"],
+        ["May 1, 2026", "PE100PN10DN32", "300", "3", "900", "0.23", "", "207.00"],
+        ["May 2, 2026", "PE100PN10DN25", "300", "3", "900", "0.144", "5", "129.60"],
+    ]
+    recs = parse_daily_blocks(
+        hdpe,
+        plant="HDPE", segment="HDPE", unit="kg", year_month="2026-05",
+        source_file="f", source_tab="MACHINE 1", machine="HDPE M/C - 1",
+    )
+    total = sum(r.total_count for r in recs)
+    assert abs(total - (789.60 + 207.00 + 129.60)) < 1e-6, \
+        f"output must read the TOTAL/KG column (got {total}, expected 1126.2)"
+    rej = sum(r.reject_count for r in recs)
+    assert rej == 5.0, f"rejection must read the TOTAL/REJECTION column, got {rej}"
+
+    garden = [
+        ["GARDEN PIPE PRODUCTION REPORTS"],
+        ["MACHINE NO : 001"],
+        ["DATE", "CODE", "SIZE", "LENGTH", "NOS", "TOTAL", "KG", "TOTAL", "RP CONSUMPTION"],
+        ["",     "",     "",     "MTR",    "PCS", "MTR",   "MTR", "KG",    "KG"],
+        ["May 1, 2026", "G1", "20mm", "300", "10", "3000", "0.1", "1500.0", "1600.0"],
+        ["May 2, 2026", "G2", "25mm", "300", "8",  "2400", "0.2", "1200.0", "1300.0"],
+    ]
+    g = parse_daily_blocks(
+        garden,
+        plant="GARDEN", segment="Garden", unit="kg", year_month="2026-05",
+        source_file="f", source_tab="MACHINE 1", machine="GARDEN M/C - 1",
+    )
+    gtotal = sum(r.total_count for r in g)
+    assert abs(gtotal - 2700.0) < 1e-6, \
+        f"GARDEN output must be the TOTAL/KG column, not RP CONSUMPTION, got {gtotal}"
+    print("PASS: blocks parser selects TOTAL/KG over per-metre KG/MTR and "
+          "RP-CONSUMPTION decoys")
+
+
 def test_blocks_parser_no_output_column_returns_empty():
     # If no KG column is present the parser returns [] (parse failure, not
     # "no production") so the caller can report an honest layout error.
@@ -224,6 +272,7 @@ if __name__ == "__main__":
     test_long_parser_without_run_col_is_no_baseline_safe()
     test_blocks_parser_single_row_header_total_kg_column()
     test_blocks_parser_two_row_header_plain_kg()
+    test_blocks_parser_picks_total_kg_over_per_metre_and_consumption_decoys()
     test_blocks_parser_no_output_column_returns_empty()
     test_long_date_day_all_formats()
     test_mc_key_joins_main_machines_only()
