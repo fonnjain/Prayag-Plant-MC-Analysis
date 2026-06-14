@@ -419,7 +419,16 @@ _PTMT_TAB_NUM = re.compile(r"(\d+)")
 
 
 def _ptmt_group(code: str) -> Tuple[str, bool]:
-    """(segment, is_finishing) for a PTMT machine label. Pure string routing."""
+    """(segment, is_finishing) for a PTMT machine label.
+
+    The authoritative roster (sources.PTMT_GROUPS) is the source of truth for
+    which process group each machine belongs to. Only codes not in the roster
+    fall back to heuristic string routing — so a never-before-seen machine is
+    still grouped sensibly instead of crashing.
+    """
+    authoritative = sources.ptmt_group(code)
+    if authoritative is not None:
+        return authoritative
     up = str(code).strip().upper()
     if "GRIND" in up:
         return "PTMT – Grinding", True

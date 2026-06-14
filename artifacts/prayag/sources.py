@@ -132,3 +132,59 @@ FY_MONTHS = [
     "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09",
     "2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03",
 ]
+
+# ---------------------------------------------------------------------------
+# PTMT authoritative machine roster (55 machines in 5 process groups).
+#
+# PTMT has NO monthly-grid summary, so its roster cannot be derived from the
+# annual grid like the other plants. This list — the factory's own machine
+# register (Report-5 "Daily Output – Moulding M/C") — is therefore the
+# authoritative roster: completeness is measured against all 55, so a machine
+# that never reports is surfaced as a gap rather than the dataset silently
+# redefining "complete" as "whatever reported". Process groups also come from
+# this file (not a heuristic), so each machine is compared within its own
+# process group, never across the whole plant.
+#
+# Codes are the bare machine label as it appears in the daily matrix; the
+# emitted machine id is "PTMT <code>" (see PTMT_ROSTER_IDS).
+# ---------------------------------------------------------------------------
+PTMT_GROUPS: dict[str, list[str]] = {
+    "PTMT – Injection (standard)": [
+        "80-1", "80-2", "80-3", "80-4", "80-5", "80-6",
+        "110-1", "110-2", "110-3", "125-1", "125-2",
+        "150-1", "150-2", "150-3", "150-4", "150-5", "150-6", "150-7", "150-8",
+        "200-2", "200-3",
+        "250-1", "250-2", "250-3", "250-4", "250-5", "250-6",
+        "350-1", "350-2", "130-TON", "450-1",
+    ],
+    "PTMT – Injection (N-line)": [
+        "N-80A", "N-80B",
+        "N-110A", "N-110B", "N-110C", "N-110D", "N-110E", "N-110F",
+        "N-200A", "N-200B", "N-200C", "N-200D", "N-200E", "N-200F",
+        "N-200G", "N-200H", "N-200I",
+    ],
+    "PTMT – Blow Moulding": ["Blow Mould 1", "Blow Mould 2", "Blow Mould 3"],
+    "PTMT – Corrugator": ["Corrugater"],
+    "PTMT – Grinding": ["GRINDER-1 (M)", "GRINDER-2 (S)", "GRINDER-3 (B)"],
+}
+
+# The grinding group is regrind/finishing: its KG is never added to plant output.
+PTMT_FINISHING_GROUP = "PTMT – Grinding"
+
+# bare machine code -> process group (flat lookup for routing).
+PTMT_ROSTER: dict[str, str] = {
+    code: group for group, codes in PTMT_GROUPS.items() for code in codes
+}
+
+
+def ptmt_roster_ids() -> set[str]:
+    """The 55 authoritative PTMT machine ids, in emitted form ("PTMT <code>")."""
+    return {f"PTMT {code}" for code in PTMT_ROSTER}
+
+
+def ptmt_group(code: str) -> tuple[str, bool] | None:
+    """(process_group, is_finishing) for a bare PTMT code, or None if unknown."""
+    group = PTMT_ROSTER.get(str(code).strip())
+    if group is None:
+        return None
+    return group, (group == PTMT_FINISHING_GROUP)

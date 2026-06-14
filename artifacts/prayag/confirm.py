@@ -165,6 +165,15 @@ def build_masters(master_rows: List[Record]) -> dict:
             moulds.setdefault(r.plant, set()).add(r.mould)
         if r.unit:
             units.setdefault(r.plant, set()).add(r.unit)
+
+    # PTMT has no monthly grid, so its roster can't be derived from master_rows.
+    # Its authoritative 55-machine register (sources.PTMT_GROUPS) IS the roster:
+    # merging it here means completeness is held to all 55 machines, so a machine
+    # that never reports is surfaced as a gap rather than the data quietly
+    # redefining the roster as "whatever happened to report".
+    for code in sources.ptmt_roster_ids():
+        machines.setdefault("PTMT", set()).add(code)
+
     return {
         "machines": machines,
         "segments": segments,
@@ -234,7 +243,10 @@ def _scope_plants(period_rows: List[Record], masters: dict, daily_used: bool) ->
     """
     if daily_used:
         return {r.plant for r in period_rows}
-    return set(masters["machines"].keys())
+    # Monthly grain only holds plants that actually HAVE a monthly grid (the
+    # annual summaries). PTMT/TANK have a daily file but no monthly grid, so they
+    # must not be held to a roster in a monthly view (they'd show as all-missing).
+    return {s["plant"] for s in sources.ANNUAL_SOURCES}
 
 
 def tier1_completeness(
@@ -359,10 +371,16 @@ def tier1_completeness(
             # In a sub-monthly window a roster machine simply may not have run —
             # that's normal, not a data gap. Collapse to one summary line.
             if missing:
+                named = sorted(missing)
+                shown = ", ".join(named[:10])
+                if len(named) > 10:
+                    shown += f", +{len(named) - 10} more"
                 issues.append(_issue(
                     1, WARNING,
-                    f"{plant}: {len(missing)} of {len(master_codes)} machine(s) had "
-                    "no run in this window (normal for a short window, not a data gap).",
+                    f"{plant}: {len(missing)} of {len(master_codes)} roster "
+                    f"machine(s) had no run in this window ({shown}) — normal for a "
+                    "short window, but flagged so a never-reporting machine is "
+                    "visible against the full roster.",
                     plant=plant,
                 ))
             if unmatched_data:
@@ -407,13 +425,18 @@ def tier1_completeness(
                 "period (shown as a gap, not a zero).",
                 plant=plant,
             ))
-        for s in sorted(present_segs - m_segs):
-            issues.append(_issue(
-                1, WARNING,
-                f"Segment/line '{s}' appears in the data but is not in the master "
-                "roster.",
-                plant=plant,
-            ))
+        # Only call something "unknown" when we actually have a roster to judge
+        # it against. A plant whose source is not per-segment (e.g. TANK, logged
+        # per item) has no segment roster, so flagging its segments as "not in the
+        # roster" would be fabricating a gap against a roster that doesn't exist.
+        if m_segs:
+            for s in sorted(present_segs - m_segs):
+                issues.append(_issue(
+                    1, WARNING,
+                    f"Segment/line '{s}' appears in the data but is not in the "
+                    "master roster.",
+                    plant=plant,
+                ))
 
         m_moulds = masters["moulds"].get(plant, set())
         present_moulds = mould_by_plant.get(plant, set())
@@ -424,12 +447,14 @@ def tier1_completeness(
                 "(shown as a gap, not a zero).",
                 plant=plant,
             ))
-        for mo in sorted(present_moulds - m_moulds):
-            issues.append(_issue(
-                1, WARNING,
-                f"Mould '{mo}' appears in the data but is not in the master roster.",
-                plant=plant,
-            ))
+        if m_moulds:
+            for mo in sorted(present_moulds - m_moulds):
+                issues.append(_issue(
+                    1, WARNING,
+                    f"Mould '{mo}' appears in the data but is not in the master "
+                    "roster.",
+                    plant=plant,
+                ))
 
     # --- Months populated vs months DUE ---
     # An in-progress (current) month and any future month are not yet due, so a
