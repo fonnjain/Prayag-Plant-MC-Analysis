@@ -1,43 +1,20 @@
 ---
 name: Prayag daily parser quirks
-description: Non-obvious bugs in parse_daily_long and parse_daily_blocks that caused double-counting and GARDEN returning no records.
+description: Durable layout traps in the daily parsers (parse_daily_long / parse_daily_blocks) that silently corrupt totals.
 ---
 
-## parse_daily_long — TOTAL-skip must use substring, not exact-set
+## Month-end TOTAL rows masquerade as data (parse_daily_long)
 
-**Rule:** The machine-label skip in `parse_daily_long` must use `"TOTAL" in u_label` in addition to the exact `_DAILY_SKIP_LABELS` set.
+**Rule:** Any machine-label containing "TOTAL" (not just the literal word) must be skipped, not only an exact skip-set.
 
-**Why:** The PIPE/MOULDING workbooks (Report-11/Report-12) include month-end summary rows whose machine column reads "GRAND TOTAL", "M/C-1 TOTAL", "NET TOTAL", "TOTAL OUTPUT", etc. These rows carry a valid date (the last day of the month) so they pass the date filter. The old exact-match set only caught literal `"TOTAL"`, causing the plant's whole-month total to be added on top of the detail rows → +31.8% PIPE / +17.2% MOULDING reconcile gap.
+**Why:** PIPE/MOULDING daily workbooks (Report-11/Report-12) embed month-end summary rows — "GRAND TOTAL", "M/C-1 TOTAL", "NET TOTAL", "TOTAL OUTPUT". They carry the month's last-day date, so they pass the date filter and get added on top of the detail rows (observed +31.8% PIPE / +17.2% MOULDING over-count).
 
-**How to apply:** The skip condition in `parse_daily_long`:
-```python
-if not label or u_label in _DAILY_SKIP_LABELS or "TOTAL" in u_label:
-    continue
-```
+**How to apply:** When auditing a daily reconcile gap that is suspiciously close to "double the real total", suspect a TOTAL-row leaking through the label skip.
 
-## parse_daily_blocks — column detection must scan both header rows
+## Block tabs have MULTIPLE KG columns — pick cumulative TOTAL (parse_daily_blocks)
 
-**Rule:** Scan BOTH `values[header_idx]` (the DATE row) AND `values[header_idx + 1]` (optional sub-header) for the output column. Use `"KG" in h` not `h == "KG"`.
+**Rule:** GARDEN/HDPE per-machine "block" tabs expose three KG-mentioning columns: a per-metre weight decoy (KG header / MTR sub), raw-material consumption (RP CONSUMPTION), and the true cumulative output (TOTAL … KG). Select the TOTAL output column; exclude per-metre, consumption, and rate columns.
 
-**Why:** GARDEN per-machine tabs put all column names in the same row as DATE with the header "TOTAL(KG)" — exact `h == "KG"` never matched, so `out_c` stayed -1 and the parser returned `[]` (mis-reported as parse failure rather than producing records).
+**Why:** Grabbing the first "KG" header binds the per-metre decoy and collapses output to near-zero (HDPE May 1369→~1). Column names may sit in the DATE row OR a separate sub-header row, and the first data row starts dynamically after the header band — a hardcoded offset drops a row or returns [] (mis-read as parse failure).
 
-**How to apply:**
-```python
-for scan_row in (values[header_idx],
-                 values[header_idx + 1] if header_idx + 1 < len(values) else []):
-    for c, v in enumerate(scan_row):
-        h = str(v).strip().upper()
-        if out_c < 0 and "KG" in h and not any(x in h for x in ("KG/H", "/KG", "RATE", "PER KG")):
-            out_c = c
-        ...
-    if out_c >= 0:
-        break
-```
-
-Also: `data_start` must be found dynamically (first row after header band with a valid date) — hardcoding `header_idx + 2` skips the first data row when the tab has only one header row.
-
-## _long_date_day — must handle all-numeric dates
-
-**Rule:** Add a regex for `DD/MM/YYYY`, `DD-MM-YYYY`, and `YYYY-MM-DD` (ISO). If the first segment > 31 it is the year (ISO); otherwise treat as DD/MM.
-
-**Why:** TANK PROD. REPORT and some GARDEN/HDPE tabs write dates numerically. Without this, `_long_date_day` returned None for every row and the parser produced no records.
+**How to apply:** If a block-tab plant suddenly reports a tiny or empty output, the column picker has latched onto a decoy KG column or a static header offset.

@@ -898,6 +898,7 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
         if ym in sources.DAILY_SOURCES[plant]["files"]
     ]
     by_pair: dict = {}
+    failed_pairs: List[Tuple[str, str]] = []
     if pairs:
         max_workers = min(len(pairs), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -906,7 +907,26 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
                 for plant, ym in pairs
             }
             for fut, pair in futures.items():
-                by_pair[pair] = fut.result()
+                try:
+                    by_pair[pair] = fut.result()
+                except SheetReadError:
+                    # One workbook failing (e.g. a transient 429 on a cold,
+                    # multi-month read) must NOT nuke the whole period and force a
+                    # fall-back to the summary grid. Record the gap as an honest
+                    # warning and keep every workbook that did load. We only raise
+                    # below if NOTHING loaded at all.
+                    failed_pairs.append(pair)
+    if failed_pairs and not by_pair:
+        raise SheetReadError(
+            "Couldn't read any daily workbook for this period "
+            "(Google Sheets is throttling or unavailable). Please try again."
+        )
+    for plant, ym in failed_pairs:
+        warnings.append(
+            f"{sources.PLANT_NAMES.get(plant, plant)} daily ({ym}) couldn't be read this "
+            "time (Google Sheets throttled or unavailable) — its figures are "
+            "temporarily missing from this view. Try Refresh in a moment."
+        )
 
     for pair in pairs:
         results = by_pair.get(pair, [])

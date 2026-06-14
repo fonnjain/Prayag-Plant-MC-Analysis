@@ -297,18 +297,24 @@ def get_data(args):
     daily_err = None
     grain_banner = pinfo["banner"]
     all_rows = source_reports = recon_warnings = None
-    if pinfo.get("sub_monthly"):
-        daily_file_months = [
-            m for m in months
-            if any(m in (cfg.get("files") or {})
-                   for cfg in DAILY_SOURCES.values())
-        ]
+
+    # The daily files are the SOURCE OF TRUTH for every period. Monthly and FY
+    # headline totals are summed from the authoritative daily tabs (one per
+    # metric), not the monthly summary grid. The grid is kept only as a
+    # reconciliation reference (a non-blocking note, emitted by get_daily_records)
+    # and serves as the headline solely for a month that has no daily workbook at
+    # all. Daily totals are never "reconciled down" to the lower summary figures.
+    daily_file_months = [
+        m for m in months
+        if any(m in (cfg.get("files") or {}) for cfg in DAILY_SOURCES.values())
+    ]
+    if daily_file_months:
         try:
-            drecs, dreports, dwarn = get_daily_records(months)
+            drecs, dreports, dwarn = get_daily_records(daily_file_months)
         except SheetReadError as e:
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read: {e}"
-        if daily_file_months and not daily_err:
+        if not daily_err:
             # "last_updated" period: narrow to the actual last date with data.
             if pinfo["period"] == "last_updated":
                 last_date = max((r.date for r in drecs if r.date), default=None)
@@ -316,32 +322,58 @@ def get_data(args):
                     pinfo["from_iso"] = last_date
                     pinfo["to_iso"] = last_date
                     pinfo["label"] = f"Last updated: {_fmt(datetime.date.fromisoformat(last_date))}"
-                # If no daily data found at all, keep the 30-day window so the
-                # "no data" grain banner fires normally below.
             fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
             win = [r for r in drecs if fwin <= r.date <= twin]
-            all_rows, source_reports, recon_warnings = win, dreports, dwarn
+            # A requested month with NO daily workbook can only be served from the
+            # monthly summary grid. Sub-monthly windows never blend the grid in;
+            # monthly/FY views append it for those grid-only months so the period
+            # is still complete (currently none — daily covers every data month).
+            grid_only_months = [m for m in months if m not in daily_file_months]
+            grid_rows: list = []
+            grid_reports: list = []
+            grid_warn: list = []
+            if grid_only_months and not pinfo.get("sub_monthly"):
+                grid_rows, grid_reports, grid_warn = get_records(grid_only_months)
+                _apply_baselines(grid_rows)
+            all_rows = win + list(grid_rows)
+            source_reports = list(dreports) + list(grid_reports)
+            recon_warnings = list(dwarn) + list(grid_warn)
             daily_used = True
-            if win:
-                disp_plants = ", ".join(
-                    PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
-                )
-                grain_banner = (
-                    f"{pinfo['label']} → true daily data for {disp_plants}. "
-                    "Any plant not listed had no run recorded on these days."
-                )
-            else:
+            if not win:
                 latest = max((r.date for r in drecs), default=None)
                 if latest:
                     latest_disp = _fmt(datetime.date.fromisoformat(latest))
                     grain_banner = (
-                        f"{pinfo['label']} → no daily production was recorded on these "
-                        f"dates. Daily data is currently entered through {latest_disp}."
+                        f"{pinfo['label']} → no daily production was recorded in this "
+                        f"period. Daily data is currently entered through {latest_disp}."
                     )
                 else:
                     grain_banner = (
                         f"{pinfo['label']} → no daily production has been recorded for "
-                        "this window yet."
+                        "this period yet."
+                    )
+            else:
+                disp_plants = ", ".join(
+                    PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
+                )
+                if pinfo.get("sub_monthly"):
+                    grain_banner = (
+                        f"{pinfo['label']} → true daily data for {disp_plants}. "
+                        "Any plant not listed had no run recorded on these days."
+                    )
+                else:
+                    extra = ""
+                    if grid_only_months:
+                        extra = (
+                            " Month(s) without a daily workbook ("
+                            + ", ".join(_month_disp(m) for m in grid_only_months)
+                            + ") fall back to the monthly summary sheet."
+                        )
+                    grain_banner = (
+                        f"{pinfo['label']} → totals are summed from the daily "
+                        f"production files for {disp_plants}. The monthly summary "
+                        "sheet is shown only as a reconciliation check (it "
+                        f"undercounts) and never reduces these figures.{extra}"
                     )
     if not daily_used:
         if pinfo.get("sub_monthly"):
@@ -363,6 +395,16 @@ def get_data(args):
                     f"{pinfo['label']} → no daily workbook is configured for {disp}. "
                     "No data for this window."
                 )
+        elif daily_err:
+            # Monthly/FY but the daily read failed outright — fall back to the
+            # summary grid honestly rather than showing nothing, and say so.
+            all_rows, source_reports, recon_warnings = get_records(months)
+            _apply_baselines(all_rows)
+            recon_warnings = list(recon_warnings) + [daily_err]
+            grain_banner = (
+                f"{pinfo['label']} → daily files could not be read; showing the "
+                "monthly summary sheet instead (it undercounts)."
+            )
         else:
             all_rows, source_reports, recon_warnings = get_records(months)
             _apply_baselines(all_rows)
