@@ -1,0 +1,72 @@
+{
+  "plant": "PTMT",
+  "source": "Report-5 (Daily Output – Moulding M/C)",
+  "machine_count": 55,
+  "groups": {
+    "PTMT – Injection (standard)": [
+      "PTMT 80-1",
+      "PTMT 80-2",
+      "PTMT 80-3",
+      "PTMT 80-4",
+      "PTMT 80-5",
+      "PTMT 80-6",
+      "PTMT 110-1",
+      "PTMT 110-2",
+      "PTMT 110-3",
+      "PTMT 125-1",
+      "PTMT 125-2",
+      "PTMT 150-1",
+      "PTMT 150-2",
+      "PTMT 150-3",
+      "PTMT 150-4",
+      "PTMT 150-5",
+      "PTMT 150-6",
+      "PTMT 150-7",
+      "PTMT 150-8",
+      "PTMT 200-2",
+      "PTMT 200-3",
+      "PTMT 250-1",
+      "PTMT 250-2",
+      "PTMT 250-3",
+      "PTMT 250-4",
+      "PTMT 250-5",
+      "PTMT 250-6",
+      "PTMT 350-1",
+      "PTMT 350-2",
+      "PTMT 130-TON",
+      "PTMT 450-1"
+    ],
+    "PTMT – Injection (N-line)": [
+      "PTMT N-80A",
+      "PTMT N-80B",
+      "PTMT N-110A",
+      "PTMT N-110B",
+      "PTMT N-110C",
+      "PTMT N-110D",
+      "PTMT N-110E",
+      "PTMT N-110F",
+      "PTMT N-200A",
+      "PTMT N-200B",
+      "PTMT N-200C",
+      "PTMT N-200D",
+      "PTMT N-200E",
+      "PTMT N-200F",
+      "PTMT N-200G",
+      "PTMT N-200H",
+      "PTMT N-200I"
+    ],
+    "PTMT – Blow Moulding": [
+      "PTMT Blow Mould 1",
+      "PTMT Blow Mould 2",
+      "PTMT Blow Mould 3"
+    ],
+    "PTMT – Corrugator": [
+      "PTMT Corrugater"
+    ],
+    "PTMT – Grinding": [
+      "PTMT GRINDER-1 (M)",
+      "PTMT GRINDER-2 (S)",
+      "PTMT GRINDER-3 (B)"
+    ]
+  }
+}
