@@ -188,12 +188,18 @@
         </select>
         <button type="submit" class="bg-terra text-white text-xs font-semibold px-3 py-1.5 rounded-lg">Go</button>
       </div>
-      <!-- Custom date inputs -->
+      <!-- Custom date inputs (dd-mm-yyyy display; converted to yyyy-mm-dd on submit) -->
+      {% set _fd = request.args.get('from_date','') %}
+      {% set _td = request.args.get('to_date','') %}
+      {% set _fv = _fd[8:10] ~ '-' ~ _fd[5:7] ~ '-' ~ _fd[0:4] if _fd|length == 10 else _fd %}
+      {% set _tv = _td[8:10] ~ '-' ~ _td[5:7] ~ '-' ~ _td[0:4] if _td|length == 10 else _td %}
       <div id="custom-dates" class="{% if period != 'custom' %}hidden{% endif %} flex gap-2 mt-1.5">
-        <input type="date" name="from_date" value="{{ request.args.get('from_date','') }}"
-          class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white;color-scheme:dark"/>
-        <input type="date" name="to_date" value="{{ request.args.get('to_date','') }}"
-          class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white;color-scheme:dark"/>
+        <input type="text" name="from_date" value="{{ _fv }}"
+          placeholder="DD-MM-YYYY" maxlength="10"
+          class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white"/>
+        <input type="text" name="to_date" value="{{ _tv }}"
+          placeholder="DD-MM-YYYY" maxlength="10"
+          class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white"/>
       </div>
       <!-- Period label + today's date -->
       <div class="flex items-center justify-between gap-2 mt-1">
@@ -337,6 +343,17 @@ function handlePeriodChange(sel) {
 
 // Pass current query params to filter form action based on current page
 document.getElementById('filter-form').action = window.location.pathname;
+
+// Convert dd-mm-yyyy text inputs → yyyy-mm-dd before form submission (server expects ISO)
+document.getElementById('filter-form').addEventListener('submit', function() {
+  ['from_date', 'to_date'].forEach(function(name) {
+    var inp = document.querySelector('#filter-form [name="' + name + '"]');
+    if (inp && /^\d{2}-\d{2}-\d{4}$/.test(inp.value)) {
+      var p = inp.value.split('-');
+      inp.value = p[2] + '-' + p[1] + '-' + p[0];
+    }
+  });
+});
 
 syncHeaderOffset();
 window.addEventListener('resize', syncHeaderOffset);
