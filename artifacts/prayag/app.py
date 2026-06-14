@@ -297,6 +297,7 @@ def get_data(args):
     daily_err = None
     grain_banner = pinfo["banner"]
     all_rows = source_reports = recon_warnings = None
+    freshness: list = []
 
     # The daily files are the SOURCE OF TRUTH for every period. Monthly and FY
     # headline totals are summed from the authoritative daily tabs (one per
@@ -315,6 +316,21 @@ def get_data(args):
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read: {e}"
         if not daily_err:
+            # Per-plant data freshness: the latest date each plant has daily
+            # data, computed from daily rows only (idle/empty days produce no
+            # rows, so they never count). Surfaced in the completeness panel so
+            # laggard plants are visible without blocking on them. ISO date
+            # strings compare lexicographically, so plain ``>`` finds the max.
+            fresh_by_plant: dict = {}
+            for r in drecs:
+                if r.date and r.date > fresh_by_plant.get(r.plant, ""):
+                    fresh_by_plant[r.plant] = r.date
+            freshness = [
+                {"plant": p, "name": PLANT_NAMES.get(p, p),
+                 "disp": _fmt(datetime.date.fromisoformat(d))}
+                for p, d in sorted(
+                    fresh_by_plant.items(), key=lambda kv: kv[1], reverse=True)
+            ]
             # "last_updated" period: narrow to the actual last date with data.
             if pinfo["period"] == "last_updated":
                 last_date = max((r.date for r in drecs if r.date), default=None)
@@ -494,6 +510,7 @@ def get_data(args):
         confirmation["status"] = "warning"
 
     confirmation["released"] = bool(signoff) and confirmation["status"] == "error"
+    confirmation["freshness"] = freshness
 
     # Flag requested months that hold no data yet (monthly path only).
     # Only months that have actually ENDED can be "missing" — the current

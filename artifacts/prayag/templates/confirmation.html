@@ -132,6 +132,12 @@
     {% endfor %}
   </div>
   <div class="text-[11px] text-gray-400 mt-2 text-center">{{ conf.score_label }}</div>
+  {% if conf.freshness %}
+  <div class="text-[11px] text-gray-500 mt-3 pt-2 border-t border-gray-100">
+    <span class="font-semibold text-gray-600">Data reported through:</span>
+    {% for f in conf.freshness %}<span class="whitespace-nowrap">{{ f.name }} to {{ f.disp }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+  </div>
+  {% endif %}
 </div>
 
 <!-- Plain-English summary (Claude) -->
