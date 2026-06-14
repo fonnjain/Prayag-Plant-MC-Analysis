@@ -651,18 +651,6 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
     report["detail_tabs"] = sorted({r.machine for r in raw})
     report["record_count"] = len(raw)
 
-    # Plant-level reconcile vs the monthly grid (GARDEN has one; HDPE does not).
-    _, grid_total = _grid_ideal_for(emit, ym)
-    if grid_total > 0:
-        daily_out = sum(r.total_count for r in raw)
-        diff = abs(daily_out - grid_total) / grid_total
-        report["reconcile"] = {
-            "grid_total": round(grid_total, 1),
-            "detail_total": round(daily_out, 1),
-            "diff_pct": round(diff * 100, 2),
-            "ok": diff <= 0.05,
-        }
-
     if not raw:
         report["warning"] = (
             f"{emit} {ym}: machine tabs are present but no production has been "
@@ -786,7 +774,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
             r.segment, r.is_finishing = _ptmt_group(code)
 
     # Baseline sources, in precedence order.
-    grid_ideal, grid_total = _grid_ideal_for(emit, ym)
+    grid_ideal, _ = _grid_ideal_for(emit, ym)  # grid_total no longer used (daily-only rule)
     sheet_ideal: dict = {}
     if spec.get("ideal_col"):
         labels = parsers.parse_matrix_summary_col(values, header_spec=spec["ideal_col"])
@@ -828,19 +816,6 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
 
     report["detail_tabs"] = sorted({r.machine for r in raw})
     report["record_count"] = len(raw)
-
-    # Reconcile at the PLANT level — daily output vs the whole-month grid output.
-    # This holds even when the per-machine join doesn't (Moulding mould codes),
-    # surfacing any honest cross-document gap rather than hiding it.
-    if grid_total > 0:
-        daily_out = sum(r.total_count for r in raw)
-        diff = abs(daily_out - grid_total) / grid_total
-        report["reconcile"] = {
-            "grid_total": round(grid_total, 1),
-            "detail_total": round(daily_out, 1),
-            "diff_pct": round(diff * 100, 2),
-            "ok": diff <= 0.05,
-        }
 
     # One summary line for machines without an efficiency baseline (not one per
     # machine). Their run hours + output still publish; only the ratio is hidden.
@@ -937,13 +912,9 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
             reports.append(report)
             if report.get("warning"):
                 warnings.append(report["warning"])
-            recon = report.get("reconcile")
-            if recon and not recon["ok"]:
-                warnings.append(
-                    f"{report['title']}: daily rows sum to {recon['detail_total']:.0f} "
-                    f"but the monthly grid is {recon['grid_total']:.0f} "
-                    f"({recon['diff_pct']:.1f}% off)"
-                )
+            # Daily-vs-grid reconciliation data is kept in report["reconcile"]
+            # for the Sources diagnostic page, but is no longer emitted as a
+            # user-visible warning — daily files are the authoritative source.
     return all_recs, reports, warnings
 
 

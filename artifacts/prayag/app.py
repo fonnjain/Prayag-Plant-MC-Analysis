@@ -324,20 +324,13 @@ def get_data(args):
                     pinfo["label"] = f"Last updated: {_fmt(datetime.date.fromisoformat(last_date))}"
             fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
             win = [r for r in drecs if fwin <= r.date <= twin]
-            # A requested month with NO daily workbook can only be served from the
-            # monthly summary grid. Sub-monthly windows never blend the grid in;
-            # monthly/FY views append it for those grid-only months so the period
-            # is still complete (currently none — daily covers every data month).
-            grid_only_months = [m for m in months if m not in daily_file_months]
-            grid_rows: list = []
-            grid_reports: list = []
-            grid_warn: list = []
-            if grid_only_months and not pinfo.get("sub_monthly"):
-                grid_rows, grid_reports, grid_warn = get_records(grid_only_months)
-                _apply_baselines(grid_rows)
-            all_rows = win + list(grid_rows)
-            source_reports = list(dreports) + list(grid_reports)
-            recon_warnings = list(dwarn) + list(grid_warn)
+            # Daily files are the only source for current figures. Months in
+            # this period without a daily workbook show no data — the monthly
+            # summary is not substituted.
+            no_daily_months = [m for m in months if m not in daily_file_months]
+            all_rows = win
+            source_reports = list(dreports)
+            recon_warnings = list(dwarn)
             daily_used = True
             if not win:
                 latest = max((r.date for r in drecs), default=None)
@@ -363,17 +356,15 @@ def get_data(args):
                     )
                 else:
                     extra = ""
-                    if grid_only_months:
+                    if no_daily_months:
                         extra = (
-                            " Month(s) without a daily workbook ("
-                            + ", ".join(_month_disp(m) for m in grid_only_months)
-                            + ") fall back to the monthly summary sheet."
+                            " No daily workbook exists for "
+                            + ", ".join(_month_disp(m) for m in no_daily_months)
+                            + " — those months show no data."
                         )
                     grain_banner = (
                         f"{pinfo['label']} → totals are summed from the daily "
-                        f"production files for {disp_plants}. The monthly summary "
-                        "sheet is shown only as a reconciliation check (it "
-                        f"undercounts) and never reduces these figures.{extra}"
+                        f"production files for {disp_plants}.{extra}"
                     )
     if not daily_used:
         if pinfo.get("sub_monthly"):
@@ -396,18 +387,28 @@ def get_data(args):
                     "No data for this window."
                 )
         elif daily_err:
-            # Monthly/FY but the daily read failed outright — fall back to the
-            # summary grid honestly rather than showing nothing, and say so.
-            all_rows, source_reports, recon_warnings = get_records(months)
-            _apply_baselines(all_rows)
-            recon_warnings = list(recon_warnings) + [daily_err]
+            # Monthly/FY but the daily read failed outright. Under the
+            # daily-only rule the monthly summary is not substituted —
+            # show nothing with an honest error banner.
+            all_rows = []
+            source_reports = []
+            recon_warnings = [daily_err]
             grain_banner = (
-                f"{pinfo['label']} → daily files could not be read; showing the "
-                "monthly summary sheet instead (it undercounts)."
+                f"{pinfo['label']} → daily files could not be read. "
+                "No production data is shown — the monthly summary is not "
+                "substituted. Retry later or check the data source."
             )
         else:
-            all_rows, source_reports, recon_warnings = get_records(months)
-            _apply_baselines(all_rows)
+            # No daily workbook is configured for any month in this period.
+            # The monthly summary is not substituted.
+            all_rows = []
+            source_reports = []
+            recon_warnings = []
+            disp = ", ".join(_month_disp(m) for m in months)
+            grain_banner = (
+                f"{pinfo['label']} → no daily workbook is configured for {disp}. "
+                "No production data for this period."
+            )
 
     # Quarantine physically-impossible rows (Tier 3 hard errors): they are held
     # aside with their raw value + provenance and EXCLUDED from every published
@@ -432,6 +433,10 @@ def get_data(args):
     # roster. Confirmation always runs on the UNFILTERED period rows so a plant
     # or machine filter never makes the dataset look incomplete. Detection runs on
     # the raw set; the published metrics it reconciles against exclude quarantine.
+    # Confirmation engine roster: the full-FY monthly grid is read here as
+    # a machine *roster* only (which machines are expected to exist), not as
+    # a source of production figures. This is the one intentional non-figure
+    # monthly-summary read in the normal dashboard path.
     has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
     try:
         master_rows = get_records(FY_MONTHS)[0]
@@ -1555,29 +1560,33 @@ def build_state():
                  f"{MOULD_MAY_EXP:,} ±0.5%", f"{_mould_sum:,.0f}",
                  "Moulding not read from Report-12 / double-count")
 
-            # #2  Daily (107,609) > monthly-grid (81,654) → daily-first live
-            # Report-11 is a pure detail log with no stored grand-total row, so
-            # we verify the daily-vs-grid divergence instead: the monthly summary
-            # grid must be materially lower than the daily sum, confirming the
-            # app is reading the daily authoritative source, not the grid.
-            PIPE_GRID_EXP = 81_654.0
+            # #2  Monthly May view uses daily-only path (no grid fallback)
+            # Verify get_data returns daily_used=True for period=5 AND that
+            # the PIPE figure matches the daily-sourced total (daily files are
+            # the only authoritative source — the monthly summary is not read
+            # for figures under the daily-only rule).
             try:
-                _grid_recs, _, _ = _sht.get_records(["2026-05"])
-                _grid_pipe = sum(
-                    r.total_count for r in _grid_recs if r.plant == "PIPE"
+                from werkzeug.datastructures import ImmutableMultiDict as _IMMD
+                _gd5 = get_data(_IMMD([("period", "5")]))
+                _daily_used5 = _gd5.get("daily_used", False)
+                _gd5_pipe = sum(
+                    r.total_count for r in _gd5.get("rows", []) if r.plant == "PIPE"
                 )
-                _daily_gt_grid = _pipe_sum > _grid_pipe * 1.05  # daily > grid by >5%
-                _grid_ok = abs(_grid_pipe - PIPE_GRID_EXP) / PIPE_GRID_EXP <= TOL
+                # daily_used must be True; PIPE figure must be close to the
+                # daily-read total (within 1% — quarantine may remove a handful of rows)
+                _pipe_match = (
+                    _pipe_sum > 0 and abs(_gd5_pipe - _pipe_sum) / _pipe_sum <= 0.01
+                )
                 _chk(2,
-                     "PIPE May: daily > monthly-grid (daily-first live; "
-                     f"grid ≈ {PIPE_GRID_EXP:,.0f}, daily ≈ {PIPE_MAY_EXP:,.0f})",
-                     _grid_ok and _daily_gt_grid,
-                     f"grid ≈ {PIPE_GRID_EXP:,.0f}  daily > grid",
-                     f"grid={_grid_pipe:,.0f}  daily={_pipe_sum:,.0f}",
-                     "daily-first not live — daily ≤ grid or grid wrong")
+                     f"Monthly May view: daily-only path (daily_used=True, "
+                     f"PIPE ≈ {PIPE_MAY_EXP:,.0f} from daily)",
+                     _daily_used5 and _pipe_match,
+                     f"daily_used=True  PIPE≈{_pipe_sum:,.0f}",
+                     f"daily_used={_daily_used5}  PIPE={_gd5_pipe:,.0f}",
+                     "daily_used=False or PIPE figure diverges from daily source")
             except Exception as _e2:
-                _skip(2, "PIPE daily > monthly-grid (daily-first live)",
-                      f"grid read error: {_e2}")
+                _skip(2, "Monthly May view: daily-only path",
+                      f"get_data error: {_e2}")
 
         # --- Current-month data: GARDEN + TANK ---
         # HDPE May already in _rows_may above (1 aggregated row per machine).
