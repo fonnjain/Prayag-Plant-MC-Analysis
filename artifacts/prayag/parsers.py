@@ -215,19 +215,36 @@ def _day_from_label(s) -> Optional[int]:
 
 
 def _long_date_day(s) -> Optional[int]:
-    """Day-of-month from a long-format DATE cell, e.g. ``"Jun 1, 2026"``.
+    """Day-of-month from a long-format DATE cell.
 
-    Long daily tabs (PIPE Report-11, Moulding Report-12) write a full
-    ``"Mon D, YYYY"`` date per row rather than a column header. Falls back to
-    :func:`_day_from_label` for the day-first / month-comma variants.
+    Handles all formats found in real workbooks:
+    - Month-name first: ``"Jun 1, 2026"``, ``"Jun 1 2026"``
+    - Day-first with 3-letter month: ``"01-Jun-26"``, ``"01 Apr 26"``
+    - Month-comma: ``"Apr, 1"``, ``"Apr,1"``
+    - All-numeric: ``"01/06/2026"`` / ``"01-06-2026"`` (DD/MM, Indian standard)
+      and ISO ``"2026-06-01"``
+    Returns ``None`` for any non-date cell (blank, label, serial number, etc.).
     """
     d = _day_from_label(s)
     if d is not None:
         return d
     t = str(s).strip()
-    m = re.match(r"^[A-Za-z]{3,9}\.?\s+(\d{1,2})\b", t)  # Jun 1, 2026
+    # "Jun 1, 2026" or "Jun 1 2026" style (month-name first)
+    m = re.match(r"^[A-Za-z]{3,9}\.?\s+(\d{1,2})\b", t)
     if m:
         d = int(m.group(1))
+        return d if 1 <= d <= 31 else None
+    # All-numeric: "01/06/2026", "01-06-26", "2026-06-01" (ISO).
+    # Group 1 = first segment, Group 2 = middle, Group 3 = last.
+    m = re.match(r"^\s*(\d{1,4})[/\-](\d{1,2})[/\-](\d{2,4})\s*$", t)
+    if m:
+        a = int(m.group(1))
+        if a > 31:
+            # YYYY-MM-DD (ISO): day is the last segment
+            d = int(m.group(3))
+        else:
+            # DD/MM/YYYY or DD-MM-YYYY (Indian convention): day is the first
+            d = a
         return d if 1 <= d <= 31 else None
     return None
 
@@ -335,7 +352,13 @@ def parse_daily_long(
         if day is None:
             continue
         label = str(row[mc_c]).strip() if mc_c < len(row) else ""
-        if not label or label.upper() in _DAILY_SKIP_LABELS:
+        u_label = label.upper()
+        # Skip subtotal / summary rows. The exact set covers common header
+        # labels; the "TOTAL" substring check catches variants the sheet uses
+        # to re-present the same output (e.g. "GRAND TOTAL", "M/C-1 TOTAL",
+        # "TOTAL OF JUNE") — these must not be summed alongside detail rows
+        # or the plant output is double-counted.
+        if not label or u_label in _DAILY_SKIP_LABELS or "TOTAL" in u_label:
             continue
         machine = f"{machine_prefix}{label}".strip()
         key = (machine, day)
@@ -495,16 +518,17 @@ def parse_daily_blocks(
 
     Used for GARDEN / HDPE daily workbooks, where each machine has its own tab
     ("MACHINE 2", "MACHINE 3", ...). Layout: a header row carries ``DATE`` plus a
-    sub-header row that labels the production columns (``KG``, ``REJECTION`` ...).
+    production column named ``KG`` or ``TOTAL(KG)`` or similar. Some tabs add a
+    second sub-header row; others put all column names on the same row as DATE.
     One row per date; an item/size may split a date across several rows, so days
     are summed.
 
-    Only output (the sub-header ``KG`` column) and rejection (a ``REJECT*``
-    column) are read — these tabs carry NO run hours, so utilisation/efficiency
-    are left unset (hidden honestly downstream) rather than shown as 0%. Columns
-    are detected from the header band, never assumed; an unrecognised layout
-    returns ``[]`` and the caller reports it as a parse failure (distinct from a
-    genuine no-production day).
+    Only output (any column whose header contains ``KG`` but is not a rate unit)
+    and rejection (any ``REJECT*`` column) are read — these tabs carry NO run
+    hours, so utilisation/efficiency are left unset (hidden honestly downstream)
+    rather than shown as 0%. Columns are detected from the header band, never
+    assumed; an unrecognised layout returns ``[]`` (caller reports parse failure,
+    distinct from a genuine no-production period).
     """
     if not values:
         return []
@@ -521,24 +545,44 @@ def parse_daily_blocks(
     if header_idx < 0:
         return []
 
-    sub_row = values[header_idx + 1] if header_idx + 1 < len(values) else []
-
-    def sub(c):
-        return str(sub_row[c]).strip().upper() if 0 <= c < len(sub_row) else ""
-
+    # Output and rejection columns are detected from the header band.  Some tabs
+    # put all column names on the same row as DATE ("single-row header"); others
+    # use a second sub-header row below it.  Scan BOTH rows so either layout is
+    # handled.  The output column matches any header that contains "KG" but is
+    # not a rate label ("KG/H", "KG/HR", "PER KG") to avoid mis-binding a
+    # run-rate column.
     out_c = -1
     rej_c = -1
-    for c in range(len(sub_row)):
-        h = sub(c)
-        if out_c < 0 and h == "KG":
-            out_c = c
-        elif rej_c < 0 and "REJECT" in h:
-            rej_c = c
+    for scan_row in (
+        values[header_idx],
+        values[header_idx + 1] if header_idx + 1 < len(values) else [],
+    ):
+        for c, v in enumerate(scan_row):
+            h = str(v).strip().upper()
+            if out_c < 0 and "KG" in h and not any(
+                x in h for x in ("KG/H", "/KG", "RATE", "PER KG")
+            ):
+                out_c = c
+            elif rej_c < 0 and "REJECT" in h:
+                rej_c = c
+        if out_c >= 0:
+            break
     if out_c < 0:
         return []
 
+    # Data starts at the first row after the header band where the date cell
+    # holds a valid day number.  Searching forward up to 4 rows handles both
+    # 1-row and 2-row header bands without hard-coding an offset.
+    data_start = -1
+    for i in range(header_idx + 1, min(header_idx + 5, len(values))):
+        if _long_date_day(values[i][date_c] if date_c < len(values[i]) else "") is not None:
+            data_start = i
+            break
+    if data_start < 0:
+        return []
+
     agg: dict = {}
-    for row in values[header_idx + 2:]:
+    for row in values[data_start:]:
         day = _long_date_day(row[date_c] if date_c < len(row) else "")
         if day is None:
             continue

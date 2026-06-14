@@ -5,3 +5,4 @@
 - [Prayag model tiering](prayag-model-tiering.md) — every per-data Claude cache key MUST include the resolved model (two separate caches had this bug); provenance must show the model actually used after fallback.
 - [PTMT authoritative roster](prayag-ptmt-roster.md) — 55-machine register (sources.PTMT_GROUPS) is PTMT's roster (no monthly grid); merged into masters, monthly scope from ANNUAL_SOURCES; non-per-machine plants (TANK) get no fabricated gaps.
 - [Prayag deploy timeouts](prayag-deploy-timeouts.md) — heavy views 500 in prod only when request wall time > gunicorn worker timeout; bound gunicorn (gthread+timeout) AND every external call (Claude SDK, sheet cache single-flight).
+- [Prayag daily parser quirks](prayag-daily-parser-quirks.md) — parse_daily_long TOTAL-skip must use substring not exact set; parse_daily_blocks must scan both header+sub-row for KG column; _long_date_day must handle numeric dates.
