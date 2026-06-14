@@ -345,12 +345,21 @@ window.addEventListener('orientationchange', syncHeaderOffset);
 // ---- Loading overlay ----
 (function() {
   var overlay = document.getElementById('loading-overlay');
+  var loaderTimer = null;
 
-  function showLoader() { overlay.classList.add('active'); }
+  // Only show the spinner if the page takes more than 400 ms to respond.
+  // Warm-cache page loads are typically < 200 ms — the spinner never appears
+  // and navigation feels instant. Only cold fetches (first load, new period)
+  // trigger the visual, which is when the user genuinely needs the feedback.
+  function showLoader() {
+    if (loaderTimer) return;
+    loaderTimer = setTimeout(function() { overlay.classList.add('active'); }, 400);
+  }
 
-  // Hide whenever a page is displayed (covers normal loads + bfcache restores).
-  // This ensures the spinner from a previous navigation is never stuck visible.
+  // Hide + cancel the timer whenever a page is displayed (covers normal loads
+  // and bfcache restores), so the spinner can never get stuck visible.
   window.addEventListener('pageshow', function() {
+    if (loaderTimer) { clearTimeout(loaderTimer); loaderTimer = null; }
     overlay.classList.remove('active');
   });
 
@@ -362,14 +371,11 @@ window.addEventListener('orientationchange', syncHeaderOffset);
     if (a.getAttribute('target') === '_blank') return;
     var href = a.getAttribute('href') || '';
     if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
-    // POST forms handled by submit event; plain GET links navigate directly.
     showLoader();
   });
 
   // Show on any form submit (period selector "Go", confirmation sign-off, etc.)
-  document.addEventListener('submit', function() {
-    showLoader();
-  });
+  document.addEventListener('submit', function() { showLoader(); });
 })();
 </script>
 
