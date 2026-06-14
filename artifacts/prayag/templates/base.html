@@ -109,6 +109,14 @@
                 style="background:{% if confirmation.status=='error' %}var(--red){% else %}var(--amber){% endif %}"></span>
           {% endif %}
         </a>
+        <a href="/verify"
+           aria-label="Data verification"
+           class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/verify' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"
+           style="{% if request.path != '/verify' %}background:rgba(255,255,255,0.15){% endif %}">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </a>
         <a href="/glossary?period={{ period }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
            aria-label="Glossary &amp; metric help"
            class="w-8 h-8 rounded-lg flex items-center justify-center {% if request.path == '/glossary' %}bg-terra{% else %}bg-white bg-opacity-15{% endif %}"

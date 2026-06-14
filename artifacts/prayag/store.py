@@ -302,3 +302,128 @@ def acks_for(period_key: str) -> Dict[str, Dict]:
         if r.get("action") == "ack":
             out[r["issue_key"]] = _shape(r)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Verification log (append-only audit trail for the read-only Verification view)
+# ---------------------------------------------------------------------------
+# Recorded only on an explicit "Run & log this verification" action. It captures
+# WHO ran the check, WHEN, for which month, and how many of the reconciliation
+# checks passed/failed over how many rows. It never touches a figure — it is an
+# attestation that the numbers were reviewed against the source at a point in
+# time. Append-only; the latest row for a month is the most recent run.
+_VERIFY_TABLE = "verification_log"
+_verify_initialised = False
+
+
+def _init_verify() -> None:
+    """Create the verification-log table if it does not exist (idempotent)."""
+    global _verify_initialised
+    if _verify_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_VERIFY_TABLE} (
+        id             BIGSERIAL   PRIMARY KEY,
+        period         TEXT        NOT NULL,
+        run_by         TEXT        NOT NULL,
+        checks_passed  INTEGER     NOT NULL DEFAULT 0,
+        checks_failed  INTEGER     NOT NULL DEFAULT 0,
+        n_rows         INTEGER     NOT NULL DEFAULT 0,
+        note           TEXT        NOT NULL DEFAULT '',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_VERIFY_TABLE}_lookup
+        ON {_VERIFY_TABLE} (period, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _verify_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def verify_record(
+    *,
+    period: str,
+    run_by: str,
+    checks_passed: int = 0,
+    checks_failed: int = 0,
+    n_rows: int = 0,
+    note: str = "",
+) -> None:
+    """Append one verification-run event. Raises StoreError if not persisted."""
+    if not (run_by or "").strip():
+        raise StoreError("A name is required to log a verification run.")
+    if not (period or "").strip():
+        raise StoreError("A period is required.")
+    _init_verify()
+    sql = f"""
+        INSERT INTO {_VERIFY_TABLE}
+            (period, run_by, checks_passed, checks_failed, n_rows, note)
+        VALUES (%s,%s,%s,%s,%s,%s)
+    """
+    params = (
+        period.strip(), run_by.strip(), int(checks_passed),
+        int(checks_failed), int(n_rows), (note or "").strip(),
+    )
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+    except StoreError:
+        raise
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def verify_last(period: Optional[str] = None) -> Optional[Dict]:
+    """The most recent verification run (optionally for one period), or None."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_verify()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            if period:
+                cur.execute(
+                    f"""SELECT * FROM {_VERIFY_TABLE} WHERE period=%s
+                        ORDER BY created_at DESC, id DESC LIMIT 1""",
+                    (period,),
+                )
+            else:
+                cur.execute(
+                    f"""SELECT * FROM {_VERIFY_TABLE}
+                        ORDER BY created_at DESC, id DESC LIMIT 1""",
+                )
+            row = cur.fetchone()
+    except Exception:
+        return None
+    return _shape(row) if row else None
+
+
+def verify_history(period: Optional[str] = None, limit: int = 20) -> List[Dict]:
+    """Recent verification runs (newest first) for the audit trail."""
+    if not AVAILABLE:
+        return []
+    try:
+        _init_verify()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            if period:
+                cur.execute(
+                    f"""SELECT * FROM {_VERIFY_TABLE} WHERE period=%s
+                        ORDER BY created_at DESC, id DESC LIMIT %s""",
+                    (period, limit),
+                )
+            else:
+                cur.execute(
+                    f"""SELECT * FROM {_VERIFY_TABLE}
+                        ORDER BY created_at DESC, id DESC LIMIT %s""",
+                    (limit,),
+                )
+            rows = cur.fetchall()
+    except Exception:
+        return []
+    return [_shape(r) for r in rows]

@@ -4,6 +4,7 @@ All arithmetic is deterministic Python. Claude is used only for narrative prose.
 """
 from __future__ import annotations
 import os
+import re
 import datetime
 import json
 from functools import lru_cache
@@ -33,6 +34,7 @@ from narrative import (
 )
 import store
 import baselines
+import verify
 from pdf_export import generate_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -887,6 +889,116 @@ def sources_view():
         "daily_sources": DAILY_SOURCES,
     })
     return render_template("detected_sources.html", **ctx)
+
+
+# ---------------------------------------------------------------------------
+# Data verification (read-only — expose computed figures + provenance so the
+# numbers can be reconciled against the source sheets; never writes a figure)
+# ---------------------------------------------------------------------------
+_YM_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _verify_month(args) -> str:
+    """Resolve the month to verify (``YYYY-MM``).
+
+    Accepts ``?month=YYYY-MM`` or the spec's ``?period=YYYY-MM``; otherwise
+    defaults to the most recent month that actually has data.
+    """
+    raw = (args.get("month") or args.get("period") or "").strip()
+    if _YM_RE.match(raw):
+        return raw
+    have = months_with_data()
+    if have:
+        return have[-1]
+    today = _today()
+    return f"{today.year:04d}-{today.month:02d}"
+
+
+def _build_verify(month: str) -> dict:
+    """Load the deterministic monthly + daily records for ``month`` and assemble
+    the verification result. Daily read failures degrade to monthly-only (the
+    daily-vs-summary check then reports NA) rather than erroring the page."""
+    try:
+        monthly_rows, monthly_reports, _w = get_records([month])
+        _apply_baselines(monthly_rows)
+    except SheetReadError:
+        monthly_rows, monthly_reports = [], []
+    try:
+        daily_rows, daily_reports, _dw = get_daily_records([month])
+    except SheetReadError:
+        daily_rows, daily_reports = [], []
+    return verify.build_verification(
+        month, monthly_rows, monthly_reports, daily_rows, daily_reports
+    )
+
+
+@app.route("/verify")
+def verify_view():
+    month = _verify_month(request.args)
+    result = _build_verify(month)
+    return render_template(
+        "verify.html",
+        result=result,
+        verify_month=month,
+        available_months=months_with_data(),
+        last_run=store.verify_last(month),
+        verify_history=store.verify_history(month),
+        verify_store_ok=store.AVAILABLE,
+        verify_msg=request.args.get("verify_msg", ""),
+        # Minimal chrome context for base.html.
+        period=month,
+        period_label=f"Verification — {result['month_label']}",
+        plant_filter="", segment_filter="", machine_filter="",
+        plant_names=PLANT_NAMES,
+        demo_mode=is_demo_mode(),
+    )
+
+
+@app.route("/verify.csv")
+def verify_csv():
+    month = _verify_month(request.args)
+    result = _build_verify(month)
+    csv_text = verify.rows_to_csv(result)
+    return Response(
+        csv_text,
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="verification_{month}.csv"'
+        },
+    )
+
+
+@app.route("/verify/log", methods=["POST"])
+def verify_log():
+    """Record one append-only verification-run entry. Writes NO fact data."""
+    form = request.form
+    month = _verify_month(form)
+    run_by = (form.get("run_by", "") or "").strip()
+
+    def _back(msg: str = ""):
+        qs = f"month={month}"
+        if msg:
+            from urllib.parse import quote
+            qs += f"&verify_msg={quote(msg)}"
+        return redirect(f"/verify?{qs}")
+
+    if not store.AVAILABLE:
+        return _back("Audit log store is unavailable (no database configured).")
+    if not run_by:
+        return _back("Please enter your name to log a verification run.")
+    result = _build_verify(month)
+    try:
+        store.verify_record(
+            period=month,
+            run_by=run_by,
+            checks_passed=result["checks_passed"],
+            checks_failed=result["checks_failed"],
+            n_rows=result["grand"]["n_rows"],
+            note=(form.get("note", "") or "").strip(),
+        )
+    except store.StoreError as e:
+        return _back(f"Could not record verification: {e}")
+    return _back(f"Verification logged by {run_by}.")
 
 
 # ---------------------------------------------------------------------------

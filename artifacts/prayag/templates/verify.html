@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% macro status_badge(s) %}
+  {% if s == 'PASS' %}
+  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-800">PASS</span>
+  {% elif s == 'FAIL' %}
+  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-800">FAIL</span>
+  {% else %}
+  <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">N/A</span>
+  {% endif %}
+{% endmacro %}
+
+<!-- Intro -->
+<div class="mb-3">
+  <div class="flex items-center gap-2">
+    <h1 class="text-navy font-bold text-base">Data Verification</h1>
+    <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-navy border border-blue-200">READ-ONLY</span>
+  </div>
+  <p class="text-gray-500 text-xs mt-1">
+    The app fetches and computes every figure deterministically. This screen only
+    <span class="font-semibold">exposes</span> what it computed, with its source, so the numbers can be
+    reconciled against the Google Sheets. It never writes to or corrects a value.
+  </p>
+</div>
+
+<!-- Month picker -->
+<form method="GET" action="/verify" class="mb-3 flex gap-2 items-end">
+  <div class="flex-1">
+    <label class="block text-[11px] font-semibold text-gray-600 mb-1">Month to verify</label>
+    <select name="month" onchange="this.form.submit()"
+            class="w-full text-xs rounded-lg border border-gray-300 px-2 py-1.5 outline-none bg-white">
+      {% if not available_months %}
+      <option value="{{ verify_month }}" selected>{{ result.month_label }}</option>
+      {% endif %}
+      {% for m in available_months|reverse %}
+      <option value="{{ m }}" {% if m == verify_month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <a href="/verify.csv?month={{ verify_month }}"
+     class="bg-navy text-white text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap">Download CSV</a>
+</form>
+
+{% if verify_msg %}
+<div class="mb-3 rounded-lg p-2.5 bg-blue-50 border border-blue-200 text-navy text-xs">{{ verify_msg }}</div>
+{% endif %}
+
+<!-- Reconciliation checks -->
+<div class="mb-2 flex items-center justify-between">
+  <h2 class="text-navy font-bold text-sm">Reconciliation checks</h2>
+  <span class="text-[11px] text-gray-500">tolerance ±{{ '%.1f'|format(result.tolerance_pct) }}%</span>
+</div>
+
+{% set check_titles = {
+  'daily_vs_summary': 'Daily vs summary',
+  'row_vs_total': 'Row vs total',
+  'plant_vs_machines': 'Plant vs machines'
+} %}
+
+{% for ckey in ['daily_vs_summary', 'row_vs_total', 'plant_vs_machines'] %}
+{% set chk = result.checks[ckey] %}
+<div class="mb-3 rounded-xl border border-gray-200 overflow-hidden">
+  <div class="flex items-center gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200">
+    <span class="font-semibold text-navy text-xs">{{ check_titles[ckey] }}</span>
+    {{ status_badge(chk.status) }}
+  </div>
+  <div class="px-3 py-2">
+    <p class="text-[11px] text-gray-500 mb-2">{{ chk.label }}</p>
+    {% if chk.note %}<p class="text-[11px] text-amber-700 mb-2">{{ chk.note }}</p>{% endif %}
+    {% if chk.entries %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="text-gray-400 text-left">
+            <th class="py-1 pr-2 font-medium">Location</th>
+            <th class="py-1 px-2 font-medium text-right">A</th>
+            <th class="py-1 px-2 font-medium text-right">B</th>
+            <th class="py-1 px-2 font-medium text-right">Diff</th>
+            <th class="py-1 px-2 font-medium text-right">%</th>
+            <th class="py-1 pl-2 font-medium text-right"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in chk.entries %}
+          <tr class="border-t border-gray-100 {% if e.status == 'FAIL' %}bg-red-50{% endif %}">
+            <td class="py-1 pr-2 text-navy">
+              {% if ckey == 'row_vs_total' %}{{ e.title }}
+              {% elif e.scope is defined and e.scope == 'plant' %}{{ plant_names.get(e.plant, e.plant) }} <span class="text-gray-400">(plant)</span>
+              {% elif e.machine %}{{ plant_names.get(e.plant, e.plant) }} · {{ e.machine }}
+              {% else %}{{ plant_names.get(e.plant, e.plant) }}{% endif %}
+            </td>
+            <td class="py-1 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(e.daily_sum) }}</td>
+            <td class="py-1 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(e.summary_value) }}</td>
+            <td class="py-1 px-2 text-right tabular-nums {% if e.difference != 0 %}text-terra{% endif %}">{{ '{:,.1f}'.format(e.difference) }}</td>
+            <td class="py-1 px-2 text-right tabular-nums">{{ '%.2f'|format(e.pct) }}</td>
+            <td class="py-1 pl-2 text-right">{{ status_badge(e.status) }}</td>
+          </tr>
+          {% if e.note %}
+          <tr class="{% if e.status == 'FAIL' %}bg-red-50{% endif %}"><td colspan="6" class="pb-1 text-[10px] text-amber-700">{{ e.note }}</td></tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-[10px] text-gray-400 mt-1">
+      {% if ckey == 'daily_vs_summary' %}A = daily sum · B = monthly summary
+      {% elif ckey == 'row_vs_total' %}A = detail rows · B = sheet TOTAL
+      {% else %}A = Σ machines · B = plant total{% endif %}
+    </p>
+    {% else %}
+    <p class="text-[11px] text-gray-400">{{ chk.note or 'Nothing to reconcile for this period.' }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<!-- Audit log -->
+<div class="mb-3 rounded-xl border border-gray-200 px-3 py-2.5">
+  <div class="flex items-center justify-between mb-1">
+    <h2 class="text-navy font-bold text-sm">Audit trail</h2>
+    {% if last_run %}
+    <span class="text-[11px] text-gray-500">
+      Last verified: {{ last_run.period }} · {{ last_run.checks_passed }}/{{ last_run.checks_passed + last_run.checks_failed }} checks passed · {{ last_run.when_disp }}
+    </span>
+    {% else %}
+    <span class="text-[11px] text-gray-400">Not yet verified this month</span>
+    {% endif %}
+  </div>
+  {% if verify_store_ok %}
+  <form method="POST" action="/verify/log" class="flex gap-2 items-center mt-2">
+    <input type="hidden" name="month" value="{{ verify_month }}"/>
+    <input type="text" name="run_by" placeholder="Your name" required
+           class="flex-1 text-xs rounded-lg border border-gray-300 px-2 py-1.5 outline-none"/>
+    <button type="submit" class="bg-terra text-white text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">Run &amp; log</button>
+  </form>
+  <p class="text-[10px] text-gray-400 mt-1">Records an append-only attestation that the numbers were reviewed — it changes no figure.</p>
+  {% else %}
+  <p class="text-[11px] text-gray-400 mt-1">Audit logging needs a database; figures and checks above still work.</p>
+  {% endif %}
+  {% if verify_history %}
+  <div class="mt-2 border-t border-gray-100 pt-2 space-y-1">
+    {% for h in verify_history %}
+    <div class="flex items-center justify-between text-[11px]">
+      <span class="text-gray-600">{{ h.run_by }}</span>
+      <span class="text-gray-400">{{ h.checks_passed }}✓ / {{ h.checks_failed }}✗ · {{ h.n_rows }} rows · {{ h.when_disp }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Figures with provenance -->
+<div class="mb-2 flex items-center justify-between">
+  <h2 class="text-navy font-bold text-sm">Figures &amp; provenance</h2>
+  <span class="text-[11px] text-gray-500">{{ result.grand.n_rows }} rows</span>
+</div>
+
+{% if result.rows %}
+<div class="rounded-xl border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-[11px] whitespace-nowrap">
+      <thead>
+        <tr class="text-gray-400 text-left bg-gray-50">
+          <th class="py-1.5 px-2 font-medium">Plant</th>
+          <th class="py-1.5 px-2 font-medium">Machine</th>
+          <th class="py-1.5 px-2 font-medium text-right">Output</th>
+          <th class="py-1.5 px-2 font-medium">Unit</th>
+          <th class="py-1.5 px-2 font-medium text-right">Reject</th>
+          <th class="py-1.5 px-2 font-medium text-right">Run hrs</th>
+          <th class="py-1.5 px-2 font-medium text-right">Ideal hrs</th>
+          <th class="py-1.5 px-2 font-medium">Ideal src</th>
+          <th class="py-1.5 px-2 font-medium">Source sheet</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in result.rows %}
+        <tr class="border-t border-gray-100">
+          <td class="py-1.5 px-2 text-navy">{{ plant_names.get(g.plant, g.plant) }}</td>
+          <td class="py-1.5 px-2">{{ g.machine }}</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(g.output) }}</td>
+          <td class="py-1.5 px-2 text-gray-500">{{ g.unit }}</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(g.reject) }}</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(g.run_hours) }}</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{% if g.ideal_source == 'none' %}<span class="text-gray-400">—</span>{% else %}{{ '{:,.1f}'.format(g.ideal_hours_used) }}{% endif %}</td>
+          <td class="py-1.5 px-2 text-gray-500">{{ g.ideal_source }}</td>
+          <td class="py-1.5 px-2 text-gray-400">{{ g.source_sheet }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="border-t-2 border-gray-200 bg-gray-50 font-semibold text-navy">
+          <td class="py-1.5 px-2" colspan="2">All plants</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(result.grand.output) }}</td>
+          <td></td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(result.grand.reject) }}</td>
+          <td class="py-1.5 px-2 text-right tabular-nums">{{ '{:,.1f}'.format(result.grand.run_hours) }}</td>
+          <td colspan="3"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+<p class="text-[10px] text-gray-400 mt-1">
+  Source file IDs are in the downloadable CSV. <span class="font-medium">Source ref</span> is the machine's own row in the named sheet —
+  follow the file ID + sheet to that row to confirm the raw value.
+</p>
+{% else %}
+<div class="rounded-xl border border-gray-200 px-3 py-6 text-center">
+  <p class="text-gray-400 text-xs">No published figures for {{ result.month_label }} yet.</p>
+</div>
+{% endif %}
+
+{% endblock %}

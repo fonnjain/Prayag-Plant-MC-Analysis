@@ -1,4 +1,5 @@
 - [Prayag daily/monthly grain](prayag-grain-engine.md) — two distinct daily Record types in compute_metrics; matrix rows must carry hours directly or metrics silently zero out.
 - [Prayag Data Confirmation](prayag-data-confirmation.md) — four-tier audit gating; master = full-FY grid, runs on unfiltered rows, grain-aware scope; Claude only matches codes + writes prose, never reads figures.
 - [Prayag manager sign-off](prayag-signoff.md) — override that releases error-gated figures; binds to a data fingerprint so changed data re-gates; append-only Postgres trail; no auth (name is attestation).
+- [Prayag Data Verification](prayag-verification.md) — read-only reconciliation layer (distinct from Confirmation gating); surfaces computed figures + provenance, 3 checks at 0.5% tol, only write is append-only audit log; never corrects a fact.
 - [Prayag model tiering](prayag-model-tiering.md) — every per-data Claude cache key MUST include the resolved model (two separate caches had this bug); provenance must show the model actually used after fallback.
