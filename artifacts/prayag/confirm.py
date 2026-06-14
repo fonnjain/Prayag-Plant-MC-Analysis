@@ -282,9 +282,19 @@ def tier1_completeness(
 
     for plant in sorted(scope):
         master_codes = masters["machines"].get(plant, set())
-        machines_expected += len(master_codes)
+        present = present_by_plant.get(plant, set())
         if not master_codes:
+            # Plant with no monthly-grid roster (e.g. PTMT/TANK have a daily
+            # workbook but no annual summary). In a daily view the daily file is
+            # the only roster we have, so count its reporting machines as both
+            # expected and present — honest coverage (e.g. "PTMT 12/12") instead
+            # of "0/0". A separate note already records there is no grid to
+            # cross-check against.
+            if daily_used and present:
+                machines_expected += len(present)
+                machines_present += len(present)
             continue
+        machines_expected += len(master_codes)
         master_norm = {_norm_code(c): c for c in master_codes}
         master_num = {}
         for c in master_codes:
@@ -292,7 +302,6 @@ def tier1_completeness(
             if n is not None:
                 master_num.setdefault(n, c)
 
-        present = present_by_plant.get(plant, set())
         matched_master: set = set()
         unmatched_data: List[str] = []
         for dc in present:

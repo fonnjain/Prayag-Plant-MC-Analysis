@@ -33,6 +33,22 @@ Per-machine ideal hours/output resolve in strict order: **monthly grid → in-sh
 
 **How to apply:** metrics expose `util_available`/`eff_available`/`headline_available` and `headline` falls OEE→eff→util→"No baseline set". Templates must gate on these flags, **not just `oee_available`** — the OEE-vs-OutputEfficiency binary is wrong for util-only and no-baseline plants. Use `headline_label`-style branching (OEE / Output Efficiency / Utilisation / No baseline) for the headline caption everywhere it appears.
 
+# Stay in daily grain whenever a daily FILE exists — even an empty window
+
+A sub-monthly window must serve daily grain whenever a daily workbook exists for the needed month(s), *even when that specific window has zero rows* (e.g. "Yesterday" before today's data is entered). Only fall back to the monthly summary when NO daily file exists for the period, or the daily read fails outright.
+
+**Why:** falling back to monthly on an empty window re-introduced the misleading "monthly totals shown instead" banner and showed un-sliceable monthly figures for a partial window. An empty daily window is honest as daily-zero with a banner that names the data horizon ("entered through <date>").
+
+**How to apply:** gate on `daily_file_months` (any needed month has a configured daily file), not on whether the window has rows. Build the grain banner where daily-vs-monthly is decided, never optimistically in the period parser.
+
+# No-roster daily plants count their own reporting machines (never 0/0)
+
+PTMT and TANK have a daily file but NO monthly-grid roster (not in `ANNUAL_SOURCES`). In a daily view their completeness must count the daily-reporting machines as both expected and present, or the card shows "0/0 machines" despite real data.
+
+**Why:** the master roster comes only from the full-FY monthly grid, so plants absent from it contribute 0 expected → the completeness loop's `if not master_codes: continue` zeroed them. The daily file is the only roster we hold for those plants.
+
+**How to apply:** in `tier1_completeness`, when `daily_used` and `master_codes` is empty but daily rows are present, add `len(present)` to both present and expected (honest coverage); a separate note already records there's no grid to cross-check.
+
 # Detected-sources screen shows the full configured inventory
 
 The `/sources` screen must list every configured workbook (annual grids + daily descriptors) regardless of the selected period — build it from the full inventory, not the period's loaded subset, or daily/annual entries disappear depending on grain.

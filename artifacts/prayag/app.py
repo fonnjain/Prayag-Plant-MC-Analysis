@@ -189,13 +189,10 @@ def parse_period(args) -> dict:
 
     months = _months_between(f, t)
 
+    # The grain banner for sub-monthly windows is built in get_data, where we
+    # know whether true daily data was served. parse_period never claims daily is
+    # unavailable — a sub-monthly window is served from the daily files directly.
     banner = ""
-    if sub_monthly:
-        disp = ", ".join(_month_disp(m) for m in months)
-        banner = (
-            f"{label} → no daily entries have been recorded for this window yet, "
-            f"so monthly totals for {disp} are shown instead."
-        )
 
     return {
         "from_iso": f.isoformat(),
@@ -282,32 +279,62 @@ def get_data(args):
     segment_filter = args.get("segment", "")
     machine_filter = args.get("machine", "")
 
-    # Prefer true daily data for sub-monthly windows; fall back to monthly.
+    # Sub-monthly windows are served from true daily data whenever a daily
+    # workbook exists for the needed month(s). A monthly summary cannot be sliced
+    # into a partial month, so we never fall back to monthly totals just because a
+    # particular window has no rows yet — we stay in daily grain and say so. We
+    # only fall back to monthly when no daily file exists for the period at all,
+    # or the daily read failed outright.
     daily_used = False
     daily_err = None
     grain_banner = pinfo["banner"]
     all_rows = source_reports = recon_warnings = None
     if pinfo.get("sub_monthly"):
+        daily_file_months = [
+            m for m in months
+            if any(m in (cfg.get("files") or {})
+                   for cfg in DAILY_SOURCES.values())
+        ]
         try:
             drecs, dreports, dwarn = get_daily_records(months)
         except SheetReadError as e:
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read ({e}); fell back to monthly totals."
-        fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
-        win = [r for r in drecs if fwin <= r.date <= twin]
-        if win:
+        if daily_file_months and not daily_err:
+            fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
+            win = [r for r in drecs if fwin <= r.date <= twin]
             all_rows, source_reports, recon_warnings = win, dreports, dwarn
             daily_used = True
-            disp_plants = ", ".join(
-                PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
-            )
-            grain_banner = (
-                f"{pinfo['label']} → true daily data for {disp_plants}. "
-                "Plants with no daily entries in this window aren't shown."
-            )
+            if win:
+                disp_plants = ", ".join(
+                    PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
+                )
+                grain_banner = (
+                    f"{pinfo['label']} → true daily data for {disp_plants}. "
+                    "Any plant not listed had no run recorded on these days."
+                )
+            else:
+                latest = max((r.date for r in drecs), default=None)
+                if latest:
+                    latest_disp = _fmt(datetime.date.fromisoformat(latest))
+                    grain_banner = (
+                        f"{pinfo['label']} → no daily production was recorded on these "
+                        f"dates. Daily data is currently entered through {latest_disp}."
+                    )
+                else:
+                    grain_banner = (
+                        f"{pinfo['label']} → no daily production has been recorded for "
+                        "this window yet."
+                    )
     if not daily_used:
         all_rows, source_reports, recon_warnings = get_records(months)
         _apply_baselines(all_rows)
+        if pinfo.get("sub_monthly") and not daily_err:
+            disp = ", ".join(_month_disp(m) for m in months)
+            grain_banner = (
+                f"{pinfo['label']} → no daily workbook is available for this window, "
+                f"so monthly totals for {disp} are shown instead."
+            )
         if daily_err:
             recon_warnings = list(recon_warnings or []) + [daily_err]
 
