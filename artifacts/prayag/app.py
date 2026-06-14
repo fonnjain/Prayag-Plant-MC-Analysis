@@ -7,6 +7,7 @@ import os
 import datetime
 import json
 from functools import lru_cache
+from typing import Optional
 from flask import Flask, render_template, request, jsonify, Response, abort, redirect
 
 from sheets import (
@@ -24,9 +25,14 @@ from confirm import (
     confirmation_fingerprint,
     tier3_row_classify,
     TIER_LABELS,
+    _month_due,
 )
-from narrative import get_narrative, match_codes, summarize_confirmation, claude_sanity_check
+from narrative import (
+    get_narrative, match_codes, summarize_confirmation, claude_sanity_check,
+    select_model, model_label,
+)
 import store
+import baselines
 from pdf_export import generate_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -36,10 +42,24 @@ from glossary import (
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
 
-# In-process store: fingerprint → Claude review text.
-# Keyed by data fingerprint so a changed sheet invalidates the prior review.
+# In-process store: (fingerprint, resolved model) → Claude review text.
+# Keyed by data fingerprint so a changed sheet invalidates the prior review, AND
+# by the resolved model so a fast-tier review is never served when a deep-tier
+# (or forced-deep) review is later requested for the same data state.
 # Survives across requests; resets on server restart (cheap — user just re-runs).
 _claude_reviews: dict[str, str] = {}
+
+
+def _review_cache_key(data: dict) -> str:
+    """Cache key for a Claude sanity review: data fingerprint + resolved model.
+
+    The model is resolved from the period tier and any deep override so that
+    switching tiers (or forcing deep) always re-runs rather than returning a
+    cached review produced by a different model.
+    """
+    fingerprint = data["confirmation"].get("fingerprint", "")
+    model, _, _ = select_model(data["period_type"], override=data.get("deep_override"))
+    return f"{fingerprint}:{model}"
 
 
 @app.errorhandler(SheetReadError)
@@ -186,8 +206,66 @@ def parse_period(args) -> dict:
     }
 
 
+def _period_type(period: str) -> str:
+    """Map a UI period to a model-tier kind.
+
+    Daily/weekly windows are the frequent, low-stakes runs → fast tier.
+    A whole fiscal month, the FY, or the prior FY are the infrequent,
+    high-stakes reviews → deep tier. Used only to pick the language model;
+    the numbers are computed identically regardless.
+    """
+    p = (period or "").strip()
+    if p in ("yesterday", "last_week", "last_month", "custom"):
+        return "weekly"
+    if p in ("current_fy", "prior_fy"):
+        return "fiscal_year"
+    if p in [str(m) for m in range(1, 13)]:
+        return "monthly"
+    return "fiscal_year"
+
+
+def _deep_override(args) -> Optional[bool]:
+    """Read a manual deep-analysis override from the request, or None.
+
+    ``deep_analysis`` (or ``deep``) = on/true/1/yes → force deep;
+    off/false/0/no → force fast; anything else → no override (tier by period).
+    """
+    raw = (args.get("deep_analysis") or args.get("deep") or "").strip().lower()
+    if raw in ("1", "true", "on", "yes", "deep"):
+        return True
+    if raw in ("0", "false", "off", "no", "fast"):
+        return False
+    return None
+
+
 def _period_key(from_iso: str, to_iso: str, plant: str, segment: str, machine: str) -> str:
     return f"{from_iso}_{to_iso}_{plant}_{segment}_{machine}"
+
+
+def _apply_baselines(rows):
+    """Layer the per-machine planned-hours baseline onto monthly rows in place.
+
+    The sheet only carries a flat placeholder for ideal/planned hours. Where a
+    machine has a configured baseline (baselines.json), we use it as the
+    utilisation/efficiency denominator and stamp ``ideal_source='config'`` while
+    preserving the original sheet value in ``ideal_hours_sheet``. Where it does
+    not, we keep the sheet value and leave ``ideal_source='sheet'`` so the
+    confirmation layer can flag it. This never touches how output or actual hours
+    were READ — only the target each machine is measured against.
+    """
+    for r in rows:
+        if r.grain != "monthly":
+            continue
+        r.ideal_hours_sheet = r.ideal_hours
+        base = baselines.resolve(r.plant, r.machine, r.period or "")
+        if base:
+            r.ideal_hours = base["planned_hours"]
+            if base.get("ideal_output") is not None:
+                r.ideal_output = base["ideal_output"]
+            r.ideal_source = "config"
+        else:
+            r.ideal_source = "sheet"
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +306,7 @@ def get_data(args):
             )
     if not daily_used:
         all_rows, source_reports, recon_warnings = get_records(months)
+        _apply_baselines(all_rows)
         if daily_err:
             recon_warnings = list(recon_warnings or []) + [daily_err]
 
@@ -257,6 +336,7 @@ def get_data(args):
     has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
     try:
         master_rows = get_records(FY_MONTHS)[0]
+        _apply_baselines(master_rows)
     except SheetReadError:
         master_rows = list(raw_all)
     confirm_overall = compute_metrics(clean_all)
@@ -312,10 +392,14 @@ def get_data(args):
     confirmation["released"] = bool(signoff) and confirmation["status"] == "error"
 
     # Flag requested months that hold no data yet (monthly path only).
+    # Only months that have actually ENDED can be "missing" — the current
+    # in-progress month and any future month are not yet due, so a blank there
+    # is expected and must never be announced as a gap.
     banner = grain_banner
     if not daily_used:
         have = set(months_with_data())
-        empty_months = [m for m in months if m not in have]
+        as_of = _today()
+        empty_months = [m for m in months if m not in have and _month_due(m, as_of)]
         if empty_months:
             disp = ", ".join(_month_disp(m) for m in empty_months)
             if len(empty_months) == len(months):
@@ -329,6 +413,13 @@ def get_data(args):
     if fs.get("stale"):
         fs["stale_age_disp"] = _fmt_age(fs.get("stale_age_seconds", 0))
 
+    # Model tier for any language (prose) call on this view. Affects only which
+    # model writes the words — never the figures.
+    period_type = _period_type(pinfo["period"])
+    deep_override = _deep_override(args)
+    has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+    analysis_label = model_label(period_type, override=deep_override) if has_claude else None
+
     return {
         "rows": rows,
         "all_rows": clean_all,
@@ -340,6 +431,9 @@ def get_data(args):
         "to_iso": pinfo["to_iso"],
         "period_label": pinfo["label"],
         "period": pinfo["period"],
+        "period_type": period_type,
+        "deep_override": deep_override,
+        "analysis_label": analysis_label,
         "months": months,
         "grain_banner": banner,
         "daily_used": daily_used,
@@ -348,7 +442,7 @@ def get_data(args):
         "segment_filter": segment_filter,
         "machine_filter": machine_filter,
         "demo_mode": is_demo_mode(),
-        "has_claude": bool(os.environ.get("ANTHROPIC_API_KEY", "")),
+        "has_claude": has_claude,
         "fetch_status": fs,
     }
 
@@ -439,6 +533,8 @@ def overview():
             period_label=data["period_label"],
             period_key=_period_key(data["from_iso"], data["to_iso"], "", "", ""),
             metrics_summary=summary,
+            period_type=data["period_type"],
+            deep=data["deep_override"],
         )
 
     ctx.update({
@@ -560,7 +656,7 @@ def confirmation_view():
         )
 
     fingerprint = conf.get("fingerprint", "")
-    claude_review_text = _claude_reviews.get(fingerprint)
+    claude_review_text = _claude_reviews.get(_review_cache_key(data))
     ctx.update({
         "conf": conf,
         "conf_summary": summary,
@@ -674,10 +770,11 @@ def confirmation_claude_review():
 
     conf = data["confirmation"]
     fingerprint = conf["fingerprint"]
+    review_ck = _review_cache_key(data)
 
-    if fingerprint in _claude_reviews:
+    if review_ck in _claude_reviews:
         return jsonify({"ok": True, "fingerprint": fingerprint,
-                        "review": _claude_reviews[fingerprint]})
+                        "review": _claude_reviews[review_ck]})
 
     od = data["overall"].to_dict()
     if od.get("oee_available"):
@@ -697,12 +794,15 @@ def confirmation_claude_review():
             "Rejection %": f"{od['rejection_pct']}%",
         }
 
-    review = claude_sanity_check(conf, metrics_summary, data["period_label"])
+    review = claude_sanity_check(
+        conf, metrics_summary, data["period_label"],
+        period_type=data["period_type"], deep=data["deep_override"],
+    )
     if review is None:
         return jsonify({"ok": False,
                         "error": "Claude could not generate a review — check API key or try again."}), 500
 
-    _claude_reviews[fingerprint] = review
+    _claude_reviews[review_ck] = review
     return jsonify({"ok": True, "fingerprint": fingerprint, "review": review})
 
 
@@ -716,10 +816,9 @@ def _do_signoff(action: str, form):
 
     # Claude sanity check is mandatory before approving (when Claude is available).
     if action == "approve" and bool(os.environ.get("ANTHROPIC_API_KEY", "")):
-        # We need the fingerprint to check — peek at the current data state.
+        # We need the resolved review key to check — peek at the current state.
         _chk_data = get_data(form)
-        _chk_fp = _chk_data["confirmation"]["fingerprint"]
-        if _chk_fp not in _claude_reviews:
+        if _review_cache_key(_chk_data) not in _claude_reviews:
             return _redirect_to_confirmation(
                 form,
                 "Please complete the Claude sanity check before signing off."
@@ -844,6 +943,8 @@ def report_detail(report_id: str):
             period_key=_period_key(data["from_iso"], data["to_iso"], "", rpt["id"], ""),
             metrics_summary={k: v for k, v in sub_dict.items() if isinstance(v, (int, float))},
             extra_context=f"Report type: {rpt['title']}",
+            period_type=data["period_type"],
+            deep=data["deep_override"],
         )
 
     ctx.update({
@@ -1008,6 +1109,7 @@ def export_pdf(report_id: str):
 
     narrative = None
     conf_summary = None
+    prov: dict = {}
     if data.get("has_claude") and rows:
         sub_dict = sub_overall.to_dict()
         narrative = get_narrative(
@@ -1015,6 +1117,9 @@ def export_pdf(report_id: str):
             period_label=data["period_label"],
             period_key=_period_key(data["from_iso"], data["to_iso"], "", report_id, ""),
             metrics_summary={k: v for k, v in sub_dict.items() if isinstance(v, (int, float))},
+            period_type=data["period_type"],
+            deep=data["deep_override"],
+            provenance=prov,
         )
     conf = data.get("confirmation")
     if data.get("has_claude") and conf:
@@ -1036,6 +1141,7 @@ def export_pdf(report_id: str):
         validation_status=sub_validation,
         confirmation=data.get("confirmation"),
         confirmation_summary=conf_summary,
+        analysis_model=(prov.get("label") or data.get("analysis_label")) if narrative else None,
     )
 
     return Response(

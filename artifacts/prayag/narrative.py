@@ -7,17 +7,116 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import logging
 from typing import Optional
 
+logger = logging.getLogger("prayag.narrative")
+
 _cache: dict[str, str] = {}
+# The model that ACTUALLY produced each cached entry (records deep→fast
+# fallback so provenance shown to the user stays honest), keyed by cache key.
+_actual_model: dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# Tiered model selection — a fast, cheap model for frequent daily/weekly runs
+# and a heavier model for the less-frequent monthly/quarterly/board reviews.
+# This affects ONLY the language calls (prose + data-review text). It never
+# touches the data path: the numbers are identical no matter which model writes.
+# Model names come from Secrets so they can change without code edits.
+# ---------------------------------------------------------------------------
+FAST_MODEL = os.environ.get("ANTHROPIC_MODEL_FAST", "claude-sonnet-4-6")
+DEEP_MODEL = os.environ.get("ANTHROPIC_MODEL_DEEP", "claude-opus-4-8")
+MAX_TOKENS_FAST = int(os.environ.get("MAX_TOKENS_FAST", "1500"))
+MAX_TOKENS_DEEP = int(os.environ.get("MAX_TOKENS_DEEP", "4000"))
+
+# Period kinds that warrant the deep tier (the infrequent, high-stakes reviews).
+DEEP_PERIODS = {"monthly", "quarterly", "fiscal_year"}
+
+
+def select_model(
+    period_type: Optional[str] = None,
+    *,
+    override: Optional[bool] = None,
+    board: bool = False,
+) -> tuple[str, int, str]:
+    """Return ``(model, max_tokens, tier)`` for a language call.
+
+    ``override=True`` forces the deep tier, ``override=False`` forces fast; a
+    manual override always wins. Otherwise a board/executive review or a deep
+    period kind selects the deep tier; everything else uses fast.
+    """
+    if override is True:
+        tier = "deep"
+    elif override is False:
+        tier = "fast"
+    elif board or (period_type or "").lower() in DEEP_PERIODS:
+        tier = "deep"
+    else:
+        tier = "fast"
+    if tier == "deep":
+        return DEEP_MODEL, MAX_TOKENS_DEEP, "deep"
+    return FAST_MODEL, MAX_TOKENS_FAST, "fast"
+
+
+def model_label(
+    period_type: Optional[str] = None,
+    *,
+    override: Optional[bool] = None,
+    board: bool = False,
+) -> str:
+    """Human-readable provenance string, e.g. ``"claude-opus-4-8 · deep tier"``."""
+    model, _, tier = select_model(period_type, override=override, board=board)
+    return f"{model} · {tier} tier"
+
+
+def tier_label(model: str) -> str:
+    """Provenance string for the model that ACTUALLY wrote the prose."""
+    tier = "deep" if model == DEEP_MODEL else "fast"
+    return f"{model} · {tier} tier"
+
+
+def _create_text(model: str, max_tokens: int, prompt: str) -> tuple[str, str]:
+    """Run one Anthropic text call, retrying once on the FAST model if a deep
+    model is unavailable/errors. Returns ``(text, model_actually_used)`` so the
+    caller can record honest provenance even after a fallback.
+
+    The downgrade is logged so the audit trail records that it happened. A
+    fast-tier call that fails is not retried (there is nothing cheaper to fall
+    back to) and the exception propagates to the caller's graceful handler.
+    """
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    try:
+        msg = client.messages.create(
+            model=model, max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip(), model
+    except Exception as e:
+        if model != FAST_MODEL:
+            logger.warning(
+                "Deep model %s failed (%s); retrying once on fast model %s.",
+                model, e, FAST_MODEL,
+            )
+            msg = client.messages.create(
+                model=FAST_MODEL, max_tokens=min(max_tokens, MAX_TOKENS_FAST),
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip(), FAST_MODEL
+        raise
 
 
 def _enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
-def _cache_key(view: str, period_key: str, metrics_summary: dict) -> str:
-    payload = json.dumps({"view": view, "period": period_key, "metrics": metrics_summary}, sort_keys=True)
+def _cache_key(view: str, period_key: str, metrics_summary: dict, model: str) -> str:
+    # The model is part of the key so a fast-tier response is never reused for a
+    # request that resolves (or is forced) to the deep tier, and vice versa.
+    payload = json.dumps(
+        {"view": view, "period": period_key, "metrics": metrics_summary, "model": model},
+        sort_keys=True,
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -27,23 +126,32 @@ def get_narrative(
     period_key: str,
     metrics_summary: dict,
     extra_context: str = "",
+    period_type: Optional[str] = None,
+    deep: Optional[bool] = None,
+    provenance: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Return a Claude-written narrative paragraph from pre-computed metrics.
     Returns None if ANTHROPIC_API_KEY is not set or on any error.
     Claude receives only the already-computed numbers, never raw sheet data.
+    The model tier follows ``period_type`` (fast for daily/weekly, deep for
+    monthly/quarterly/FY); ``deep=True`` forces the deep tier. When a
+    ``provenance`` dict is passed it is filled with ``{"model", "label"}`` for
+    the model that ACTUALLY produced the text (honest after any fallback).
     """
     if not _enabled():
         return None
 
-    ck = _cache_key(view, period_key, metrics_summary)
+    model, max_tokens, _ = select_model(period_type, override=deep)
+    ck = _cache_key(view, period_key, metrics_summary, model)
     if ck in _cache:
+        used = _actual_model.get(ck, model)
+        if provenance is not None:
+            provenance["model"] = used
+            provenance["label"] = tier_label(used)
         return _cache[ck]
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
         metrics_text = "\n".join(f"  {k}: {v}" for k, v in metrics_summary.items())
         prompt = f"""You are writing a concise management narrative for a plastics manufacturing analytics dashboard.
 The view is: {view}
@@ -58,13 +166,12 @@ Focus on key insights: what is performing well, what needs attention, and any no
 Be specific and factual — reference the actual numbers provided.
 Do not use markdown formatting. Write in a professional, concise tone suitable for a factory manager."""
 
-        message = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = message.content[0].text.strip()
+        text, used = _create_text(model, min(max_tokens, 600), prompt)
         _cache[ck] = text
+        _actual_model[ck] = used
+        if provenance is not None:
+            provenance["model"] = used
+            provenance["label"] = tier_label(used)
         return text
     except Exception:
         return None
@@ -91,8 +198,6 @@ def match_codes(unmatched: list[str], master_codes: list[str]) -> dict:
             return {}
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         prompt = (
             "You match factory machine codes between two lists. These are CODES "
             "(names), not numbers — never invent a match.\n"
@@ -102,12 +207,8 @@ def match_codes(unmatched: list[str], master_codes: list[str]) -> dict:
             "refers to the same physical machine as a master code, to that master "
             "code. Omit any data code with no confident match. No prose."
         )
-        message = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = message.content[0].text.strip()
+        # Utility classification — always the fast tier; never period-driven.
+        text, _ = _create_text(FAST_MODEL, 400, prompt)
         if text.startswith("```"):
             text = text.strip("`")
             text = text[text.find("{"):text.rfind("}") + 1]
@@ -145,8 +246,6 @@ def summarize_confirmation(
         return _cache[ck]
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         issues_text = "\n".join(f"  - {s}" for s in issues_brief[:25]) or "  (none)"
         prompt = f"""You are summarising a data-confirmation report for a factory production dashboard.
 Overall status: {status}
@@ -157,12 +256,8 @@ Issues found (already detected; do not recalculate or judge the numbers):
 Write 2-3 plain-English sentences for a factory manager explaining whether the data
 can be trusted, what is missing or flagged, and what to check. Do not invent figures.
 Do not use markdown. Be concise and factual."""
-        message = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=260,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = message.content[0].text.strip()
+        # Brief report summary — always the fast tier.
+        text, _ = _create_text(FAST_MODEL, 260, prompt)
         _cache[ck] = text
         return text
     except Exception:
@@ -173,6 +268,8 @@ def claude_sanity_check(
     confirmation: dict,
     computed_metrics: dict,
     period_label: str,
+    period_type: Optional[str] = None,
+    deep: Optional[bool] = None,
 ) -> Optional[str]:
     """Deep sanity check of an ALREADY-COMPUTED confirmation result.
 
@@ -186,15 +283,15 @@ def claude_sanity_check(
     if not _enabled():
         return None
 
+    model, max_tokens, _ = select_model(period_type, override=deep)
     fingerprint = confirmation.get("fingerprint", "")
-    ck = "sanity:" + fingerprint
+    # Model is part of the key so a fast-tier review is never reused for a
+    # deep-tier (or forced) request of the same data state, and vice versa.
+    ck = "sanity:" + fingerprint + ":" + model
     if ck in _cache:
         return _cache[ck]
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
         issues = confirmation.get("issues", [])
         if issues:
             lines = []
@@ -245,12 +342,7 @@ READINESS VERDICT: State clearly either "Ready to sign off" (if only advisory wa
 
 Rules: Do not use markdown formatting (no bold, no asterisks, no hyphens as bullets). Do not invent figures. Do not recalculate anything. Write in plain English for a factory manager. Maximum 400 words."""
 
-        message = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=700,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = message.content[0].text.strip()
+        text, _ = _create_text(model, max(max_tokens, 700), prompt)
         _cache[ck] = text
         return text
     except Exception:
@@ -274,22 +366,15 @@ def classify_downtime_reason(free_text: str) -> Optional[str]:
     ]
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         codes_list = ", ".join(f'"{c}"' for c in standard_codes)
-        message = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=30,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Map this downtime note to one of these codes: {codes_list}.\n"
-                    f"Note: \"{free_text}\"\n"
-                    "Reply with ONLY the code, nothing else."
-                ),
-            }],
+        prompt = (
+            f"Map this downtime note to one of these codes: {codes_list}.\n"
+            f"Note: \"{free_text}\"\n"
+            "Reply with ONLY the code, nothing else."
         )
-        result = message.content[0].text.strip().strip('"')
+        # Utility classification — always the fast tier.
+        text, _ = _create_text(FAST_MODEL, 30, prompt)
+        result = text.strip('"')
         if result in standard_codes:
             return result
         return None

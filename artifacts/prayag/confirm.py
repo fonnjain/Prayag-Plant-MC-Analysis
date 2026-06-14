@@ -770,6 +770,51 @@ def tier4_plausibility(
     return issues
 
 
+def baseline_confirm(period_rows: List[Record]) -> List[dict]:
+    """Surface the planned-hours baseline provenance for monthly machines.
+
+    Utilisation and output-efficiency are measured against a per-machine
+    planned-hours baseline (config). A machine still on the sheet's flat
+    placeholder (``ideal_source == 'sheet'``) has no real target set, so its
+    utilisation/efficiency is only indicative — flagged per plant as a WARNING.
+    Machines whose denominator comes from config are noted (INFO) so the
+    provenance is explicit. Deterministic; never invents a baseline.
+    """
+    issues: List[dict] = []
+    sheet_by_plant: Dict[str, set] = {}
+    config_machines: List[tuple] = []
+    placeholder_by_plant: Dict[str, float] = {}
+    for r in period_rows:
+        if r.grain != "monthly" or not r.machine:
+            continue
+        if getattr(r, "ideal_source", "sheet") == "config":
+            config_machines.append((r.plant, r.machine))
+        else:
+            sheet_by_plant.setdefault(r.plant, set()).add(r.machine)
+            placeholder_by_plant.setdefault(
+                r.plant, getattr(r, "ideal_hours_sheet", r.ideal_hours) or 0.0
+            )
+
+    for plant in sorted(sheet_by_plant):
+        n = len(sheet_by_plant[plant])
+        ph = placeholder_by_plant.get(plant, 0.0)
+        issues.append(_issue(
+            1, WARNING,
+            f"{plant}: {n} machine(s) have no planned-hours baseline set — "
+            f"utilisation/efficiency use the sheet placeholder "
+            f"({ph:,.0f} h). Set them in baselines.json for a real target.",
+            plant=plant,
+        ))
+
+    if config_machines:
+        names = ", ".join(sorted({m for _p, m in config_machines}))
+        issues.append(_issue(
+            1, INFO,
+            f"Planned-hours baseline applied from config for: {names}.",
+        ))
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -812,6 +857,9 @@ def full_confirm(
     t2 = tier2_reconciliation(source_reports, clean_rows, computed)
     t3 = t3_rows + tier3_aggregate(computed)
     t4 = tier4_plausibility(clean_rows, master_rows, period_months, masters, daily_used)
+
+    # Planned-hours baseline provenance (config vs sheet placeholder).
+    t1 = t1 + baseline_confirm(period_rows)
 
     # Read-time reconcile notes not already captured structurally.
     for w in extra_recon_warnings or []:

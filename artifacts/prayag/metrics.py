@@ -41,7 +41,11 @@ class Record:
 
     # --- hours (monthly grain) ---
     actual_hours: float = 0.0
-    ideal_hours: float = 0.0
+    ideal_hours: float = 0.0       # the value USED as the utilisation/efficiency
+                                   # denominator (a config baseline when set,
+                                   # otherwise the sheet placeholder)
+    ideal_hours_sheet: float = 0.0  # raw planned hours as read from the sheet
+    ideal_source: str = "sheet"     # "config" baseline | "sheet" placeholder
 
     # --- daily-grain OEE inputs ---
     has_oee: bool = False

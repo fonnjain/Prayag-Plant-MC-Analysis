@@ -22,6 +22,7 @@ def _fake_data(fingerprint, status="error"):
     return {
         "from_iso": "2026-04-01", "to_iso": "2027-03-31",
         "period_label": "Current FY",
+        "period_type": "fy", "deep_override": None,
         "confirmation": {
             "status": status,
             "period_key": "2026-04-01_2027-03-31___",
@@ -47,7 +48,8 @@ def _run(posted_fp, current_fp, approver="A. Manager", status="error"):
     appmod.get_data = lambda form: _fake_data(current_fp, status)
     appmod.store.AVAILABLE = True
     appmod.store.record = lambda action, **kw: recorded.append((action, kw))
-    appmod._claude_reviews[current_fp] = "stubbed review"
+    review_ck = appmod._review_cache_key(_fake_data(current_fp, status))
+    appmod._claude_reviews[review_ck] = "stubbed review"
     try:
         client = appmod.app.test_client()
         resp = client.post("/confirmation/approve", data={
@@ -58,7 +60,7 @@ def _run(posted_fp, current_fp, approver="A. Manager", status="error"):
         appmod.get_data = orig_get_data
         appmod.store.record = orig_record
         appmod.store.AVAILABLE = orig_avail
-        appmod._claude_reviews.pop(current_fp, None)
+        appmod._claude_reviews.pop(review_ck, None)
 
 
 def test_stale_fingerprint_is_rejected():

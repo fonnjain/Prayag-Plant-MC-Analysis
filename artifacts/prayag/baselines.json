@@ -1,0 +1,24 @@
+{
+  "_comment": "Per-machine planned-hours baseline master. This is the denominator for utilisation and output-efficiency. It does NOT change how output/hours are read from the sheets; it only sets the target each machine is measured against. A machine with no entry here falls back to the sheet's flat placeholder and is flagged 'baseline not set'. Edit this file to add machines; no code change needed. 'machines' keys are matched case- and whitespace-insensitively against the full machine code (e.g. 'MOULDING M/C - 4'). 'overrides' lets a specific YYYY-MM use different planned hours. 'ideal_output_rate' (units/hour) is optional; when omitted, output-efficiency keeps the sheet's own ideal-output figure.",
+  "formula_defaults": {},
+  "machines": {
+    "MOULDING M/C - 4": {
+      "planned_hours": 624,
+      "ideal_output_rate": null,
+      "basis": "2 shifts x 12h x 26 working days = 624 h/month",
+      "effective_from": "2026-04",
+      "overrides": {},
+      "set_by": "config",
+      "set_at": "2026-06-13"
+    },
+    "MOULDING M/C - 22": {
+      "planned_hours": 624,
+      "ideal_output_rate": null,
+      "basis": "2 shifts x 12h x 26 working days = 624 h/month",
+      "effective_from": "2026-04",
+      "overrides": {},
+      "set_by": "config",
+      "set_at": "2026-06-13"
+    }
+  }
+}
