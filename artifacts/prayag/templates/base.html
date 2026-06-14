@@ -173,6 +173,7 @@
           class="flex-1 text-xs rounded-lg border-0 bg-white bg-opacity-15 text-white px-2 py-1.5 outline-none appearance-none"
           style="background-color: rgba(255,255,255,0.15); color: white;">
           {% set p = period %}
+          <option value="last_updated" {% if p=='last_updated' %}selected{% endif %} style="color:black">Last Updated</option>
           <option value="yesterday" {% if p=='yesterday' %}selected{% endif %} style="color:black">Yesterday</option>
           <option value="last_week" {% if p=='last_week' %}selected{% endif %} style="color:black">Last 7 Days</option>
           <option value="last_month" {% if p=='last_month' %}selected{% endif %} style="color:black">Last 30 Days</option>

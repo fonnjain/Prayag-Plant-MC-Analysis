@@ -134,12 +134,19 @@ def parse_period(args) -> dict:
     Returns a dict with from/to ISO dates, a human label, the list of overlapped
     months, and a banner explaining any sub-monthly → monthly resolution.
     """
-    period = args.get("period", "current_fy")
+    period = args.get("period", "last_updated")
     today = _today()
     yesterday = today - datetime.timedelta(days=1)
     sub_monthly = False
 
-    if period == "yesterday":
+    if period == "last_updated":
+        # Use the last 30 days as the search window; get_data narrows to the
+        # actual last date that has production entries once records are loaded.
+        t = yesterday
+        f = t - datetime.timedelta(days=29)
+        label = "Last Updated"   # refined in get_data once records are known
+        sub_monthly = True
+    elif period == "yesterday":
         f = t = yesterday
         label = f"Yesterday ({_fmt(yesterday)})"
         sub_monthly = True
@@ -215,7 +222,7 @@ def _period_type(period: str) -> str:
     the numbers are computed identically regardless.
     """
     p = (period or "").strip()
-    if p in ("yesterday", "last_week", "last_month", "custom"):
+    if p in ("yesterday", "last_week", "last_month", "last_updated", "custom"):
         return "weekly"
     if p in ("current_fy", "prior_fy"):
         return "fiscal_year"
@@ -302,6 +309,15 @@ def get_data(args):
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read ({e}); fell back to monthly totals."
         if daily_file_months and not daily_err:
+            # "last_updated" period: narrow to the actual last date with data.
+            if pinfo["period"] == "last_updated":
+                last_date = max((r.date for r in drecs if r.date), default=None)
+                if last_date:
+                    pinfo["from_iso"] = last_date
+                    pinfo["to_iso"] = last_date
+                    pinfo["label"] = f"Last updated: {_fmt(datetime.date.fromisoformat(last_date))}"
+                # If no daily data found at all, keep the 30-day window so the
+                # "no data" grain banner fires normally below.
             fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
             win = [r for r in drecs if fwin <= r.date <= twin]
             all_rows, source_reports, recon_warnings = win, dreports, dwarn
