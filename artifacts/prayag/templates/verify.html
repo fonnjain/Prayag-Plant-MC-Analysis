@@ -115,41 +115,6 @@
 </div>
 {% endfor %}
 
-<!-- Audit log -->
-<div class="mb-3 rounded-xl border border-gray-200 px-3 py-2.5">
-  <div class="flex items-center justify-between mb-1">
-    <h2 class="text-navy font-bold text-sm">Audit trail</h2>
-    {% if last_run %}
-    <span class="text-[11px] text-gray-500">
-      Last verified: {{ last_run.period }} · {{ last_run.checks_passed }}/{{ last_run.checks_passed + last_run.checks_failed }} checks passed · {{ last_run.when_disp }}
-    </span>
-    {% else %}
-    <span class="text-[11px] text-gray-400">Not yet verified this month</span>
-    {% endif %}
-  </div>
-  {% if verify_store_ok %}
-  <form method="POST" action="/verify/log" class="flex gap-2 items-center mt-2">
-    <input type="hidden" name="month" value="{{ verify_month }}"/>
-    <input type="text" name="run_by" placeholder="Your name" required
-           class="flex-1 text-xs rounded-lg border border-gray-300 px-2 py-1.5 outline-none"/>
-    <button type="submit" class="bg-terra text-white text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">Run &amp; log</button>
-  </form>
-  <p class="text-[10px] text-gray-400 mt-1">Records an append-only attestation that the numbers were reviewed — it changes no figure.</p>
-  {% else %}
-  <p class="text-[11px] text-gray-400 mt-1">Audit logging needs a database; figures and checks above still work.</p>
-  {% endif %}
-  {% if verify_history %}
-  <div class="mt-2 border-t border-gray-100 pt-2 space-y-1">
-    {% for h in verify_history %}
-    <div class="flex items-center justify-between text-[11px]">
-      <span class="text-gray-600">{{ h.run_by }}</span>
-      <span class="text-gray-400">{{ h.checks_passed }}✓ / {{ h.checks_failed }}✗ · {{ h.n_rows }} rows · {{ h.when_disp }}</span>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-</div>
-
 <!-- Figures with provenance -->
 <div class="mb-2 flex items-center justify-between">
   <h2 class="text-navy font-bold text-sm">Figures &amp; provenance</h2>
