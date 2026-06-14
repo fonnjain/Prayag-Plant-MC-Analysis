@@ -61,3 +61,36 @@ concurrent cold fills so only one Sheets fetch runs at a time.
 
 **Cache TTL:** `_DATA_TTL = 300.0` (5 min) so a browsing session across
 Overview → Plant → Machine → Reports stays warm throughout.
+
+## Cold-start read time must be parallel, not serial
+
+The landing route `/` defaults to period `last_updated` (sub-monthly) → it reads
+**daily** sheets for every plant, not monthly. On a *cold* cache that first read
+must finish inside the proxy/browser patience window or the published page just
+spins forever (`/health` stays instant, so the deploy is "healthy" while users
+see nothing).
+
+**Rule:** the live-sheet loaders must fan out their independent workbook reads
+concurrently. Serial reads (one `urllib` GET after another, each up to a 30s
+timeout) across ~6 plants × 2 months pushed the cold load **>150s**;
+parallelizing with `ThreadPoolExecutor` cut it to **~8s** for the same 2533
+daily records.
+
+**How to apply:**
+- `_load_live_monthly` fans `_load_annual_family` across `ANNUAL_SOURCES`;
+  `get_daily_records` fans `_load_daily_cached` across `(plant, ym)` pairs.
+  Always gather results then process them in the ORIGINAL source order so
+  warnings/reports stay deterministic.
+- The daily cache uses **per-key** single-flight locks (`_daily_key_lock`), not
+  the one global `_fetch_lock` — a single lock would re-serialise the fan-out.
+  Distinct keys load in parallel; duplicate concurrent fetches of the SAME key
+  still collapse. (Monthly stays on the single `_fetch_lock` — it's one payload.)
+- No deadlock: daily workers may call `_grid_ideal_for → _live_payload()` (which
+  takes `_fetch_lock`) while holding a daily key lock, but nothing acquires a
+  daily key lock while holding `_fetch_lock`, so there is no lock-order cycle.
+- Parallel bursts can trip Google's per-user read quota → **429**. `_api_get`
+  retries 429/500/503 with exponential backoff + jitter (honouring
+  `Retry-After`); 401/403/404 are permanent and surface immediately.
+- `_startup_warmup` (daemon thread, sleeps 3s so gunicorn binds first) pre-warms
+  monthly then the two most recent daily months — keep monthly first because the
+  daily ideal-baseline lookup reads the cached monthly grid.

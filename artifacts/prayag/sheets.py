@@ -18,6 +18,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple
 
 from metrics import Record
@@ -150,22 +151,48 @@ def _get_access_token() -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Generic Sheets REST helpers
 # ---------------------------------------------------------------------------
+_API_MAX_RETRIES = 4    # total attempts on a throttle/transient error
+
+
 def _api_get(url: str, token: str) -> dict:
+    """GET a Google Sheets API endpoint, retrying transient throttle errors.
+
+    Reads are fanned out across threads (see _load_live_monthly /
+    get_daily_records), so a burst can briefly exceed Google's per-user read
+    quota and come back 429 (or a transient 5xx). Those are retried with
+    exponential backoff (honouring a Retry-After header when present) instead of
+    failing the whole load. 401/403/404 are permanent and surface immediately.
+    """
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise SheetReadError("Spreadsheet or tab not found (404).") from e
-        if e.code in (401, 403):
-            raise SheetReadError(
-                "The Google account doesn't have access to a configured "
-                "spreadsheet, or the connection needs to be re-authorized."
-            ) from e
-        raise SheetReadError(f"Google Sheets API error ({e.code}).") from e
-    except urllib.error.URLError as e:
-        raise SheetReadError("Couldn't reach Google Sheets. Please try again.") from e
+    for attempt in range(_API_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise SheetReadError("Spreadsheet or tab not found (404).") from e
+            if e.code in (401, 403):
+                raise SheetReadError(
+                    "The Google account doesn't have access to a configured "
+                    "spreadsheet, or the connection needs to be re-authorized."
+                ) from e
+            if e.code in (429, 500, 503) and attempt < _API_MAX_RETRIES - 1:
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                try:
+                    delay = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    delay = 0.0
+                # Exponential backoff with jitter, floored by any Retry-After.
+                delay = max(delay, (2 ** attempt) + random.uniform(0, 0.5))
+                time.sleep(delay)
+                continue
+            raise SheetReadError(f"Google Sheets API error ({e.code}).") from e
+        except urllib.error.URLError as e:
+            if attempt < _API_MAX_RETRIES - 1:
+                time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+                continue
+            raise SheetReadError("Couldn't reach Google Sheets. Please try again.") from e
+    raise SheetReadError("Couldn't reach Google Sheets. Please try again.")
 
 
 def list_tabs(file_id: str, token: str) -> List[str]:
@@ -258,20 +285,33 @@ def _load_live_monthly(token: str) -> dict:
     warnings: List[str] = []
     failed_plants: List[dict] = []
 
-    for src in sources.ANNUAL_SOURCES:
+    # Read each family workbook concurrently — they are independent network
+    # round-trips, so fanning them out turns a serial chain (one 30 s timeout
+    # after another) into a single slowest-call wall time. Results are gathered
+    # and then processed in source order so warnings/reports stay deterministic.
+    def _try_family(src):
         try:
-            recs, report = _load_annual_family(src, token)
+            return src, _load_annual_family(src, token), None
         except SheetReadError as e:
+            return src, None, e
+
+    max_workers = min(len(sources.ANNUAL_SOURCES), 8) or 1
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = list(pool.map(_try_family, sources.ANNUAL_SOURCES))
+
+    for src, loaded, err in results:
+        if err is not None:
             failed_plants.append({
                 "plant": src["plant"],
                 "title": src["title"],
-                "error": str(e),
+                "error": str(err),
             })
             warnings.append(
-                f"{src['title']}: could not load ({e}). "
+                f"{src['title']}: could not load ({err}). "
                 "Figures for this plant are absent from this view."
             )
             continue
+        recs, report = loaded
         all_records.extend(recs)
         reports.append(report)
 
@@ -395,6 +435,38 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
 # Live daily load — per-month workbooks (true day-level data)
 # ---------------------------------------------------------------------------
 _daily_cache: dict = {}          # (plant, ym) -> (ts, [(records, report), ...])
+# Per-key single-flight locks for the daily cache. The monthly path uses one
+# global lock (a single payload), but daily reads are many independent
+# (plant, ym) workbooks — a single lock would serialise them and reintroduce the
+# slow cold chain. A lock per key lets distinct keys load concurrently while
+# still collapsing duplicate concurrent fetches of the SAME key.
+_daily_key_locks: dict = {}
+_daily_locks_guard = threading.Lock()
+
+
+def _daily_key_lock(key) -> threading.Lock:
+    with _daily_locks_guard:
+        lock = _daily_key_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _daily_key_locks[key] = lock
+        return lock
+
+
+def _load_daily_cached(plant: str, ym: str, token: str):
+    """Return cached results for one (plant, ym), fetching once under a per-key
+    lock on a cold miss. Safe to call from many threads concurrently."""
+    key = (plant, ym)
+    cached = _daily_cache.get(key)
+    if cached and time.time() - cached[0] < _DATA_TTL:
+        return cached[1]
+    with _daily_key_lock(key):
+        cached = _daily_cache.get(key)
+        if cached and time.time() - cached[0] < _DATA_TTL:
+            return cached[1]
+        results = _load_daily(plant, ym, token)
+        _daily_cache[key] = (time.time(), results)
+        return results
 
 # Per-plant daily layout config. Each workbook can emit one OR MORE logical
 # plants (the PIPE workbook also holds the Moulding tab). ``layout`` selects the
@@ -811,42 +883,47 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
             "Reconnect it from the integrations panel and try again."
         )
 
-    now = time.time()
     all_recs: List[Record] = []
     reports: List[dict] = []
     warnings: List[str] = []
-    for plant in _daily_plants():
-        for ym in months:
-            if ym not in sources.DAILY_SOURCES[plant]["files"]:
+
+    # Every (plant, ym) is an independent workbook read, so fetch them
+    # concurrently. _load_daily_cached collapses duplicate concurrent fetches of
+    # the same key under a per-key lock; results are reassembled in the original
+    # (plant, ym) order below so warnings/reports stay deterministic.
+    pairs = [
+        (plant, ym)
+        for plant in _daily_plants()
+        for ym in months
+        if ym in sources.DAILY_SOURCES[plant]["files"]
+    ]
+    by_pair: dict = {}
+    if pairs:
+        max_workers = min(len(pairs), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_load_daily_cached, plant, ym, token): (plant, ym)
+                for plant, ym in pairs
+            }
+            for fut, pair in futures.items():
+                by_pair[pair] = fut.result()
+
+    for pair in pairs:
+        results = by_pair.get(pair, [])
+        for recs, report in results:
+            all_recs.extend(recs)
+            if not report:
                 continue
-            key = (plant, ym)
-            cached = _daily_cache.get(key)
-            if cached and now - cached[0] < _DATA_TTL:
-                results = cached[1]
-            else:
-                with _fetch_lock:
-                    # Re-check under the lock so concurrent threads don't each
-                    # run the same slow per-plant fetch (cache stampede).
-                    cached = _daily_cache.get(key)
-                    if cached and time.time() - cached[0] < _DATA_TTL:
-                        results = cached[1]
-                    else:
-                        results = _load_daily(plant, ym, token)
-                        _daily_cache[key] = (time.time(), results)
-            for recs, report in results:
-                all_recs.extend(recs)
-                if not report:
-                    continue
-                reports.append(report)
-                if report.get("warning"):
-                    warnings.append(report["warning"])
-                recon = report.get("reconcile")
-                if recon and not recon["ok"]:
-                    warnings.append(
-                        f"{report['title']}: daily rows sum to {recon['detail_total']:.0f} "
-                        f"but the monthly grid is {recon['grid_total']:.0f} "
-                        f"({recon['diff_pct']:.1f}% off)"
-                    )
+            reports.append(report)
+            if report.get("warning"):
+                warnings.append(report["warning"])
+            recon = report.get("reconcile")
+            if recon and not recon["ok"]:
+                warnings.append(
+                    f"{report['title']}: daily rows sum to {recon['detail_total']:.0f} "
+                    f"but the monthly grid is {recon['grid_total']:.0f} "
+                    f"({recon['diff_pct']:.1f}% off)"
+                )
     return all_recs, reports, warnings
 
 
