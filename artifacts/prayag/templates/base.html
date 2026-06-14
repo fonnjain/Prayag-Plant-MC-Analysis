@@ -66,9 +66,43 @@
       color:#374151; background:#f3f4f6; border-radius:8px; padding:8px 10px; margin-top:10px; }
     .gs-unit { font-size:12px; color:#6b7280; margin-top:10px; }
     .gs-more { display:inline-block; margin-top:14px; font-size:13px; font-weight:600; color:var(--terra); }
+    /* Loading overlay */
+    #loading-overlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(31,56,100,0.82);   /* navy at 82% */
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 18px;
+      backdrop-filter: blur(2px);
+    }
+    #loading-overlay.active { display: flex; }
+    .loading-ring {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      border: 5px solid rgba(255,255,255,0.18);
+      border-top-color: var(--terra);
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-label {
+      color: rgba(255,255,255,0.90);
+      font-size: 14px; font-weight: 600; letter-spacing: 0.01em;
+    }
+    .loading-sub {
+      color: rgba(255,255,255,0.52);
+      font-size: 11px; margin-top: -10px; letter-spacing: 0.01em;
+    }
   </style>
 </head>
 <body class="min-h-screen">
+
+<!-- ===== LOADING OVERLAY ===== -->
+<div id="loading-overlay" role="status" aria-live="polite" aria-label="Fetching data">
+  <div class="loading-ring"></div>
+  <div class="loading-label">Fetching data…</div>
+  <div class="loading-sub">Reading live production sheets</div>
+</div>
 
 <!-- ===== STICKY HEADER ===== -->
 <header id="app-header" class="bg-navy fixed top-0 left-0 right-0 z-50 shadow-lg">
@@ -306,6 +340,36 @@ document.getElementById('filter-form').action = window.location.pathname;
 syncHeaderOffset();
 window.addEventListener('resize', syncHeaderOffset);
 window.addEventListener('orientationchange', syncHeaderOffset);
+
+// ---- Loading overlay ----
+(function() {
+  var overlay = document.getElementById('loading-overlay');
+
+  function showLoader() { overlay.classList.add('active'); }
+
+  // Hide whenever a page is displayed (covers normal loads + bfcache restores).
+  // This ensures the spinner from a previous navigation is never stuck visible.
+  window.addEventListener('pageshow', function() {
+    overlay.classList.remove('active');
+  });
+
+  // Show on any navigating <a> click (skip anchors, new-tab, non-href, glossary buttons).
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest('a[href]');
+    if (!a) return;
+    if (a.classList.contains('info-btn')) return;   // glossary tooltip
+    if (a.getAttribute('target') === '_blank') return;
+    var href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+    // POST forms handled by submit event; plain GET links navigate directly.
+    showLoader();
+  });
+
+  // Show on any form submit (period selector "Go", confirmation sign-off, etc.)
+  document.addEventListener('submit', function() {
+    showLoader();
+  });
+})();
 </script>
 
 <!-- ===== GLOSSARY BOTTOM-SHEET (tooltips) ===== -->
