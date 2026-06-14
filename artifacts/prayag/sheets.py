@@ -591,26 +591,6 @@ def _daily_seg_unit(plant: str) -> Tuple[str, str]:
     return plant.title(), "kg"
 
 
-def _grid_ideal_for(emit: str, ym: str) -> Tuple[dict, float]:
-    """(ideal_by_key, grid_plant_output_total) from the cached monthly grid.
-
-    ``ideal_by_key`` is keyed by ``_mc_key`` so daily machines join onto their
-    monthly ideal rate/hours; it is empty for plants with no monthly grid
-    (PTMT/TANK) or whose daily identifiers don't map to the grid (Moulding uses
-    mould codes, not M/C numbers). ``grid_plant_output_total`` is the plant's
-    whole-month grid output, used for a plant-level reconciliation that holds
-    even when the per-machine join doesn't."""
-    ideal_map: dict = {}
-    grid_total = 0.0
-    for r in _live_payload()["records"]:
-        if r.plant == emit and r.period == ym:
-            grid_total += r.total_count
-            k = _mc_key(r.machine)
-            if k is not None and r.ideal_rate > 0:
-                ideal_map[k] = (r.ideal_rate, r.ideal_hours)
-    return ideal_map, grid_total
-
-
 def _has_date_header(values: List[list]) -> bool:
     """True if a DATE column header exists in the first rows — used to tell a
     genuine no-production period (header present, no data) from a parse failure
@@ -739,10 +719,14 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
     """Read and baseline one logical plant's daily rows from a workbook tab.
 
     Ideal-denominator precedence per machine: in-sheet ideal-OUTPUT rate (a plant
-    that publishes its own per-machine Ideal Output, e.g. HDPE) → monthly grid →
-    in-sheet ideal-HOURS column (e.g. PTMT) → config baseline → none ("no baseline
-    set"). A no-baseline machine still reports run hours + output; its ratio is
-    suppressed downstream rather than shown as a misleading 0%.
+    that publishes its own per-machine Ideal Output, e.g. HDPE) →
+    in-sheet ideal-HOURS column (e.g. PTMT) → config baseline (baselines.json) →
+    none ("no baseline set"). The monthly grid's "Ideal Hours" is a flat
+    placeholder (500 for every machine), NOT a real planned-hours baseline, so it
+    is deliberately NOT a precedence step — PIPE/MOULDING have no real shift-pattern
+    baseline and correctly show "baseline not set". A no-baseline machine still
+    reports run hours + output; its ratio is suppressed downstream rather than shown
+    as a misleading figure against a placeholder.
     """
     seg, unit = _daily_seg_unit(emit)
     layout = spec["layout"]
@@ -812,8 +796,11 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         report["record_count"] = 0
         return raw, report
 
-    # Baseline sources, in precedence order.
-    grid_ideal, _ = _grid_ideal_for(emit, ym)  # grid_total no longer used (daily-only rule)
+    # Baseline sources, in precedence order. The monthly grid is deliberately NOT
+    # a source: its "Ideal Hours" column is a flat placeholder (500 for every
+    # machine), not a real per-machine planned-hours baseline, so using it would
+    # manufacture a misleading utilisation/efficiency. PIPE/MOULDING therefore fall
+    # through to "none" ("baseline not set") unless a real config baseline exists.
     summary_mc = spec.get("summary_mc_header", ("contains", "M/C NO"))
     sheet_ideal: dict = {}  # in-sheet ideal HOURS  (PTMT "IDEAL HOUR")    → utilisation
     sheet_rate: dict = {}   # in-sheet ideal OUTPUT rate, units/hr (HDPE) → efficiency
@@ -839,7 +826,6 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         active.setdefault(r.machine, set()).add(r.date)
 
     for r in raw:
-        k = _mc_key(r.machine)
         days = max(len(active.get(r.machine, ())), 1)
         if sheet_rate.get(r.machine, 0) > 0:
             # A plant that publishes its OWN per-machine "Ideal Output" rate in the
@@ -854,12 +840,6 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
             ih_month = sheet_hours.get(r.machine, 0.0)
             r.ideal_hours = (ih_month / days) if ih_month > 0 else 0.0
             r.ideal_source = "sheet"
-        elif k is not None and k in grid_ideal:
-            rate, ih_month = grid_ideal[k]
-            r.ideal_rate = rate
-            r.ideal_hours = ih_month / days
-            r.ideal_output = r.actual_hours * rate
-            r.ideal_source = "config"
         elif r.machine in sheet_ideal:
             r.ideal_hours = sheet_ideal[r.machine] / days
             r.ideal_output = 0.0  # no in-sheet output rate → efficiency hidden

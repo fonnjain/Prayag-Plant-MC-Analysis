@@ -3,13 +3,17 @@ Per-machine planned-hours baseline master (CONFIG, not data).
 
 This is the denominator for utilisation and output-efficiency. The production
 sheets carry only a flat placeholder for "Ideal Hours" (500 for every Moulding
-machine), so the *real* planned-hours figure — e.g. "2 shifts x 12h x 26 working
-days" — is maintained here by the team and applied deterministically.
+machine), which is NOT a real baseline. The *real* planned-hours figure is
+maintained here by the team — but only when genuine shift-pattern data exists.
+Estimates and the 500-h placeholder must never be entered as a baseline. PIPE and
+MOULDING have no shift-pattern data today, so the file ships with no entries for
+them and they correctly show "baseline not set".
 
 It NEVER changes how output or hours are READ from the sheet. It only sets the
 target each machine is measured against, and every figure keeps its provenance
-(sheet placeholder vs config baseline). When a machine has no baseline the engine
-falls back to the sheet value and FLAGS it — it never silently invents one.
+(no real baseline vs config baseline). When a machine has no baseline the engine
+suppresses its ratio and FLAGS it as an advisory, non-blocking warning — it never
+silently invents one and never gates sign-off.
 
 Editing: change baselines.json. No code edit is needed. Each entry documents its
 ``basis`` (how the planned hours were derived) and who set it.

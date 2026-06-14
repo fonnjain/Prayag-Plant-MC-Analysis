@@ -21,16 +21,22 @@ idle; only an unrecognised layout is a parse failure.
 source tab's raw values. If the tab opens and the data area is blank/zeroed, it is
 idle — do nothing. Do not fabricate rows.
 
-# PIPE needs no baselines.json entry
+# PIPE/MOULDING have NO real planned-hours baseline — show "baseline not set"
 
-PIPE has a monthly grid, so its utilisation/efficiency denominator comes from the grid
-(grid-ideal precedence beats config baseline). `baselines.json` is only for machines a
-grid does NOT cover (currently MOULDING M/C-4, M/C-22). HDPE/PTMT self-supply in-sheet;
-GARDEN/TANK are output-only.
-**Why:** "baselines needed for PIPE+MOULDING only" means those are the only baseline-
-ELIGIBLE plants, not that PIPE must have explicit entries. Inventing PIPE planned_hours
-would fabricate numbers.
-**How to apply:** Only add PIPE baselines if the business supplies real planned-hours.
+The monthly grid's "Ideal Hours" column is a FLAT PLACEHOLDER (500 for every machine),
+NOT a real baseline. It must never be a utilisation/efficiency denominator. The grid is
+therefore NOT a precedence step (the old `_grid_ideal_for` path was removed). Real
+baselines come only from: HDPE in-sheet ideal-output rate, PTMT in-sheet IDEAL HOUR
+column, or a real config entry in baselines.json. PIPE/MOULDING have no shift-pattern
+data, so they resolve to `ideal_source="none"` ("baseline not set"): raw run hours +
+output publish; utilisation/efficiency are suppressed; the flag is an advisory,
+non-blocking WARNING (never gates sign-off). baselines.json ships with NO machine
+entries — do NOT add estimates (e.g. the old "2 shifts x 12h x 26 days = 624h") or the
+500-h placeholder; only real, business-supplied planned hours.
+**Why:** Computing a ratio against a 500-h placeholder is a fabricated figure; the user
+explicitly disavowed estimates and the placeholder.
+**How to apply:** If asked why PIPE shows no utilisation, that is correct/intended. Only
+add a baselines.json entry when the team supplies real planned hours.
 
 # build-state #7 (GARDEN+TANK June) can fail transiently
 
