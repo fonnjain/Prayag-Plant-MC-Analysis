@@ -35,7 +35,7 @@ A mobile-first Flask dashboard that reads Prayag's real production Google Sheets
 ## Architecture decisions
 
 - All ratios are recomputed in Python from raw cells; stored % cells are never trusted. Claude only writes prose from already-computed numbers.
-- Daily data is ingested only for plants that have BOTH a daily workbook AND a monthly grid baseline (PIPE, GARDEN). `_load_daily` keeps only machines present in the monthly grid; `ideal_rate`/`ideal_hours` are joined from the cached monthly payload. Plants without a monthly baseline (HDPE/PTMT/TANK) are skipped with an explicit warning.
+- Daily data is ingested for EVERY plant with a daily workbook, via a per-plant layout config (`_DAILY_LAYOUTS` in `sheets.py`): `long` (row-per-machine-per-date: PIPE, MOULDING), `matrix` (wide per-date grid: PTMT), `blocks` (one per-machine block tab: GARDEN, HDPE), `tank` (per-item PROD. REPORT: TANK). The ideal denominator (for utilisation/efficiency) degrades by precedence — monthly grid → in-sheet ideal column (PTMT) → baseline master → none. Plants without any baseline still show raw hours + output; utilisation/efficiency are suppressed (not a misleading 0%) with a "No baseline set" notice. PTMT/HDPE/TANK have no monthly grid, so their roster is the daily-reporting machines themselves (dynamic, never hardcoded).
 - `_mc_key` joins daily↔monthly machines on M/C-n or MACHINE-n only (ignores SOCKET/Grinder/die codes) to prevent mis-joins.
 - Per-day ideal hours = monthly ideal hours ÷ the machine's active days that month, so a full-month daily rollup reconciles exactly to the monthly grid (verified: 831 actual / 5000 ideal hrs both paths).
 - In `compute_metrics`, daily rows with `shift_len_min > 0` are true shift-logs (time model, feed OEE); daily-matrix rows (`shift_len_min == 0`) carry hours/output directly like monthly rows.
@@ -54,7 +54,7 @@ Mobile-first dashboard over Prayag's real production sheets: OEE/utilisation/out
 ## Gotchas
 
 - PIPE daily Output is net-of-rejection while the monthly grid Output is gross, so PIPE output reconciliation is ~6.6% off by design — surfaced as an honest warning, not hidden. GARDEN reconciles exactly.
-- Daily ingestion currently covers PIPE + GARDEN only (the plants with both a daily file and a monthly grid).
+- Daily ingestion covers every plant with a daily workbook (PIPE, MOULDING, GARDEN, HDPE, PTMT, TANK). PIPE/GARDEN/MOULDING have monthly grids; HDPE/PTMT/TANK do not, so they show raw output (and PTMT's in-sheet ideal column) without a grid cross-check. TANK is logged per item with no machine identity, so it shows plant-level output + item detail and no per-machine OEE. PTMT regrind/grinder KG carries `is_finishing=True` and is excluded from the plant total to avoid double-counting (the Grinding segment still shows it when viewed alone).
 - Run the app via the workflow (`PORT=21800 python3 app.py`); for ad-hoc curl use `localhost:80/...` through the shared proxy.
 - Manager sign-off releases the ERROR gate only (warnings already publish). There is no login, so the approver name is typed into the form and recorded as-is — it is an attestation, not authenticated identity. A sign-off binds to the exact data state (fingerprint); any change to the underlying sheets re-gates the figures automatically and the prior sign-off no longer applies.
 

@@ -276,9 +276,12 @@ def tier1_completeness(
     machines_expected = 0
     machines_present = 0
     present_by_plant: Dict[str, set] = {}
+    plants_with_output: set = set()
     for r in period_rows:
         if r.machine:
             present_by_plant.setdefault(r.plant, set()).add(r.machine)
+        if r.total_count > 0:
+            plants_with_output.add(r.plant)
 
     for plant in sorted(scope):
         master_codes = masters["machines"].get(plant, set())
@@ -293,6 +296,13 @@ def tier1_completeness(
             if daily_used and present:
                 machines_expected += len(present)
                 machines_present += len(present)
+            elif daily_used and plant in plants_with_output:
+                # Plant that reports at PLANT level only (no machine dimension —
+                # e.g. TANK logs production per item). Completeness here is simply
+                # "is the plant reporting?": score it 1/1 rather than 0-of-N so a
+                # machine-less plant never looks incomplete.
+                machines_expected += 1
+                machines_present += 1
             continue
         machines_expected += len(master_codes)
         master_norm = {_norm_code(c): c for c in master_codes}
@@ -509,6 +519,7 @@ def tier2_reconciliation(
     orphan_by_plant: Dict[str, float] = {}
     seg_total: Dict[tuple, float] = {}
     mc_total: Dict[tuple, float] = {}
+    seg_has_machines: set = set()
     for r in period_rows:
         if r.total_count <= 0:
             continue
@@ -519,6 +530,8 @@ def tier2_reconciliation(
         else:
             orphan_by_plant[r.plant] = orphan_by_plant.get(r.plant, 0.0) + r.total_count
         if r.machine:
+            if r.segment:
+                seg_has_machines.add((r.plant, r.segment))
             mc_segments.setdefault((r.plant, r.machine), set()).add(r.segment)
             if r.segment:
                 mc_total[(r.plant, r.segment, r.machine)] = (
@@ -536,6 +549,11 @@ def tier2_reconciliation(
             ))
 
     for (plant, seg), tot in seg_total.items():
+        # A segment whose output is reported entirely without a machine identity
+        # (e.g. TANK, logged per item) has no "lines" to reconcile against — the
+        # plant-level total IS the figure, not a roll-up of machines.
+        if (plant, seg) not in seg_has_machines:
+            continue
         lines_sum = sum(
             v for (p, s, _m), v in mc_total.items() if p == plant and s == seg
         )
@@ -556,9 +574,15 @@ def tier2_reconciliation(
                 plant=plant,
             ))
 
-    # Engine self-reconcile: published total must equal the row sum exactly.
-    src_total = sum(r.total_count for r in period_rows)
-    src_reject = sum(r.reject_count for r in period_rows)
+    # Engine self-reconcile: published total must equal the row sum exactly. This
+    # MUST mirror compute_metrics' row selection — when the set mixes production
+    # with finishing/regrind rows, the published plant total counts production
+    # only (regrind would double-count the same material), so the row sum here
+    # excludes finishing rows too. A pure-finishing set reconciles to itself.
+    non_fin = [r for r in period_rows if not r.is_finishing]
+    prod_rows = non_fin if non_fin else period_rows
+    src_total = sum(r.total_count for r in prod_rows)
+    src_reject = sum(r.reject_count for r in prod_rows)
     if abs(computed.total_count - src_total) > 0.01:
         issues.append(_issue(
             2, ERROR,
@@ -716,11 +740,13 @@ def tier4_plausibility(
             "confirm the reject figures are correct.",
         ))
 
-    # Unit mismatch vs the plant's configured unit.
+    # Unit mismatch vs the plant's configured unit. Only checked for rows that
+    # carry a machine identity — a plant-level row (e.g. TANK, logged per item in
+    # pieces with no machine) has no configured per-machine unit to compare to.
     plant_unit = {s["plant"]: s["unit"] for s in sources.ANNUAL_SOURCES}
     for r in period_rows:
         exp = plant_unit.get(r.plant)
-        if exp and r.unit and r.unit != exp:
+        if exp and r.unit and r.unit != exp and r.machine:
             issues.append(_issue(
                 4, WARNING,
                 f"{r.machine or r.mould}: unit '{r.unit}' does not match the plant's "
@@ -746,13 +772,19 @@ def tier4_plausibility(
         if r.machine:
             months_present.setdefault((r.plant, r.machine), set()).add(r.period or r.date)
 
-    by_plant_machine: Dict[str, Dict[str, float]] = {}
+    # Outliers are compared WITHIN a (plant, segment) group, not plant-wide: a
+    # plant like PTMT mixes very different processes (Injection vs Blow vs
+    # Corrugator vs Grinding) whose outputs aren't comparable, so a plant-wide
+    # median would flag whole processes as "outliers". Each machine is measured
+    # against the median of its own process group.
+    by_group_machine: Dict[tuple, Dict[str, float]] = {}
     for r in period_rows:
         if not r.machine:
             continue
-        by_plant_machine.setdefault(r.plant, {}).setdefault(r.machine, 0.0)
-        by_plant_machine[r.plant][r.machine] += r.total_count
-    for plant, mc_out in by_plant_machine.items():
+        g = (r.plant, r.segment)
+        by_group_machine.setdefault(g, {}).setdefault(r.machine, 0.0)
+        by_group_machine[g][r.machine] += r.total_count
+    for (plant, segment), mc_out in by_group_machine.items():
         outs = [v for v in mc_out.values() if v > 0]
         if len(outs) < MIN_PLANT_MACHINES_FOR_OUTLIER:
             continue
@@ -779,7 +811,7 @@ def tier4_plausibility(
                         continue
             issues.append(_issue(
                 4, WARNING,
-                f"{mc}: output {v:,.0f} is {ratio:.1f}× the plant median "
+                f"{mc}: output {v:,.0f} is {ratio:.1f}× the {segment} median "
                 f"({med:,.0f}) — looks like an outlier.",
                 plant=plant, machine=mc,
             ))

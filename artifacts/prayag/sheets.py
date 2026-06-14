@@ -393,14 +393,43 @@ _DAILY_LAYOUTS: dict = {
             ),
         },
     ],
-    "GARDEN": [{"emit": "GARDEN", "tab": "Daily Report", "layout": "matrix"}],
-    "HDPE": [{"emit": "HDPE", "tab": "Daily Report", "layout": "matrix"}],
+    # GARDEN/HDPE daily workbooks keep one tab PER MACHINE ("MACHINE 2", ...),
+    # each a date×production block (no run hours). The single "Daily Report" tab
+    # that used to be read is empty — real output lives in these per-machine tabs.
+    "GARDEN": [{
+        "emit": "GARDEN", "layout": "blocks",
+        "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "GARDEN M/C - ",
+    }],
+    "HDPE": [{
+        "emit": "HDPE", "layout": "blocks",
+        "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "HDPE M/C - ",
+    }],
     "PTMT": [{
         "emit": "PTMT", "tab": "Report-5", "layout": "matrix",
         "ideal_col": ("contains", "IDEAL HOUR"),
     }],
-    "TANK": [{"emit": "TANK", "tab": "Daily Report", "layout": "matrix"}],
+    # TANK records per-ITEM production (no machine dimension) on "PROD. REPORT".
+    "TANK": [{"emit": "TANK", "tab": "PROD. REPORT", "layout": "tank"}],
 }
+
+# PTMT runs several distinct processes that should be compared within their own
+# group, not against the whole plant. The grinder/regrind lines are FINISHING:
+# their KG is regrind, never added to plant output.
+_PTMT_TAB_NUM = re.compile(r"(\d+)")
+
+
+def _ptmt_group(code: str) -> Tuple[str, bool]:
+    """(segment, is_finishing) for a PTMT machine label. Pure string routing."""
+    up = str(code).strip().upper()
+    if "GRIND" in up:
+        return "PTMT – Grinding", True
+    if "BLOW" in up:
+        return "PTMT – Blow Moulding", False
+    if "CORRUGAT" in up:
+        return "PTMT – Corrugator", False
+    if up.startswith("N-") or up.startswith("N "):
+        return "PTMT – Injection (N-line)", False
+    return "PTMT – Injection (standard)", False
 
 
 _MC_RE = re.compile(r"M\s*/?\s*C\s*-?\s*(\d+)", re.I)
@@ -460,6 +489,128 @@ def _grid_ideal_for(emit: str, ym: str) -> Tuple[dict, float]:
     return ideal_map, grid_total
 
 
+def _has_date_header(values: List[list]) -> bool:
+    """True if a DATE column header exists in the first rows — used to tell a
+    genuine no-production period (header present, no data) from a parse failure
+    (no recognisable header at all)."""
+    return any(
+        str(c).strip().upper() == "DATE"
+        for row in values[:12] for c in row
+    )
+
+
+def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
+                 seg: str, unit: str, report: dict) -> Tuple[List[Record], dict]:
+    """Emit daily rows from per-machine 'block' tabs (GARDEN/HDPE).
+
+    One tab == one machine. These tabs carry output + rejection but NO run hours,
+    so utilisation/efficiency are left hidden (never shown as 0%). Distinguishes a
+    genuine no-production period from a layout that could not be parsed."""
+    tab_re = re.compile(spec["tab_re"], re.I)
+    prefix = spec.get("machine_prefix", f"{emit} M/C - ")
+    tabs = list_tabs(file_id, token)
+    machine_tabs = [t for t in tabs if tab_re.match(str(t).strip())]
+    report["tab"] = ", ".join(machine_tabs) if machine_tabs else spec["tab_re"]
+    if not machine_tabs:
+        report["warning"] = (
+            f"{emit} {ym}: no per-machine tabs matching '{spec['tab_re']}' were "
+            "found in the daily workbook."
+        )
+        return [], report
+
+    raw: List[Record] = []
+    any_header = False
+    for t in machine_tabs:
+        values = read_values(file_id, t, token)
+        if _has_date_header(values):
+            any_header = True
+        mnum = _PTMT_TAB_NUM.search(str(t))
+        machine = f"{prefix}{mnum.group(1)}".strip() if mnum else f"{prefix}{t}".strip()
+        raw.extend(parsers.parse_daily_blocks(
+            values, plant=emit, segment=seg, unit=unit, year_month=ym,
+            source_file=file_id, source_tab=t, machine=machine,
+        ))
+
+    for r in raw:
+        r.ideal_hours = 0.0      # no run hours in this layout → ratio hidden
+        r.ideal_output = 0.0
+        r.ideal_source = "none"
+
+    report["detail_tabs"] = sorted({r.machine for r in raw})
+    report["record_count"] = len(raw)
+
+    # Plant-level reconcile vs the monthly grid (GARDEN has one; HDPE does not).
+    _, grid_total = _grid_ideal_for(emit, ym)
+    if grid_total > 0:
+        daily_out = sum(r.total_count for r in raw)
+        diff = abs(daily_out - grid_total) / grid_total
+        report["reconcile"] = {
+            "grid_total": round(grid_total, 1),
+            "detail_total": round(daily_out, 1),
+            "diff_pct": round(diff * 100, 2),
+            "ok": diff <= 0.05,
+        }
+
+    if not raw:
+        report["warning"] = (
+            f"{emit} {ym}: machine tabs are present but no production has been "
+            "recorded for this period yet."
+            if any_header else
+            f"{emit} {ym}: the machine tabs could not be parsed "
+            "(date/output layout not recognised)."
+        )
+    else:
+        report["warning"] = (
+            f"{emit} {ym}: daily file records output only (no run hours), so "
+            "utilisation/efficiency are not available — output is shown."
+        )
+    return raw, report
+
+
+def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
+               seg: str, report: dict) -> Tuple[List[Record], dict]:
+    """Emit daily rows from the Tank per-item PROD. REPORT.
+
+    Tank output is recorded per item (no machine, no run hours) in pieces, so
+    rows carry ``machine=""`` and ``unit="pcs"``; utilisation/efficiency stay
+    hidden. Distinguishes a genuine no-production period from a parse failure."""
+    tab = spec["tab"]
+    tabs = list_tabs(file_id, token)
+    actual = next((t for t in tabs if str(t).strip().upper() == tab.upper()), None)
+    if actual is None:
+        report["warning"] = f"{emit} {ym}: daily tab '{tab}' not found in the workbook."
+        return [], report
+    report["tab"] = actual
+
+    values = read_values(file_id, actual, token)
+    raw = parsers.parse_tank_prod(
+        values, plant=emit, segment=seg, unit="pcs", year_month=ym,
+        source_file=file_id, source_tab=actual,
+    )
+    for r in raw:
+        r.ideal_hours = 0.0
+        r.ideal_output = 0.0
+        r.ideal_source = "none"
+
+    report["detail_tabs"] = sorted({r.mould for r in raw if r.mould})
+    report["record_count"] = len(raw)
+
+    if not raw:
+        report["warning"] = (
+            f"{emit} {ym}: production report is present but no output has been "
+            "recorded for this period yet."
+            if _has_date_header(values) else
+            f"{emit} {ym}: the production report could not be parsed "
+            "(layout not recognised)."
+        )
+    else:
+        report["warning"] = (
+            f"{emit} {ym}: tank output is recorded per item (no machine or run "
+            "hours), so utilisation/efficiency are not available — output is shown."
+        )
+    return raw, report
+
+
 def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
                 token: str) -> Tuple[List[Record], dict]:
     """Read and baseline one logical plant's daily rows from a workbook tab.
@@ -470,7 +621,8 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
     than shown as a misleading 0%.
     """
     seg, unit = _daily_seg_unit(emit)
-    tab = spec["tab"]
+    layout = spec["layout"]
+    tab = spec.get("tab", "")
     report = {
         "family": emit.lower(),
         "title": f"{sources.PLANT_NAMES.get(emit, emit)} — daily ({ym})",
@@ -486,6 +638,14 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         "warning": None,
     }
 
+    # Per-machine block tabs (GARDEN/HDPE) and the per-item Tank report have their
+    # own readers — they read several tabs / a different shape than the single-tab
+    # matrix & long layouts handled below.
+    if layout == "blocks":
+        return _emit_blocks(emit, ym, file_id, spec, token, seg, unit, report)
+    if layout == "tank":
+        return _emit_tank(emit, ym, file_id, spec, token, seg, report)
+
     tabs = list_tabs(file_id, token)
     if tab not in tabs:
         report["warning"] = (
@@ -494,7 +654,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         return [], report
 
     values = read_values(file_id, tab, token)
-    if spec["layout"] == "long":
+    if layout == "long":
         raw = parsers.parse_daily_long(
             values, plant=emit, segment=seg, unit=unit, year_month=ym,
             source_file=file_id, source_tab=tab, **spec["long"],
@@ -504,6 +664,14 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
             values, plant=emit, segment=seg, unit=unit, year_month=ym,
             source_file=file_id, source_tab=tab,
         )
+
+    # PTMT runs several processes on one Report-5 matrix; route each machine to
+    # its process group and flag grinder/regrind lines as finishing so their KG
+    # is excluded from PTMT's plant output (compared within-group, not plant-wide).
+    if emit == "PTMT":
+        for r in raw:
+            code = r.machine[len(emit) + 1:] if r.machine.startswith(emit + " ") else r.machine
+            r.segment, r.is_finishing = _ptmt_group(code)
 
     # Baseline sources, in precedence order.
     grid_ideal, grid_total = _grid_ideal_for(emit, ym)
@@ -665,7 +833,7 @@ def detected_sources() -> List[dict]:
             reports.append({**base, "tab": "", "note": (
                 "Daily file present but no layout is configured yet — not ingested.")})
             continue
-        tabs = [e["tab"] for e in emits]
+        tabs = [e.get("tab") or e.get("tab_re", "") for e in emits]
         layouts = sorted({e["layout"] for e in emits})
         emit_names = [e["emit"] for e in emits]
         # Ideal-denominator precedence (matches _emit_daily): grid → in-sheet ideal → none.

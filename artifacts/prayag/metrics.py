@@ -47,6 +47,12 @@ class Record:
     ideal_hours_sheet: float = 0.0  # raw planned hours as read from the sheet
     ideal_source: str = "sheet"     # "config" baseline | "sheet" placeholder
 
+    # --- classification ---
+    is_finishing: bool = False    # finishing/regrind line (e.g. PTMT Grinders).
+                                  # Its throughput is regrind, not new production,
+                                  # so it is excluded from a MIXED rollup's output
+                                  # totals (its own segment still shows itself).
+
     # --- daily-grain OEE inputs ---
     has_oee: bool = False
     shift: str = ""
@@ -274,6 +280,14 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     if not rows:
         return m
 
+    # Finishing/regrind lines (e.g. PTMT Grinders) reprocess scrap — their
+    # throughput is not new production. In a MIXED rollup (plant/overall/period)
+    # they are excluded so regrind KG is never added to plant output, and their
+    # run hours never enter the utilisation numerator. A rollup that is ENTIRELY
+    # finishing (the Grinding segment viewed on its own) still shows itself.
+    non_fin = [r for r in rows if not r.is_finishing]
+    prod_rows = non_fin if non_fin else rows
+
     # Utilisation/efficiency numerators only accumulate hours/output that have a
     # real baseline behind them (ideal_hours / ideal_output > 0). A no-baseline
     # plant (TANK, Moulding daily) still contributes to the output and run-hour
@@ -281,7 +295,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     # in the numerator with a zero denominator and silently inflate the figure.
     util_run = 0.0
     eff_out = 0.0
-    for r in rows:
+    for r in prod_rows:
         m.total_count += r.total_count
         m.reject_count += r.reject_count
         m.runner_lumps += r.runner_lumps
@@ -325,8 +339,9 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     m.runner_pct = _safe_div(m.runner_lumps, m.total_count)
     m.attainment = _safe_div(m.total_count, m.planned_output)
 
-    # OEE only from OEE-capable daily rows.
-    oee_rows = [r for r in rows if r.has_oee]
+    # OEE only from OEE-capable daily rows (finishing lines excluded from a
+    # mixed rollup, same as the totals above).
+    oee_rows = [r for r in prod_rows if r.has_oee]
     if oee_rows:
         ppt = sum(r.shift_len_min - r.planned_stops_min for r in oee_rows)
         dt = sum(r.downtime_min for r in oee_rows)

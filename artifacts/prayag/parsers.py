@@ -479,6 +479,190 @@ def parse_daily_matrix(
     return recs
 
 
+def parse_daily_blocks(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    year_month: str,
+    source_file: str,
+    source_tab: str,
+    machine: str,
+    date_col=("eq", "DATE"),
+) -> List[Record]:
+    """Parse ONE per-machine 'block' tab (one tab == one machine) into daily Records.
+
+    Used for GARDEN / HDPE daily workbooks, where each machine has its own tab
+    ("MACHINE 2", "MACHINE 3", ...). Layout: a header row carries ``DATE`` plus a
+    sub-header row that labels the production columns (``KG``, ``REJECTION`` ...).
+    One row per date; an item/size may split a date across several rows, so days
+    are summed.
+
+    Only output (the sub-header ``KG`` column) and rejection (a ``REJECT*``
+    column) are read — these tabs carry NO run hours, so utilisation/efficiency
+    are left unset (hidden honestly downstream) rather than shown as 0%. Columns
+    are detected from the header band, never assumed; an unrecognised layout
+    returns ``[]`` and the caller reports it as a parse failure (distinct from a
+    genuine no-production day).
+    """
+    if not values:
+        return []
+
+    header_idx = -1
+    date_c = -1
+    for i, row in enumerate(values[:12]):
+        for c, v in enumerate(row):
+            if _match_header(v, date_col):
+                header_idx, date_c = i, c
+                break
+        if header_idx >= 0:
+            break
+    if header_idx < 0:
+        return []
+
+    sub_row = values[header_idx + 1] if header_idx + 1 < len(values) else []
+
+    def sub(c):
+        return str(sub_row[c]).strip().upper() if 0 <= c < len(sub_row) else ""
+
+    out_c = -1
+    rej_c = -1
+    for c in range(len(sub_row)):
+        h = sub(c)
+        if out_c < 0 and h == "KG":
+            out_c = c
+        elif rej_c < 0 and "REJECT" in h:
+            rej_c = c
+    if out_c < 0:
+        return []
+
+    agg: dict = {}
+    for row in values[header_idx + 2:]:
+        day = _long_date_day(row[date_c] if date_c < len(row) else "")
+        if day is None:
+            continue
+        a = agg.setdefault(day, {"out": 0.0, "rej": 0.0})
+        a["out"] += num(row[out_c]) if out_c < len(row) else 0.0
+        a["rej"] += num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
+
+    recs: List[Record] = []
+    for day, a in sorted(agg.items()):
+        if a["out"] <= 0 and a["rej"] <= 0:
+            continue  # day not yet produced — don't fabricate
+        recs.append(Record(
+            grain="daily",
+            period=year_month,
+            date=f"{year_month}-{day:02d}",
+            plant=plant,
+            segment=segment,
+            unit=unit,
+            machine=machine,
+            total_count=a["out"],
+            reject_count=a["rej"],
+            source_family=segment,
+            source_file=source_file,
+            source_tab=source_tab,
+        ))
+    return recs
+
+
+def parse_tank_prod(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    year_month: str,
+    source_file: str,
+    source_tab: str,
+) -> List[Record]:
+    """Parse the TANK 'PROD. REPORT' (per-item production log) into daily Records.
+
+    The Tank workbook records production per ITEM (size/colour), not per machine:
+    one row per (date, item code) with PRODUCTION IN PCS and REJECTION IN PCS.
+    There is no machine dimension, so emitted Records carry ``machine=""`` (plant
+    + item level only) and ``unit="pcs"``; the item code is kept as the ``mould``
+    so it browses as item detail. No run hours exist, so utilisation/efficiency
+    stay hidden. Columns are detected from the header; an unrecognised layout
+    returns ``[]``.
+    """
+    if not values:
+        return []
+
+    header_idx = -1
+    cols: dict = {}
+    for i, row in enumerate(values[:12]):
+        U = [str(c).strip().upper() for c in row]
+        if "DATE" in U and any("ITEM CODE" in u for u in U):
+            header_idx = i
+            for c, u in enumerate(U):
+                if u == "DATE" and "date" not in cols:
+                    cols["date"] = c
+                elif "ITEM CODE" in u and "item" not in cols:
+                    cols["item"] = c
+                elif u == "SIZE" and "size" not in cols:
+                    cols["size"] = c
+                elif u in ("COLOR", "COLOUR") and "color" not in cols:
+                    cols["color"] = c
+                elif "PRODUCTION IN PC" in u and "out" not in cols:
+                    cols["out"] = c
+                elif "REJECTION IN PCS" in u and "rej" not in cols:
+                    cols["rej"] = c
+            break
+    if header_idx < 0 or "date" not in cols or "out" not in cols:
+        return []
+
+    date_c = cols["date"]
+    out_c = cols["out"]
+    rej_c = cols.get("rej", -1)
+    item_c = cols.get("item", -1)
+    size_c = cols.get("size", -1)
+    color_c = cols.get("color", -1)
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    agg: dict = {}
+    for row in values[header_idx + 1:]:
+        day = _long_date_day(g(row, date_c))
+        if day is None:
+            continue
+        item = str(g(row, item_c)).strip()
+        size = str(g(row, size_c)).strip()
+        color = str(g(row, color_c)).strip()
+        label = item or size or "Item"
+        key = (day, label)
+        a = agg.get(key)
+        if a is None:
+            a = {"out": 0.0, "rej": 0.0, "size": size, "color": color}
+            agg[key] = a
+        a["out"] += num(g(row, out_c))
+        a["rej"] += num(g(row, rej_c)) if rej_c >= 0 else 0.0
+
+    recs: List[Record] = []
+    for (day, label), a in sorted(agg.items()):
+        if a["out"] <= 0 and a["rej"] <= 0:
+            continue  # nothing produced — don't fabricate
+        recs.append(Record(
+            grain="daily",
+            period=year_month,
+            date=f"{year_month}-{day:02d}",
+            plant=plant,
+            segment=segment,
+            unit=unit,
+            machine="",          # tank workbook has no machine dimension
+            mould=label,
+            material=a["color"],
+            total_count=a["out"],
+            reject_count=a["rej"],
+            source_family=segment,
+            source_file=source_file,
+            source_tab=source_tab,
+        ))
+    return recs
+
+
 def parse_matrix_summary_col(
     values: List[list],
     *,

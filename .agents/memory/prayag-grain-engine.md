@@ -52,3 +52,25 @@ PTMT and TANK have a daily file but NO monthly-grid roster (not in `ANNUAL_SOURC
 # Detected-sources screen shows the full configured inventory
 
 The `/sources` screen must list every configured workbook (annual grids + daily descriptors) regardless of the selected period — build it from the full inventory, not the period's loaded subset, or daily/annual entries disappear depending on grain.
+
+# Finishing/regrind rows are excluded from mixed totals — and the audit MUST mirror that
+
+A `Record.is_finishing` row (e.g. PTMT regrind/grinder KG) re-processes already-counted material. `compute_metrics` excludes finishing rows from a *mixed* group (`prod_rows = non_fin if non_fin else rows`) so the plant total isn't double-counted, but a *pure-finishing* group still shows itself.
+
+**Why:** the Tier-2 engine self-reconcile (`confirm.py`) compares the published plant total against a raw row sum. If the row sum includes finishing rows while the published total excludes them, every mixed page false-flags an ERROR equal to the regrind KG.
+
+**How to apply:** any code that re-derives "the row sum behind the published total" (reconciliation, verification, exports) MUST apply the same `non_fin if non_fin else rows` selection as `compute_metrics`. Treat the two as a locked pair — change one, change the other.
+
+# Plant-level (machine-less) plants need machine-less-aware reconciliation and UI filtering
+
+Some daily plants report with NO machine identity (e.g. TANK, logged per item: `machine=""`, `mould=item`, unit pcs). Their segment total has no machine "lines" to roll up.
+
+**Why:** the segment-vs-lines hierarchy check sums machine-bearing rows; a machine-less segment yields lines_sum=0 and false-flags "segment total ≠ Σ lines". Likewise machine views/report tables that key by `machine` render a blank-machine row.
+
+**How to apply:** skip the segment-vs-lines reconcile for any (plant, segment) with zero machine-bearing rows (track `seg_has_machines`); gate the unit-mismatch check on `r.machine`; and filter `if not machine: continue` in machine_view, the machine filter list, and machine-keyed report tables. Plant-level output still shows everywhere else.
+
+# Outliers are compared WITHIN a (plant, segment) process group, never plant-wide
+
+PTMT mixes processes with incomparable output scales (Injection vs Blow vs Corrugator vs Grinding). A plant-wide median flags whole small-output processes as "outliers". Compare each machine to the median of its own `(plant, segment)` group instead.
+
+**Note:** PTMT's daily file has no monthly grid, so its 52-machine roster + process-group segments (`_ptmt_group`: GRIND→Grinding[is_finishing], BLOW→Blow Moulding, CORRUGAT→Corrugator, N-→Injection N-line, else Injection standard) are DYNAMIC from the reporting machines — never hardcode a count. The stale `replit.md` gotcha that HDPE/PTMT/TANK are "skipped" is wrong; all daily-file plants are ingested via per-plant layout dispatch (`blocks`/`tank`/`matrix`/`long`).

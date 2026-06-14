@@ -495,7 +495,7 @@ def _common_ctx(data: dict) -> dict:
     opt_rows = data.get("all_rows", data["rows"])
     plants = sorted(set(r.plant for r in opt_rows))
     segments = sorted(set(r.segment for r in opt_rows))
-    machines = sorted(set(r.machine for r in opt_rows))
+    machines = sorted(set(r.machine for r in opt_rows if r.machine))
     return {
         **data,
         "plants": plants,
@@ -618,7 +618,7 @@ def machine_view():
 
     by_machine = rollup_by_machine(data["rows"])
     machine_items = sorted(
-        [{"machine": k, "metrics": v.to_dict()} for k, v in by_machine.items()],
+        [{"machine": k, "metrics": v.to_dict()} for k, v in by_machine.items() if k],
         key=lambda x: x["metrics"]["headline"],
         reverse=True,
     )
@@ -1108,6 +1108,8 @@ def _build_report_table(report_id: str, rows, data: dict):
         table_rows = []
         chart_labels, chart_values = [], []
         for mc, m in sorted(by_machine.items()):
+            if not mc:
+                continue
             lc_per_kg = round(m.labour_cost / m.total_count, 2) if m.total_count > 0 else 0
             table_rows.append([mc, f"{m.run_time/60:.1f}", f"{m.total_count:,.0f}",
                                 f"{m.rejection_pct_display:.2f}%", f"{m.utilisation_pct:.1f}%",
@@ -1123,6 +1125,8 @@ def _build_report_table(report_id: str, rows, data: dict):
         table_rows = []
         chart_labels, chart_values = [], []
         for mc, m in sorted(by_machine.items()):
+            if not mc:
+                continue
             ideal_hrs = m.shift_len_min / 60
             actual_hrs = m.run_time / 60
             table_rows.append([mc, f"{ideal_hrs:.1f}", f"{actual_hrs:.1f}", f"{m.total_count:,.0f}",
@@ -1214,6 +1218,8 @@ def _build_report_table(report_id: str, rows, data: dict):
         table_rows = []
         chart_labels, chart_values = [], []
         for mc, m in sorted(by_machine.items()):
+            if not mc:
+                continue
             ideal_hrs = m.shift_len_min / 60
             actual_hrs = m.run_time / 60
             oee_cell = f"{m.oee_pct:.1f}%" if m.oee_available else "n/a"
