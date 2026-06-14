@@ -998,3 +998,40 @@ def _demo_reports() -> List[dict]:
             "reconcile": None,
         })
     return reports
+
+
+# ---------------------------------------------------------------------------
+# Startup cache warmup
+# ---------------------------------------------------------------------------
+def _startup_warmup() -> None:
+    """Pre-fill in-process caches a few seconds after the module loads.
+
+    Gunicorn binds the socket synchronously before this thread fires, so the
+    healthcheck at /health responds immediately (no data fetch needed there).
+    Three seconds later this thread warms both the monthly cache (_live_payload)
+    and the daily cache for the two most recent calendar months, so the very
+    first user navigation hits warm data instead of triggering a 30-60 s cold
+    Google Sheets round-trip that would time out through Replit's proxy.
+
+    Entirely best-effort: silently swallows every error. The normal per-request
+    path surfaces errors to the user if the sheets are genuinely unreachable.
+    """
+    import time as _t
+    _t.sleep(3)                    # let the worker finish booting first
+    if is_demo_mode():
+        return
+    try:
+        _live_payload()
+    except Exception:
+        pass
+    today = datetime.date.today()
+    first_of_month = today.replace(day=1)
+    prev = first_of_month - datetime.timedelta(days=1)
+    recent = sorted({prev.strftime("%Y-%m"), today.strftime("%Y-%m")})
+    try:
+        get_daily_records(recent)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_startup_warmup, daemon=True, name="cache-warmup").start()
