@@ -63,6 +63,18 @@ def last_fetch_status() -> dict:
     return dict(_last_fetch_status)
 
 
+def clear_caches() -> None:
+    """Drop every cached sheet payload so the next read fetches live data.
+
+    Used by the manual "Refresh" action. The auth token cache is left intact
+    (it is keyed to real expiry, not the data TTL) so a refresh re-reads the
+    sheets without needlessly re-authenticating.
+    """
+    _data_cache.clear()
+    _daily_cache.clear()
+    _last_fetch_status.clear()
+
+
 def _fetch_token() -> Tuple[Optional[str], float]:
     host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
     repl_identity = os.environ.get("REPL_IDENTITY")

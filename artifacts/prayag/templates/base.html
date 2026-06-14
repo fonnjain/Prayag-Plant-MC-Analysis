@@ -160,8 +160,13 @@
         <input type="date" name="to_date" value="{{ request.args.get('to_date','') }}"
           class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white;color-scheme:dark"/>
       </div>
-      <!-- Period label -->
-      <div class="text-blue-200 text-xs mt-1 truncate">{{ period_label }}</div>
+      <!-- Period label + today's date -->
+      <div class="flex items-center justify-between gap-2 mt-1">
+        <div class="text-blue-200 text-xs truncate">{{ period_label }}</div>
+        {% if today_disp %}
+        <div class="text-blue-100 text-xs font-medium whitespace-nowrap">Today's date: {{ today_disp }}</div>
+        {% endif %}
+      </div>
     </form>
   </div>
 </header>

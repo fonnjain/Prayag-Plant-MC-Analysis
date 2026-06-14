@@ -9,11 +9,12 @@ import datetime
 import json
 from functools import lru_cache
 from typing import Optional
+from urllib.parse import urlsplit
 from flask import Flask, render_template, request, jsonify, Response, abort, redirect
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    is_demo_mode, SheetReadError, last_fetch_status,
+    is_demo_mode, SheetReadError, last_fetch_status, clear_caches,
 )
 from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS
 from metrics import (
@@ -503,12 +504,33 @@ def _common_ctx(data: dict) -> dict:
         "segments": segments,
         "machines": machines,
         "overall_dict": data["overall"].to_dict(),
+        "today_disp": _fmt(_today()),
     }
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+def _safe_next(nxt: str) -> str:
+    """Return ``nxt`` only if it is an internal, same-origin relative path;
+    otherwise fall back to ``/``. Guards against open redirects."""
+    if not nxt or not nxt.startswith("/") or nxt.startswith("//") or nxt.startswith("/\\"):
+        return "/"
+    parts = urlsplit(nxt)
+    # A safe internal target has no scheme and no host (netloc).
+    if parts.scheme or parts.netloc:
+        return "/"
+    return nxt
+
+
+@app.route("/refresh")
+def refresh():
+    """Drop the sheet caches so the next page load fetches the latest live data,
+    then return to the page the user came from (defaults to the overview)."""
+    clear_caches()
+    return redirect(_safe_next(request.args.get("next", "/")))
+
 
 @app.route("/")
 def overview():

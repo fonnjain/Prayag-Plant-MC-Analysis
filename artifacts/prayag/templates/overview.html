@@ -16,6 +16,20 @@
 </a>
 {% endif %}
 
+<!-- Refresh data -->
+{% set home_q = "/?period=" ~ period %}
+{% if period=='custom' %}{% set home_q = home_q ~ "&from_date=" ~ request.args.get('from_date','') ~ "&to_date=" ~ request.args.get('to_date','') %}{% endif %}
+<div class="flex items-center justify-between mb-3">
+  <div class="text-xs text-gray-500">Live production sheets</div>
+  <a href="/refresh?next={{ home_q | urlencode }}" id="refresh-btn"
+     class="inline-flex items-center gap-1.5 bg-navy text-white text-xs font-semibold px-3 py-1.5 rounded-lg active:opacity-80">
+    <svg id="refresh-icon" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    <span id="refresh-label">Refresh data</span>
+  </a>
+</div>
+
 <!-- KPI Grid -->
 <div class="grid grid-cols-2 gap-3 mb-4">
   <!-- Headline Big Card: OEE (daily) or Output Efficiency (monthly) -->
@@ -191,6 +205,25 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// Refresh button: show a "Refreshing…" state while the live sheets reload.
+(function () {
+  var btn = document.getElementById('refresh-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var label = document.getElementById('refresh-label');
+    var icon = document.getElementById('refresh-icon');
+    if (label) label.textContent = 'Refreshing…';
+    if (icon) {
+      icon.style.transition = 'transform 0.8s linear';
+      icon.style.transformOrigin = 'center';
+      icon.style.transform = 'rotate(360deg)';
+    }
+    btn.style.pointerEvents = 'none';
+    btn.style.opacity = '0.7';
+  });
+})();
+</script>
 {% if not (confirmation and confirmation.status=='error' and not confirmation.released) %}
 <script>
 // Headline Gauge (Doughnut) — OEE when available, else Output Efficiency.
