@@ -191,8 +191,8 @@ def parse_period(args) -> dict:
     if sub_monthly:
         disp = ", ".join(_month_disp(m) for m in months)
         banner = (
-            f"{label} → showing monthly totals for {disp}. The source data is "
-            "monthly, so a daily breakdown isn't available yet."
+            f"{label} → no daily entries have been recorded for this window yet, "
+            f"so monthly totals for {disp} are shown instead."
         )
 
     return {
@@ -301,8 +301,7 @@ def get_data(args):
             )
             grain_banner = (
                 f"{pinfo['label']} → true daily data for {disp_plants}. "
-                "Other plants don't have a daily baseline yet, so they're omitted "
-                "from this sub-monthly view."
+                "Plants with no daily entries in this window aren't shown."
             )
     if not daily_used:
         all_rows, source_reports, recon_warnings = get_records(months)

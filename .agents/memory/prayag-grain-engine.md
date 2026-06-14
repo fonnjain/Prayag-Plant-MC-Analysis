@@ -19,7 +19,19 @@ Per-day ideal hours = the machine's monthly ideal hours ÷ its active days that 
 
 # Sub-monthly windows can't borrow monthly totals
 
-Sub-monthly windows (yesterday / 7d / rolling 30d / custom < 27d) never align to calendar months, so monthly totals cannot be sliced into them. Show only daily-capable plants for these windows and banner the omission; never mix non-sliceable monthly totals into a partial window.
+Sub-monthly windows (yesterday / 7d / rolling 30d / custom < 27d) never align to calendar months, so monthly totals cannot be sliced into them. Never mix non-sliceable monthly totals into a partial window — read real daily rows for the window instead.
+
+# Daily ingestion covers EVERY plant with a daily file, via a per-plant layout config
+
+Each plant declares its daily tab + layout (`matrix` = wide per-date grid, or `long` = one row per machine per date). One workbook may emit several logical plants (e.g. the PIPE workbook emits both PIPE and a `MOULDING `-prefixed plant from a second tab). Do not hard-skip plants that lack a monthly grid — read them and resolve the ideal denominator by precedence.
+
+**Why:** the original engine only ingested plants with BOTH a daily file and a monthly grid, so sub-monthly windows fell back to a misleading monthly summary ("0/N machines"). The fix reads daily for all configured plants and degrades the *baseline*, not the *data*.
+
+# Ideal-denominator precedence + the "no baseline set" honest fallback
+
+Per-machine ideal hours/output resolve in strict order: **monthly grid → in-sheet ideal column (e.g. PTMT) → baseline master → none**. When none resolves, utilisation/output-efficiency are *suppressed* (not computed as a misleading 0%) and the figure is flagged "No baseline set"; raw hours + output are still shown.
+
+**How to apply:** metrics expose `util_available`/`eff_available`/`headline_available` and `headline` falls OEE→eff→util→"No baseline set". Templates must gate on these flags, **not just `oee_available`** — the OEE-vs-OutputEfficiency binary is wrong for util-only and no-baseline plants. Use `headline_label`-style branching (OEE / Output Efficiency / Utilisation / No baseline) for the headline caption everywhere it appears.
 
 # Detected-sources screen shows the full configured inventory
 

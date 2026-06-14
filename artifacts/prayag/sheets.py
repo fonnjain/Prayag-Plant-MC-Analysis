@@ -22,6 +22,7 @@ from typing import List, Optional, Tuple
 from metrics import Record
 import parsers
 import sources
+import baselines
 
 # ---------------------------------------------------------------------------
 # Connection + token (cached within the process until near expiry)
@@ -362,9 +363,44 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
 # ---------------------------------------------------------------------------
 # Live daily load — per-month workbooks (true day-level data)
 # ---------------------------------------------------------------------------
-_daily_cache: dict = {}          # (plant, ym) -> (ts, (records, report))
-# Daily-matrix tab titles, in preference order (layout varies by plant).
-_DAILY_TAB_PREF = ["Report-5", "Daily Report"]
+_daily_cache: dict = {}          # (plant, ym) -> (ts, [(records, report), ...])
+
+# Per-plant daily layout config. Each workbook can emit one OR MORE logical
+# plants (the PIPE workbook also holds the Moulding tab). ``layout`` selects the
+# parser: ``matrix`` = wide per-date grid (current parser), ``long`` = one row
+# per machine per date (Report-11/Report-12). ``long`` carries the column specs
+# for parsers.parse_daily_long. ``ideal_col`` (matrix only) names an in-sheet
+# per-machine ideal-hours column used as a utilisation baseline when there is no
+# monthly grid (PTMT). Tabs/columns are detected at read time; nothing assumed.
+_DAILY_LAYOUTS: dict = {
+    "PIPE": [
+        {
+            "emit": "PIPE", "tab": "Report-11", "layout": "long",
+            "long": dict(
+                machine_col=("eq", "MACHINE NO."),
+                out_col=("eq", "WEIGHT"),
+                run_col=("startswith", "RUNNING HOUR"),
+                rej_col=("eq", "ACTUAL WT (KG)"),
+            ),
+        },
+        {
+            "emit": "MOULDING", "tab": "Report-12", "layout": "long",
+            "long": dict(
+                machine_col=("startswith", "MOULDING MACHI"),
+                out_col=("contains", "WT IN KGS"),
+                runner_col=("startswith", "RUNNER PRODUCE"),
+                machine_prefix="MOULDING ",
+            ),
+        },
+    ],
+    "GARDEN": [{"emit": "GARDEN", "tab": "Daily Report", "layout": "matrix"}],
+    "HDPE": [{"emit": "HDPE", "tab": "Daily Report", "layout": "matrix"}],
+    "PTMT": [{
+        "emit": "PTMT", "tab": "Report-5", "layout": "matrix",
+        "ideal_col": ("contains", "IDEAL HOUR"),
+    }],
+    "TANK": [{"emit": "TANK", "tab": "Daily Report", "layout": "matrix"}],
+}
 
 
 _MC_RE = re.compile(r"M\s*/?\s*C\s*-?\s*(\d+)", re.I)
@@ -389,12 +425,12 @@ def _mc_key(label) -> Optional[int]:
 
 
 def _daily_plants() -> List[str]:
-    """Plants we ingest at daily grain: those with BOTH a daily workbook AND a
-    monthly grid. The monthly grid supplies the per-machine ideal rate/hours, so
-    daily figures reconcile with the monthly engine by construction."""
-    grid_plants = {s["plant"] for s in sources.ANNUAL_SOURCES}
-    return [p for p in sources.DAILY_SOURCES if p in grid_plants
-            and sources.DAILY_SOURCES[p].get("files")]
+    """Workbook plants we read at daily grain — every plant that has a daily
+    file configured. Each may emit one or more logical plants (see
+    ``_DAILY_LAYOUTS``); plants with no monthly grid (PTMT/TANK) are still read,
+    falling back to an in-sheet or no baseline rather than being skipped."""
+    return [p for p in sources.DAILY_SOURCES
+            if p in _DAILY_LAYOUTS and sources.DAILY_SOURCES[p].get("files")]
 
 
 def _daily_seg_unit(plant: str) -> Tuple[str, str]:
@@ -404,101 +440,154 @@ def _daily_seg_unit(plant: str) -> Tuple[str, str]:
     return plant.title(), "kg"
 
 
-def _load_daily(plant: str, ym: str, token: str) -> Tuple[List[Record], Optional[dict]]:
-    """Read one plant's daily workbook for month ``ym`` → (records, report).
+def _grid_ideal_for(emit: str, ym: str) -> Tuple[dict, float]:
+    """(ideal_by_key, grid_plant_output_total) from the cached monthly grid.
 
-    Only machines that also appear in the monthly grid are kept (so we have an
-    ideal rate and the daily totals reconcile against the monthly engine). The
-    per-day ideal hours = the machine's monthly ideal hours / its active days.
-    """
-    file_id = sources.DAILY_SOURCES.get(plant, {}).get("files", {}).get(ym)
-    if not file_id:
-        return [], None
-
-    # Per-machine ideal rate + monthly ideal hours from the (cached) grid.
-    payload = _live_payload()
+    ``ideal_by_key`` is keyed by ``_mc_key`` so daily machines join onto their
+    monthly ideal rate/hours; it is empty for plants with no monthly grid
+    (PTMT/TANK) or whose daily identifiers don't map to the grid (Moulding uses
+    mould codes, not M/C numbers). ``grid_plant_output_total`` is the plant's
+    whole-month grid output, used for a plant-level reconciliation that holds
+    even when the per-machine join doesn't."""
     ideal_map: dict = {}
-    mon_out_by_mc: dict = {}
-    for r in payload["records"]:
-        if r.plant == plant and r.period == ym:
+    grid_total = 0.0
+    for r in _live_payload()["records"]:
+        if r.plant == emit and r.period == ym:
+            grid_total += r.total_count
             k = _mc_key(r.machine)
-            if k is None:
-                continue
-            if r.ideal_rate > 0:
+            if k is not None and r.ideal_rate > 0:
                 ideal_map[k] = (r.ideal_rate, r.ideal_hours)
-            mon_out_by_mc[k] = mon_out_by_mc.get(k, 0.0) + r.total_count
+    return ideal_map, grid_total
 
-    seg, unit = _daily_seg_unit(plant)
+
+def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
+                token: str) -> Tuple[List[Record], dict]:
+    """Read and baseline one logical plant's daily rows from a workbook tab.
+
+    Ideal-denominator precedence per machine: monthly grid → in-sheet ideal
+    column → config baseline → none ("no baseline set"). A no-baseline machine
+    still reports run hours + output; its ratio is suppressed downstream rather
+    than shown as a misleading 0%.
+    """
+    seg, unit = _daily_seg_unit(emit)
+    tab = spec["tab"]
     report = {
-        "family": plant.lower(),
-        "title": f"{sources.PLANT_NAMES.get(plant, plant)} — daily ({ym})",
+        "family": emit.lower(),
+        "title": f"{sources.PLANT_NAMES.get(emit, emit)} — daily ({ym})",
         "file_id": file_id,
-        "tab": "",
+        "tab": tab,
         "detail_tabs": [],
         "grain": "daily",
         "months_available": [ym],
         "record_count": 0,
         "segment": seg,
-        "plant": plant,
+        "plant": emit,
         "reconcile": None,
         "warning": None,
     }
-    if not ideal_map:
-        report["warning"] = (
-            f"{plant} {ym}: no monthly grid baseline, so daily rows can't be "
-            "reconciled — skipped."
-        )
-        return [], report
 
     tabs = list_tabs(file_id, token)
-    tab = next((t for t in _DAILY_TAB_PREF if t in tabs), None)
-    if not tab:
+    if tab not in tabs:
         report["warning"] = (
-            f"{plant} {ym}: no daily matrix tab ({'/'.join(_DAILY_TAB_PREF)}) "
-            "found in the workbook."
+            f"{emit} {ym}: daily tab '{tab}' not found in the workbook."
         )
         return [], report
-    report["tab"] = tab
 
-    raw = parsers.parse_daily_matrix(
-        read_values(file_id, tab, token),
-        plant=plant, segment=seg, unit=unit, year_month=ym,
-        source_file=file_id, source_tab=tab,
-    )
-    matched = [r for r in raw if _mc_key(r.machine) in ideal_map]
-    skipped = len({r.machine for r in raw if _mc_key(r.machine) not in ideal_map})
+    values = read_values(file_id, tab, token)
+    if spec["layout"] == "long":
+        raw = parsers.parse_daily_long(
+            values, plant=emit, segment=seg, unit=unit, year_month=ym,
+            source_file=file_id, source_tab=tab, **spec["long"],
+        )
+    else:
+        raw = parsers.parse_daily_matrix(
+            values, plant=emit, segment=seg, unit=unit, year_month=ym,
+            source_file=file_id, source_tab=tab,
+        )
 
+    # Baseline sources, in precedence order.
+    grid_ideal, grid_total = _grid_ideal_for(emit, ym)
+    sheet_ideal: dict = {}
+    if spec.get("ideal_col"):
+        labels = parsers.parse_matrix_summary_col(values, header_spec=spec["ideal_col"])
+        # Re-key onto the machine names the matrix parser emitted ("PLANT label").
+        sheet_ideal = {f"{emit} {lbl}".strip(): hrs for lbl, hrs in labels.items()}
+
+    # Active days per machine (full month) so per-day ideal hours reconcile to
+    # the monthly figure.
     active: dict = {}
-    for r in matched:
-        active.setdefault(_mc_key(r.machine), set()).add(r.date)
+    for r in raw:
+        active.setdefault(r.machine, set()).add(r.date)
 
-    for r in matched:
+    for r in raw:
         k = _mc_key(r.machine)
-        rate, ih_month = ideal_map[k]
-        r.ideal_rate = rate
-        r.ideal_hours = ih_month / max(len(active.get(k, ())), 1)
-        r.ideal_output = r.actual_hours * rate
+        days = max(len(active.get(r.machine, ())), 1)
+        if k is not None and k in grid_ideal:
+            rate, ih_month = grid_ideal[k]
+            r.ideal_rate = rate
+            r.ideal_hours = ih_month / days
+            r.ideal_output = r.actual_hours * rate
+            r.ideal_source = "config"
+        elif r.machine in sheet_ideal:
+            r.ideal_hours = sheet_ideal[r.machine] / days
+            r.ideal_output = 0.0  # no in-sheet output rate → efficiency hidden
+            r.ideal_source = "sheet"
+        else:
+            base = baselines.resolve(emit, r.machine, ym)
+            if base:
+                r.ideal_hours = base["planned_hours"] / days
+                if base.get("ideal_output") is not None:
+                    rate = base["ideal_output"] / max(base["planned_hours"], 1e-9)
+                    r.ideal_rate = rate
+                    r.ideal_output = r.actual_hours * rate
+                r.ideal_source = "config"
+            else:
+                r.ideal_hours = 0.0
+                r.ideal_output = 0.0
+                r.ideal_source = "none"
 
-    report["detail_tabs"] = sorted({r.machine for r in matched})
-    report["record_count"] = len(matched)
+    report["detail_tabs"] = sorted({r.machine for r in raw})
+    report["record_count"] = len(raw)
 
-    # Reconcile daily output vs the monthly grid (same machines).
-    daily_out = sum(r.total_count for r in matched)
-    grid_out = sum(mon_out_by_mc.get(k, 0.0) for k in active)
-    if grid_out > 0:
-        diff = abs(daily_out - grid_out) / grid_out
+    # Reconcile at the PLANT level — daily output vs the whole-month grid output.
+    # This holds even when the per-machine join doesn't (Moulding mould codes),
+    # surfacing any honest cross-document gap rather than hiding it.
+    if grid_total > 0:
+        daily_out = sum(r.total_count for r in raw)
+        diff = abs(daily_out - grid_total) / grid_total
         report["reconcile"] = {
-            "grid_total": round(grid_out, 1),
+            "grid_total": round(grid_total, 1),
             "detail_total": round(daily_out, 1),
             "diff_pct": round(diff * 100, 2),
             "ok": diff <= 0.05,
         }
-    if skipped:
+
+    # One summary line for machines without an efficiency baseline (not one per
+    # machine). Their run hours + output still publish; only the ratio is hidden.
+    total_m = len({r.machine for r in raw})
+    no_base = sorted({r.machine for r in raw if r.ideal_source == "none"})
+    if no_base:
         report["warning"] = (
-            f"{plant} {ym}: {skipped} daily machine(s) not in the monthly grid "
-            "were skipped (no ideal-rate baseline)."
+            f"{emit} {ym}: {len(no_base)} of {total_m} machine(s) have no "
+            "planned-hours baseline — run hours + output are shown but "
+            "utilisation/efficiency are hidden."
         )
-    return matched, report
+    return raw, report
+
+
+def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dict]]:
+    """Read one workbook plant's daily file for month ``ym``.
+
+    Returns a list of (records, report) — one per logical plant the workbook
+    emits (the PIPE workbook emits both PIPE and Moulding)."""
+    file_id = sources.DAILY_SOURCES.get(plant, {}).get("files", {}).get(ym)
+    if not file_id:
+        return []
+    out: List[Tuple[List[Record], dict]] = []
+    for spec in _DAILY_LAYOUTS.get(plant, []):
+        recs, report = _emit_daily(spec["emit"], ym, file_id, spec, token)
+        out.append((recs, report))
+    return out
 
 
 def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]:
@@ -525,12 +614,14 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
             key = (plant, ym)
             cached = _daily_cache.get(key)
             if cached and now - cached[0] < _DATA_TTL:
-                recs, report = cached[1]
+                results = cached[1]
             else:
-                recs, report = _load_daily(plant, ym, token)
-                _daily_cache[key] = (now, (recs, report))
-            all_recs.extend(recs)
-            if report:
+                results = _load_daily(plant, ym, token)
+                _daily_cache[key] = (now, results)
+            for recs, report in results:
+                all_recs.extend(recs)
+                if not report:
+                    continue
                 reports.append(report)
                 if report.get("warning"):
                     warnings.append(report["warning"])
@@ -550,17 +641,17 @@ def detected_sources() -> List[dict]:
         return _demo_reports()
     reports = list(_live_payload()["reports"])
     # Document the daily workbooks too (descriptors only — no extra network).
+    grid_plants = {s["plant"] for s in sources.ANNUAL_SOURCES}
     for plant in sources.DAILY_SOURCES:
         files = sources.DAILY_SOURCES[plant].get("files", {})
         if not files:
             continue
         seg, _unit = _daily_seg_unit(plant)
-        capable = plant in _daily_plants()
-        reports.append({
+        emits = _DAILY_LAYOUTS.get(plant, [])
+        base = {
             "family": f"{plant.lower()}-daily",
             "title": f"{sources.PLANT_NAMES.get(plant, plant)} — daily workbooks",
             "file_id": next(iter(files.values()), ""),
-            "tab": "/".join(_DAILY_TAB_PREF),
             "detail_tabs": [],
             "grain": "daily",
             "months_available": sorted(files.keys()),
@@ -569,13 +660,26 @@ def detected_sources() -> List[dict]:
             "plant": plant,
             "reconcile": None,
             "field_map": parsers.MC_DETAIL_FIELD_MAP,
-            "note": (
-                "Per-date matrix; ideal rate/hours joined from the monthly grid."
-                if capable else
-                "Daily file present but no monthly grid baseline yet — not "
-                "ingested (sub-monthly falls back to monthly)."
-            ),
-        })
+        }
+        if not emits:
+            reports.append({**base, "tab": "", "note": (
+                "Daily file present but no layout is configured yet — not ingested.")})
+            continue
+        tabs = [e["tab"] for e in emits]
+        layouts = sorted({e["layout"] for e in emits})
+        emit_names = [e["emit"] for e in emits]
+        # Ideal-denominator precedence (matches _emit_daily): grid → in-sheet ideal → none.
+        if any(e["emit"] in grid_plants for e in emits):
+            note = "Daily grain; ideal rate/hours joined from the monthly grid baseline."
+        elif any(e.get("ideal_col") for e in emits):
+            note = "Daily tab carries an in-sheet ideal column; utilisation uses it directly."
+        else:
+            note = ("Daily grain; no monthly grid or in-sheet ideal — hours & output "
+                    "are shown and the plant is flagged 'no baseline set'.")
+        reports.append({**base, "tab": "/".join(tabs), "note": (
+            note
+            + (f" Emits: {', '.join(emit_names)}." if emit_names != [plant] else "")
+            + (f" Layout: {'/'.join(layouts)}." if layouts else ""))})
     return reports
 
 

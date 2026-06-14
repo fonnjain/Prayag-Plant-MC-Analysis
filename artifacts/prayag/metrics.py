@@ -114,6 +114,12 @@ class MetricsResult:
     output_efficiency: float = 0.0
 
     oee_available: bool = False
+    # Whether a real ideal/planned baseline backs the ratio. False for plants
+    # with no monthly grid, no in-sheet ideal column and no config baseline
+    # (e.g. TANK, Moulding daily): we still report run hours + output, but the
+    # ratio is suppressed in the UI rather than shown as a misleading 0%.
+    util_available: bool = False
+    eff_available: bool = False
 
     # Costs
     labour_cost: float = 0.0
@@ -137,17 +143,45 @@ class MetricsResult:
         return _rate_band(self.output_efficiency)
 
     @property
+    def headline_available(self) -> bool:
+        """True when some baseline-backed headline KPI can be shown."""
+        return self.oee_available or self.eff_available or self.util_available
+
+    @property
     def headline(self) -> float:
-        """Primary KPI: OEE when available, else Output Efficiency."""
-        return self.oee if self.oee_available else self.output_efficiency
+        """Primary KPI: OEE, else Output Efficiency, else Utilisation.
+
+        Falls back through the ratios that actually have a baseline behind them
+        so a utilisation-only plant (e.g. PTMT, with in-sheet ideal hours but no
+        output rate) still shows a real figure instead of a misleading 0%.
+        """
+        if self.oee_available:
+            return self.oee
+        if self.eff_available:
+            return self.output_efficiency
+        if self.util_available:
+            return self.utilisation
+        return 0.0
 
     @property
     def headline_label(self) -> str:
-        return "OEE" if self.oee_available else "Output Efficiency"
+        if self.oee_available:
+            return "OEE"
+        if self.eff_available:
+            return "Output Efficiency"
+        if self.util_available:
+            return "Utilisation"
+        return "No baseline set"
 
     @property
     def headline_rating(self) -> str:
-        return self.oee_rating if self.oee_available else self.eff_rating
+        if self.oee_available:
+            return self.oee_rating
+        if self.eff_available:
+            return self.eff_rating
+        if self.util_available:
+            return self.util_rating
+        return "red"
 
     # ---- percentage helpers ----
     @property
@@ -202,6 +236,9 @@ class MetricsResult:
             "quality": self.quality_pct,
             "oee": self.oee_pct,
             "oee_available": self.oee_available,
+            "util_available": self.util_available,
+            "eff_available": self.eff_available,
+            "headline_available": self.headline_available,
             "rejection_pct": self.rejection_pct_display,
             "runner_pct": round(self.runner_pct * 100, 2),
             "attainment": self.attainment_pct,
@@ -237,6 +274,13 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     if not rows:
         return m
 
+    # Utilisation/efficiency numerators only accumulate hours/output that have a
+    # real baseline behind them (ideal_hours / ideal_output > 0). A no-baseline
+    # plant (TANK, Moulding daily) still contributes to the output and run-hour
+    # TOTALS below, but must NOT pollute the ratio — otherwise its run hours land
+    # in the numerator with a zero denominator and silently inflate the figure.
+    util_run = 0.0
+    eff_out = 0.0
     for r in rows:
         m.total_count += r.total_count
         m.reject_count += r.reject_count
@@ -255,19 +299,28 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             m.ideal_hours += r.shift_len_min / 60.0
             m.ideal_output += (row_run / 60.0) * r.ideal_rate
             m.downtime_min += r.downtime_min
+            util_run += row_run / 60.0
+            if r.ideal_rate > 0:
+                eff_out += r.total_count
         else:
             # Monthly-grain rows AND daily-matrix rows (per-date production
             # grids) both carry hours/output directly — no shift timing to model.
             m.actual_hours += r.actual_hours
             m.ideal_hours += r.ideal_hours
             m.ideal_output += r.ideal_output
+            if r.ideal_hours > 0:
+                util_run += r.actual_hours
+            if r.ideal_output > 0:
+                eff_out += r.total_count
 
     m.good_count = m.total_count - m.reject_count
     m.run_time = m.actual_hours * 60.0
     m.shift_len_min = m.ideal_hours * 60.0
 
-    m.utilisation = _safe_div(m.actual_hours, m.ideal_hours)
-    m.output_efficiency = _safe_div(m.total_count, m.ideal_output)
+    m.utilisation = _safe_div(util_run, m.ideal_hours)
+    m.output_efficiency = _safe_div(eff_out, m.ideal_output)
+    m.util_available = m.ideal_hours > 0
+    m.eff_available = m.ideal_output > 0
     m.rejection_pct = _safe_div(m.reject_count, m.total_count)
     m.runner_pct = _safe_div(m.runner_lumps, m.total_count)
     m.attainment = _safe_div(m.total_count, m.planned_output)

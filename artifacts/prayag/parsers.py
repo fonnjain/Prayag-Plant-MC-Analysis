@@ -214,6 +214,163 @@ def _day_from_label(s) -> Optional[int]:
     return None
 
 
+def _long_date_day(s) -> Optional[int]:
+    """Day-of-month from a long-format DATE cell, e.g. ``"Jun 1, 2026"``.
+
+    Long daily tabs (PIPE Report-11, Moulding Report-12) write a full
+    ``"Mon D, YYYY"`` date per row rather than a column header. Falls back to
+    :func:`_day_from_label` for the day-first / month-comma variants.
+    """
+    d = _day_from_label(s)
+    if d is not None:
+        return d
+    t = str(s).strip()
+    m = re.match(r"^[A-Za-z]{3,9}\.?\s+(\d{1,2})\b", t)  # Jun 1, 2026
+    if m:
+        d = int(m.group(1))
+        return d if 1 <= d <= 31 else None
+    return None
+
+
+def _match_header(cell, spec) -> bool:
+    """Match a header cell against a ``(mode, token)`` spec.
+
+    mode ∈ {"eq", "contains", "startswith"}; comparison is upper-cased and
+    whitespace-stripped so layout quirks (" Wt in Kgs ") still match.
+    """
+    if not spec:
+        return False
+    mode, token = spec
+    u = str(cell).strip().upper()
+    t = str(token).strip().upper()
+    if mode == "eq":
+        return u == t
+    if mode == "contains":
+        return t in u
+    if mode == "startswith":
+        return u.startswith(t)
+    return False
+
+
+def parse_daily_long(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    year_month: str,
+    source_file: str,
+    source_tab: str,
+    date_col=("eq", "DATE"),
+    machine_col,
+    out_col,
+    run_col=None,
+    rej_col=None,
+    runner_col=None,
+    machine_prefix: str = "",
+) -> List[Record]:
+    """Parse a long (one row per machine per date) daily tab into Records.
+
+    Used for PIPE ``Report-11`` and Moulding ``Report-12`` (the latter lives
+    inside the PIPE workbook). Unlike the wide matrix, each physical row is a
+    single (machine, date) observation; multiple rows for the same machine/date
+    (different item codes) are summed. Column positions are detected from the
+    header band by ``(mode, token)`` spec — never assumed — and the stored ratio
+    cells are ignored. ``run_col``/``rej_col``/``runner_col`` are optional: a
+    layout without run hours (Moulding) simply leaves run hours at zero, which
+    downstream marks the plant ``no baseline set`` rather than fabricating a
+    figure.
+    """
+    if not values:
+        return []
+
+    # Header row = first row carrying the DATE label that also exposes the
+    # machine column somewhere in its header band (header row + any sub-header
+    # rows that sit above the first real data row).
+    header_idx = -1
+    date_c = -1
+    for i, row in enumerate(values[:12]):
+        for c, v in enumerate(row):
+            if _match_header(v, date_col):
+                header_idx, date_c = i, c
+                break
+        if header_idx >= 0:
+            break
+    if header_idx < 0 or date_c < 0:
+        return []
+
+    # First data row: the first row after the header whose DATE cell parses.
+    first_data = -1
+    for j in range(header_idx + 1, len(values)):
+        if _long_date_day(values[j][date_c] if date_c < len(values[j]) else "") is not None:
+            first_data = j
+            break
+    if first_data < 0:
+        return []
+
+    band = values[header_idx:first_data]  # header + sub-header rows
+
+    def find_col(spec) -> int:
+        if not spec:
+            return -1
+        for row in band:
+            for c, v in enumerate(row):
+                if _match_header(v, spec):
+                    return c
+        return -1
+
+    mc_c = find_col(machine_col)
+    out_c = find_col(out_col)
+    run_c = find_col(run_col)
+    rej_c = find_col(rej_col)
+    runner_c = find_col(runner_col)
+    if mc_c < 0 or out_c < 0:
+        return []
+
+    # Aggregate every (machine, day) — a machine can have several item rows per
+    # day. Sum run hours/output/rejection/runner so the day rolls up correctly.
+    agg: dict = {}
+    for row in values[first_data:]:
+        day = _long_date_day(row[date_c] if date_c < len(row) else "")
+        if day is None:
+            continue
+        label = str(row[mc_c]).strip() if mc_c < len(row) else ""
+        if not label or label.upper() in _DAILY_SKIP_LABELS:
+            continue
+        machine = f"{machine_prefix}{label}".strip()
+        key = (machine, day)
+        a = agg.get(key)
+        if a is None:
+            a = {"run": 0.0, "out": 0.0, "rej": 0.0, "runner": 0.0}
+            agg[key] = a
+        a["run"] += num(row[run_c]) if 0 <= run_c < len(row) else 0.0
+        a["out"] += num(row[out_c]) if 0 <= out_c < len(row) else 0.0
+        a["rej"] += num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
+        a["runner"] += num(row[runner_c]) if 0 <= runner_c < len(row) else 0.0
+
+    recs: List[Record] = []
+    for (machine, day), a in agg.items():
+        if a["run"] <= 0 and a["out"] <= 0:
+            continue  # nothing produced that day — don't fabricate
+        recs.append(Record(
+            grain="daily",
+            period=year_month,
+            date=f"{year_month}-{day:02d}",
+            plant=plant,
+            segment=segment,
+            unit=unit,
+            machine=machine,
+            actual_hours=a["run"],
+            total_count=a["out"],
+            reject_count=a["rej"],
+            runner_lumps=a["runner"],
+            source_family=segment,
+            source_file=source_file,
+            source_tab=source_tab,
+        ))
+    return recs
+
+
 # Row labels that are subtotals / headers, never real machines.
 _DAILY_SKIP_LABELS = {"TOTAL", "PART-1", "PART-2", "%AGE", "%", "MACHINE", "M/C NO.", "S.NO."}
 
@@ -320,6 +477,51 @@ def parse_daily_matrix(
                 source_tab=source_tab,
             ))
     return recs
+
+
+def parse_matrix_summary_col(
+    values: List[list],
+    *,
+    header_spec,
+    mc_header_spec=("contains", "M/C NO"),
+) -> dict:
+    """Map ``machine label -> numeric value`` from a per-machine summary column.
+
+    Some daily matrix tabs carry a per-machine MONTHLY figure alongside the
+    per-date groups — e.g. PTMT ``Report-5`` has an ``IDEAL HOUR`` column. This
+    reads that single summary column keyed by the machine-id column so the value
+    can be used as a utilisation baseline. Returns ``{}`` if either column is not
+    found (caller then falls back to the next baseline source). Deterministic.
+    """
+    if not values:
+        return {}
+    hdr_idx = -1
+    val_c = -1
+    for i, row in enumerate(values[:10]):
+        for c, v in enumerate(row):
+            if _match_header(v, header_spec):
+                hdr_idx, val_c = i, c
+                break
+        if hdr_idx >= 0:
+            break
+    if hdr_idx < 0 or val_c < 0:
+        return {}
+    mc_c = -1
+    for c, v in enumerate(values[hdr_idx]):
+        if _match_header(v, mc_header_spec):
+            mc_c = c
+            break
+    if mc_c < 0:
+        return {}
+    out: dict = {}
+    for row in values[hdr_idx + 1:]:
+        label = str(row[mc_c]).strip() if mc_c < len(row) else ""
+        if not label or label.upper() in _DAILY_SKIP_LABELS:
+            continue
+        val = num(row[val_c]) if val_c < len(row) else 0.0
+        if val > 0:
+            out[label] = val
+    return out
 
 
 def grid_total_output(values: List[list]) -> Optional[float]:

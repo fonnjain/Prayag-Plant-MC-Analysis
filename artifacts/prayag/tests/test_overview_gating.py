@@ -19,6 +19,7 @@ def _ctx(status):
     o = {
         "headline": 73.4, "headline_rating": "amber", "headline_label": "Fair",
         "oee_available": False,
+        "util_available": True, "eff_available": True, "headline_available": True,
         "availability": 90.0, "performance": 88.0, "quality": 95.0,
         "utilisation": 80.0, "output_efficiency": 73.4,
         "total_count": 12345.0, "attainment": 88.0,
@@ -70,7 +71,22 @@ def test_overview_publishes_figures_when_reconciled():
     print("PASS: reconciled state publishes the headline figure and charts")
 
 
+def test_overview_shows_no_baseline_when_unavailable():
+    ctx = _ctx("pass")
+    o = ctx["overall_dict"]
+    o["util_available"] = False
+    o["eff_available"] = False
+    o["headline_available"] = False
+    o["headline_rating"] = "red"
+    with app.test_request_context("/?period=7d"):
+        html = render_template("overview.html", **ctx)
+    assert "No baseline set" in html, "no-baseline state must show the 'No baseline set' placeholder"
+    assert "No baseline" in html, "no-baseline bars must show a 'No baseline' label, not 0%"
+    print("PASS: no-baseline state hides utilisation/efficiency and shows a baseline notice")
+
+
 if __name__ == "__main__":
     test_overview_blocks_all_headline_figures_on_error()
     test_overview_publishes_figures_when_reconciled()
+    test_overview_shows_no_baseline_when_unavailable()
     print("\nAll overview gating regression tests passed.")

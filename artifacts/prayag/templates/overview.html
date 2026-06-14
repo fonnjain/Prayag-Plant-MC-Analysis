@@ -23,7 +23,7 @@
     <div class="flex items-center justify-between mb-3">
       <div>
         <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">
-          {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% else %}Output Efficiency{{ info('OUTPUT_EFF') }}{% endif %}
+          {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% elif o.eff_available %}Output Efficiency{{ info('OUTPUT_EFF') }}{% elif o.util_available %}Utilisation{{ info('UTIL') }}{% else %}Headline{% endif %}
         </div>
         {% if blocked %}
         <a href="{{ review_href }}" class="block mt-1">
@@ -33,11 +33,14 @@
           </span>
           <div class="text-xs text-gray-400 mt-1">Figure withheld until {{ confirmation.counts.error }} data error(s) are resolved →</div>
         </a>
-        {% else %}
+        {% elif o.headline_available %}
         <div class="text-4xl font-bold text-navy mt-1" style="color:var(--navy)">{{ o.headline }}%</div>
         {% if not o.oee_available %}
         <div class="text-xs text-gray-400 mt-1">Monthly data — OEE (availability × performance × quality) needs daily shift logs</div>
         {% endif %}
+        {% else %}
+        <div class="text-2xl font-bold text-gray-400 mt-1">No baseline set</div>
+        <div class="text-xs text-gray-400 mt-1">Run hours &amp; output are shown below; set a planned-hours baseline for utilisation/efficiency.</div>
         {% endif %}
       </div>
       <!-- Doughnut gauge -->
@@ -63,19 +66,19 @@
     {% else %}
     {% if o.oee_available %}
     <!-- A P Q progress bars (daily grain) -->
-    {% set bars = [('Availability', o.availability, '#22c55e', 'A'), ('Performance', o.performance, '#3b82f6', 'P'), ('Quality', o.quality, '#8b5cf6', 'Q')] %}
+    {% set bars = [('Availability', o.availability, '#22c55e', 'A', true), ('Performance', o.performance, '#3b82f6', 'P', true), ('Quality', o.quality, '#8b5cf6', 'Q', true)] %}
     {% else %}
     <!-- Utilisation / Output Efficiency bars (monthly grain) -->
-    {% set bars = [('Utilisation', o.utilisation, '#22c55e', 'UTIL'), ('Output Efficiency', o.output_efficiency, '#3b82f6', 'EFF')] %}
+    {% set bars = [('Utilisation', o.utilisation, '#22c55e', 'UTIL', o.util_available), ('Output Efficiency', o.output_efficiency, '#3b82f6', 'EFF', o.eff_available)] %}
     {% endif %}
-    {% for label, val, color, tkey in bars %}
+    {% for label, val, color, tkey, avail in bars %}
     <div class="mb-2">
       <div class="flex justify-between text-xs mb-1">
         <span class="text-gray-600">{{ label }}{{ info(tkey) }}</span>
-        <span class="font-semibold text-gray-800">{{ val }}%</span>
+        <span class="font-semibold text-gray-800">{% if avail %}{{ val }}%{% else %}<span class="text-gray-400">No baseline</span>{% endif %}</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width:{{ [val, 100]|min }}%;background:{{ color }}"></div>
+        <div class="progress-fill" style="width:{% if avail %}{{ [val, 100]|min }}{% else %}0{% endif %}%;background:{{ color }}"></div>
       </div>
     </div>
     {% endfor %}

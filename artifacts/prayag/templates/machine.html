@@ -68,8 +68,8 @@
           <div class="ml-2 flex items-center gap-1 flex-shrink-0">
             <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ m.headline_label }}</span>{{ info('OEE' if m.oee_available else 'OUTPUT_EFF') }}
             <span class="text-base font-bold px-2 py-0.5 rounded-full
-              {% if m.headline_rating=='green' %}rating-green{% elif m.headline_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
-              {{ m.headline }}%
+              {% if not m.headline_available %}bg-gray-100 text-gray-400{% elif m.headline_rating=='green' %}rating-green{% elif m.headline_rating=='amber' %}rating-amber{% else %}rating-red{% endif %}">
+              {% if m.headline_available %}{{ m.headline }}%{% else %}—{% endif %}
             </span>
           </div>
         </div>
@@ -87,9 +87,9 @@
         {% else %}
         <!-- Monthly grain: Utilisation / Output Eff / Reject / Attainment (no A/P/Q) -->
         <div class="grid grid-cols-4 gap-1 text-center">
-          {% for lbl, val, color, tkey in [('Util.', m.utilisation, '#22c55e', 'UTIL'), ('Out.Eff', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF'), ('Rej.', m.rejection_pct, '#ef4444', 'REJECT_PCT'), ('Att.', m.attainment, '#1F3864', 'ATT')] %}
+          {% for lbl, val, color, tkey, avail in [('Util.', m.utilisation, '#22c55e', 'UTIL', m.util_available), ('Out.Eff', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF', m.eff_available), ('Rej.', m.rejection_pct, '#ef4444', 'REJECT_PCT', true), ('Att.', m.attainment, '#1F3864', 'ATT', true)] %}
           <div class="bg-gray-50 rounded-lg py-1 px-1">
-            <div class="text-xs font-bold" style="color:{{ color }}">{{ val }}%</div>
+            <div class="text-xs font-bold" style="color:{{ color }}">{% if avail %}{{ val }}%{% else %}<span class="text-gray-400">n/a</span>{% endif %}</div>
             <div class="text-[10px] text-gray-400">{{ lbl }}{{ info(tkey) }}</div>
           </div>
           {% endfor %}

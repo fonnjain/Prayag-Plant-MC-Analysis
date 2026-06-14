@@ -177,16 +177,13 @@ def expected_files_for(period_months: List[str], daily_used: bool) -> List[dict]
     """Configured workbooks expected to contribute to this period.
 
     Monthly grain → the annual M/C summary workbooks.
-    Daily grain   → the per-month daily workbooks of daily-capable plants
-                    (those that also have a monthly grid baseline) for the
-                    selected months.
+    Daily grain   → the per-month daily workbooks of every plant that has one,
+                    for the selected months (a plant need not have a monthly grid
+                    baseline to contribute daily run hours + output).
     """
     out: List[dict] = []
     if daily_used:
-        grid_plants = {s["plant"] for s in sources.ANNUAL_SOURCES}
         for plant, cfg in sources.DAILY_SOURCES.items():
-            if plant not in grid_plants:
-                continue
             for ym, fid in (cfg.get("files") or {}).items():
                 if ym in period_months:
                     out.append({
@@ -320,23 +317,57 @@ def tier1_completeness(
                     still.append(dc)
             unmatched_data = still
 
+        # Daily data sometimes reports by a different machine-identity system than
+        # the monthly roster (e.g. Moulding logs by mould code, not M/C number).
+        # When NOTHING matches we can't do a per-machine completeness check against
+        # the grid — say so once and count the reporting machines so the score
+        # isn't tanked, rather than emitting dozens of unmatched/missing warnings.
+        if daily_used and present and not matched_master:
+            machines_present += min(len(present), len(master_codes))
+            issues.append(_issue(
+                1, WARNING,
+                f"{plant}: daily data is reported by a machine code that doesn't map "
+                f"to the monthly roster ({len(present)} reporting) — per-machine "
+                "completeness against the grid isn't available for this view.",
+                plant=plant,
+            ))
+            continue
+
         machines_present += len(matched_master)
 
         missing = master_codes - matched_master
-        for mc in sorted(missing):
-            issues.append(_issue(
-                1, WARNING,
-                f"Machine {mc} is in the master roster but has no data this period "
-                "(shown as a gap, not a zero).",
-                plant=plant, machine=mc,
-            ))
-        for dc in sorted(unmatched_data):
-            issues.append(_issue(
-                1, WARNING,
-                f"Machine {dc} appears in the data but is not in the master roster "
-                "— could not be matched to a known machine.",
-                plant=plant, machine=dc,
-            ))
+        if daily_used:
+            # In a sub-monthly window a roster machine simply may not have run —
+            # that's normal, not a data gap. Collapse to one summary line.
+            if missing:
+                issues.append(_issue(
+                    1, WARNING,
+                    f"{plant}: {len(missing)} of {len(master_codes)} machine(s) had "
+                    "no run in this window (normal for a short window, not a data gap).",
+                    plant=plant,
+                ))
+            if unmatched_data:
+                issues.append(_issue(
+                    1, WARNING,
+                    f"{plant}: {len(unmatched_data)} daily machine code(s) could not be "
+                    "matched to the monthly roster.",
+                    plant=plant,
+                ))
+        else:
+            for mc in sorted(missing):
+                issues.append(_issue(
+                    1, WARNING,
+                    f"Machine {mc} is in the master roster but has no data this period "
+                    "(shown as a gap, not a zero).",
+                    plant=plant, machine=mc,
+                ))
+            for dc in sorted(unmatched_data):
+                issues.append(_issue(
+                    1, WARNING,
+                    f"Machine {dc} appears in the data but is not in the master roster "
+                    "— could not be matched to a known machine.",
+                    plant=plant, machine=dc,
+                ))
 
     # --- Segments & moulds present vs master roster (both ways) ---
     seg_by_plant: Dict[str, set] = {}

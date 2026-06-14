@@ -65,8 +65,12 @@
 {% set o = sub_overall %}
 <div class="grid grid-cols-3 gap-2 mb-4">
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">{% if o.oee_available %}OEE{{ info('OEE') }}{% else %}Out.Eff{{ info('OUTPUT_EFF') }}{% endif %}</div>
+    <div class="text-xs text-gray-500 mb-1">{% if o.oee_available %}OEE{{ info('OEE') }}{% elif o.eff_available %}Out.Eff{{ info('OUTPUT_EFF') }}{% elif o.util_available %}Util.{{ info('UTIL') }}{% else %}Headline{% endif %}</div>
+    {% if o.headline_available %}
     <div class="text-lg font-bold {% if o.headline_rating=='green' %}text-green-600{% elif o.headline_rating=='amber' %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.headline }}%</div>
+    {% else %}
+    <div class="text-sm font-semibold text-gray-400">No baseline</div>
+    {% endif %}
   </div>
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Output{{ info('UNITS') }}</div>
@@ -88,7 +92,7 @@
   {% else %}
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Util.{{ info('UTIL') }}</div>
-    <div class="text-base font-bold text-blue-600">{{ o.utilisation }}%</div>
+    <div class="text-base font-bold text-blue-600">{% if o.util_available %}{{ o.utilisation }}%{% else %}<span class="text-gray-400">n/a</span>{% endif %}</div>
   </div>
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Runner %</div>
