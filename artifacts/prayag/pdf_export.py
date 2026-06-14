@@ -13,7 +13,7 @@ try:
     from reportlab.lib.units import mm
     from reportlab.platypus import (
         SimpleDocTemplate, Table, TableStyle, Paragraph,
-        Spacer, HRFlowable,
+        Spacer, HRFlowable, PageBreak,
     )
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     REPORTLAB_AVAILABLE = True
@@ -233,6 +233,78 @@ def generate_report_pdf(
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]))
         story.append(tbl)
+
+    # Appendix: every data-confirmation issue, so the PDF is self-describing
+    # for an auditor who only has the document (no in-app access).
+    if confirmation:
+        all_issues = confirmation.get("issues") or []
+        if all_issues:
+            story.append(PageBreak())
+            story.append(Paragraph(
+                "Data Confirmation — all issues", ParagraphStyle(
+                    "app_h", fontSize=13, textColor=colors.Color(*TERRA),
+                    spaceAfter=2, fontName="Helvetica-Bold",
+                ),
+            ))
+            err_n = sum(1 for i in all_issues if i.get("severity") == "error")
+            warn_n = len(all_issues) - err_n
+            story.append(Paragraph(
+                f"{len(all_issues)} issue(s) in total — "
+                f"{err_n} error(s), {warn_n} warning(s)/flag(s). "
+                "Grouped by check tier; errors listed first within each tier.",
+                ParagraphStyle("app_sub", fontSize=8.5,
+                               textColor=colors.Color(*NAVY),
+                               spaceAfter=6, fontName="Helvetica"),
+            ))
+            story.append(HRFlowable(width="100%", thickness=0.8,
+                                    color=colors.Color(*NAVY), spaceAfter=6))
+
+            app_issue_style = ParagraphStyle(
+                "app_issue", fontSize=8, textColor=colors.black,
+                spaceAfter=2, fontName="Helvetica", leading=11,
+            )
+            tier_h_style = ParagraphStyle(
+                "app_tier_h", fontSize=10, textColor=colors.Color(*NAVY),
+                spaceBefore=6, spaceAfter=3, fontName="Helvetica-Bold",
+            )
+
+            # Stable tier order from first appearance, errors before warnings.
+            tier_order: List[Any] = []
+            by_tier: Dict[Any, List[Dict[str, Any]]] = {}
+            for i in all_issues:
+                t = i.get("tier")
+                if t not in by_tier:
+                    by_tier[t] = []
+                    tier_order.append(t)
+                by_tier[t].append(i)
+
+            for t in tier_order:
+                group = by_tier[t]
+                tier_label = group[0].get("tier_label", str(t))
+                story.append(Paragraph(
+                    f"{tier_label} ({len(group)})", tier_h_style,
+                ))
+                ordered_group = (
+                    [i for i in group if i.get("severity") == "error"]
+                    + [i for i in group if i.get("severity") != "error"]
+                )
+                for i in ordered_group:
+                    sev = "✗" if i.get("severity") == "error" else "•"
+                    sev_color = RED if i.get("severity") == "error" else AMBER
+                    scope = " ".join(
+                        p for p in [i.get("plant", ""), i.get("machine", "")] if p
+                    )
+                    scope_txt = f"{scope} — " if scope else ""
+                    msg = i.get("message", "")
+                    hex_col = "#%02X%02X%02X" % (
+                        int(sev_color[0] * 255), int(sev_color[1] * 255),
+                        int(sev_color[2] * 255),
+                    )
+                    story.append(Paragraph(
+                        f'<font color="{hex_col}">{sev}</font> '
+                        f"{scope_txt}{msg}",
+                        app_issue_style,
+                    ))
 
     story.append(Spacer(1, 8 * mm))
     story.append(Paragraph(
