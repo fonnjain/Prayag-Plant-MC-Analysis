@@ -1,0 +1,52 @@
+BUG: The Tier 3 "Validity" check (rejects-exceed-output) is producing false 
+positives and wrongly excluding good rows from the published figures.
+
+WHAT'S HAPPENING
+The validity tier flags 27 rows as "Rejects (X) exceed output (Y)" for May 2026 
+(26 PTMT machines on tab Report-5, plus Pipe M/C-5 on tab Report-11) and marks 
+them HELD ASIDE, which drops them from the published numbers and triggers the 
+"Must fix 27 reject-exceeds-output errors before sign-off" readiness verdict.
+
+I verified every flagged row against the source workbooks. In ALL 27 cases, 
+output massively exceeds rejects. These are not real errors. The reject value 
+the check reports is correct, but the "output" value it compares against is the 
+WRONG cell — it is far too small to be the machine's output.
+
+EVIDENCE (source = "PTMT Date Sheet & Monthly Report - May '2026", tab Report-5)
+  - 80-4:   flag "Rejects 40 > output 38".  Source: rejection 39.7 kg, output 651.8 kg
+  - 250-2:  flag "Rejects 393 > output 118". Source: rejection 392.7 kg, output 3,189 kg
+  - 150-4:  flag "Rejects 238 > output 12".  Source: rejection 238.3 kg, output 1,673 kg
+  - N-110C: flag "Rejects 242 > output 5".   Source: rejection 242.1 kg, output 1,410 kg
+  Pipe M/C-5 (tab Report-11), May total: output 11,328 kg vs rejects 1,180 kg.
+
+The reported "Rejects (X)" exactly matches the source column 
+"Actual Rejection Weight (in Kgs)" (rounded). The reported "output (Y)" matches 
+NO output column in the sheet — real monthly net output ranges ~650–5,000 kg 
+per machine.
+
+ROOT CAUSE TO FIND AND FIX
+In the validity-tier code, locate where "output" is read for the 
+reject-vs-output comparison. It is pulling the wrong column (or a different unit, 
+or a per-hour/ideal cell). It must read the same net output the rest of the 
+dashboard uses:
+  - PTMT Report-5: output = "Wt in Kgs" column (net monthly output, kg). 
+    Reject = "Actual Rejection Weight (in Kgs)". Both must be kg.
+  - Pipe Report-11 / its summary: output and rejection must both be compared in 
+    KG (do not compare reject-kg against output-pieces, and do not use 
+    ideal-output-per-hour as "output").
+
+Add a guard: only flag a row as a validity error when both values are present, 
+in the same unit (kg), and reject > output. If the output cell is blank/zero or 
+in a different unit, do not flag.
+
+ALSO FIX THE DOWNSTREAM EFFECTS
+  - Stop holding these rows aside; they are valid and must be included in the 
+    published PTMT and Pipe figures for May 2026 (currently understated).
+  - Recompute the "held aside" count and the readiness verdict after the fix.
+
+VALIDATION
+For each row the validity tier flags, log the raw reject value, the raw output 
+value, and the exact source cell reference (sheet, row, column header) for both. 
+Re-run the 30-day check and confirm the 27 May-2026 reject-exceeds-output errors 
+disappear. The Tier 1 completeness flags (e.g., HDPE June and Tank May empty) are 
+correct — don't change those; this fix is scoped to the Tier 3 validity logic only.

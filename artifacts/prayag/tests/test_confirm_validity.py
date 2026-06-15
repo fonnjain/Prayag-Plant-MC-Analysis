@@ -100,6 +100,47 @@ def test_rejects_exceed_zero_output_quarantines_the_row():
     print("PASS: rejects exceeding zero output quarantines the row")
 
 
+def _daily_out_rej(machine, day, out, rej, period="2026-05"):
+    """A daily-matrix row (hours/output carried directly, no shift model)."""
+    return Record(grain="daily", plant="PTMT", machine=machine, period=period,
+                  date=f"{period}-{day:02d}", total_count=out, reject_count=rej,
+                  source_tab="Report-5")
+
+
+def test_daily_reject_on_one_day_not_flagged_when_month_output_dwarfs_it():
+    # PTMT books a machine's whole-month rejection against the last day (the
+    # matrix has no per-date rejection column). So a single day can show
+    # reject > that day's output even though month output far exceeds rejects.
+    # This must NOT quarantine — every row stays published.
+    rows = [_daily_out_rej("PTMT 150-4", d, 70.0, 0.0) for d in range(1, 28)]
+    rows.append(_daily_out_rej("PTMT 150-4", 31, 12.0, 238.0))  # month reject lump
+    out_sum = sum(r.total_count for r in rows)   # 1902 > 238
+    clean, quarantined, issues = tier3_row_classify(rows)
+
+    rej_err = [i for i in issues
+               if i["severity"] == ERROR and "exceed output" in i["message"]]
+    assert not rej_err, f"month output dwarfs rejects — must not flag: {rej_err}"
+    assert quarantined == [], "valid rows must not be held aside"
+    assert len(clean) == len(rows), "every row must publish"
+    assert out_sum > 238.0
+    print("PASS: single-day reject>output not flagged when month output dwarfs it")
+
+
+def test_machine_month_reject_truly_exceeds_output_quarantines_all_rows():
+    # A genuine impossibility: summed over the month, rejects (300) exceed output
+    # (100). Every row for that machine-month is held aside, with one error.
+    rows = [_daily_out_rej("PTMT 80-9", 1, 40.0, 100.0),
+            _daily_out_rej("PTMT 80-9", 2, 60.0, 200.0)]
+    clean, quarantined, issues = tier3_row_classify(rows)
+
+    rej_err = [i for i in issues
+               if i["severity"] == ERROR and "exceed output" in i["message"]]
+    assert len(rej_err) == 1, f"one aggregate error per machine-month: {issues}"
+    assert all(i.get("quarantined") for i in rej_err), "must quarantine"
+    assert len(quarantined) == 2 and clean == [], "all month rows held aside"
+    print("PASS: genuine machine-month reject>output quarantines all its rows")
+
+
 def test_hours_over_calendar_quarantines_the_row():
     # 1527 logged hours in May (744 calendar hours) is physically impossible.
     row = _monthly_hours_row(actual_hours=1527.0, ideal_hours=500.0, period="2026-05")
@@ -145,6 +186,8 @@ if __name__ == "__main__":
     test_aggregate_performance_over_100_is_a_warning()
     test_clean_performance_has_no_aggregate_issue()
     test_rejects_exceed_zero_output_quarantines_the_row()
+    test_daily_reject_on_one_day_not_flagged_when_month_output_dwarfs_it()
+    test_machine_month_reject_truly_exceeds_output_quarantines_all_rows()
     test_hours_over_calendar_quarantines_the_row()
     test_hours_over_ideal_within_calendar_is_a_warning_not_quarantined()
     test_clean_hours_row_has_no_issue()

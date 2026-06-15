@@ -673,9 +673,12 @@ def tier3_row_classify(
             hard.append(f"Negative output ({r.total_count:.0f}).")
         if r.reject_count < 0:
             hard.append(f"Negative reject count ({r.reject_count:.0f}).")
-        if r.reject_count > r.total_count and r.reject_count > 0:
-            hard.append(
-                f"Rejects ({r.reject_count:.0f}) exceed output ({r.total_count:.0f}).")
+        # NOTE: reject > output is NOT checked per row. Some plants book a whole
+        # month's rejection against a single day (PTMT Report-5 has no per-date
+        # rejection column — the monthly "Actual Rejection Weight" total lands on
+        # the last day), so an isolated daily row can legitimately show
+        # reject > that day's output. The physical-impossibility check is only
+        # meaningful per machine-month and runs as an aggregate pass below.
 
         ppt = r.shift_len_min - r.planned_stops_min
         if r.grain == "daily" and r.shift_len_min > 0 and r.downtime_min > ppt > 0:
@@ -707,6 +710,46 @@ def tier3_row_classify(
             quarantined.append(r)
         else:
             clean.append(r)
+
+    # Aggregate physical-possibility check: rejects must not exceed output over a
+    # machine-month (the grain at which rejection is actually recorded). Summing
+    # the clean rows recovers the true monthly output and rejection regardless of
+    # which day a plant books its rejection against, so this never false-positives
+    # on a single low-output day. A genuine impossibility (month rejects > month
+    # output) still quarantines every row for that machine-month.
+    agg: Dict[Tuple[str, str, str, str], list] = {}
+    for r in clean:
+        key = (r.grain, r.plant, r.machine or r.mould or "",
+               r.period or (r.date[:7] if r.date else ""))
+        a = agg.get(key)
+        if a is None:
+            a = agg[key] = [0.0, 0.0, []]
+        a[0] += r.total_count
+        a[1] += r.reject_count
+        a[2].append(r)
+
+    bad_ids: set = set()
+    for (_grain, plant, machine, month), (out_sum, rej_sum, grp) in agg.items():
+        if rej_sum > out_sum and rej_sum > 0:
+            r0 = grp[0]
+            loc = dict(plant=plant, machine=machine, month=month,
+                       file=r0.source_file, sheet=r0.source_tab)
+            issues.append(_issue(
+                3, ERROR,
+                f"Rejects ({rej_sum:.0f}) exceed output ({out_sum:.0f}) for "
+                f"{machine or plant} across {month}.",
+                quarantined=True, **loc))
+            for r in grp:
+                bad_ids.add(id(r))
+
+    if bad_ids:
+        kept = []
+        for r in clean:
+            if id(r) in bad_ids:
+                quarantined.append(r)
+            else:
+                kept.append(r)
+        clean = kept
 
     return clean, quarantined, issues
 
