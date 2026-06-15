@@ -11,3 +11,4 @@
 - [Prayag sub-monthly no-fallback](prayag-sub-monthly-fallback.md) — sub-monthly daily windows NEVER substitute monthly-grid figures; empty rows + honest banner instead; monthly master for confirmation is unaffected.
 - [PTMT reject lumping & validity grain](prayag-reject-validity-grain.md) — matrices book whole-month rejection on the last day (no per-date reject col); reject>output impossibility check MUST be machine-month aggregate, never per daily row.
 - [Plausibility narrative units](prayag-narrative-units.md) — Claude writes the plausibility narrative from issue text only & guesses units if omitted; figure-citing tier messages must embed the unit. MOULDING is kg (Wt in Kgs), not pcs.
+- [Spreadsheet-change tracking](prayag-source-fingerprints.md) — Google edit time unreachable; "last updated" is a content fingerprint that must be cross-process deterministic; re-baseline after any formula change.

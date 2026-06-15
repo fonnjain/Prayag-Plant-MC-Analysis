@@ -427,3 +427,148 @@ def verify_history(period: Optional[str] = None, limit: int = 20) -> List[Dict]:
     except Exception:
         return []
     return [_shape(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Source content fingerprints (dashboard-detected "last changed" tracking)
+# ---------------------------------------------------------------------------
+# The connected Google account only has the ``drive.file`` scope, so Google's
+# true "last edited" time for these spreadsheets is NOT reachable (the Drive
+# metadata API returns 404 for files the app did not create). Instead the
+# dashboard records a content fingerprint (a hash of the parsed values) per
+# workbook each time it reads one. The store is append-ONLY and a new row is
+# written ONLY when a workbook's fingerprint differs from the last one seen, so
+# the most recent row's ``observed_at`` is exactly "when the dashboard first
+# saw this version of the data" — i.e. when the sheet last had an input/update.
+# Degrades to a no-op (no tracking) when DATABASE_URL is absent.
+_FP_TABLE = "source_fingerprints"
+_fp_initialised = False
+
+
+def _init_fingerprints() -> None:
+    """Create the source-fingerprint table if it does not exist (idempotent)."""
+    global _fp_initialised
+    if _fp_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_FP_TABLE} (
+        id          BIGSERIAL   PRIMARY KEY,
+        file_id     TEXT        NOT NULL,
+        fingerprint TEXT        NOT NULL,
+        label       TEXT        NOT NULL DEFAULT '',
+        plant       TEXT        NOT NULL DEFAULT '',
+        grain       TEXT        NOT NULL DEFAULT '',
+        row_count   INTEGER     NOT NULL DEFAULT 0,
+        observed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_FP_TABLE}_lookup
+        ON {_FP_TABLE} (file_id, observed_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS {_FP_TABLE}_version_uniq
+        ON {_FP_TABLE} (file_id, fingerprint);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _fp_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def fingerprint_state() -> Dict[str, Dict]:
+    """Per-file latest fingerprint plus how many distinct snapshots exist.
+
+    Returns ``{file_id: {fingerprint, observed_at, snapshots, label, ...}}``.
+    ``snapshots`` is the count of recorded (change) rows for the file, so
+    ``snapshots > 1`` means the workbook has actually changed at least once
+    since tracking began (not just a first baseline). Degrades to ``{}``.
+    """
+    if not AVAILABLE:
+        return {}
+    try:
+        _init_fingerprints()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT DISTINCT ON (file_id) *,
+                        (SELECT COUNT(*) FROM {_FP_TABLE} c
+                         WHERE c.file_id = f.file_id) AS snapshots
+                    FROM {_FP_TABLE} f
+                    ORDER BY file_id, observed_at DESC, id DESC"""
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[str, Dict] = {}
+    for r in rows:
+        d = _shape(r)
+        ts = r.get("observed_at")
+        if isinstance(ts, datetime.datetime):
+            d["observed_at_disp"] = ts.strftime("%d-%m-%Y %H:%M")
+        d["observed_at"] = ts
+        d["snapshots"] = int(r.get("snapshots") or 1)
+        out[r["file_id"]] = d
+    return out
+
+
+def fingerprint_record(
+    *,
+    file_id: str,
+    fingerprint: str,
+    label: str = "",
+    plant: str = "",
+    grain: str = "",
+    row_count: int = 0,
+) -> Optional[Dict]:
+    """Append one fingerprint snapshot for a workbook (call only on change).
+
+    One row per content version: ``(file_id, fingerprint)`` is unique, so the
+    snapshot count for a file equals the number of distinct versions ever seen
+    (``snapshots > 1`` ⇒ the workbook genuinely changed at least once). The
+    caller only calls this on a real transition (first sight, or current ≠ the
+    last-seen version), never on an unchanged re-read.
+
+    On conflict the row is touched (``observed_at = now()``) rather than left
+    alone, which makes two cases correct at once:
+      * concurrent duplicate inserts of the same transition collapse to one row
+        (no race can inflate the snapshot count into a false "updated");
+      * a *revert* to a previously-seen version (A→B→A) re-establishes that
+        version as the latest with a fresh timestamp, so the next read converges
+        (current == latest) instead of re-detecting a change every load.
+
+    Returns the stored row (shaped, with ``observed_at``) on success, or ``None``
+    when no store is configured / the write fails (best-effort: change tracking
+    never breaks a page render).
+    """
+    if not AVAILABLE or not (file_id or "").strip() or not fingerprint:
+        return None
+    try:
+        _init_fingerprints()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""INSERT INTO {_FP_TABLE}
+                        (file_id, fingerprint, label, plant, grain, row_count)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (file_id, fingerprint) DO UPDATE
+                        SET observed_at = now(),
+                            row_count   = EXCLUDED.row_count,
+                            label       = EXCLUDED.label,
+                            plant       = EXCLUDED.plant,
+                            grain       = EXCLUDED.grain
+                    RETURNING *""",
+                (file_id, fingerprint, label, plant, grain, int(row_count or 0)),
+            )
+            row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    d = _shape(row)
+    ts = row.get("observed_at")
+    if isinstance(ts, datetime.datetime):
+        d["observed_at_disp"] = ts.strftime("%d-%m-%Y %H:%M")
+    d["observed_at"] = ts
+    d["snapshots"] = 1
+    return d

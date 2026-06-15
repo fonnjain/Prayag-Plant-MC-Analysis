@@ -36,6 +36,7 @@ from narrative import (
 import store
 import baselines
 import verify
+import freshness
 from pdf_export import generate_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -583,6 +584,50 @@ def inject_glossary():
     }
 
 
+def _build_freshness() -> dict:
+    """Dashboard-detected "last updated / what changed" for every source sheet.
+
+    Comprehensive and view-independent: fingerprints are computed from the full
+    set of currently-present records (monthly grids + daily workbooks across all
+    months that hold data), not the page's selected period — so the same change
+    state shows on every page. Reads are cached; failures degrade to whatever
+    could be read (change tracking never blocks a page render). Skipped in demo
+    mode (no real workbooks to track)."""
+    if is_demo_mode():
+        return {
+            "available": False, "demo": True, "sources": [], "updated": [],
+            "n_total": 0, "n_updated": 0,
+            "recent_days": freshness.RECENT_DAYS, "checked_at_disp": "",
+        }
+    months = months_with_data()
+    recs: list = []
+    read_errors: list = []
+    try:
+        mrecs, _r, _w = get_records(months)
+        recs.extend(mrecs)
+    except SheetReadError as e:
+        read_errors.append(f"monthly grids ({e})")
+    try:
+        drecs, _dr, _dw = get_daily_records(months)
+        recs.extend(drecs)
+    except SheetReadError as e:
+        read_errors.append(f"daily workbooks ({e})")
+    out = freshness.build(recs)
+    out["demo"] = False
+    # Coverage honesty. "partial" flags only a TOTAL read failure of a category
+    # (every monthly grid, or every daily workbook, raised SheetReadError) — the
+    # affected workbooks keep their last-known state but were not re-checked, so
+    # the panel warns the check was incomplete. A single isolated per-file
+    # failure does NOT raise (get_daily_records recovers the rest); that file
+    # simply drops out of `recs` this load and freshness.build lists it from its
+    # last-known snapshot — already honest, no extra signal needed. We do NOT
+    # treat reader warnings as "partial": get_daily_records always emits the
+    # benign daily-vs-grid reconciliation note, so that would false-alarm.
+    out["partial"] = bool(read_errors)
+    out["read_errors"] = read_errors
+    return out
+
+
 def _common_ctx(data: dict) -> dict:
     """Build template context that every page needs."""
     opt_rows = data.get("all_rows", data["rows"])
@@ -808,6 +853,7 @@ def confirmation_view():
         "signoff_msg": request.args.get("signoff_msg", ""),
         "claude_reviewed": claude_review_text is not None,
         "claude_review_text": claude_review_text or "",
+        "freshness": _build_freshness(),
     })
     return render_template("confirmation.html", **ctx)
 
@@ -1028,6 +1074,7 @@ def sources_view():
         "reports": reports,
         "annual_sources": ANNUAL_SOURCES,
         "daily_sources": DAILY_SOURCES,
+        "freshness": _build_freshness(),
     })
     return render_template("detected_sources.html", **ctx)
 
