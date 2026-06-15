@@ -91,6 +91,16 @@ daily records.
 - Parallel bursts can trip Google's per-user read quota → **429**. `_api_get`
   retries 429/500/503 with exponential backoff + jitter (honouring
   `Retry-After`); 401/403/404 are permanent and surface immediately.
+- `_api_get` must catch raw socket-level `OSError` (e.g. `TimeoutError` from
+  `ssl.read` during `getresponse()`), NOT only `HTTPError`/`URLError`. A read
+  timeout that fires mid-response is a bare `TimeoutError`/`socket.timeout`
+  (subclass of `OSError`, NOT of `URLError`), so without an explicit `OSError`
+  handler it escapes `_api_get` **unwrapped**. That matters because the per-pair
+  isolation in `get_daily_records` only catches `SheetReadError` — an unwrapped
+  `TimeoutError` from a single workbook then 500s the WHOLE page (dev *and*
+  prod), and the very next warm-cache request returns 200, so it looks
+  intermittent. Rule: every transient network failure must funnel through the
+  same retry-then-wrap-in-`SheetReadError` path so callers can degrade per-file.
 - `_startup_warmup` (daemon thread, sleeps 3s so gunicorn binds first) pre-warms
   monthly then the two most recent daily months — keep monthly first because the
   daily ideal-baseline lookup reads the cached monthly grid.

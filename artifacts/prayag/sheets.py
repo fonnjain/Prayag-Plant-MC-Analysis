@@ -105,7 +105,11 @@ def _fetch_token() -> Tuple[Optional[str], float]:
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.load(r)
-    except (urllib.error.URLError, ValueError) as e:
+    except (urllib.error.URLError, ValueError, OSError) as e:
+        # URLError covers DNS/connect failures; ValueError covers a malformed
+        # JSON body; the bare OSError catches a raw socket-level TimeoutError
+        # (read timed out mid-response) which is NOT a URLError and would
+        # otherwise escape unwrapped and 500 the page before any sheet is read.
         raise SheetReadError(
             "Couldn't verify the Google Sheets connection. "
             "Please reconnect it and try again."
@@ -192,6 +196,22 @@ def _api_get(url: str, token: str) -> dict:
                 time.sleep((2 ** attempt) + random.uniform(0, 0.5))
                 continue
             raise SheetReadError("Couldn't reach Google Sheets. Please try again.") from e
+        except OSError as e:
+            # A read/connect timeout that fires mid-response (or a dropped/reset
+            # connection) surfaces as a raw socket-level OSError — e.g.
+            # TimeoutError from ssl.read during getresponse() — NOT a URLError.
+            # If it isn't caught here it escapes _api_get unwrapped, so the
+            # per-pair isolation in get_daily_records (which only catches
+            # SheetReadError) can't degrade gracefully and the whole page 500s.
+            # Treat it as transient: retry with backoff, then wrap in
+            # SheetReadError so callers isolate the one failing workbook.
+            if attempt < _API_MAX_RETRIES - 1:
+                time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+                continue
+            raise SheetReadError(
+                "Couldn't reach Google Sheets (the connection timed out or was "
+                "dropped). Please try again."
+            ) from e
     raise SheetReadError("Couldn't reach Google Sheets. Please try again.")
 
 
