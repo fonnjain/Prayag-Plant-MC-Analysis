@@ -43,6 +43,7 @@ def _install_stubs(monkey_daily, monkey_grid):
         "ab": app._apply_baselines, "mw": app.months_with_data,
         "today": app._today, "eff": app.store.effective,
         "acks": app.store.acks_for, "key": os.environ.get("ANTHROPIC_API_KEY"),
+        "ds": app.DAILY_SOURCES,
     }
     app.get_daily_records = monkey_daily
     app.get_records = monkey_grid
@@ -63,6 +64,7 @@ def _restore(saved):
     app._today = saved["today"]
     app.store.effective = saved["eff"]
     app.store.acks_for = saved["acks"]
+    app.DAILY_SOURCES = saved["ds"]
     if saved["key"] is None:
         os.environ.pop("ANTHROPIC_API_KEY", None)
     else:
@@ -119,7 +121,42 @@ def test_total_daily_outage_shows_nothing_not_grid():
         _restore(saved)
 
 
+def test_mixed_month_availability_uses_only_daily_months():
+    """A multi-month view where only SOME months have a daily workbook publishes
+    figures from the daily-covered month(s) only. The month without a daily file
+    shows no data — its lower monthly summary grid is NEVER substituted in — and
+    the banner names the omitted month honestly."""
+    def daily(months):
+        # The daily reader only ever yields the month that has a workbook (May).
+        return ([_daily("PIPE", "PIPE M/C - 1", "2026-05", 15, 500.0)],
+                [{"file_id": "f", "record_count": 1, "title": "Pipe daily"}], [])
+
+    def grid(months):
+        # Grid carries BOTH months — if April leaked through (or the missing
+        # month fell back to its grid), the total would rise above the daily 500.
+        return ([_grid("PIPE", "PIPE M/C - 1", "2026-04", 333.0),
+                 _grid("PIPE", "PIPE M/C - 1", "2026-05", 111.0)], [], [])
+
+    saved = _install_stubs(daily, grid)
+    # Only May has a daily workbook configured; April deliberately does not.
+    app.DAILY_SOURCES = {"PIPE": {"files": {"2026-05": "fid-may"}}}
+    try:
+        d = app.get_data({"period": "custom",
+                          "from_date": "2026-04-01", "to_date": "2026-05-31"})
+        assert d["daily_used"] is True, d["daily_used"]
+        total = sum(r.total_count for r in d["rows"])
+        assert total == 500.0, total          # only May daily; April grid never added
+        assert "summed from the daily" in d["grain_banner"], d["grain_banner"]
+        assert "No daily workbook exists for" in d["grain_banner"], d["grain_banner"]
+        assert "Apr 2026" in d["grain_banner"], d["grain_banner"]
+        print("PASS: mixed availability sums only daily months; missing month shows "
+              "no data (grid never substituted)")
+    finally:
+        _restore(saved)
+
+
 if __name__ == "__main__":
     test_monthly_view_sums_daily_not_grid()
     test_total_daily_outage_shows_nothing_not_grid()
+    test_mixed_month_availability_uses_only_daily_months()
     print("\nAll daily-first monthly/FY regression tests passed.")
