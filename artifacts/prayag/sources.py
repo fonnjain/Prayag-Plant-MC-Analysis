@@ -56,7 +56,7 @@ ANNUAL_SOURCES: list[dict] = [
         "kind": "mc_grid",
         "segment": "Moulding",
         "plant": "MOULDING",
-        "unit": "pcs",
+        "unit": "kg",
     },
 ]
 

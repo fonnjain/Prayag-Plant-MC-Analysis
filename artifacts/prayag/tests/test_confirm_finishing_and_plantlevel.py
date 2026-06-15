@@ -145,6 +145,10 @@ def test_outliers_are_scoped_within_a_process_segment():
     assert n4, f"a true within-segment outlier must still be flagged: {issues2}"
     assert all("Injection (N-line) median" in i["message"] for i in n4), (
         f"outlier must be compared to its OWN process median: {n4}")
+    # The figure must carry its unit so the Claude narrative echoes it (kg here)
+    # instead of guessing a unit ("pieces").
+    assert all("kg" in i["message"] for i in n4), (
+        f"outlier message must embed the unit so the narrative quotes it: {n4}")
     print("PASS: tier-4 outliers are scoped within (plant, segment) process groups")
 
 

@@ -853,12 +853,15 @@ def tier4_plausibility(
     # median would flag whole processes as "outliers". Each machine is measured
     # against the median of its own process group.
     by_group_machine: Dict[tuple, Dict[str, float]] = {}
+    group_unit: Dict[tuple, str] = {}
     for r in period_rows:
         if not r.machine:
             continue
         g = (r.plant, r.segment)
         by_group_machine.setdefault(g, {}).setdefault(r.machine, 0.0)
         by_group_machine[g][r.machine] += r.total_count
+        if r.unit and g not in group_unit:
+            group_unit[g] = r.unit
     for (plant, segment), mc_out in by_group_machine.items():
         outs = [v for v in mc_out.values() if v > 0]
         if len(outs) < MIN_PLANT_MACHINES_FOR_OUTLIER:
@@ -884,10 +887,11 @@ def tier4_plausibility(
                         # Consistent with its own history — structurally high/low,
                         # not a data error.
                         continue
+            usuf = f" {group_unit[(plant, segment)]}" if group_unit.get((plant, segment)) else ""
             issues.append(_issue(
                 4, WARNING,
-                f"{mc}: output {v:,.0f} is {ratio:.1f}× the {segment} median "
-                f"({med:,.0f}) — looks like an outlier.",
+                f"{mc}: output {v:,.0f}{usuf} is {ratio:.1f}× the {segment} median "
+                f"({med:,.0f}{usuf}) — looks like an outlier.",
                 plant=plant, machine=mc,
             ))
 

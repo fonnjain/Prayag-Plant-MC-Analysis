@@ -10,3 +10,4 @@
 - [Prayag daily parser quirks](prayag-daily-parser-quirks.md) — parse_daily_long TOTAL-skip must use substring not exact set; parse_daily_blocks must scan both header+sub-row for KG column; _long_date_day must handle numeric dates.
 - [Prayag sub-monthly no-fallback](prayag-sub-monthly-fallback.md) — sub-monthly daily windows NEVER substitute monthly-grid figures; empty rows + honest banner instead; monthly master for confirmation is unaffected.
 - [PTMT reject lumping & validity grain](prayag-reject-validity-grain.md) — matrices book whole-month rejection on the last day (no per-date reject col); reject>output impossibility check MUST be machine-month aggregate, never per daily row.
+- [Plausibility narrative units](prayag-narrative-units.md) — Claude writes the plausibility narrative from issue text only & guesses units if omitted; figure-citing tier messages must embed the unit. MOULDING is kg (Wt in Kgs), not pcs.
