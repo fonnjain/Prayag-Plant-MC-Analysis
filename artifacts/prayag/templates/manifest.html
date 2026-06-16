@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Ingestion Manifest{% endblock %}
+
+{% block content %}
+
+{# ── Page header ── #}
+<div class="kpi-card p-4 mb-4">
+  <div class="flex items-start justify-between gap-2 mb-2">
+    <div>
+      <h2 class="text-base font-bold" style="color:var(--navy)">Ingestion Manifest</h2>
+      <div class="text-xs text-gray-500 mt-0.5">FY {{ fy }} · as of {{ as_of_disp }}</div>
+    </div>
+    <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full bg-purple-50 text-purple-700 flex-shrink-0">
+      advisory
+    </span>
+  </div>
+  <p class="text-xs text-gray-500 leading-relaxed">
+    Deterministic coverage of what the pipeline fetched versus what it expected, plus a
+    Claude advisory pass for the fuzzy layer (stale files, naming drift). Code is
+    authoritative for all counts. Claude is advisory only — it never modifies figures.
+  </p>
+  <div class="mt-2 text-[11px] text-gray-400">
+    <svg class="inline w-3 h-3 mr-0.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    Drive.file scope: folder enumeration not available — Reconciliation 2 (Drive listing) is skipped.
+    Per-file metadata (modifiedTime, size) requires Drive.file scope on each known file_id.
+  </div>
+</div>
+
+{# ── Coverage summary bar ── #}
+{% set cov = coverage %}
+{% set n_expected = cov.expected_count | int %}
+{% set n_fetched  = cov.fetched_with_data | int %}
+{% set n_empty    = cov.present_but_empty | length %}
+{% set n_missing  = cov.not_found_at_all  | length %}
+{% set n_stale    = cov.stale_suspects    | length %}
+{% set n_flags    = schema_flags | length %}
+
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Coverage at a glance</div>
+  <div class="grid grid-cols-3 gap-3 mb-3">
+    <div class="text-center">
+      <div class="text-2xl font-bold" style="color:var(--navy)">{{ n_expected }}</div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Expected</div>
+    </div>
+    <div class="text-center">
+      <div class="text-2xl font-bold text-green-600">{{ n_fetched }}</div>
+      <div class="text-[10px] text-gray-500 mt-0.5">With data</div>
+    </div>
+    <div class="text-center">
+      <div class="text-2xl font-bold {% if n_missing > 0 %}text-red-600{% elif n_empty > 0 %}text-amber-600{% else %}text-green-600{% endif %}">
+        {% if n_missing > 0 %}{{ n_missing }} missing{% elif n_empty > 0 %}{{ n_empty }} empty{% else %}0 gaps{% endif %}
+      </div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Gaps</div>
+    </div>
+  </div>
+
+  {# Coverage progress bar #}
+  {% if n_expected > 0 %}
+  {% set pct = (n_fetched / n_expected * 100) | round | int %}
+  <div class="progress-bar mb-1">
+    <div class="progress-fill {% if pct == 100 %}bg-green-500{% elif pct >= 80 %}bg-amber-400{% else %}bg-red-400{% endif %}"
+         style="width:{{ pct }}%"></div>
+  </div>
+  <div class="flex justify-between text-[10px] text-gray-400">
+    <span>{{ n_fetched }}/{{ n_expected }} files have data</span>
+    <span>{{ pct }}%</span>
+  </div>
+  {% endif %}
+
+  {% if n_stale > 0 %}
+  <div class="mt-3 flex items-center gap-1.5 text-xs text-amber-700">
+    <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    {{ n_stale }} stale suspect{{ 's' if n_stale != 1 else '' }} — data may not be up to date
+  </div>
+  {% endif %}
+  {% if n_flags > 0 %}
+  <div class="mt-1.5 flex items-center gap-1.5 text-xs text-red-700">
+    <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    {{ n_flags }} schema flag{{ 's' if n_flags != 1 else '' }}
+  </div>
+  {% endif %}
+</div>
+
+{# ── Coverage details ── #}
+{% if n_missing > 0 or n_empty > 0 or n_stale > 0 %}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Coverage gaps</div>
+
+  {# Not found #}
+  {% if cov.not_found_at_all %}
+  <div class="mb-3">
+    <div class="flex items-center gap-1.5 text-xs font-semibold text-red-700 mb-2">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+      Not found at all ({{ cov.not_found_at_all | length }})
+    </div>
+    {% for g in cov.not_found_at_all %}
+    <div class="mb-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs">
+      <div class="font-semibold text-red-800">{{ g.plant }} · {{ g.month }}</div>
+      {% if g.file_id %}
+      <div class="text-red-600 font-mono text-[10px] mt-0.5 break-all">{{ g.file_id }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Present but empty #}
+  {% if cov.present_but_empty %}
+  <div class="mb-3">
+    <div class="flex items-center gap-1.5 text-xs font-semibold text-blue-700 mb-2">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+      </svg>
+      File opened but no rows parsed ({{ cov.present_but_empty | length }})
+    </div>
+    {% for g in cov.present_but_empty %}
+    <div class="mb-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs">
+      <div class="font-semibold text-blue-800">{{ g.plant }} · {{ g.month }}</div>
+      <div class="text-blue-600 text-[10px] mt-0.5">File is present but no production has been recorded yet (idle / in-progress template).</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Stale suspects #}
+  {% if cov.stale_suspects %}
+  <div>
+    <div class="flex items-center gap-1.5 text-xs font-semibold text-amber-700 mb-2">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Stale suspects ({{ cov.stale_suspects | length }})
+    </div>
+    {% for s in cov.stale_suspects %}
+    <div class="mb-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs">
+      <div class="font-semibold text-amber-800">{{ s.plant }} · {{ s.month }}</div>
+      <div class="text-amber-700 mt-0.5">
+        Data through {{ s.data_through | replace('-', '/') }} —
+        {{ s.days_behind }} day{{ 's' if s.days_behind != 1 else '' }} behind as-of {{ s.as_of | replace('-', '/') }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="kpi-card p-4 mb-4">
+  <div class="flex items-center gap-2 text-xs text-green-700">
+    <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+    </svg>
+    All expected files fetched with data — no coverage gaps detected.
+  </div>
+</div>
+{% endif %}
+
+{# ── Schema flags ── #}
+{% if schema_flags %}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Schema flags ({{ schema_flags | length }})</div>
+  {% for f in schema_flags %}
+  <div class="mb-2 rounded-lg px-3 py-2 text-xs {% if f.severity == 'error' %}bg-red-50{% else %}bg-amber-50{% endif %}">
+    <div class="flex items-start gap-1.5">
+      <svg class="w-3.5 h-3.5 mt-0.5 flex-shrink-0 {% if f.severity == 'error' %}text-red-600{% else %}text-amber-600{% endif %}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+      </svg>
+      <div>
+        <span class="font-semibold {% if f.severity == 'error' %}text-red-800{% else %}text-amber-800{% endif %}">
+          {{ f.plant }} · {{ f.month }}
+        </span>
+        <div class="mt-0.5 {% if f.severity == 'error' %}text-red-700{% else %}text-amber-700{% endif %}">{{ f.issue }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── Advisory (Claude) ── #}
+{% if advisory %}
+<div class="kpi-card p-4 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Advisory — Claude fuzzy review</div>
+    <span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 font-medium">
+      {{ advisory._model or 'fast model' }}
+    </span>
+  </div>
+  <div class="mb-2 rounded-lg bg-purple-50 px-3 py-2 text-[11px] text-purple-800 leading-relaxed">
+    Advisory findings are fuzzy only — they never override the deterministic counts above and
+    cannot modify any production figure.
+  </div>
+
+  {% set looks_ok = advisory.get('looks_complete', true) %}
+  <div class="flex items-center gap-1.5 mb-3 text-xs {% if looks_ok %}text-green-700{% else %}text-amber-700{% endif %}">
+    {% if looks_ok %}
+    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+    </svg>
+    Claude considers ingestion complete for this period.
+    {% else %}
+    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    Claude flags possible issues — review the findings below.
+    {% endif %}
+  </div>
+
+  {# Stale / partial findings #}
+  {% if advisory.stale_or_partial %}
+  <div class="mb-3">
+    <div class="text-[11px] font-semibold text-gray-600 mb-1.5">Stale / partial files</div>
+    {% for item in advisory.stale_or_partial %}
+    <div class="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs">
+      <div class="flex items-start justify-between gap-2">
+        <div class="font-semibold text-amber-800">{{ item.plant }} · {{ item.month }}</div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0
+          {% if item.confidence == 'high' %}bg-amber-200 text-amber-900
+          {% elif item.confidence == 'medium' %}bg-amber-100 text-amber-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ item.confidence }}
+        </span>
+      </div>
+      <div class="text-amber-700 mt-1">{{ item.evidence }}</div>
+      {% if item.suggested_action %}
+      <div class="text-amber-600 mt-0.5 italic">→ {{ item.suggested_action }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Drift findings #}
+  {% if advisory.drift %}
+  <div class="mb-3">
+    <div class="text-[11px] font-semibold text-gray-600 mb-1.5">Naming / code drift</div>
+    {% for item in advisory.drift %}
+    <div class="mb-2 rounded-lg bg-blue-50 px-3 py-2 text-xs">
+      <div class="flex items-start justify-between gap-2">
+        <div class="font-semibold text-blue-800">{{ item.type | replace('_', ' ') | title }}</div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0
+          {% if item.confidence == 'high' %}bg-blue-200 text-blue-900
+          {% elif item.confidence == 'medium' %}bg-blue-100 text-blue-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ item.confidence }}
+        </span>
+      </div>
+      <div class="text-blue-700 mt-1">{{ item.evidence }}</div>
+      {% if item.suggested_action %}
+      <div class="text-blue-600 mt-0.5 italic">→ {{ item.suggested_action }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Notes for engineer #}
+  {% if advisory.notes_for_engineer %}
+  <div class="text-[11px] text-gray-500 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed">
+    <span class="font-semibold text-gray-600">Note: </span>{{ advisory.notes_for_engineer }}
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Advisory — Claude fuzzy review</div>
+  <div class="text-xs text-gray-400">
+    Advisory review not available — ANTHROPIC_API_KEY is not configured.
+    Deterministic coverage above is unaffected.
+  </div>
+</div>
+{% endif %}
+
+{# ── Fetched files detail ── #}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+    Fetched files ({{ manifest.fetched | length }})
+  </div>
+  {% for rep in manifest.fetched %}
+  {% set agg = rep.get('aggregates') %}
+  {% set dr  = rep.get('date_range_in_data') %}
+  <div class="border-t border-gray-100 pt-3 mt-3 first:border-0 first:pt-0 first:mt-0">
+    <div class="flex items-start justify-between gap-2 mb-1.5">
+      <div class="min-w-0">
+        <div class="text-sm font-semibold text-gray-900 truncate">{{ rep.title }}</div>
+        <div class="text-xs text-gray-500 mt-0.5">
+          {{ plant_names.get(rep.plant, rep.plant) }}
+          {% if rep.grain %} · <span class="font-medium">{{ rep.grain }}</span>{% endif %}
+        </div>
+      </div>
+      <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full flex-shrink-0
+        {% if (rep.rows_found or 0) > 0 %}bg-green-50 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
+        {{ rep.rows_found or 0 }} rows
+      </span>
+    </div>
+
+    <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-1.5">
+      {% if rep.months_available %}
+      <div>
+        <span class="text-gray-400">Months: </span>
+        <span class="text-gray-700">{{ rep.months_available | join(', ') }}</span>
+      </div>
+      {% endif %}
+      {% if dr %}
+      <div>
+        <span class="text-gray-400">Date range: </span>
+        <span class="text-gray-700">{{ dr[0] }} → {{ dr[1] }}</span>
+      </div>
+      {% endif %}
+      {% if agg %}
+      <div>
+        <span class="text-gray-400">Output: </span>
+        <span class="text-gray-700">{{ '{:,.0f}'.format(agg.total_count) }} {{ agg.unit }}</span>
+      </div>
+      <div>
+        <span class="text-gray-400">Reject: </span>
+        <span class="text-gray-700">{{ '{:,.0f}'.format(agg.reject_count) }} {{ agg.unit }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if rep.columns_seen %}
+    <div class="flex flex-wrap gap-1 mt-1">
+      {% for c in rep.columns_seen[:8] %}
+      <span class="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-mono">{{ c }}</span>
+      {% endfor %}
+      {% if rep.columns_seen | length > 8 %}
+      <span class="text-[10px] text-gray-400 px-1 py-0.5">+{{ rep.columns_seen | length - 8 }} more</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if rep.warning %}
+    <div class="mt-1.5 text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-relaxed">{{ rep.warning }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{# ── Expected universe ── #}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Expected universe — FY {{ fy }}</div>
+  <div class="text-[11px] text-gray-400 mb-3">Plants configured with a daily workbook per month.</div>
+
+  {% set eu = manifest.expected_universe %}
+  {% for plant_code, plant_months in eu.daily_configured.items() %}
+  <div class="flex items-start justify-between gap-2 mb-2">
+    <div class="text-xs font-medium text-gray-700 w-24 flex-shrink-0">
+      {{ plant_names.get(plant_code, plant_code) }}
+    </div>
+    <div class="flex flex-wrap gap-1 flex-1">
+      {% for m in eu.months %}
+      <span class="text-[10px] px-1.5 py-0.5 rounded
+        {% if m in plant_months %}bg-navy text-white{% else %}bg-gray-100 text-gray-300{% endif %}"
+        style="{% if m in plant_months %}background-color:var(--navy){% endif %}">
+        {{ m[5:] }}
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="mt-3 text-[11px] text-gray-400">
+    Annual summary workbooks:
+    {% for p in eu.annual_summary_plants %}{{ plant_names.get(p, p) }}{% if not loop.last %}, {% endif %}{% endfor %}.
+    These are the reconciliation reference; figures come from daily tabs.
+  </div>
+</div>
+
+{# ── Run log ── #}
+{% if recent_logs %}
+<div class="kpi-card p-4 mb-4">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Recent manifest runs</div>
+  {% for log in recent_logs %}
+  <div class="flex items-center justify-between gap-2 py-1.5 border-t border-gray-50 first:border-0 first:pt-0 text-xs">
+    <div class="text-gray-700">{{ log.created_at_disp or log.as_of }}</div>
+    <div class="flex items-center gap-3 text-[11px] text-gray-500">
+      <span>{{ log.fetched_count }}/{{ log.expected_count }} fetched</span>
+      {% if log.empty_count > 0 %}<span class="text-blue-600">{{ log.empty_count }} empty</span>{% endif %}
+      {% if log.not_found_count > 0 %}<span class="text-red-600">{{ log.not_found_count }} missing</span>{% endif %}
+      {% if log.schema_flag_count > 0 %}<span class="text-amber-600">{{ log.schema_flag_count }} flags</span>{% endif %}
+      {% if log.advisory_ok %}<span class="text-purple-600">+adv</span>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

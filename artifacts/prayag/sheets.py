@@ -274,6 +274,28 @@ def read_values(file_id: str, tab: str, token: str) -> List[list]:
     return _api_get(url, token).get("values", []) or []
 
 
+def drive_file_meta(file_id: str, token: str) -> dict:
+    """Fetch file metadata (modifiedTime, size, name) via Drive API v3.
+
+    Works for files the app has access to (drive.file scope). Returns {} on
+    any error — this is best-effort enrichment for the manifest only and must
+    never block a page render.
+    """
+    url = (
+        f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        "?fields=modifiedTime%2Csize%2Cname"
+    )
+    try:
+        data = _api_get(url, token)
+        return {
+            "modified_time": data.get("modifiedTime"),
+            "file_size_bytes": int(data["size"]) if data.get("size") else None,
+            "file_name": data.get("name"),
+        }
+    except Exception:
+        return {}
+
+
 def batch_get(file_id: str, tabs: List[str], token: str) -> dict:
     """Return {tab_title: value_matrix} for many tabs in one HTTP call."""
     if not tabs:
@@ -719,6 +741,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
 
     report["detail_tabs"] = sorted({r.machine for r in raw})
     report["record_count"] = len(raw)
+    report["columns_seen"] = list(machine_tabs)   # tab names serve as the column inventory
 
     if not raw:
         report["warning"] = (
@@ -752,6 +775,9 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
     report["tab"] = actual
 
     values = read_values(file_id, actual, token)
+    report["columns_seen"] = [
+        str(c).strip() for c in (values[0] if values else []) if str(c).strip()
+    ][:40]
     raw = parsers.parse_tank_prod(
         values, plant=emit, segment=seg, unit="pcs", year_month=ym,
         source_file=file_id, source_tab=actual,
@@ -828,6 +854,10 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
         return [], report
 
     values = read_values(file_id, tab, token)
+    # Capture the header row for manifest schema checks.
+    report["columns_seen"] = [
+        str(c).strip() for c in (values[0] if values else []) if str(c).strip()
+    ][:40]
     if layout == "long":
         raw = parsers.parse_daily_long(
             values, plant=emit, segment=seg, unit=unit, year_month=ym,

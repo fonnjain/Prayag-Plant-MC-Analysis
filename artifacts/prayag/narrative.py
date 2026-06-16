@@ -357,6 +357,90 @@ Rules: Do not use markdown formatting (no bold, no asterisks, no hyphens as bull
         return None
 
 
+def advisory_review(
+    manifest_summary: dict,
+    coverage: dict,
+    as_of: str,
+) -> Optional[dict]:
+    """Advisory-only Claude review of the fuzzy ingestion layer.
+
+    Sends a compact manifest summary + deterministic coverage to the fast model
+    and parses its JSON response. Returns the parsed dict on success, None on
+    any failure. Every output is advisory — callers must never auto-modify a
+    figure or expand ingestion scope based on this response.
+    """
+    if not _enabled():
+        return None
+
+    system = (
+        "You are a data-ingestion reviewer for a production-analytics pipeline.\n\n"
+        "You are given:\n"
+        "- MANIFEST: files the pipeline fetched and what it found in each.\n"
+        "- COVERAGE: the pipeline's own deterministic reconciliation of "
+        "expected-minus-fetched.\n"
+        "- UNACCOUNTED_RAW: always empty here (Drive folder listing is not possible "
+        "with the current auth scope).\n\n"
+        "Your job is the FUZZY layer only:\n\n"
+        "1. STALE / PARTIAL: Flag fetched files that look present-but-stale or only "
+        "partially filled. Compare date_range_in_data against the period and AS_OF date.\n\n"
+        "2. DRIFT: Flag naming or machine/mould-code drift the deterministic matcher "
+        "might have mishandled.\n\n"
+        "3. UNACCOUNTED FILES: Skip — Drive listing unavailable.\n\n"
+        "4. EXPLAIN: For each gap, give the likely plain-English reason.\n\n"
+        "Hard rules:\n"
+        "- COVERAGE is authoritative. Do NOT recompute counts or override it.\n"
+        "- Every claim MUST cite the specific file_id or file_title it refers to.\n"
+        "- Do not assert a file is missing unless it appears in coverage.not_found_at_all.\n"
+        "- 'present_but_empty' is a CONTENT gap, label it as such, not as missing.\n"
+        "- You are advisory. You do not approve, sign off, or modify any figure.\n"
+        "- If unsure, say 'unverified' / use low confidence rather than guessing.\n\n"
+        "Return ONLY valid JSON. No prose, no markdown, no code fences. Shape:\n"
+        "{\n"
+        '  "stale_or_partial": [\n'
+        '    {"file_id": "...", "plant": "...", "month": "...",\n'
+        '     "type": "stale|partial",\n'
+        '     "evidence": "...", "suggested_action": "...",\n'
+        '     "confidence": "high|medium|low"}\n'
+        "  ],\n"
+        '  "drift": [\n'
+        '    {"file_id": "...", "type": "naming_drift|code_mismatch|other",\n'
+        '     "evidence": "...", "suggested_action": "...",\n'
+        '     "confidence": "high|medium|low"}\n'
+        "  ],\n"
+        '  "unaccounted_files": [],\n'
+        '  "looks_complete": true,\n'
+        '  "notes_for_engineer": "..."\n'
+        "}"
+    )
+
+    user = (
+        f"AS_OF: {as_of}\n\n"
+        "MANIFEST:\n"
+        + json.dumps(manifest_summary, indent=2, default=str)[:6000]
+        + "\n\nCOVERAGE:\n"
+        + json.dumps(coverage, indent=2, default=str)
+        + "\n\nUNACCOUNTED_RAW: []\n"
+        "(drive.file scope: folder enumeration is not possible — skip unaccounted_files.)"
+    )
+
+    try:
+        prompt = f"{system}\n\n{user}"
+        text, model_used = _create_text(FAST_MODEL, 1500, prompt)
+        text = text.strip()
+        # Strip accidental markdown fences
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.rsplit("```", 1)[0].strip()
+        result = json.loads(text)
+        result["_model"] = model_used
+        return result
+    except Exception as e:
+        logger.warning("Advisory review failed (%s)", e)
+        return None
+
+
 def classify_downtime_reason(free_text: str) -> Optional[str]:
     """
     Map a free-text downtime note to a standard reason code using Claude.

@@ -7,6 +7,7 @@ import os
 import re
 import datetime
 import json
+import time
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit
@@ -31,8 +32,9 @@ from confirm import (
 )
 from narrative import (
     get_narrative, match_codes, summarize_confirmation, claude_sanity_check,
-    select_model, model_label,
+    select_model, model_label, advisory_review,
 )
+import manifest as manifest_mod
 import store
 import baselines
 import verify
@@ -1132,6 +1134,86 @@ def sources_view():
 
 
 # ---------------------------------------------------------------------------
+# Ingestion Manifest (deterministic coverage + optional Claude advisory)
+# ---------------------------------------------------------------------------
+_manifest_cache: dict = {}
+_MANIFEST_TTL = 900  # 15 min in-process
+
+
+@app.route("/manifest")
+def manifest_view():
+    now = time.time()
+    cached = _manifest_cache.get("result")
+    if cached and (now - cached["ts"]) < _MANIFEST_TTL:
+        return render_template("manifest.html", **cached["ctx"])
+
+    # Load full FY data — sheets.py caches; only cold first-load is expensive.
+    fy_months = FY_MONTHS
+    try:
+        mrecs, mreports, _ = get_records(fy_months)
+        _apply_baselines(mrecs)
+    except SheetReadError:
+        mrecs, mreports = [], []
+    daily_months = [
+        m for m in fy_months
+        if any(m in (cfg.get("files") or {}) for cfg in DAILY_SOURCES.values())
+    ]
+    try:
+        drecs, dreports, _ = get_daily_records(daily_months)
+    except SheetReadError:
+        drecs, dreports = [], []
+
+    all_records = mrecs + drecs
+    all_reports = mreports + dreports
+
+    man = manifest_mod.build_manifest(fy_months, all_records, all_reports)
+    fp = manifest_mod.manifest_fingerprint(man)
+
+    # Advisory pass: cached per fingerprint so a re-load doesn't re-call Claude.
+    adv_key = f"adv_{fp}"
+    adv = _manifest_cache.get(adv_key)
+    if adv is None:
+        summary = manifest_mod.manifest_summary(man)
+        adv = advisory_review(summary, man["coverage"], man["as_of"])
+        _manifest_cache[adv_key] = adv  # None is a valid cached result (API unavailable)
+
+    # Persist run log (best-effort — never block the render).
+    try:
+        store.save_manifest_log(
+            as_of=man["as_of"],
+            fy=man["fy"],
+            fingerprint=fp,
+            coverage=man["coverage"],
+            schema_flags=man["schema_flags"],
+            advisory=adv,
+        )
+    except Exception:
+        pass
+
+    ctx = {
+        "manifest": man,
+        "advisory": adv,
+        "coverage": man["coverage"],
+        "schema_flags": man["schema_flags"],
+        "recent_logs": store.recent_manifest_logs(5),
+        "plant_names": PLANT_NAMES,
+        "fy": man["fy"],
+        "as_of_disp": _fmt(datetime.date.fromisoformat(man["as_of"])),
+        "glossary_data": GLOSSARY_BY_KEY,
+        "demo_mode": is_demo_mode(),
+        "period": request.args.get("period", "current_fy"),
+        "period_label": "Full year",
+        "today_disp": _fmt(_today()),
+        "last_synced": last_fetch_status(),
+        "fetch_status": last_fetch_status(),
+        "confirmation": None,
+        "grain_banner": None,
+    }
+    _manifest_cache["result"] = {"ctx": ctx, "ts": now}
+    return render_template("manifest.html", **ctx)
+
+
+# ---------------------------------------------------------------------------
 # Data verification (read-only — expose computed figures + provenance so the
 # numbers can be reconciled against the source sheets; never writes a figure)
 # ---------------------------------------------------------------------------
@@ -1753,7 +1835,7 @@ def build_state():
     # ------------------------------------------------------------------ #
     # Render                                                               #
     # ------------------------------------------------------------------ #
-    checks.sort(key=lambda x: x["num"])
+    checks.sort(key=lambda x: str(x["num"]).zfill(4))
     n_pass  = sum(1 for x in checks if x["passed"] is True)
     n_fail  = sum(1 for x in checks if x["passed"] is False)
     n_skip  = sum(1 for x in checks if x["passed"] is None)

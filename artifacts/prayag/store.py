@@ -17,6 +17,7 @@ default), and ``record`` raises ``StoreError`` so the route can show a message.
 from __future__ import annotations
 
 import os
+import json
 import datetime
 from typing import List, Optional, Dict
 
@@ -508,6 +509,118 @@ def fingerprint_state() -> Dict[str, Dict]:
         d["observed_at"] = ts
         d["snapshots"] = int(r.get("snapshots") or 1)
         out[r["file_id"]] = d
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Manifest run log — one row per advisory-review run
+# ---------------------------------------------------------------------------
+_ML_TABLE = "manifest_log"
+_ml_initialised = False
+
+
+def _init_manifest_log() -> None:
+    global _ml_initialised
+    if _ml_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_ML_TABLE} (
+        id            BIGSERIAL    PRIMARY KEY,
+        as_of         TEXT         NOT NULL,
+        fy            TEXT         NOT NULL DEFAULT '',
+        fingerprint   TEXT         NOT NULL DEFAULT '',
+        expected_count INTEGER     NOT NULL DEFAULT 0,
+        fetched_count  INTEGER     NOT NULL DEFAULT 0,
+        empty_count    INTEGER     NOT NULL DEFAULT 0,
+        not_found_count INTEGER    NOT NULL DEFAULT 0,
+        schema_flag_count INTEGER  NOT NULL DEFAULT 0,
+        advisory_ok   BOOLEAN      NOT NULL DEFAULT FALSE,
+        coverage      JSONB,
+        schema_flags  JSONB,
+        advisory      JSONB,
+        created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_ML_TABLE}_lookup
+        ON {_ML_TABLE} (as_of, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _ml_initialised = True
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def save_manifest_log(
+    *,
+    as_of: str,
+    fy: str = "",
+    fingerprint: str = "",
+    coverage: dict,
+    schema_flags: list,
+    advisory: Optional[dict] = None,
+) -> Optional[int]:
+    """Persist one manifest run. Returns the new row id, or None on failure."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_manifest_log()
+        cov = coverage or {}
+        sql = f"""
+            INSERT INTO {_ML_TABLE}
+                (as_of, fy, fingerprint, expected_count, fetched_count,
+                 empty_count, not_found_count, schema_flag_count,
+                 advisory_ok, coverage, schema_flags, advisory)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+        """
+        params = (
+            as_of, fy, fingerprint,
+            int(cov.get("expected_count", 0)),
+            int(cov.get("fetched_with_data", 0)),
+            len(cov.get("present_but_empty", [])),
+            len(cov.get("not_found_at_all", [])),
+            len(schema_flags or []),
+            advisory is not None,
+            json.dumps(cov) if cov else None,
+            json.dumps(schema_flags) if schema_flags else None,
+            json.dumps(advisory) if advisory else None,
+        )
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def recent_manifest_logs(limit: int = 10) -> List[Dict]:
+    """Recent manifest run log entries (newest first)."""
+    if not AVAILABLE:
+        return []
+    try:
+        _init_manifest_log()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT id, as_of, fy, fingerprint, expected_count,
+                           fetched_count, empty_count, not_found_count,
+                           schema_flag_count, advisory_ok, created_at
+                    FROM {_ML_TABLE}
+                    ORDER BY created_at DESC LIMIT %s""",
+                (limit,),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        ts = d.get("created_at")
+        if isinstance(ts, datetime.datetime):
+            d["created_at_disp"] = ts.strftime("%d-%m-%Y %H:%M")
+        out.append(d)
     return out
 
 
