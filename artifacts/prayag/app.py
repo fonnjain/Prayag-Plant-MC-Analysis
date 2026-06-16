@@ -667,12 +667,12 @@ def _sync_ctx() -> dict:
 
 
 def _recent_date_options(n: int = 7) -> list:
-    """The last ``n`` calendar dates ending yesterday, most-recent first, as
-    (iso, dd-mm-yyyy) pairs for the period dropdown's "Recent dates" group."""
-    y = _today() - datetime.timedelta(days=1)
+    """The last ``n`` calendar dates starting from today, most-recent first,
+    as (iso, dd-mm-yyyy) pairs for the period dropdown's "Recent dates" group."""
+    today = _today()
     out = []
     for i in range(n):
-        d = y - datetime.timedelta(days=i)
+        d = today - datetime.timedelta(days=i)
         out.append((d.isoformat(), _fmt(d)))
     return out
 
