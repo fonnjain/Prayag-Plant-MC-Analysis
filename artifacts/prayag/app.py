@@ -129,6 +129,9 @@ def _fmt_age(seconds: int) -> str:
     return f"{d}d {h}h" if h else f"{d}d"
 
 
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def parse_period(args) -> dict:
     """Resolve the requested period to calendar months (the source grain).
 
@@ -150,6 +153,14 @@ def parse_period(args) -> dict:
     elif period == "yesterday":
         f = t = yesterday
         label = f"Yesterday ({_fmt(yesterday)})"
+        sub_monthly = True
+    elif _ISO_DATE_RE.match(period):
+        # A specific single calendar date picked from the "Recent dates" group.
+        try:
+            f = t = datetime.date.fromisoformat(period)
+        except ValueError:
+            f = t = yesterday
+        label = _fmt(f)
         sub_monthly = True
     elif period == "last_week":
         t = yesterday
@@ -223,7 +234,7 @@ def _period_type(period: str) -> str:
     the numbers are computed identically regardless.
     """
     p = (period or "").strip()
-    if p in ("yesterday", "last_week", "last_month", "last_updated", "custom"):
+    if p in ("yesterday", "last_week", "last_month", "last_updated", "custom") or _ISO_DATE_RE.match(p):
         return "weekly"
     if p in ("current_fy", "prior_fy"):
         return "fiscal_year"
@@ -645,6 +656,17 @@ def _sync_ctx() -> dict:
     }
 
 
+def _recent_date_options(n: int = 7) -> list:
+    """The last ``n`` calendar dates ending yesterday, most-recent first, as
+    (iso, dd-mm-yyyy) pairs for the period dropdown's "Recent dates" group."""
+    y = _today() - datetime.timedelta(days=1)
+    out = []
+    for i in range(n):
+        d = y - datetime.timedelta(days=i)
+        out.append((d.isoformat(), _fmt(d)))
+    return out
+
+
 def _common_ctx(data: dict) -> dict:
     """Build template context that every page needs."""
     opt_rows = data.get("all_rows", data["rows"])
@@ -660,6 +682,7 @@ def _common_ctx(data: dict) -> dict:
         "overall_dict": data["overall"].to_dict(),
         "today_disp": _fmt(_today()),
         "last_synced": _sync_ctx(),
+        "recent_dates": _recent_date_options(),
     }
 
 
