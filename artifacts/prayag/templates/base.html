@@ -93,6 +93,22 @@
       color: rgba(255,255,255,0.52);
       font-size: 11px; margin-top: -10px; letter-spacing: 0.01em;
     }
+    .loading-slow {
+      display: none;
+      max-width: 320px; margin-top: 6px; padding: 0 24px;
+      text-align: center;
+    }
+    #loading-overlay.slow .loading-slow { display: block; }
+    .loading-slow-msg {
+      color: rgba(255,255,255,0.78);
+      font-size: 12px; line-height: 1.5;
+    }
+    .loading-reload {
+      display: inline-block; margin-top: 12px;
+      background: var(--terra); color: #fff;
+      font-size: 13px; font-weight: 600;
+      padding: 8px 18px; border-radius: 8px; text-decoration: none;
+    }
   </style>
 </head>
 <body class="min-h-screen">
@@ -102,6 +118,10 @@
   <div class="loading-ring"></div>
   <div class="loading-label">Fetching data…</div>
   <div class="loading-sub">Loading production data</div>
+  <div id="loading-slow" class="loading-slow">
+    <div class="loading-slow-msg">Still loading — the production sheets can take a little longer right after the dashboard restarts.</div>
+    <a href="#" id="loading-reload" class="loading-reload">Reload this page</a>
+  </div>
 </div>
 
 <!-- ===== STICKY HEADER ===== -->
@@ -377,7 +397,8 @@ window.addEventListener('orientationchange', syncHeaderOffset);
 // ---- Loading overlay ----
 (function() {
   var overlay = document.getElementById('loading-overlay');
-  var loaderTimer = null;
+  var loaderTimer = null;   // 400 ms → show spinner
+  var slowTimer = null;     // ~18 s → reveal "still loading" escape hatch
 
   // Only show the spinner if the page takes more than 400 ms to respond.
   // Warm-cache page loads are typically < 200 ms — the spinner never appears
@@ -386,14 +407,31 @@ window.addEventListener('orientationchange', syncHeaderOffset);
   function showLoader() {
     if (loaderTimer) return;
     loaderTimer = setTimeout(function() { overlay.classList.add('active'); }, 400);
+    // After ~18 s the cold-cache read is genuinely slow (e.g. right after a
+    // production restart). Surface an actionable message + reload so the user
+    // never faces a spinner that looks permanently frozen.
+    slowTimer = setTimeout(function() { overlay.classList.add('slow'); }, 18000);
   }
 
-  // Hide + cancel the timer whenever a page is displayed (covers normal loads
-  // and bfcache restores), so the spinner can never get stuck visible.
-  window.addEventListener('pageshow', function() {
+  function resetLoader() {
     if (loaderTimer) { clearTimeout(loaderTimer); loaderTimer = null; }
+    if (slowTimer) { clearTimeout(slowTimer); slowTimer = null; }
     overlay.classList.remove('active');
-  });
+    overlay.classList.remove('slow');
+  }
+
+  // Hide + cancel the timers whenever a page is displayed (covers normal loads
+  // and bfcache restores), so the spinner can never get stuck visible.
+  window.addEventListener('pageshow', resetLoader);
+
+  // Escape hatch: force a fresh reload of the current request.
+  var reloadLink = document.getElementById('loading-reload');
+  if (reloadLink) {
+    reloadLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      window.location.reload();
+    });
+  }
 
   // Show on any navigating <a> click (skip anchors, new-tab, non-href, glossary buttons).
   document.addEventListener('click', function(e) {
