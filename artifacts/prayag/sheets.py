@@ -17,9 +17,12 @@ import datetime
 import urllib.request
 import urllib.parse
 import urllib.error
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple
+
+logger = logging.getLogger("prayag.sheets")
 
 from metrics import Record
 import parsers
@@ -31,8 +34,21 @@ import baselines
 # ---------------------------------------------------------------------------
 _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
-_DATA_TTL = 300.0               # seconds (5 min — keeps data warm across page-to-page navigation)
+_DATA_TTL = 900.0               # seconds (15 min) on-demand fallback TTL. The
+                                # always-on background refresher (bottom of file)
+                                # refills well inside this window, so warm-cache
+                                # hits are the norm; this TTL only governs the
+                                # fallback when no refresher runs (e.g. autoscale).
+_REFRESH_INTERVAL = 600.0       # seconds (10 min) — always-on background sync
+                                # cadence. Effective only on an always-running
+                                # (Reserved VM) deployment; idle/harmless on a
+                                # scale-to-zero one (the process sleeps).
 _last_fetch_status: dict = {}   # stale/failed info from the most recent live attempt
+_sync_state: dict = {                      # live/background-sync observability
+    "last_ok_ts": 0.0,                     # epoch of the last successful live read
+    "last_attempt_ts": 0.0,                # epoch of the last background refresh attempt
+    "last_error": None,                    # message of the most recent background failure
+}
 # Single-flight lock: under threaded gunicorn workers (gthread) concurrent cold
 # requests would each run the full, slow Sheets fetch (a cache stampede). The
 # lock serialises fills so the first request does the work and the rest reuse
@@ -80,6 +96,34 @@ def clear_caches() -> None:
     _data_cache.clear()
     _daily_cache.clear()
     _last_fetch_status.clear()
+
+
+def _mark_synced() -> None:
+    """Stamp the time of a successful live read from Google Sheets."""
+    _sync_state["last_ok_ts"] = time.time()
+
+
+def sync_status() -> dict:
+    """Report when live data was last successfully pulled, and the auto-refresh
+    cadence. ``last_ok_ts`` is 0 until the first successful read.
+
+    Keys:
+      available       bool – True once at least one live read has succeeded.
+      last_ok_ts      float – epoch seconds of that last success (0 if none).
+      age_seconds     int   – seconds since the last success (None if none).
+      interval_seconds int  – the background refresh cadence.
+      auto            bool  – True when live mode (the refresher is meaningful).
+    """
+    ok = _sync_state.get("last_ok_ts", 0.0)
+    now = time.time()
+    return {
+        "available": bool(ok),
+        "last_ok_ts": ok,
+        "age_seconds": int(now - ok) if ok else None,
+        "interval_seconds": int(_REFRESH_INTERVAL),
+        "auto": not is_demo_mode(),
+        "last_error": _sync_state.get("last_error"),
+    }
 
 
 def _fetch_token() -> Tuple[Optional[str], float]:
@@ -412,6 +456,7 @@ def _fetch_live_payload(now: float, cached) -> dict:
             )
         payload = _load_live_monthly(token)
         _data_cache["live"] = (now, payload)
+        _mark_synced()
         _last_fetch_status = {
             "stale": False,
             "failed_plants": payload.get("failed_plants", []),
@@ -486,6 +531,7 @@ def _load_daily_cached(plant: str, ym: str, token: str):
             return cached[1]
         results = _load_daily(plant, ym, token)
         _daily_cache[key] = (time.time(), results)
+        _mark_synced()
         return results
 
 # Per-plant daily layout config. Each workbook can emit one OR MORE logical
@@ -1135,6 +1181,58 @@ def _demo_reports() -> List[dict]:
 # ---------------------------------------------------------------------------
 # Startup cache warmup
 # ---------------------------------------------------------------------------
+def _recent_daily_months() -> List[str]:
+    """The two most recently-relevant calendar months (this month + last) — the
+    daily windows the dashboard lands on by default."""
+    today = datetime.date.today()
+    first_of_month = today.replace(day=1)
+    prev = first_of_month - datetime.timedelta(days=1)
+    return sorted({prev.strftime("%Y-%m"), today.strftime("%Y-%m")})
+
+
+def _force_live_payload() -> dict:
+    """Re-fetch the monthly payload under ``_fetch_lock`` and overwrite the cache,
+    bypassing the TTL. Sharing the lock with ``_live_payload`` means a background
+    refresh and a concurrent request never both fetch (single-flight), and the
+    cache write stays coordinated — no unsynchronised pop-then-fetch race.
+    """
+    with _fetch_lock:
+        now = time.time()
+        cached = _data_cache.get("live")
+        return _fetch_live_payload(now, cached)
+
+
+def _refresh_once() -> None:
+    """Force one full live re-pull (monthly grid + recent daily months) into the
+    caches, bypassing the TTL so the data is genuinely current. Best-effort: each
+    leg records its own error (surfaced via ``sync_status``) but never aborts the
+    other. Shared by both the boot warmup and the always-on background refresher.
+
+    Cache eviction is coordinated with the request path's own single-flight locks
+    (``_fetch_lock`` for monthly via ``_force_live_payload``; each daily key's
+    ``_daily_key_lock`` for the pop) so a refresh never races a request mid-write.
+    """
+    errors: list = []
+    try:
+        _force_live_payload()
+    except Exception as exc:                       # noqa: BLE001 — best-effort leg
+        errors.append(f"monthly: {exc}")
+    recent = _recent_daily_months()
+    # Evict the recent daily keys under their per-key lock so a concurrent
+    # _load_daily_cached write is never clobbered, then force a fresh fetch.
+    for key in [k for k in list(_daily_cache.keys()) if k[1] in recent]:
+        with _daily_key_lock(key):
+            _daily_cache.pop(key, None)
+    try:
+        get_daily_records(recent)
+    except Exception as exc:                       # noqa: BLE001 — best-effort leg
+        errors.append(f"daily: {exc}")
+    _sync_state["last_attempt_ts"] = time.time()
+    _sync_state["last_error"] = "; ".join(errors) if errors else None
+    if errors:
+        logger.warning("background sheet refresh had failures: %s", "; ".join(errors))
+
+
 def _startup_warmup() -> None:
     """Pre-fill in-process caches a few seconds after the module loads.
 
@@ -1152,18 +1250,30 @@ def _startup_warmup() -> None:
     _t.sleep(3)                    # let the worker finish booting first
     if is_demo_mode():
         return
-    try:
-        _live_payload()
-    except Exception:
-        pass
-    today = datetime.date.today()
-    first_of_month = today.replace(day=1)
-    prev = first_of_month - datetime.timedelta(days=1)
-    recent = sorted({prev.strftime("%Y-%m"), today.strftime("%Y-%m")})
-    try:
-        get_daily_records(recent)
-    except Exception:
-        pass
+    _refresh_once()
+
+
+def _auto_refresh_loop() -> None:
+    """Always-on background sync: every ``_REFRESH_INTERVAL`` seconds, force a
+    fresh live pull so the dashboard stays current around the clock without
+    waiting for a visitor to trigger a fetch.
+
+    This is only effective on an always-running (Reserved VM) deployment — on a
+    scale-to-zero deployment the process sleeps between requests and this loop
+    simply doesn't advance, which is harmless (the per-request path still keeps
+    data within the TTL). Best-effort and silent; the per-request path still
+    surfaces genuine read errors to the user.
+    """
+    import time as _t
+    while True:
+        _t.sleep(_REFRESH_INTERVAL)
+        if is_demo_mode():
+            continue
+        try:
+            _refresh_once()
+        except Exception:
+            pass
 
 
 threading.Thread(target=_startup_warmup, daemon=True, name="cache-warmup").start()
+threading.Thread(target=_auto_refresh_loop, daemon=True, name="cache-refresh").start()

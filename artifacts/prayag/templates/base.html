@@ -208,6 +208,15 @@
         <div class="text-blue-100 text-xs font-medium whitespace-nowrap">Today's date: {{ today_disp }}</div>
         {% endif %}
       </div>
+      <!-- Live sync status -->
+      {% if last_synced %}
+      <div class="flex items-center gap-1.5 mt-1">
+        <span class="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 {% if last_synced.available %}bg-green-400{% else %}bg-blue-300{% endif %}"></span>
+        <div class="text-blue-100 text-[11px] whitespace-nowrap truncate">
+          {%- if last_synced.available %}Data synced {{ last_synced.age_disp }} ago · {{ last_synced.disp }}{% else %}Syncing live data…{% endif %}{% if last_synced.auto %} · auto-refresh on{% endif -%}
+        </div>
+      </div>
+      {% endif %}
     </form>
   </div>
 </header>

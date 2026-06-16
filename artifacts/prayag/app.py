@@ -14,7 +14,7 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    is_demo_mode, SheetReadError, last_fetch_status, clear_caches,
+    is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
 )
 from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS
 from metrics import (
@@ -628,6 +628,23 @@ def _build_freshness() -> dict:
     return out
 
 
+def _sync_ctx() -> dict:
+    """Header context for the 'Last synced' stamp — when live data was last
+    successfully pulled and whether the always-on auto-refresh is active.
+    Suppressed entirely in demo mode (there is no live sync to report)."""
+    if is_demo_mode():
+        return {}
+    st = sync_status()
+    if not st.get("available"):
+        return {"available": False, "auto": st.get("auto", False)}
+    return {
+        "available": True,
+        "disp": datetime.datetime.fromtimestamp(st["last_ok_ts"]).strftime("%d-%m-%Y %H:%M"),
+        "age_disp": _fmt_age(st["age_seconds"] or 0),
+        "auto": st.get("auto", False),
+    }
+
+
 def _common_ctx(data: dict) -> dict:
     """Build template context that every page needs."""
     opt_rows = data.get("all_rows", data["rows"])
@@ -642,6 +659,7 @@ def _common_ctx(data: dict) -> dict:
         "machines": machines,
         "overall_dict": data["overall"].to_dict(),
         "today_disp": _fmt(_today()),
+        "last_synced": _sync_ctx(),
     }
 
 
