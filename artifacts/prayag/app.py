@@ -1548,6 +1548,18 @@ def build_state():
          True, parse_period({"period": "last_week"}).get("sub_monthly"),
          "daily-first not live for sub-monthly")
 
+    # #5b  A specific picked date ('Recent dates' group) → single-day daily view
+    _dp = parse_period({"period": "2026-06-14"})
+    _opts = _recent_date_options()
+    _date_ok = (_dp.get("from_iso") == "2026-06-14"
+                and _dp.get("to_iso") == "2026-06-14"
+                and bool(_dp.get("sub_monthly"))
+                and _period_type("2026-06-14") == "weekly"
+                and len(_opts) == 7)
+    _chk("5b", "Picked date = single-day daily view; 7 recent-date options",
+         _date_ok, True, _date_ok,
+         "Recent-dates option parsing/rendering broken")
+
     # #8  PTMT roster = 55 machines
     ptmt_n = sum(len(v) for v in _src.PTMT_GROUPS.values())
     _chk(8, "PTMT roster machine count = 55",
