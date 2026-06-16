@@ -441,6 +441,152 @@ def advisory_review(
         return None
 
 
+def _ai_report_cache_key(
+    report_title: str,
+    period_key: str,
+    overall: dict,
+    table_headers: list,
+    table_rows: list,
+    model: str,
+) -> str:
+    """Cache key for a full AI report. Includes the resolved model (a fast-tier
+    report is never reused for a deep-tier request) and the full computed table
+    so any change to the underlying figures invalidates the cached prose."""
+    payload = json.dumps(
+        {
+            "v": "ai_report",
+            "title": report_title,
+            "period": period_key,
+            "overall": {k: v for k, v in overall.items()
+                        if isinstance(v, (int, float))},
+            "headers": list(table_headers),
+            "rows": [[str(c) for c in row] for row in table_rows],
+            "model": model,
+        },
+        sort_keys=True,
+    )
+    return "aireport:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+def generate_ai_report(
+    report_title: str,
+    period_label: str,
+    period_key: str,
+    overall: dict,
+    table_headers: list,
+    table_rows: list,
+    period_type: Optional[str] = None,
+    deep: Optional[bool] = None,
+    provenance: Optional[dict] = None,
+) -> Optional[str]:
+    """Return a fuller, multi-section AI analytical report for one report page.
+
+    Claude is given ONLY the already-computed KPIs and the already-computed
+    report table (both produced by the deterministic engine) plus the report
+    type, and asked to write a structured management analysis. It must never
+    recalculate or invent a figure — it interprets the numbers it is handed.
+
+    Returns None if ANTHROPIC_API_KEY is not set or on any error. Model tier
+    follows ``period_type`` (deep for monthly/quarterly/FY); ``deep=True``
+    forces the deep tier. ``provenance`` (if given) is filled with the model
+    that ACTUALLY produced the text (honest after any fallback).
+    """
+    if not _enabled():
+        return None
+
+    model, max_tokens, _ = select_model(period_type, override=deep)
+    ck = _ai_report_cache_key(
+        report_title, period_key, overall, table_headers, table_rows, model
+    )
+    if ck in _cache:
+        used = _actual_model.get(ck, model)
+        if provenance is not None:
+            provenance["model"] = used
+            provenance["label"] = tier_label(used)
+        return _cache[ck]
+
+    try:
+        kpi_lines = "\n".join(
+            f"  {k}: {v}" for k, v in overall.items()
+            if isinstance(v, (int, float))
+        )
+        header_line = " | ".join(str(h) for h in table_headers)
+        body_lines = "\n".join(
+            " | ".join(str(c) for c in row) for row in table_rows
+        ) or "  (no rows for this period/filter)"
+        prompt = f"""You are a senior manufacturing operations analyst writing an analytical report for a plastics factory management team.
+
+Report type: {report_title}
+Reporting period: {period_label}
+
+These figures are FINAL and were computed by a deterministic engine. Do NOT recalculate, re-derive, or invent any number. Use only the values below and reference them specifically.
+
+Overall KPIs:
+{kpi_lines}
+
+Detailed data table ({header_line}):
+{body_lines}
+
+Write a structured analytical report with these sections, each introduced by a heading line beginning with "## ":
+## Executive Summary
+## Key Findings
+## Areas of Concern
+## Recommendations
+
+Guidance:
+- Reference specific machines/moulds/segments and their actual numbers from the table.
+- Call out the best and worst performers and any notable spread.
+- Keep each section to 2-4 sentences (Recommendations may be 3-5 short bullet-like sentences).
+- Plain English for a factory manager. Do NOT use markdown other than the "## " section headings (no bold, no tables, no bullet characters).
+- Never state a figure that is not present in the data above."""
+
+        text, used = _create_text(model, max(max_tokens, 1200), prompt)
+        _cache[ck] = text
+        _actual_model[ck] = used
+        if provenance is not None:
+            provenance["model"] = used
+            provenance["label"] = tier_label(used)
+        return text
+    except Exception:
+        return None
+
+
+def parse_ai_report_sections(text: str) -> list[dict]:
+    """Parse an AI report into ``[{"heading": str, "paragraphs": [str, ...]}]``.
+
+    Headings are lines beginning with ``## ``. Text before the first heading
+    becomes an untitled lead section. Blank lines separate paragraphs.
+    """
+    if not text:
+        return []
+    sections: list[dict] = []
+    current = {"heading": "", "paragraphs": []}
+    buf: list[str] = []
+
+    def _flush_para():
+        if buf:
+            para = " ".join(s.strip() for s in buf if s.strip()).strip()
+            if para:
+                current["paragraphs"].append(para)
+            buf.clear()
+
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.lstrip().startswith("## "):
+            _flush_para()
+            if current["heading"] or current["paragraphs"]:
+                sections.append(current)
+            current = {"heading": line.lstrip()[3:].strip(), "paragraphs": []}
+        elif not line.strip():
+            _flush_para()
+        else:
+            buf.append(line)
+    _flush_para()
+    if current["heading"] or current["paragraphs"]:
+        sections.append(current)
+    return sections
+
+
 def classify_downtime_reason(free_text: str) -> Optional[str]:
     """
     Map a free-text downtime note to a standard reason code using Claude.

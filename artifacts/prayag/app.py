@@ -33,13 +33,14 @@ from confirm import (
 from narrative import (
     get_narrative, match_codes, summarize_confirmation, claude_sanity_check,
     select_model, model_label, advisory_review,
+    generate_ai_report, parse_ai_report_sections,
 )
 import manifest as manifest_mod
 import store
 import baselines
 import verify
 import freshness
-from pdf_export import generate_report_pdf
+from pdf_export import generate_report_pdf, generate_ai_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
     WORKED_EXAMPLE, COMPUTE_NOTE, HEADER_TERM_MAP,
@@ -1587,6 +1588,116 @@ def export_pdf(report_id: str):
         pdf_bytes,
         mimetype="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=prayag_{report_id}_{data['from_iso']}.pdf"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# AI-generated report (Claude analyses the already-computed figures)
+# ---------------------------------------------------------------------------
+
+def _ai_report_payload(report_id: str):
+    """Shared builder: resolve the report, rebuild its computed table + KPIs,
+    and have Claude write a structured analysis from those numbers only.
+    Returns ``(rpt, data, headers, table_rows, sub_overall, text, prov)`` or
+    ``None`` if the report id is unknown."""
+    rpt = next((r for r in REPORT_TYPES if r["id"] == report_id), None)
+    if not rpt:
+        return None
+
+    data = get_data(request.args)
+    rows = data["rows"]
+    if rpt["segments"]:
+        rows = [r for r in rows if r.segment in rpt["segments"]]
+
+    headers, table_rows, _, _, _ = _build_report_table(report_id, rows, data)
+    sub_overall = compute_metrics(rows)
+    sub_dict = sub_overall.to_dict()
+
+    prov: dict = {}
+    text = None
+    if data.get("has_claude") and rows:
+        text = generate_ai_report(
+            report_title=rpt["title"],
+            period_label=data["period_label"],
+            period_key=_period_key(
+                data["from_iso"], data["to_iso"], "", report_id, ""
+            ),
+            overall=sub_dict,
+            table_headers=headers,
+            table_rows=table_rows,
+            period_type=data["period_type"],
+            deep=data["deep_override"],
+            provenance=prov,
+        )
+    return rpt, data, headers, table_rows, sub_dict, text, prov
+
+
+@app.route("/reports/<report_id>/ai-report")
+def report_ai(report_id: str):
+    """On-demand: generate the AI analysis for one report and return rendered
+    HTML (safe, server-escaped) + the model that wrote it, as JSON."""
+    built = _ai_report_payload(report_id)
+    if built is None:
+        abort(404)
+    rpt, data, _headers, _table_rows, _overall, text, prov = built
+
+    if not data.get("has_claude"):
+        return jsonify({
+            "ok": False,
+            "error": "AI analysis is unavailable (no API key configured).",
+        }), 503
+    if not text:
+        return jsonify({
+            "ok": False,
+            "error": "No data available to analyse for this period / filter.",
+        }), 200
+
+    sections = parse_ai_report_sections(text)
+    model = prov.get("label") or data.get("analysis_label")
+    html = render_template(
+        "_ai_report.html",
+        sections=sections,
+        report=rpt,
+        model=model,
+        pdf_qs=request.query_string.decode("utf-8"),
+    )
+    return jsonify({"ok": True, "html": html, "model": model})
+
+
+@app.route("/export-ai-pdf/<report_id>")
+def export_ai_pdf(report_id: str):
+    """Download the AI analytical report for one report page as a PDF."""
+    built = _ai_report_payload(report_id)
+    if built is None:
+        abort(404)
+    rpt, data, headers, table_rows, sub_dict, text, prov = built
+
+    # Never hand back an "AI report" PDF with no actual analysis (e.g. a direct
+    # URL hit with no API key or no data for the period). The in-app download
+    # button only appears after a successful generation, so this guards the
+    # direct-link path only.
+    if not text:
+        msg = (
+            "AI analysis is unavailable (no API key configured)."
+            if not data.get("has_claude")
+            else "No data available to analyse for this period / filter."
+        )
+        return Response(msg, status=409, mimetype="text/plain")
+
+    sections = parse_ai_report_sections(text or "")
+    pdf_bytes = generate_ai_report_pdf(
+        title=rpt["title"],
+        period_label=data["period_label"],
+        overall=sub_dict,
+        sections=sections,
+        table_rows=table_rows,
+        table_headers=headers,
+        analysis_model=(prov.get("label") or data.get("analysis_label")) if text else None,
+    )
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=prayag_{report_id}_AI_{data['from_iso']}.pdf"},
     )
 
 

@@ -1,0 +1,31 @@
+<div class="kpi-card p-4 mb-4 border-l-4" style="border-color:var(--terra)">
+  <div class="flex items-center gap-1.5 mb-3">
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="#C55A11" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+    </svg>
+    <span class="text-sm font-bold" style="color:var(--terra)">AI-Generated Report</span>
+    {% if model %}<span class="text-[11px] text-gray-400 ml-auto">{{ model }}</span>{% endif %}
+  </div>
+
+  {% for sec in sections %}
+  <div class="mb-3">
+    {% if sec.heading %}
+    <h4 class="text-sm font-bold mb-1.5" style="color:var(--navy)">{{ sec.heading }}</h4>
+    {% endif %}
+    {% for para in sec.paragraphs %}
+    <p class="text-sm text-gray-700 leading-relaxed mb-2">{{ para }}</p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+  <div class="text-[11px] text-gray-400 mb-3">Numbers computed by the deterministic engine; the AI only interprets those figures.</div>
+
+  <a href="/export-ai-pdf/{{ report.id }}{% if pdf_qs %}?{{ pdf_qs }}{% endif %}"
+     class="flex items-center gap-2 justify-center w-full py-2.5 rounded-xl text-sm font-semibold text-white"
+     style="background:var(--terra)">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+    </svg>
+    Download AI Report as PDF
+  </a>
+</div>

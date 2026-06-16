@@ -18,6 +18,21 @@
   </div>
 </div>
 
+<!-- Generate report by AI -->
+{% if has_claude %}
+<button id="aiGenBtn" type="button"
+   data-report-id="{{ report.id }}"
+   class="flex items-center gap-2 justify-center w-full py-2.5 rounded-xl text-sm font-semibold text-white mb-3"
+   style="background:var(--navy)">
+  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+  </svg>
+  <span id="aiGenLabel">Generate report by AI</span>
+</button>
+<div id="aiReportContainer" class="mb-4"></div>
+<div id="aiReportError" class="hidden rounded-xl p-2.5 bg-red-50 border border-red-200 mb-4 text-red-800 text-xs font-medium"></div>
+{% endif %}
+
 <!-- Export PDF button -->
 <a href="/export-pdf/{{ report.id }}?period={{ period }}&plant={{ plant_filter }}&segment={{ segment_filter }}{% if period=='custom' %}&from_date={{ request.args.get('from_date','') }}&to_date={{ request.args.get('to_date','') }}{% endif %}"
    class="flex items-center gap-2 justify-center w-full py-2.5 rounded-xl text-sm font-semibold text-white mb-4"
@@ -25,7 +40,7 @@
   <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
     <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
   </svg>
-  Export PDF
+  Export Data Report PDF
 </a>
 
 <!-- Validation status -->
@@ -168,6 +183,47 @@
 
 {% block scripts %}
 <script>
+// Generate report by AI (on-demand) ---------------------------------------
+(function () {
+  const btn = document.getElementById('aiGenBtn');
+  if (!btn) return;
+  const label = document.getElementById('aiGenLabel');
+  const container = document.getElementById('aiReportContainer');
+  const errBox = document.getElementById('aiReportError');
+  const reportId = btn.getAttribute('data-report-id');
+  const qs = window.location.search; // preserve period / plant / segment filters
+
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    label.textContent = 'Generating analysis…';
+    errBox.classList.add('hidden');
+    errBox.textContent = '';
+    container.innerHTML = '';
+    try {
+      const resp = await fetch('/reports/' + reportId + '/ai-report' + qs, {
+        headers: { 'Accept': 'application/json' }
+      });
+      const json = await resp.json();
+      if (json.ok) {
+        container.innerHTML = json.html;
+        label.textContent = 'Regenerate AI report';
+      } else {
+        errBox.textContent = json.error || 'Could not generate the AI report.';
+        errBox.classList.remove('hidden');
+        label.textContent = 'Generate report by AI';
+      }
+    } catch (e) {
+      errBox.textContent = 'Could not generate the AI report. Please try again.';
+      errBox.classList.remove('hidden');
+      label.textContent = 'Generate report by AI';
+    } finally {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+  });
+})();
+
 const chartLabels = {{ chart_labels|safe }};
 const chartValues = {{ chart_values|safe }};
 const chartLabel = {{ chart_label|tojson }};

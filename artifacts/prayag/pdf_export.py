@@ -5,7 +5,14 @@ No AI involved; numbers come straight from the metrics engine.
 from __future__ import annotations
 import io
 import datetime
+from html import escape as _html_escape
 from typing import List, Dict, Any
+
+
+def _esc(text: Any) -> str:
+    """Escape text for reportlab Paragraph markup (so stray < & > in AI prose
+    never break the mini-HTML parser)."""
+    return _html_escape(str(text), quote=False)
 
 try:
     from reportlab.lib import colors
@@ -66,6 +73,141 @@ def _make_footer(generated_str: str, analysis_model: str | None):
         canvas.drawRightString(w - 15 * mm, y, right)
         canvas.restoreState()
     return _draw
+
+
+def generate_ai_report_pdf(
+    title: str,
+    period_label: str,
+    overall: Dict[str, Any],
+    sections: List[Dict[str, Any]],
+    table_rows: List[List[str]],
+    table_headers: List[str],
+    analysis_model: str | None = None,
+) -> bytes:
+    """Return PDF bytes for an AI-generated analytical report.
+
+    The numbers in ``overall``/``table_rows`` come from the deterministic
+    engine; ``sections`` is Claude's interpretive prose written from those
+    numbers only. Provenance is stamped on every page footer.
+    """
+    if not REPORTLAB_AVAILABLE:
+        return b""
+
+    generated_str = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=15 * mm, rightMargin=15 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm,
+    )
+
+    title_style = ParagraphStyle(
+        "title", fontSize=16, textColor=colors.Color(*NAVY),
+        spaceAfter=4, fontName="Helvetica-Bold", alignment=TA_LEFT,
+    )
+    sub_style = ParagraphStyle(
+        "sub", fontSize=10, textColor=colors.Color(*TERRA),
+        spaceAfter=2, fontName="Helvetica",
+    )
+    body_style = ParagraphStyle(
+        "body", fontSize=9.5, textColor=colors.black,
+        spaceAfter=6, fontName="Helvetica", leading=14,
+    )
+    sec_h_style = ParagraphStyle(
+        "sec_h", fontSize=11.5, textColor=colors.Color(*NAVY),
+        spaceBefore=8, spaceAfter=4, fontName="Helvetica-Bold",
+    )
+
+    story = []
+    story.append(Paragraph("Prayag Production Analytics", title_style))
+    story.append(Paragraph(title, ParagraphStyle(
+        "h2", fontSize=13, textColor=colors.Color(*TERRA),
+        spaceAfter=2, fontName="Helvetica-Bold",
+    )))
+    story.append(Paragraph(f"Period: {period_label}", sub_style))
+    badge = (
+        f"AI-Generated Analysis — {analysis_model}"
+        if analysis_model else "AI-Generated Analysis"
+    )
+    story.append(Paragraph(badge, ParagraphStyle(
+        "badge", fontSize=8.5, textColor=colors.Color(*TERRA),
+        spaceAfter=2, fontName="Helvetica-Oblique",
+    )))
+    story.append(HRFlowable(width="100%", thickness=1,
+                             color=colors.Color(*NAVY), spaceAfter=8))
+
+    # Overall KPIs — the deterministic figures the analysis is written from.
+    if overall:
+        kpi_data = [
+            ["OEE", f"{overall.get('oee', 0):.1f}%"],
+            ["Availability", f"{overall.get('availability', 0):.1f}%"],
+            ["Performance", f"{overall.get('performance', 0):.1f}%"],
+            ["Quality", f"{overall.get('quality', 0):.1f}%"],
+            ["Total Output", f"{overall.get('total_count', 0):,.0f}"],
+            ["Rejection %", f"{overall.get('rejection_pct', 0):.2f}%"],
+            ["Plan Attainment", f"{overall.get('attainment', 0):.1f}%"],
+        ]
+        kpi_table = Table(kpi_data, colWidths=[60 * mm, 50 * mm])
+        kpi_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.Color(0.95, 0.95, 0.97)),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ("ROWBACKGROUNDS", (0, 0), (-1, -1),
+             [colors.white, colors.Color(0.97, 0.97, 0.99)]),
+        ]))
+        story.append(kpi_table)
+        story.append(Spacer(1, 6 * mm))
+
+    # AI analysis sections.
+    if sections:
+        for sec in sections:
+            heading = sec.get("heading") or ""
+            if heading:
+                story.append(Paragraph(_esc(heading), sec_h_style))
+            for para in sec.get("paragraphs", []):
+                story.append(Paragraph(_esc(para), body_style))
+    else:
+        story.append(Paragraph(
+            "No AI analysis was generated for this report.", body_style,
+        ))
+    story.append(Spacer(1, 4 * mm))
+
+    # Source data table (so the report is self-contained for an auditor).
+    if table_rows and table_headers:
+        story.append(Paragraph("Source Data", ParagraphStyle(
+            "h3", fontSize=11, textColor=colors.Color(*NAVY),
+            spaceAfter=3, fontName="Helvetica-Bold",
+        )))
+        col_w = (180 * mm) / max(len(table_headers), 1)
+        col_widths = [col_w] * len(table_headers)
+        table_data = [table_headers] + table_rows
+        tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY)),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ("ROWBACKGROUNDS", (1, 0), (-1, -1),
+             [colors.white, colors.Color(0.97, 0.97, 0.99)]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(tbl)
+
+    story.append(Spacer(1, 8 * mm))
+    prov = f" Analysis written by {analysis_model}." if analysis_model else ""
+    story.append(Paragraph(
+        f"Generated {generated_str} by Prayag Production Analytics — numbers "
+        f"computed by the deterministic engine, never through AI; the AI only "
+        f"interprets those figures.{prov}",
+        ParagraphStyle("footer", fontSize=7, textColor=colors.grey),
+    ))
+
+    footer = _make_footer(generated_str, analysis_model)
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return buf.getvalue()
 
 
 def generate_report_pdf(
