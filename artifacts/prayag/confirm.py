@@ -973,7 +973,8 @@ def _score_label(score: dict) -> str:
     f = score["files"]
     m = score["machines"]
     mo = score["months"]
-    return f"{f[0]}/{f[1]} files · {m[0]}/{m[1]} machines · {mo[0]}/{mo[1]} months"
+    machines_part = "n/a" if m[1] == 0 else f"{m[0]}/{m[1]}"
+    return f"{f[0]}/{f[1]} files · {machines_part} machines · {mo[0]}/{mo[1]} months"
 
 
 def full_confirm(
@@ -987,6 +988,8 @@ def full_confirm(
     as_of: datetime.date,
     extra_recon_warnings: Optional[List[str]] = None,
     matcher: Optional[Callable[[List[str], List[str]], Dict[str, str]]] = None,
+    period_to: Optional[datetime.date] = None,
+    last_data_date: Optional[datetime.date] = None,
 ) -> dict:
     """Run all four tiers and return a structured confirmation result.
 
@@ -1019,9 +1022,21 @@ def full_confirm(
     tiers = {1: t1, 2: t2, 3: t3, 4: t4}
     issues = t1 + t2 + t3 + t4
 
-    # No data at all for a requested, overdue period is an error-level gap.
+    # No data at all: classify as INFO ("not yet available") when the period
+    # end date is today, in the future, or after the latest entered-data date.
+    # Only a fully past, closed period with genuinely missing data is an ERROR.
     if not period_rows:
-        gap = _issue(1, ERROR, "No data could be published for this period.")
+        _not_yet = period_to is not None and (
+            period_to >= as_of
+            or (last_data_date is not None and period_to > last_data_date)
+        )
+        if _not_yet:
+            gap = _issue(
+                1, INFO,
+                "Figures not available yet — no data has been entered for this period.",
+            )
+        else:
+            gap = _issue(1, ERROR, "No data could be published for this period.")
         tiers[1].append(gap)
         issues.append(gap)
 
@@ -1051,6 +1066,7 @@ def full_confirm(
             "quarantined": quarantined_n,
             "info": info,
             "total": len(issues),
+            "counted": blocking + warn + quarantined_n,
         },
         "reconciled": status == "pass",
         "summary": None,

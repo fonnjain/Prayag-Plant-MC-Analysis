@@ -12,7 +12,7 @@
 <a href="{{ review_href }}" class="mb-3 rounded-xl p-2.5 bg-amber-50 border border-amber-200 flex items-center gap-2">
   <svg width="15" height="15" class="flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
   <span class="text-amber-800 text-xs font-medium">Published under sign-off by {{ confirmation.signoff.approver }}{% if confirmation.signoff.role %} ({{ confirmation.signoff.role }}){% endif %} · {{ confirmation.signoff.when_disp }}</span>
-  <span class="text-amber-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.counts.total }} flag(s) ›</span>
+  <span class="text-amber-600 text-[11px] ml-auto whitespace-nowrap">{{ confirmation.counts.counted }} flag(s) ›</span>
 </a>
 {% endif %}
 
@@ -39,7 +39,10 @@
         <div class="text-xs text-gray-500 font-medium uppercase tracking-wide">
           {% if o.oee_available %}Overall OEE{{ info('OEE') }}{% elif o.eff_available %}Output Efficiency{{ info('OUTPUT_EFF') }}{% elif o.util_available %}Utilisation{{ info('UTIL') }}{% else %}Headline{% endif %}
         </div>
-        {% if blocked %}
+        {% if data_empty %}
+        <div class="text-2xl font-bold text-gray-300 mt-1">—</div>
+        <div class="text-xs text-gray-400 mt-1">No data recorded for this period yet.</div>
+        {% elif blocked %}
         <a href="{{ review_href }}" class="block mt-1">
           <span class="inline-flex items-center gap-1.5 text-xl font-bold text-red-700">
             <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
@@ -59,7 +62,11 @@
       </div>
       <!-- Doughnut gauge -->
       <div class="w-24 h-24 relative flex-shrink-0">
-        {% if blocked %}
+        {% if data_empty %}
+        <div class="w-full h-full rounded-full border-4 border-dashed border-gray-100 flex items-center justify-center text-center">
+          <span class="text-[10px] text-gray-300 px-1">—</span>
+        </div>
+        {% elif blocked %}
         <div class="w-full h-full rounded-full border-4 border-dashed border-gray-200 flex items-center justify-center text-center">
           <span class="text-[10px] font-semibold text-gray-400 px-1">Needs<br>review</span>
         </div>
@@ -77,7 +84,7 @@
     <div class="rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-700">
       Availability, Performance, Quality and efficiency figures are withheld until the data errors are resolved.
     </div>
-    {% else %}
+    {% elif not data_empty %}
     {% if o.oee_available %}
     <!-- A P Q progress bars (daily grain) -->
     {% set bars = [('Availability', o.availability, '#22c55e', 'A', true), ('Performance', o.performance, '#3b82f6', 'P', true), ('Quality', o.quality, '#8b5cf6', 'Q', true)] %}

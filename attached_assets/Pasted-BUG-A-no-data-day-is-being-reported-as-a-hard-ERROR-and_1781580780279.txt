@@ -1,0 +1,75 @@
+BUG: A no-data day is being reported as a hard ERROR and the two dashboard
+views disagree on the issue count.
+
+REPRO
+Select 15-06-2026 (a single day with no production; data is only entered
+through 14-06-2026). The page correctly says "no daily production recorded
+in this period," but:
+  - It shows status "Needs review" with "1 open error" and withholds all
+    headline figures (Availability/Performance/Quality/efficiency).
+  - The error is Tier 1 "No data could be published for this period," which
+    is just a roll-up of the other warnings, not a separate fault.
+  - Tier 3 (Validity) and Tier 4 (Plausibility) both PASS — so no real data
+    error exists.
+  - One view reads "1 error · 6 warnings"; another reads "8 issues" for the
+    SAME date. They must agree.
+
+This must never produce an ERROR for today's date, a future date, or any
+date after the last-entered data date. Those are "not available yet"
+states, not faults.
+
+ROOT-CAUSE RULES TO IMPLEMENT
+
+1) Classify the "nothing to publish" roll-up by WHY the period is empty,
+   using today's date and the per-plant "data entered through" date:
+   - If the selected period is today, in the future, or after the latest
+     entered-data date for all plants  -> status = INFO / "Not available
+     yet", NOT an error. Wording e.g. "Figures not available yet — this
+     period has no data entered (data entered through <date>)."
+   - If the period is in progress (current month/partial)  -> INFO, same
+     treatment.
+   - Only if the period is fully in the PAST and CLOSED and still has no
+     data -> keep it as an ERROR (this is a genuine missing-data gap).
+
+2) Do not withhold headline figures as an "error" for not-yet-available
+   periods. Show them as "—" / "Not available yet" with the INFO note.
+   Withholding due to genuine data errors (a real Tier 3 validity failure)
+   stays as-is.
+
+3) "No data could be published" must never be counted as an independent
+   error when it is purely the consequence of completeness/reconciliation
+   items. Either omit it from the error count or render it as a derived
+   status line, not a counted error.
+
+4) Make the issue count IDENTICAL across all surfaces (header pill, summary
+   card, PDF). Define one counting function and reuse it everywhere. Decide
+   explicitly whether INFO items count (recommend: errors and warnings are
+   counted; INFO is shown but NOT counted) and apply that one rule in every
+   view. Today: one view shows 1 error+6 warnings (7), another shows 8 —
+   the 8 is counting the INFO line. Pick one rule and use it everywhere.
+
+5) Fix the completeness card showing "0/0 machines" — for a no-data period
+   show the roster count with 0 reporting (e.g. "0/<roster>"), or "n/a for
+   this period", never "0/0".
+
+GUARDRAILS — do not over-correct
+- Do NOT suppress errors for past, closed periods that are genuinely
+  missing data. The empty-vs-error decision must depend on date-vs-today
+  and date-vs-last-entered, not on emptiness alone.
+- Do NOT change Tier 3 (Validity) or Tier 4 (Plausibility) logic — they are
+  passing correctly and must keep working.
+- Keep the real completeness/reconciliation WARNINGS (HDPE June empty,
+  missing PIPE/MOULDING planned-hours, GARDEN/TANK output-only). Those are
+  accurate; only the top-level ERROR classification and the counts change.
+
+VALIDATION
+- 15-06-2026 (and any future date, and today): status is INFO/"not
+  available yet", zero errors, headline figures show "—" with the note,
+  Tiers 3 & 4 still PASS.
+- A past CLOSED month with genuinely missing data: still shows an ERROR.
+- Header pill, summary card, and PDF show the SAME issue count for the same
+  date.
+- A normal populated period (e.g. the current-FY view) is unchanged: same
+  warnings/errors as before, figures published.
+- Guard the single-day/empty-range path against divide-by-zero so empty
+  windows degrade to "not available yet" rather than 0%/NaN/∞.

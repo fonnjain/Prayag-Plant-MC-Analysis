@@ -472,6 +472,14 @@ def get_data(args):
     except SheetReadError:
         master_rows = list(raw_all)
     confirm_overall = compute_metrics(clean_all)
+    # Latest date with any daily data in the period's months — used to
+    # distinguish "not yet entered" from "genuine gap" in the confirmation
+    # engine's no-data classification.
+    _last_data_date = None
+    if daily_used and drecs:
+        _ld = max((r.date for r in drecs), default=None)
+        if _ld:
+            _last_data_date = datetime.date.fromisoformat(_ld)
     confirmation = full_confirm(
         period_months=months,
         period_rows=raw_all,
@@ -483,6 +491,8 @@ def get_data(args):
         as_of=_today(),
         extra_recon_warnings=recon_warnings,
         matcher=(match_codes if has_claude else None),
+        period_to=datetime.date.fromisoformat(pinfo["to_iso"]),
+        last_data_date=_last_data_date,
     )
 
     # ---- Manager sign-off (release of error-gated figures) ----
@@ -683,6 +693,7 @@ def _common_ctx(data: dict) -> dict:
         "today_disp": _fmt(_today()),
         "last_synced": _sync_ctx(),
         "recent_dates": _recent_date_options(),
+        "data_empty": not bool(data.get("all_rows", data.get("rows", []))),
     }
 
 
