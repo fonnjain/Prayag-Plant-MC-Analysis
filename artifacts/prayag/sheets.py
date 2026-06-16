@@ -28,6 +28,7 @@ from metrics import Record
 import parsers
 import sources
 import baselines
+import store as _store
 
 # ---------------------------------------------------------------------------
 # Connection + token (cached within the process until near expiry)
@@ -91,11 +92,16 @@ def clear_caches() -> None:
 
     Used by the manual "Refresh" action. The auth token cache is left intact
     (it is keyed to real expiry, not the data TTL) so a refresh re-reads the
-    sheets without needlessly re-authenticating.
+    sheets without needlessly re-authenticating.  Also clears the shared
+    Postgres L2 cache so other gunicorn workers pick up fresh data too.
     """
     _data_cache.clear()
     _daily_cache.clear()
     _last_fetch_status.clear()
+    try:
+        _store.pg_cache_clear()
+    except Exception:
+        pass
 
 
 def _mark_synced() -> None:
@@ -467,8 +473,28 @@ def _live_payload() -> dict:
 
 def _fetch_live_payload(now: float, cached) -> dict:
     """Do the actual (slow) live monthly fetch and cache it. Always called while
-    holding ``_fetch_lock`` so only one thread fetches at a time."""
+    holding ``_fetch_lock`` so only one thread fetches at a time.
+
+    Before hitting Google Sheets we check the shared Postgres L2 cache.  Any
+    gunicorn worker that previously fetched from Sheets will have written the
+    result there, so a cold worker can serve data without a Sheets round-trip.
+    """
     global _last_fetch_status
+
+    # --- L2: shared Postgres cache (fast; avoids Sheets round-trip) ----------
+    try:
+        pg_hit = _store.pg_cache_read("monthly_live", _DATA_TTL)
+        if pg_hit is not None:
+            _data_cache["live"] = (now, pg_hit)
+            _last_fetch_status = {
+                "stale": False,
+                "failed_plants": pg_hit.get("failed_plants", []),
+            }
+            return pg_hit
+    except Exception:
+        pass  # fall through to live fetch
+
+    # --- L3: Google Sheets (slow; single-flight under _fetch_lock) -----------
     try:
         token = _get_access_token()
         if not token:
@@ -483,6 +509,11 @@ def _fetch_live_payload(now: float, cached) -> dict:
             "stale": False,
             "failed_plants": payload.get("failed_plants", []),
         }
+        # Write to shared Postgres cache so other workers skip the Sheets trip.
+        try:
+            _store.pg_cache_write("monthly_live", payload)
+        except Exception:
+            pass
         return payload
     except SheetReadError as exc:
         if cached:
@@ -542,18 +573,40 @@ def _daily_key_lock(key) -> threading.Lock:
 
 def _load_daily_cached(plant: str, ym: str, token: str):
     """Return cached results for one (plant, ym), fetching once under a per-key
-    lock on a cold miss. Safe to call from many threads concurrently."""
+    lock on a cold miss. Safe to call from many threads concurrently.
+
+    Cache hierarchy:
+      L1 – in-process _daily_cache  (per worker, sub-millisecond)
+      L2 – shared Postgres sheet_cache  (cross-worker, ~1-5 ms)
+      L3 – Google Sheets live read  (slow, 5-30 s per workbook)
+    """
     key = (plant, ym)
     cached = _daily_cache.get(key)
     if cached and time.time() - cached[0] < _DATA_TTL:
         return cached[1]
+    pg_key = f"daily_{plant}_{ym}"
     with _daily_key_lock(key):
+        # Re-check L1 — another thread may have filled it while we waited.
         cached = _daily_cache.get(key)
         if cached and time.time() - cached[0] < _DATA_TTL:
             return cached[1]
+        # L2: shared Postgres cache — avoids re-fetching across workers.
+        try:
+            pg_hit = _store.pg_cache_read(pg_key, _DATA_TTL)
+            if pg_hit is not None:
+                _daily_cache[key] = (time.time(), pg_hit)
+                return pg_hit
+        except Exception:
+            pass
+        # L3: live Sheets read.
         results = _load_daily(plant, ym, token)
         _daily_cache[key] = (time.time(), results)
         _mark_synced()
+        # Populate Postgres so sibling workers skip the Sheets trip.
+        try:
+            _store.pg_cache_write(pg_key, results)
+        except Exception:
+            pass
         return results
 
 # Per-plant daily layout config. Each workbook can emit one OR MORE logical

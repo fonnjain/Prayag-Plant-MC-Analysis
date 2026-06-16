@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import json
+import pickle
 import datetime
 from typing import List, Optional, Dict
 
@@ -685,3 +686,109 @@ def fingerprint_record(
     d["observed_at"] = ts
     d["snapshots"] = 1
     return d
+
+
+# ---------------------------------------------------------------------------
+# Postgres-backed sheet cache — shared across gunicorn workers
+# ---------------------------------------------------------------------------
+# Each gunicorn worker has its own in-process _data_cache/_daily_cache.
+# A cold worker would otherwise re-fetch from Google Sheets on every request.
+# This table acts as a shared L2 cache: any worker that fetches from Sheets
+# writes the result here; cold workers read from here instead of Sheets.
+# Serialisation uses pickle (internal only, never user-supplied input).
+# The whole section degrades silently when DATABASE_URL is absent.
+# ---------------------------------------------------------------------------
+
+_SC_TABLE = "sheet_cache"
+_sc_initialised = False
+
+
+def _init_sheet_cache() -> None:
+    global _sc_initialised
+    if _sc_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_SC_TABLE} (
+        cache_key  TEXT        PRIMARY KEY,
+        payload    BYTEA       NOT NULL,
+        cached_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _sc_initialised = True
+    except Exception:
+        pass  # degrade silently — per-request path still works
+
+
+def pg_cache_read(key: str, max_age_s: float = 900.0):
+    """Return unpickled payload from the shared Postgres sheet cache, or None.
+
+    Returns None when:
+    - Postgres is unavailable (DATABASE_URL missing)
+    - No row exists for ``key``
+    - The row is older than ``max_age_s`` seconds
+    - Unpickling fails (e.g. Record class changed between deploys)
+    Any exception is swallowed so a cache miss never breaks a page render.
+    """
+    if not AVAILABLE:
+        return None
+    try:
+        _init_sheet_cache()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT payload FROM {_SC_TABLE}
+                    WHERE cache_key = %s
+                      AND cached_at > now() - make_interval(secs => %s::double precision)""",
+                (key, float(max_age_s)),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return pickle.loads(bytes(row[0]))
+    except Exception:
+        return None
+
+
+def pg_cache_write(key: str, data) -> None:
+    """Pickle and upsert ``data`` into the shared Postgres sheet cache.
+
+    Best-effort: any failure is silently swallowed so a cache write never
+    breaks a page render. The caller should not depend on the write succeeding.
+    """
+    if not AVAILABLE:
+        return
+    try:
+        _init_sheet_cache()
+        payload_bytes = pickle.dumps(data, protocol=4)
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_SC_TABLE} (cache_key, payload, cached_at)
+                    VALUES (%s, %s, now())
+                    ON CONFLICT (cache_key) DO UPDATE
+                        SET payload   = EXCLUDED.payload,
+                            cached_at = now()""",
+                (key, psycopg2.Binary(payload_bytes)),
+            )
+    except Exception:
+        pass  # degrade silently
+
+
+def pg_cache_clear(key: str = "") -> None:
+    """Delete one key (or every key when ``key`` is empty) from the sheet cache.
+
+    Called on manual Refresh so the next request fetches live data from Sheets
+    rather than serving a stale Postgres entry.  Best-effort.
+    """
+    if not AVAILABLE:
+        return
+    try:
+        _init_sheet_cache()
+        with _conn() as conn, conn.cursor() as cur:
+            if key:
+                cur.execute(f"DELETE FROM {_SC_TABLE} WHERE cache_key = %s", (key,))
+            else:
+                cur.execute(f"DELETE FROM {_SC_TABLE}")
+    except Exception:
+        pass  # degrade silently
