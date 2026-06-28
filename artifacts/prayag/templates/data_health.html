@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Data health{% endblock %}
+
+{% block content %}
+{% set c = dh.cards %}
+
+<!-- ===== Freshness banner ===== -->
+<div class="rounded-2xl p-4 mb-4 text-white" style="background:var(--navy)">
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+      <h1 class="text-lg font-bold leading-tight">Data health</h1>
+      <p class="text-blue-200 text-xs mt-0.5">
+        Is the data fresh, and where are the gaps?
+      </p>
+    </div>
+    <div class="text-right flex-shrink-0">
+      <div class="text-[11px] text-blue-200">Today</div>
+      <div class="text-sm font-semibold">{{ dh.today_disp }}</div>
+    </div>
+  </div>
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-blue-100">
+    {% if dh.last_synced and dh.last_synced.available %}
+    <span>Last sync {{ dh.last_synced.disp }}</span>
+    {% endif %}
+    <span>{{ dh.n_tracked }} workbook{{ '' if dh.n_tracked == 1 else 's' }} tracked</span>
+  </div>
+</div>
+
+<!-- ===== Four summary cards ===== -->
+<div class="grid grid-cols-2 gap-3 mb-5">
+  <div class="kpi-card p-3">
+    <div class="text-[11px] text-gray-500">Latest data input</div>
+    <div class="text-lg font-bold text-navy mt-0.5" style="color:var(--navy)">{{ c.latest_date }}</div>
+    <div class="text-[11px] text-gray-500 mt-0.5 truncate">
+      {% if c.latest_plant %}{{ c.latest_plant }}{% if c.latest_days_behind is not none %} · {{ c.latest_days_behind }}d behind{% endif %}{% else %}No daily data yet{% endif %}
+    </div>
+  </div>
+  <div class="kpi-card p-3">
+    <div class="text-[11px] text-gray-500">Plants reporting</div>
+    <div class="text-lg font-bold text-navy mt-0.5" style="color:var(--navy)">{{ c.plants_reporting }} <span class="text-sm text-gray-400 font-semibold">of {{ c.plants_total }}</span></div>
+    <div class="text-[11px] text-gray-500 mt-0.5">Have data this year</div>
+  </div>
+  <div class="kpi-card p-3">
+    <div class="text-[11px] text-gray-500">Files with no data</div>
+    <div class="text-lg font-bold mt-0.5" style="color:{% if c.files_no_data %}var(--terra){% else %}var(--navy){% endif %}">{{ c.files_no_data }}</div>
+    <div class="text-[11px] text-gray-500 mt-0.5">Present but empty</div>
+  </div>
+  <div class="kpi-card p-3">
+    <div class="text-[11px] text-gray-500">Machines idle</div>
+    <div class="text-lg font-bold mt-0.5" style="color:{% if c.machines_idle %}var(--terra){% else %}var(--navy){% endif %}">{{ c.machines_idle }} <span class="text-sm text-gray-400 font-semibold">of {{ c.machines_total }}</span></div>
+    <div class="text-[11px] text-gray-500 mt-0.5">In roster, no run</div>
+  </div>
+</div>
+
+<!-- ===== Last data input by plant ===== -->
+<h2 class="text-sm font-bold text-navy mb-2" style="color:var(--navy)">Last data input by plant</h2>
+<div class="kpi-card p-0 mb-5 overflow-hidden">
+  <div class="table-scroll">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-left text-gray-400">
+          <th class="py-2 px-3 font-medium">Plant</th>
+          <th class="py-2 px-3 font-medium">Location</th>
+          <th class="py-2 px-3 font-medium whitespace-nowrap">Last input</th>
+          <th class="py-2 px-3 font-medium whitespace-nowrap">Machines</th>
+          <th class="py-2 px-3 font-medium text-right">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in dh.plants %}
+        <tr style="border-top:0.5px solid #e5e7eb">
+          <td class="py-2 px-3 font-semibold text-gray-800">{{ p.name }}</td>
+          <td class="py-2 px-3 text-gray-500">{{ p.location }}</td>
+          <td class="py-2 px-3 text-gray-700 whitespace-nowrap">{{ p.last_disp }}</td>
+          <td class="py-2 px-3 text-gray-700 whitespace-nowrap">
+            {% if p.mc_total is not none %}{{ p.mc_reporting }}/{{ p.mc_total }}{% else %}—{% endif %}
+          </td>
+          <td class="py-2 px-3 text-right">
+            {% set pillbg = {'current':'#16a34a','lagging':'#d97706','empty':'#dc2626','awaiting':'#6b7280'} %}
+            <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full text-white whitespace-nowrap"
+                  style="background:{{ pillbg.get(p.status, '#6b7280') }}">{{ p.status_label }}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== No data — needs a look ===== -->
+<h2 class="text-sm font-bold text-navy mb-2" style="color:var(--navy)">No data — needs a look</h2>
+<div class="space-y-3 mb-5">
+  <!-- Empty workbooks -->
+  <div class="kpi-card p-3" style="border-left:4px solid var(--terra); border-top-left-radius:0; border-bottom-left-radius:0">
+    <div class="text-xs font-bold text-gray-800 mb-1.5">Empty workbooks <span class="text-gray-400 font-medium">({{ dh.empty_workbooks|length }})</span></div>
+    {% if dh.empty_workbooks %}
+    <ul class="space-y-1">
+      {% for e in dh.empty_workbooks %}
+      <li class="text-[11px] text-gray-600 leading-relaxed">{% if e.plant_name %}<span class="font-medium text-gray-800">{{ e.plant_name }}</span> · {% endif %}{{ e.message }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="text-[11px] text-gray-400">Every expected workbook returned data.</div>
+    {% endif %}
+  </div>
+
+  <!-- Idle machines -->
+  <div class="kpi-card p-3" style="border-left:4px solid #d97706; border-top-left-radius:0; border-bottom-left-radius:0">
+    <div class="text-xs font-bold text-gray-800 mb-1.5">Idle machines <span class="text-gray-400 font-medium">({{ dh.idle_machines|length }})</span></div>
+    {% if dh.idle_machines %}
+    <ul class="space-y-1">
+      {% for m in dh.idle_machines %}
+      <li class="text-[11px] text-gray-600 leading-relaxed">{% if m.plant_name %}<span class="font-medium text-gray-800">{{ m.plant_name }}</span> · {% endif %}{{ m.message }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="text-[11px] text-gray-400">Every roster machine reported a run this year.</div>
+    {% endif %}
+  </div>
+
+  <!-- Roster gaps -->
+  <div class="kpi-card p-3" style="border-left:4px solid #6b7280; border-top-left-radius:0; border-bottom-left-radius:0">
+    <div class="text-xs font-bold text-gray-800 mb-1.5">Roster gaps <span class="text-gray-400 font-medium">({{ dh.roster_gaps|length }})</span></div>
+    <p class="text-[10px] text-gray-400 mb-1.5">Segment or mould codes in the master roster with no data — a gap, not a zero.</p>
+    {% if dh.roster_gaps %}
+    <ul class="space-y-1">
+      {% for g in dh.roster_gaps %}
+      <li class="text-[11px] text-gray-600 leading-relaxed">{% if g.plant_name %}<span class="font-medium text-gray-800">{{ g.plant_name }}</span> · {% endif %}{{ g.message }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="text-[11px] text-gray-400">No roster gaps detected.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ===== Source workbooks ===== -->
+<h2 class="text-sm font-bold text-navy mb-2" style="color:var(--navy)">Source workbooks</h2>
+<div class="kpi-card p-0 mb-3 overflow-hidden">
+  <div class="table-scroll">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-left text-gray-400">
+          <th class="py-2 px-3 font-medium">Workbook</th>
+          <th class="py-2 px-3 font-medium whitespace-nowrap">Last modified</th>
+          <th class="py-2 px-3 font-medium whitespace-nowrap">Data through</th>
+          <th class="py-2 px-3 font-medium text-right">Rows</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in dh.workbooks %}
+        <tr style="border-top:0.5px solid #e5e7eb">
+          <td class="py-2 px-3">
+            <span class="font-medium text-gray-800">{{ w.label }}</span>
+            {% if w.updated %}<span class="ml-1 text-[9px] font-bold uppercase px-1 py-0.5 rounded text-white align-middle" style="background:var(--terra)">new</span>{% endif %}
+            <div class="text-gray-400">{{ w.plant_name }} · {{ w.grain }}</div>
+          </td>
+          <td class="py-2 px-3 text-gray-700 whitespace-nowrap">{{ w.last_modified_disp or '—' }}</td>
+          <td class="py-2 px-3 text-gray-700 whitespace-nowrap">{{ w.data_through_disp }}</td>
+          <td class="py-2 px-3 text-right text-gray-700">{{ w.rows }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-[11px] text-gray-500 leading-relaxed mb-2">
+  {% if dh.fresh_demo %}
+  Change tracking is paused in demo mode.
+  {% elif not dh.fresh_available %}
+  Change tracking needs the database to remember updates between visits.
+  {% elif dh.changed_n %}
+  {{ dh.changed_n }} workbook{{ '' if dh.changed_n == 1 else 's' }} changed in the last {{ dh.recent_days }} days.
+  {% else %}
+  No spreadsheet changes detected in the last {{ dh.recent_days }} days.
+  {% endif %}
+  Times are when the dashboard first detected each sheet's current data — not Google's edit time, which this connection can't read.
+</p>
+{% endblock %}

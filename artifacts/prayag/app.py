@@ -29,6 +29,7 @@ from confirm import (
     full_confirm,
     confirmation_fingerprint,
     tier3_row_classify,
+    build_masters,
     TIER_LABELS,
     _month_due,
 )
@@ -1230,6 +1231,233 @@ def manifest_view():
     }
     _manifest_cache["result"] = {"ctx": ctx, "ts": now}
     return render_template("manifest.html", **ctx)
+
+
+# ---------------------------------------------------------------------------
+# Data Health (/data) — read-only freshness & gap view over already-computed data
+# ---------------------------------------------------------------------------
+
+def _norm_mc(code: str) -> str:
+    """Loose machine-code key for matching ran-vs-roster (uppercase, alnum only)."""
+    return re.sub(r"[^A-Z0-9]", "", str(code).upper())
+
+
+def _build_data_health() -> dict:
+    """Assemble the Data Health view from already-computed structures only.
+
+    No metric is recomputed. Sources:
+      * get_data(current_fy) → confirmation (tier-1 issues, score) + published rows.
+      * _build_freshness()   → per-workbook change tracking.
+      * build_masters(grid)  → per-plant roster totals (machines that exist).
+    """
+    today = _today()
+    data = get_data({"period": "current_fy"})
+    conf = data.get("confirmation") or {}
+    rows = data.get("all_rows") or data.get("rows") or []
+    fresh = _build_freshness()
+
+    # Per-plant roster from the authoritative monthly grid (cached read).
+    try:
+        mrecs, _mr, _mw = get_records(FY_MONTHS)
+    except SheetReadError:
+        mrecs = []
+    masters = build_masters(mrecs)
+    roster_machines = masters.get("machines", {})
+
+    daily_plants = set(DAILY_SOURCES.keys())
+    annual_plants = {s["plant"] for s in ANNUAL_SOURCES}
+
+    # Per-plant latest input + machines that actually produced. Daily activity
+    # comes from the published daily-grain rows; summary-grain (monthly-only)
+    # plants have no daily rows in the daily-first output, so their last month +
+    # reporting machines are read from the monthly grid (rows with real output).
+    daily_last: dict = {}
+    monthly_last: dict = {}
+    ran_by_plant: dict = {}
+    for r in rows:
+        d = r.date or ""
+        if len(d) == 10:  # full ISO daily date
+            if r.machine:
+                ran_by_plant.setdefault(r.plant, set()).add(r.machine)
+            if d > daily_last.get(r.plant, ""):
+                daily_last[r.plant] = d
+    for r in mrecs:
+        if (r.total_count or 0) <= 0:
+            continue  # a roster blank is a completeness gap, not real output
+        if r.machine:
+            ran_by_plant.setdefault(r.plant, set()).add(r.machine)
+        d = r.date or ""
+        if len(d) == 7 and d > monthly_last.get(r.plant, ""):
+            monthly_last[r.plant] = d
+
+    # A daily-capable plant with zero rows is only a genuine red gap once at least
+    # one FY month is actually due — never at the very start of an FY.
+    any_month_due = any(_month_due(m, today) for m in FY_MONTHS)
+
+    universe = sorted(
+        (daily_plants | annual_plants | set(ran_by_plant)
+         | set(daily_last) | set(monthly_last)) - {"ALL"},
+        key=lambda p: (PLANT_LOCATIONS.get(p, "ZZ"), PLANT_NAMES.get(p, p)),
+    )
+
+    plants: list = []
+    freshest = None  # (date, plant_name, days_behind)
+    reporting_plants = 0
+    for p in universe:
+        name = PLANT_NAMES.get(p, p)
+        loc = PLANT_LOCATIONS.get(p, "—")
+        is_daily = p in daily_plants
+        ran = ran_by_plant.get(p, set())
+
+        # Roster totals (machines that EXIST) vs reporting (machines that RAN).
+        roster = roster_machines.get(p, set())
+        if roster:
+            roster_norm = {_norm_mc(c) for c in roster}
+            reporting = sum(1 for m in ran if _norm_mc(m) in roster_norm) if ran else 0
+            reporting = min(reporting, len(roster))
+            mc_total = len(roster)
+        elif ran:
+            reporting = mc_total = len(ran)
+        else:
+            reporting = mc_total = None
+
+        # Last input + status. Keyed off date-vs-today AND date-vs-last-entered,
+        # never emptiness alone: never red for today/future/after last-entered, or
+        # for a summary-grain site (these show gray "awaiting"/"summary").
+        last_iso = daily_last.get(p)
+        if is_daily and last_iso:
+            last_date = datetime.date.fromisoformat(last_iso)
+            days_behind = (today - last_date).days
+            last_disp = _fmt(last_date)
+            grain = "daily"
+            if days_behind <= 2:
+                status, status_label = "current", "Current"
+            else:
+                status, status_label = "lagging", f"Lagging {days_behind}d"
+            if freshest is None or last_date > freshest[0]:
+                freshest = (last_date, name, days_behind)
+            reporting_plants += 1
+        elif p in monthly_last:
+            grain = "summary"
+            last_disp = _month_disp(monthly_last[p])
+            days_behind = None
+            status, status_label = "awaiting", "Summary"
+            reporting_plants += 1
+        elif is_daily and any_month_due:
+            # Daily-capable plant with zero daily rows across a due (closed/current)
+            # FY window — genuinely empty where data is expected.
+            grain = "daily"
+            last_disp = "—"
+            days_behind = None
+            status, status_label = "empty", "No data"
+        else:
+            grain = "summary"
+            last_disp = "—"
+            days_behind = None
+            status, status_label = "awaiting", "Awaiting"
+
+        plants.append({
+            "code": p, "name": name, "location": loc, "grain": grain,
+            "last_disp": last_disp, "days_behind": days_behind,
+            "mc_reporting": reporting, "mc_total": mc_total,
+            "status": status, "status_label": status_label,
+        })
+
+    # --- No data — needs a look (from tier-1 issues already computed) ---
+    t1 = (conf.get("tiers") or {}).get(1, []) or []
+    empty_workbooks: list = []
+    idle_machines: list = []
+    roster_gaps: list = []
+    seen_empty_files: set = set()
+    for i in t1:
+        msg = i.get("message", "")
+        pn = PLANT_NAMES.get(i.get("plant", ""), i.get("plant", ""))
+        is_seg_mould = ("Segment" in msg) or ("line '" in msg) or ("Mould" in msg)
+        if msg.startswith("No data read from"):
+            fid = i.get("file")
+            if fid:
+                seen_empty_files.add(fid)
+            empty_workbooks.append({"plant_name": pn, "message": msg})
+        elif is_seg_mould and "is in the master roster" in msg:
+            roster_gaps.append({"plant_name": pn, "message": msg})
+        elif "had no run in this window" in msg or "master roster but has no data" in msg:
+            idle_machines.append({"plant_name": pn, "message": msg})
+
+    # Also surface workbooks the change-tracker read with zero rows — but not ones
+    # tier-1 already reported (dedup by file id) so the count is not double-stated.
+    for s in (fresh.get("sources") or []):
+        if s.get("row_count"):
+            continue
+        fid = s.get("file_id")
+        if fid and fid in seen_empty_files:
+            continue
+        if fid:
+            seen_empty_files.add(fid)
+        empty_workbooks.append({
+            "plant_name": s.get("plant_name", ""),
+            "message": f"{s.get('label', 'Workbook')} — file present, zero rows.",
+        })
+
+    # --- Summary cards ---
+    score = conf.get("score") or {}
+    mc_found, mc_expected = (score.get("machines") or (0, 0))
+    machines_idle = max(mc_expected - mc_found, 0)
+
+    # --- Source workbooks table (last-changed + data-through per plant) ---
+    plant_through = {pp["code"]: pp["last_disp"] for pp in plants}
+    workbooks: list = []
+    for s in (fresh.get("sources") or []):
+        workbooks.append({
+            "label": s.get("label", ""),
+            "plant_name": s.get("plant_name", ""),
+            "grain": s.get("grain", ""),
+            "last_modified_disp": s.get("last_changed_disp", ""),
+            "data_through_disp": plant_through.get(s.get("plant", ""), "—"),
+            "rows": s.get("row_count", 0),
+            "updated": s.get("updated", False),
+        })
+
+    return {
+        "today_disp": _fmt(today),
+        "last_synced": _sync_ctx(),
+        "n_tracked": fresh.get("n_total", len(workbooks)),
+        "recent_days": fresh.get("recent_days", 7),
+        "changed_n": fresh.get("n_updated", 0),
+        "fresh_available": fresh.get("available", False),
+        "fresh_demo": fresh.get("demo", False),
+        "cards": {
+            "latest_date": _fmt(freshest[0]) if freshest else "—",
+            "latest_plant": freshest[1] if freshest else "",
+            "latest_days_behind": freshest[2] if freshest else None,
+            "plants_reporting": reporting_plants,
+            "plants_total": len(plants),
+            "files_no_data": len(empty_workbooks),
+            "machines_idle": machines_idle,
+            "machines_total": mc_expected,
+        },
+        "plants": plants,
+        "empty_workbooks": empty_workbooks,
+        "idle_machines": idle_machines,
+        "roster_gaps": roster_gaps,
+        "workbooks": workbooks,
+    }
+
+
+@app.route("/data")
+def data_health_view():
+    dh = _build_data_health()
+    ctx = {
+        "dh": dh,
+        "today_disp": dh["today_disp"],
+        "last_synced": dh["last_synced"],
+        "period": request.args.get("period", "current_fy"),
+        "period_label": "Data health",
+        "demo_mode": is_demo_mode(),
+        "fetch_status": last_fetch_status(),
+        "confirmation": None,
+        "grain_banner": None,
+    }
+    return render_template("data_health.html", **ctx)
 
 
 # ---------------------------------------------------------------------------
