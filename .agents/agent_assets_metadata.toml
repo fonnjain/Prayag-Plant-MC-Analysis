@@ -24,3 +24,9 @@ id = "cJNM4prsX5buKpKvjUK7f"
 uri = "file://prayag_legacy_daily_input.csv"
 type = "table"
 title = "Daily data input template (Apr–Jun 2026)"
+
+[[outputs]]
+id = "GsYN_vI2R43qWh8uIpJIb"
+uri = "file://prayag_architecture.xlsx"
+type = "table"
+title = "Prayag Analytics — Complete Architecture Document"
