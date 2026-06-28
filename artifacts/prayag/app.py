@@ -15,12 +15,14 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
+    load_report_records,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
 )
-from sources import PLANT_NAMES, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS
+from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
     rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
+    rollup_by_tonnage_band, rollup_by_location,
 )
 from validate import full_validate
 from confirm import (
@@ -185,6 +187,20 @@ def parse_period(args) -> dict:
         f = datetime.date(year, 4, 1)
         t = datetime.date(year + 1, 3, 31)
         label = f"FY {year}-{str(year+1)[2:]}"
+    elif period in ("q1", "q2", "q3", "q4"):
+        # Quarters mapped to Indian FY Apr–Mar
+        fy_start = today.year if today.month >= 4 else today.year - 1
+        import calendar as _cal
+        q_map = {
+            "q1": (fy_start,     4,  fy_start,     6),
+            "q2": (fy_start,     7,  fy_start,     9),
+            "q3": (fy_start,    10,  fy_start,    12),
+            "q4": (fy_start + 1, 1,  fy_start + 1, 3),
+        }
+        fy_y, fm, ty_y, tm = q_map[period]
+        f = datetime.date(fy_y, fm, 1)
+        t = datetime.date(ty_y, tm, _cal.monthrange(ty_y, tm)[1])
+        label = f"Q{period[1]} (FY {fy_start}-{str(fy_start+1)[2:]})"
     elif period == "custom":
         try:
             f = datetime.date.fromisoformat(args.get("from_date", str(yesterday)))
@@ -241,6 +257,8 @@ def _period_type(period: str) -> str:
         return "weekly"
     if p in ("current_fy", "prior_fy"):
         return "fiscal_year"
+    if p in ("q1", "q2", "q3", "q4"):
+        return "monthly"
     if p in [str(m) for m in range(1, 13)]:
         return "monthly"
     return "fiscal_year"
@@ -1340,14 +1358,6 @@ REPORT_TYPES = [
 ]
 
 
-@app.route("/reports")
-def reports():
-    data = get_data(request.args)
-    ctx = _common_ctx(data)
-    ctx["report_types"] = REPORT_TYPES
-    return render_template("reports.html", **ctx)
-
-
 @app.route("/reports/<report_id>")
 def report_detail(report_id: str):
     rpt = next((r for r in REPORT_TYPES if r["id"] == report_id), None)
@@ -2038,6 +2048,167 @@ def build_state():
     return Response(_html, mimetype="text/html")
 
 
+# ---------------------------------------------------------------------------
+# /reports — flat management-report index grouped by Location → Report.
+# Every catalogue entry below maps to a working route.
+# ---------------------------------------------------------------------------
+
+_REPORT_CATALOGUE = [
+    {"id": "extrusion_summary", "title": "Extrusion M/C Summary",  "location": "KH",      "desc": "Pipe / Garden / HDPE: run hours, output, rejection %, utilisation %"},
+    {"id": "gom_summary",       "title": "Group-of-Moulding",      "location": "KH",      "desc": "Output by tonnage band (150–450 T)"},
+    {"id": "mould_summary",     "title": "Mould-wise Summary",     "location": "KH",      "desc": "Per-mould output, run hours, runner %, rejection %"},
+    {"id": "mould_efficiency",  "title": "Mould Age-in-Efficiency","location": "KH",      "desc": "Per-mould production, ideal vs actual hours, efficiency %"},
+    {"id": "compound_summary",  "title": "Compound / Material",    "location": "KH",      "desc": "Batch weight, mixer output, weight-loss % by compound"},
+    {"id": "tank_kh",           "title": "Tanks (KH)",             "location": "KH",      "desc": "Per-item daily production and rejection"},
+    {"id": "injection_summary", "title": "Injection Moulding M/C", "location": "Bhiwari", "desc": "PTMT / CP: ideal vs actual hours, output, rejection, utilisation %"},
+    {"id": "tank_vn",           "title": "Tanks (VN)",             "location": "VN",      "desc": "Annual summary — production & rejection by item"},
+    {"id": "tank_wb",           "title": "Tanks (WB)",             "location": "WB",      "desc": "Annual summary — production & rejection by item"},
+    {"id": "tank_summary",      "title": "Tank Litre Summary",     "location": "ALL",     "desc": "Production & rejection by capacity (200–5000 L) × layer"},
+    {"id": "segment_labour",    "title": "Segment Labour Cost",    "location": "ALL",     "desc": "Labour, solar & power cost by segment (UNIT-1/2/3)"},
+    {"id": "segment_cost",      "title": "Segment-wise Cost",      "location": "ALL",     "desc": "Labour / Power / Solar: headcount, wages, per-kg & per-hour cost"},
+    {"id": "utilisation",       "title": "Utilisation (M/C & Mould)","location": "ALL",   "desc": "Actual vs ideal hours, utilisation %, 3-month trend"},
+]
+
+_LOCATION_ORDER = ["KH", "Bhiwari", "VN", "WB", "ALL"]
+_LOCATION_NAMES = {"KH": "Khandala", "Bhiwari": "Bhiwari", "VN": "Vasna", "WB": "Wambori", "ALL": "All Locations"}
+
+
+@app.route("/reports")
+def reports_index():
+    """All 14 management reports grouped by Location → Plant."""
+    from collections import defaultdict
+    by_loc = defaultdict(list)
+    for r in _REPORT_CATALOGUE:
+        by_loc[r["location"]].append(r)
+    locations = []
+    for loc in _LOCATION_ORDER:
+        items = by_loc.get(loc, [])
+        if items:
+            locations.append({"id": loc, "name": _LOCATION_NAMES.get(loc, loc), "reports": items})
+    return render_template("reports.html",
+        locations=locations,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/reports/gom_summary")
+def report_gom_summary():
+    """Group-of-Moulding: output by tonnage band (150-450 T)."""
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    wanted = set(pinfo["months"])
+    try:
+        gom_recs = [r for r in load_report_records("gom") if r.period in wanted]
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    by_band = rollup_by_tonnage_band(gom_recs)
+    overall = compute_metrics(gom_recs)
+    band_rows = [{"band": b, "label": f"{b} T", "metrics": m.to_dict()} for b, m in by_band.items()]
+
+    months = sorted({r.period for r in gom_recs})
+    by_month = rollup_by_period(gom_recs)
+    trend_labels = [_month_disp(m) for m in months]
+    trend_values = [round(by_month[m].total_count, 0) for m in months]
+
+    return render_template("report_gom_summary.html",
+        band_rows=band_rows, overall=overall.to_dict(),
+        trend_labels=_safe_json(trend_labels), trend_values=_safe_json(trend_values),
+        period_label=pinfo["label"], period=period_arg,
+        today_disp=_fmt(_today()), last_synced=_sync_ctx(),
+    )
+
+
+def _tank_location_report(family: str, plant: str, location: str, title: str):
+    """Shared renderer for VN/WB tank annual summary reports."""
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    wanted = set(pinfo["months"])
+    try:
+        recs = [r for r in load_report_records(family)
+                if r.plant == plant and r.period in wanted]
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    overall = compute_metrics(recs)
+    from collections import defaultdict
+    items = defaultdict(lambda: defaultdict(dict))
+    all_months = set()
+    for r in recs:
+        items[r.mould or "—"][r.period] = {"prod": r.total_count, "rej": r.reject_count}
+        all_months.add(r.period)
+    months = sorted(all_months)
+
+    return render_template("report_tank_location.html",
+        plant=plant, location=location, title=title,
+        items=dict(items), item_list=sorted(items.keys()),
+        months=months, month_disps=[_month_disp(m) for m in months],
+        overall=overall.to_dict(),
+        period_label=pinfo["label"], period=period_arg,
+        summary_only=True,
+        today_disp=_fmt(_today()), last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/reports/tank_vn")
+def report_tank_vn():
+    return _tank_location_report("tank_vn", "TANK_VN", "VN", "Tanks (Vasna)")
+
+
+@app.route("/reports/tank_wb")
+def report_tank_wb():
+    return _tank_location_report("tank_wb", "TANK_WB", "WB", "Tanks (Wambori)")
+
+
+@app.route("/reports/tank_kh")
+def report_tank_kh():
+    return redirect("/?plant=TANK")
+
+
+@app.route("/reports/segment_labour")
+def report_segment_labour():
+    """Segment Labour / Solar / Power cost by UNIT and segment."""
+    from sheets import _seg_labour_cache
+    from sources import REPORT_SOURCES
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    wanted_months = set(pinfo["months"])
+
+    # On-demand load populates _seg_labour_cache as a side effect.
+    try:
+        load_report_records("seg_labour")
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    all_rows = []
+    sources_used = []
+    for src in reversed(REPORT_SOURCES):
+        if src.get("kind") != "seg_labour":
+            continue
+        cached = _seg_labour_cache.get(src["file_id"])
+        if cached:
+            rows = [r for r in cached["rows"] if r["month"] in wanted_months]
+            all_rows.extend(rows)
+            sources_used.append(cached["title"])
+
+    from collections import defaultdict
+    pivot = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    for r in all_rows:
+        pivot[r["unit"]][r["segment"]][r["month"]] = r
+    months = sorted(wanted_months & {r["month"] for r in all_rows})
+    units = sorted(pivot.keys())
+
+    return render_template("report_segment_labour.html",
+        pivot=dict({u: dict({s: dict(m) for s, m in sv.items()}) for u, sv in pivot.items()}),
+        units=units, months=months,
+        month_disps=[_month_disp(m) for m in months],
+        period_label=pinfo["label"], period=period_arg,
+        sources_used=sources_used,
+        today_disp=_fmt(_today()), last_synced=_sync_ctx(),
+    )
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
-    app.run(host="0.0.0.0", port=port, debug=False)
+  port = int(os.environ.get("PORT", 5001))
+  app.run(host="0.0.0.0", port=port, debug=False)

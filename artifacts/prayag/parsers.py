@@ -811,3 +811,445 @@ def grid_total_output(values: List[list]) -> Optional[float]:
         return largest
 
     return sum(vals)
+
+
+# ===========================================================================
+# NEW PARSERS — Group-of-Moulding, Tank Annual, Segment Labour
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Group-of-Moulding grid parser
+# ---------------------------------------------------------------------------
+# GOM tab layout: machine codes (C-150-1, C-200-1 …) across the top row;
+# month labels (APR'26, MAY'26 …) down column B; paired HOURS / OUTPUT cols
+# per machine. The tab also contains a "SUMMARY-1" sub-tab with band totals.
+# We parse at the machine level and assign tonnage bands via sources.gom_band.
+
+def _gom_band_from_prefix(label: str) -> str:
+    """Resolve tonnage band from a GOM machine column header label."""
+    import sources as _sources
+    return _sources.gom_band(label)
+
+
+def parse_gom_grid(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    source_file: str,
+    source_tab: str,
+) -> List[Record]:
+    """Parse a Group-of-Moulding grid tab (machine cols × month rows).
+
+    Layout: row 0 = machine code headers (C-150-1 … C-450-5); col 0 or A =
+    row labels (APR'26, TOTAL …). Each machine occupies 2 columns: HOURS then
+    OUTPUT. Paired columns are detected by the sub-header row (row 1) which
+    carries 'HOURS' / 'OUTPUT' labels under each machine code. Months are
+    detected by parse_month_label on col B (or the leftmost non-empty col).
+
+    Returns one Record per (machine, month) with actual_hours + total_count.
+    Ideal hours are left at 0 (the 500h sheet placeholder is suppressed by the
+    existing baseline rule — utilisation stays hidden, raw hours still publish).
+    """
+    if not values:
+        return []
+
+    # Find the machine-header row (contains "C-150" or "C-200" etc.)
+    mc_row_idx = -1
+    for i, row in enumerate(values[:5]):
+        joined = " ".join(str(c).strip().upper() for c in row)
+        if "C-150" in joined or "C-200" in joined or "C-275" in joined:
+            mc_row_idx = i
+            break
+    if mc_row_idx < 0:
+        return []
+
+    mc_row = [str(c).strip() for c in values[mc_row_idx]]
+
+    # Sub-header row immediately below machine row: HOURS / OUTPUT labels.
+    sub_row_idx = mc_row_idx + 1
+    sub_row = [str(c).strip().upper() for c in values[sub_row_idx]] if sub_row_idx < len(values) else []
+
+    # Build (col_idx, machine_label, "hours"|"output") mapping.
+    # Carry the last machine label forward for paired blank header cols.
+    col_map: list = []  # list of (col, machine, "hours"|"output")
+    last_mc = ""
+    for c, label in enumerate(mc_row):
+        if label and label.upper() not in ("", "MACHINE", "MONTH", "MONTHS"):
+            u = label.upper()
+            if u.startswith("C-"):
+                last_mc = label
+        if not last_mc:
+            continue
+        sub = sub_row[c] if c < len(sub_row) else ""
+        if "HOUR" in sub:
+            col_map.append((c, last_mc, "hours"))
+        elif "OUTPUT" in sub:
+            col_map.append((c, last_mc, "output"))
+
+    if not col_map:
+        return []
+
+    # Find the month column (first col whose data rows hold month labels).
+    month_c = 0
+    for c in range(min(3, len(mc_row))):
+        if any(
+            parse_month_label(values[r][c] if c < len(values[r]) else "")
+            for r in range(sub_row_idx + 1, min(sub_row_idx + 5, len(values)))
+        ):
+            month_c = c
+            break
+
+    # Aggregate per (machine, month).
+    agg: dict = {}  # (machine, ym) -> {hours, output}
+    for row in values[sub_row_idx + 1:]:
+        ym = parse_month_label(row[month_c] if month_c < len(row) else "")
+        if not ym:
+            continue
+        for col, mc_label, kind in col_map:
+            val = num(row[col]) if col < len(row) else 0.0
+            if val <= 0:
+                continue
+            key = (mc_label, ym)
+            a = agg.setdefault(key, {"hours": 0.0, "output": 0.0})
+            a[kind] += val
+
+    recs: List[Record] = []
+    for (mc_label, ym), a in agg.items():
+        if a["hours"] <= 0 and a["output"] <= 0:
+            continue
+        band = _gom_band_from_prefix(mc_label)
+        machine = f"GOM {mc_label}".strip()
+        recs.append(Record(
+            grain="monthly",
+            period=ym,
+            date=ym,
+            plant=plant,
+            segment=segment,
+            unit=unit,
+            machine=machine,
+            actual_hours=a["hours"],
+            total_count=a["output"],
+            # ideal_hours deliberately left 0: the sheet's 500h/machine is a
+            # placeholder, not a real baseline. Utilisation is suppressed
+            # downstream (ideal_source="none") — raw hours still publish.
+            ideal_hours=0.0,
+            ideal_source="none",
+            tonnage_band=band,
+            source_family=segment,
+            source_file=source_file,
+            source_tab=source_tab,
+        ))
+    return recs
+
+
+# ---------------------------------------------------------------------------
+# Tank annual summary parsers (25-26 SUMMARY (LTR) and 26-27 Sheet1)
+# ---------------------------------------------------------------------------
+
+def parse_tank_annual_2526(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    source_file: str,
+    source_tab: str,
+    location: str = "",
+) -> List[Record]:
+    """Parse Tank annual summary tab in the 25-26 layout (SUMMARY (LTR) tab).
+
+    Layout: row 0 = month column headers (APR, MAY … MAR or APR'25 …);
+    each item occupies 2 rows: Production row then Rejection row.
+    The first column carries the item description.
+    Returns one Record per (item, month) with production + rejection.
+    """
+    if not values:
+        return []
+
+    # Find the header row: the one with the most month-like labels.
+    header_idx = -1
+    best = 1
+    for i, row in enumerate(values[:6]):
+        cnt = sum(1 for c in row if parse_month_label(c) is not None
+                  or str(c).strip().upper()[:3] in _MONTHS3)
+        if cnt > best:
+            best, header_idx = cnt, i
+
+    if header_idx < 0:
+        # Try: look for a row that contains 'APR' somewhere
+        for i, row in enumerate(values[:8]):
+            joined = " ".join(str(c).strip().upper() for c in row)
+            if "APR" in joined and ("MAY" in joined or "JUN" in joined):
+                header_idx = i
+                break
+    if header_idx < 0:
+        return []
+
+    header_row = values[header_idx]
+
+    # Build month columns: (col, YYYY-MM).
+    # The header may use "APR", "APR'25", "APR 25" etc.
+    month_cols: list = []
+    for c, cell in enumerate(header_row):
+        s = str(cell).strip().upper()
+        ym = parse_month_label(s)
+        if ym is None:
+            # Try bare 3-letter month name — assume current FY year context.
+            mon = _MONTHS3.get(s[:3])
+            if mon:
+                # 25-26 FY: Apr-Dec = 2025, Jan-Mar = 2026
+                yr = 2025 if mon >= 4 else 2026
+                ym = f"{yr:04d}-{mon:02d}"
+        if ym:
+            month_cols.append((c, ym))
+
+    if not month_cols:
+        return []
+
+    # Parse data rows. Items are in pairs: PRODUCTION / REJECTION.
+    # The item description is in col 0 (or first non-empty col).
+    recs: List[Record] = []
+    i = header_idx + 1
+    while i < len(values):
+        row = values[i]
+        item_label = str(row[0]).strip() if row else ""
+        # Skip blank or header-like rows.
+        if not item_label or item_label.upper() in ("", "ITEM", "DESCRIPTION", "S.NO", "S.NO."):
+            i += 1
+            continue
+        u_label = item_label.upper()
+        if "TOTAL" in u_label or "GRAND" in u_label:
+            i += 1
+            continue
+
+        # Check if this row is a PRODUCTION row (look ahead for REJECTION).
+        prod_row = row
+        rej_row = values[i + 1] if i + 1 < len(values) else []
+        rej_label = str(rej_row[0]).strip().upper() if rej_row else ""
+
+        for col, ym in month_cols:
+            prod = num(prod_row[col]) if col < len(prod_row) else 0.0
+            rej = num(rej_row[col]) if ("REJECT" in rej_label and col < len(rej_row)) else 0.0
+            if prod <= 0 and rej <= 0:
+                continue
+            recs.append(Record(
+                grain="monthly",
+                period=ym,
+                date=ym,
+                plant=plant,
+                segment=segment,
+                unit=unit,
+                machine="",
+                mould=item_label,
+                total_count=prod,
+                reject_count=rej,
+                location=location,
+                source_family=segment,
+                source_file=source_file,
+                source_tab=source_tab,
+            ))
+
+        # Advance: if we consumed a PRODUCTION+REJECTION pair, skip 2; else 1.
+        if "REJECT" in rej_label:
+            i += 2
+        else:
+            i += 1
+
+    return recs
+
+
+def parse_tank_annual_2627(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    unit: str,
+    source_file: str,
+    source_tab: str,
+    location: str = "",
+) -> List[Record]:
+    """Parse Tank annual summary tab in the 26-27 layout (Sheet1).
+
+    Layout: row 2 = header (S.NO. / CODE / LTR. / DESCRIPTION / COLOUR /
+    TOTAL PCS / then per-month pairs Production / Rejection).
+    Row 3+ = one item per row with monthly production + rejection values.
+    Month headers are in the header row, e.g. APR'26, MAY'26 …
+    """
+    if not values:
+        return []
+
+    # Find the header row: contains 'DESCRIPTION' or 'CODE' AND month labels.
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        joined = " ".join(str(c).strip().upper() for c in row)
+        if ("DESCRIPTION" in joined or "CODE" in joined) and "APR" in joined:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    header_row = values[header_idx]
+
+    # Build (col, YYYY-MM, "prod"|"rej") mapping from the header.
+    # Month pairs: each month appears twice — Production then Rejection.
+    month_col_map: list = []  # (col, ym, "prod"|"rej")
+    last_ym = None
+    prod_seen = False
+    for c, cell in enumerate(header_row):
+        s = str(cell).strip().upper()
+        ym = parse_month_label(s)
+        if ym:
+            last_ym = ym
+            prod_seen = False
+            continue
+        if last_ym:
+            if "PROD" in s or s in ("", " ") and not prod_seen:
+                month_col_map.append((c, last_ym, "prod"))
+                prod_seen = True
+            elif "REJECT" in s:
+                month_col_map.append((c, last_ym, "rej"))
+                prod_seen = False
+                last_ym = None  # consumed the pair
+
+    if not month_col_map:
+        # Fallback: header row has month labels directly in col headers;
+        # look for month label columns then assume next col = rejection.
+        for c, cell in enumerate(header_row):
+            ym = parse_month_label(str(cell).strip())
+            if ym:
+                month_col_map.append((c, ym, "prod"))
+                if c + 1 < len(header_row):
+                    month_col_map.append((c + 1, ym, "rej"))
+
+    if not month_col_map:
+        return []
+
+    # Find description column (first col with "DESCRIPTION" or "CODE").
+    desc_c = 0
+    for c, cell in enumerate(header_row):
+        s = str(cell).strip().upper()
+        if "DESCRIPTION" in s or s == "CODE":
+            desc_c = c
+            break
+
+    # Parse data rows.
+    prod_by: dict = {}  # (item, ym) -> {prod, rej}
+    for row in values[header_idx + 1:]:
+        item_label = str(row[desc_c]).strip() if desc_c < len(row) else ""
+        if not item_label:
+            continue
+        u = item_label.upper()
+        if "TOTAL" in u or "GRAND" in u or u in ("ITEM", "DESCRIPTION"):
+            continue
+        for col, ym, kind in month_col_map:
+            val = num(row[col]) if col < len(row) else 0.0
+            if val <= 0:
+                continue
+            key = (item_label, ym)
+            a = prod_by.setdefault(key, {"prod": 0.0, "rej": 0.0})
+            a[kind] += val
+
+    recs: List[Record] = []
+    for (item_label, ym), a in prod_by.items():
+        if a["prod"] <= 0 and a["rej"] <= 0:
+            continue
+        recs.append(Record(
+            grain="monthly",
+            period=ym,
+            date=ym,
+            plant=plant,
+            segment=segment,
+            unit=unit,
+            machine="",
+            mould=item_label,
+            total_count=a["prod"],
+            reject_count=a["rej"],
+            location=location,
+            source_family=segment,
+            source_file=source_file,
+            source_tab=source_tab,
+        ))
+    return recs
+
+
+# ---------------------------------------------------------------------------
+# Segment Labour parser (UNIT-1 / UNIT-2 / UNIT-3 tabs)
+# ---------------------------------------------------------------------------
+# Layout (both FYs): each tab = one unit.
+# Row 0 = blank; Row 1 = header (SEGMENT / MONTH / Labour / Solar / Power /
+# Total); Row 2 = TOTAL row; Rows 3+ = monthly data, with SEGMENT in col B
+# as a merged cell carried across its months.
+
+def parse_segment_labour(
+    values: List[list],
+    *,
+    unit_label: str,
+    source_file: str,
+    source_tab: str,
+) -> List[dict]:
+    """Parse one UNIT tab of the Segment Labour workbook.
+
+    Returns a list of dicts:
+      {unit, segment, month (YYYY-MM), labour, solar, power, total}
+
+    We don't emit Records here (labour cost is not production data); the
+    app builds its own view table from these dicts.
+    """
+    if not values:
+        return []
+
+    # Find header row (contains SEGMENT or MONTH and LABOUR).
+    header_idx = -1
+    for i, row in enumerate(values[:5]):
+        joined = " ".join(str(c).strip().upper() for c in row)
+        if ("SEGMENT" in joined or "MONTH" in joined) and "LABOUR" in joined:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    header = [str(c).strip().upper() for c in values[header_idx]]
+
+    def hcol(needle: str) -> int:
+        for c, h in enumerate(header):
+            if needle in h:
+                return c
+        return -1
+
+    seg_c = hcol("SEGMENT")
+    month_c = hcol("MONTH")
+    labour_c = hcol("LABOUR")
+    solar_c = hcol("SOLAR")
+    power_c = hcol("POWER")
+    total_c = hcol("TOTAL")
+
+    if month_c < 0:
+        return []
+
+    rows_out: list = []
+    carry_seg = ""
+    for row in values[header_idx + 1:]:
+        def g(c):
+            return row[c] if 0 <= c < len(row) else ""
+
+        # Carry segment label forward (merged cells).
+        sv = str(g(seg_c)).strip() if seg_c >= 0 else ""
+        if sv and sv.upper() not in ("", "TOTAL", "GRAND TOTAL", "SEGMENT"):
+            carry_seg = sv
+
+        ym = parse_month_label(g(month_c))
+        if not ym:
+            continue
+
+        rows_out.append({
+            "unit": unit_label,
+            "segment": carry_seg,
+            "month": ym,
+            "labour": num(g(labour_c)),
+            "solar": num(g(solar_c)) if solar_c >= 0 else 0.0,
+            "power": num(g(power_c)) if power_c >= 0 else 0.0,
+            "total": num(g(total_c)) if total_c >= 0 else 0.0,
+        })
+    return rows_out

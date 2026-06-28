@@ -14,50 +14,191 @@ All IDs below were verified accessible via the `google-sheet` connection.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
+# Plant location registry — KH = Khandala, Bhiwari, VN = Vasna, WB = Wambori
+# Used to route tank + segment-labour reports per location.
+# ---------------------------------------------------------------------------
+PLANT_LOCATIONS: dict[str, str] = {
+  "PIPE":     "KH",
+  "GARDEN":   "KH",
+  "HDPE":     "KH",
+  "MOULDING": "KH",
+  "PTMT":     "Bhiwari",
+  "CP":       "KH",
+  "TANK":     "KH",     # KH daily workbook — location tag for daily records
+  "TANK_VN":  "VN",
+  "TANK_WB":  "WB",
+  "GOM":      "KH",
+}
+
+# ---------------------------------------------------------------------------
 # Annual (monthly-grain) summary workbooks — native Google Sheets.
 # kind drives which parser in parsers.py handles the tab.
 # ---------------------------------------------------------------------------
 ANNUAL_SOURCES: list[dict] = [
-    {
-        "family": "pipe",
-        "title": "Pipe M/C Summary (26-27)",
-        "file_id": "1EHJvI7KxIahlfZ5ODiAea3Pj2Zk3z1T6cCybZJuDAMQ",
-        "tab": "Pipe M/C 26-27",
-        "kind": "mc_grid",
-        "segment": "Pipe",
-        "plant": "PIPE",
-        "unit": "kg",
-    },
-    {
-        "family": "garden",
-        "title": "Garden Pipe M/C Summary (26-27)",
-        "file_id": "1OYQq7YR_-6PyqzppOOamEaJl14VjbOQ6x-O_cpDy0gc",
-        "tab": "GARDEN M/C 26-27",
-        "kind": "mc_grid",
-        "segment": "Garden Pipe",
-        "plant": "GARDEN",
-        "unit": "kg",
-    },
-    {
-        "family": "hdpe",
-        "title": "HDPE M/C Summary (26-27)",
-        "file_id": "1TRpfk3UzsAow4InJ6HyT_smayOdHfyoZ67xmHIwD2tw",
-        "tab": "HDPE M/C 26-27",
-        "kind": "mc_grid",
-        "segment": "HDPE",
-        "plant": "HDPE",
-        "unit": "kg",
-    },
-    {
-        "family": "moulding",
-        "title": "Moulding M/C Summary (26-27)",
-        "file_id": "1ZCHZp5io1ctdvm92xlHI7x5FtBC-nLoAb2FRMkfXzBI",
-        "tab": "Moulding M/C 26-27",
-        "kind": "mc_grid",
-        "segment": "Moulding",
-        "plant": "MOULDING",
-        "unit": "kg",
-    },
+  {
+      "family": "pipe",
+      "title": "Pipe M/C Summary (26-27)",
+      "file_id": "1EHJvI7KxIahlfZ5ODiAea3Pj2Zk3z1T6cCybZJuDAMQ",
+      "tab": "Pipe M/C 26-27",
+      "kind": "mc_grid",
+      "segment": "Pipe",
+      "plant": "PIPE",
+      "unit": "kg",
+  },
+  {
+      "family": "garden",
+      "title": "Garden Pipe M/C Summary (26-27)",
+      "file_id": "1OYQq7YR_-6PyqzppOOamEaJl14VjbOQ6x-O_cpDy0gc",
+      "tab": "GARDEN M/C 26-27",
+      "kind": "mc_grid",
+      "segment": "Garden Pipe",
+      "plant": "GARDEN",
+      "unit": "kg",
+  },
+  {
+      "family": "hdpe",
+      "title": "HDPE M/C Summary (26-27)",
+      "file_id": "1TRpfk3UzsAow4InJ6HyT_smayOdHfyoZ67xmHIwD2tw",
+      "tab": "HDPE M/C 26-27",
+      "kind": "mc_grid",
+      "segment": "HDPE",
+      "plant": "HDPE",
+      "unit": "kg",
+  },
+  {
+      "family": "moulding",
+      "title": "Moulding M/C Summary (26-27)",
+      "file_id": "1ZCHZp5io1ctdvm92xlHI7x5FtBC-nLoAb2FRMkfXzBI",
+      "tab": "Moulding M/C 26-27",
+      "kind": "mc_grid",
+      "segment": "Moulding",
+      "plant": "MOULDING",
+      "unit": "kg",
+  },
+]
+
+# ---------------------------------------------------------------------------
+# Report-only annual sources — deliberately NOT loaded by the main dashboard
+# ("/"). They back the dedicated /reports/* pages and are loaded on-demand
+# (sheets.load_report_records) so the main dashboard cold-start stays fast.
+# Adding them to the main load path made the "/" cold load read 24 workbooks
+# and time out the dev health check.
+# ---------------------------------------------------------------------------
+REPORT_SOURCES: list[dict] = [
+  # ---- Group-of-Moulding (tonnage-band summary, both FYs) ----
+  {
+      "family": "gom",
+      "title": "Group-of-Moulding Summary (26-27)",
+      "file_id": "1WWaRBBmT8_kPWz8txQND3yrNla3nlzg6ApQIzH-h9YU",
+      "tab": "Moulding M/C 26-27",
+      "kind": "gom_grid",
+      "segment": "Group-of-Moulding",
+      "plant": "GOM",
+      "unit": "kg",
+      "fy": "26-27",
+  },
+  {
+      "family": "gom",
+      "title": "Group-of-Moulding Summary (25-26)",
+      "file_id": "1dItgua4DeVq5ixGiskjiZTwuSsxt_ETKGzF7dfdCmAM",
+      "tab": "Moulding M/C 25-26",
+      "kind": "gom_grid",
+      "segment": "Group-of-Moulding",
+      "plant": "GOM",
+      "unit": "kg",
+      "fy": "25-26",
+  },
+  # ---- Tank VN annual (summary-only, no daily workbook for VN/WB) ----
+  {
+      "family": "tank_vn",
+      "title": "Tank VN Annual (26-27)",
+      "file_id": "1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag",
+      "tab": "Sheet1",
+      "kind": "tank_annual_2627",
+      "segment": "Tanks",
+      "plant": "TANK_VN",
+      "unit": "pcs",
+      "fy": "26-27",
+      "location": "VN",
+      "grain": "summary-only",
+  },
+  {
+      "family": "tank_vn",
+      "title": "Tank VN Annual (25-26)",
+      "file_id": "1fe2ZgL8EcuUVkvjC3-mZ5Pr8WkXWQ5V70AiwkbDUh-0",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
+      "segment": "Tanks",
+      "plant": "TANK_VN",
+      "unit": "pcs",
+      "fy": "25-26",
+      "location": "VN",
+      "grain": "summary-only",
+  },
+  # ---- Tank WB annual (summary-only, no daily workbook for VN/WB) ----
+  {
+      "family": "tank_wb",
+      "title": "Tank WB Annual (26-27)",
+      "file_id": "1W6hGoEZauSkQyBUQbngnHNMD7Koon3_c8tnO0PDHrt8",
+      "tab": "Sheet1",
+      "kind": "tank_annual_2627",
+      "segment": "Tanks",
+      "plant": "TANK_WB",
+      "unit": "pcs",
+      "fy": "26-27",
+      "location": "WB",
+      "grain": "summary-only",
+  },
+  {
+      "family": "tank_wb",
+      "title": "Tank WB Annual (25-26)",
+      "file_id": "1mtgkCbNsWsSrgjJfN2zc7SDb2ysHoH11xG3afr0oovc",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
+      "segment": "Tanks",
+      "plant": "TANK_WB",
+      "unit": "pcs",
+      "fy": "25-26",
+      "location": "WB",
+      "grain": "summary-only",
+  },
+  # ---- Tank KH 25-26 history (already daily for 26-27; this covers last FY) ----
+  {
+      "family": "tank_kh",
+      "title": "Tank KH Annual (25-26)",
+      "file_id": "1_6Foa8TXXP-xr0KIx04q7i8iigkrLjuT8r7uG62x8qQ",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
+      "segment": "Tanks",
+      "plant": "TANK",
+      "unit": "pcs",
+      "fy": "25-26",
+      "location": "KH",
+      "grain": "summary-only",
+  },
+  # ---- Segment Labour (both FYs) ----
+  {
+      "family": "seg_labour",
+      "title": "Segment Labour (26-27)",
+      "file_id": "1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw",
+      "tab": None,          # multi-tab: UNIT-1 / UNIT-2 / UNIT-3
+      "kind": "seg_labour",
+      "segment": "Labour",
+      "plant": "ALL",
+      "unit": "cost",
+      "fy": "26-27",
+  },
+  {
+      "family": "seg_labour",
+      "title": "Segment Labour (25-26)",
+      "file_id": "1N6gVEZyv1CLs5ARQHeebjAxOyvdkwOJFPqDWHUUOy_g",
+      "tab": None,
+      "kind": "seg_labour",
+      "segment": "Labour",
+      "plant": "ALL",
+      "unit": "cost",
+      "fy": "25-26",
+  },
 ]
 
 # ---------------------------------------------------------------------------
@@ -67,70 +208,93 @@ ANNUAL_SOURCES: list[dict] = [
 # folder_ids kept for reference / manual lookup only.
 # ---------------------------------------------------------------------------
 DAILY_SOURCES: dict[str, dict] = {
-    "PIPE": {
-        "folder_ids": ["1eE1xSVAvi8t4wO_eZnCvbxMjQiqBiRG6"],
-        "files": {
-            "2026-04": "1eNUSktOldFHRtM55VYfLiYp5nLDRk3ovOEdYYKfI0hU",
-            "2026-05": "17__f7pP28bIoctVXV-iku3WIlffAuonvRhCaViVu-bA",
-            "2026-06": "1uwuhCylN3h9HizK5qNUCH-sjktE3GEH74Y_UeNq6eec",
-        },
-    },
-    "PTMT": {
-        "folder_ids": ["1cyRndUCOgirU3PsOgtqAPvJMw7Qx0wR1"],
-        "files": {
-            "2026-04": "16zsh5x4MdY8DX3H5_hw5iaOdkGixlUsPzesDVnwgfYo",
-            "2026-05": "1T1M5MT47P3D4wCwi7tX7KcL_sHVtx43NSuXFDP9Oq78",
-            "2026-06": "1nEDFjrVu6pnNkzZ9tJhvGvBDMUHjLStcc0RP2uHig4g",
-        },
-    },
-    "GARDEN": {
-        "folder_ids": ["1NbzEo0JdWAQSmT3fGhD9DuFZkBvOvnzT"],
-        "files": {
-            "2026-04": "1mbxHLgvvruhI-3_d9zoqevZQxHhjxZY4cN0tIyxkzEo",
-            "2026-05": "1qmTMCWZWLsuA4kCzaAFC4fjG46Zf3rGz5VjOknv_Sy0",
-            "2026-06": "1fIpsiS5De9xzyK5We0r9_kdIVrwXC09UIQpe4lWmATA",
-        },
-    },
-    "HDPE": {
-        "folder_ids": ["1YaS66Ef7wKOvTVtBHjMD5QFBquCX5r60"],
-        "files": {
-            "2026-04": "1TTxcpSQyVyleermiOhYlxlcd3RE0Pay0dRHLnXSEohs",
-            "2026-05": "1-RCsS2gbtI3toyNG4uec29_coID42qCNsquaYdk-IIQ",
-            "2026-06": "1_vKZGOctS_ADPxDD2OypxasHVQ5MgmHjTWcvWKEDyi8",
-        },
-    },
-    "TANK": {
-        "folder_ids": [
-            "1IsWgq01xLIkX0UZKnSolIL6lOToFefO_",
-            "1hlBedSVVMM7nbTn5Ylx4ecAeJ3CS1FJj",
-        ],
-        "files": {
-            "2026-04": "1osCJ1ZF2okCdHXbhkBthvJ7T7x21warW1-NMGm-5xbc",
-            "2026-05": "1Zl8dvEZkQKGAkyWDTgLznC_yISNVznPf3pgUodHttm8",
-            "2026-06": "1xl-k9i4BteCWtHmVcdjEIUXEiZnWzlTpkJuqPPHFLQo",
-        },
-    },
-    # CP runs on a different cycle; no Apr-26+ daily file yet (flagged at load).
-    "CP": {
-        "folder_ids": ["17thg66c3u0DMqy8bXjt6JSYp6sKqQISE"],
-        "files": {},
-    },
+  "PIPE": {
+      "folder_ids": ["1eE1xSVAvi8t4wO_eZnCvbxMjQiqBiRG6"],
+      "files": {
+          "2026-04": "1eNUSktOldFHRtM55VYfLiYp5nLDRk3ovOEdYYKfI0hU",
+          "2026-05": "17__f7pP28bIoctVXV-iku3WIlffAuonvRhCaViVu-bA",
+          "2026-06": "1uwuhCylN3h9HizK5qNUCH-sjktE3GEH74Y_UeNq6eec",
+      },
+  },
+  "PTMT": {
+      "folder_ids": ["1cyRndUCOgirU3PsOgtqAPvJMw7Qx0wR1"],
+      "files": {
+          "2026-04": "16zsh5x4MdY8DX3H5_hw5iaOdkGixlUsPzesDVnwgfYo",
+          "2026-05": "1T1M5MT47P3D4wCwi7tX7KcL_sHVtx43NSuXFDP9Oq78",
+          "2026-06": "1nEDFjrVu6pnNkzZ9tJhvGvBDMUHjLStcc0RP2uHig4g",
+      },
+  },
+  "GARDEN": {
+      "folder_ids": ["1NbzEo0JdWAQSmT3fGhD9DuFZkBvOvnzT"],
+      "files": {
+          "2026-04": "1mbxHLgvvruhI-3_d9zoqevZQxHhjxZY4cN0tIyxkzEo",
+          "2026-05": "1qmTMCWZWLsuA4kCzaAFC4fjG46Zf3rGz5VjOknv_Sy0",
+          "2026-06": "1fIpsiS5De9xzyK5We0r9_kdIVrwXC09UIQpe4lWmATA",
+      },
+  },
+  "HDPE": {
+      "folder_ids": ["1YaS66Ef7wKOvTVtBHjMD5QFBquCX5r60"],
+      "files": {
+          "2026-04": "1TTxcpSQyVyleermiOhYlxlcd3RE0Pay0dRHLnXSEohs",
+          "2026-05": "1-RCsS2gbtI3toyNG4uec29_coID42qCNsquaYdk-IIQ",
+          "2026-06": "1_vKZGOctS_ADPxDD2OypxasHVQ5MgmHjTWcvWKEDyi8",
+      },
+  },
+  "TANK": {
+      "folder_ids": [
+          "1IsWgq01xLIkX0UZKnSolIL6lOToFefO_",
+          "1hlBedSVVMM7nbTn5Ylx4ecAeJ3CS1FJj",
+      ],
+      "files": {
+          "2026-04": "1osCJ1ZF2okCdHXbhkBthvJ7T7x21warW1-NMGm-5xbc",
+          "2026-05": "1Zl8dvEZkQKGAkyWDTgLznC_yISNVznPf3pgUodHttm8",
+          "2026-06": "1xl-k9i4BteCWtHmVcdjEIUXEiZnWzlTpkJuqPPHFLQo",
+      },
+  },
+  # CP runs on a different cycle; no Apr-26+ daily file yet (flagged at load).
+  "CP": {
+      "folder_ids": ["17thg66c3u0DMqy8bXjt6JSYp6sKqQISE"],
+      "files": {},
+  },
 }
 
 # Friendly names for plants/segments shown in the UI.
 PLANT_NAMES = {
-    "PIPE": "Pipe & Fitting",
-    "GARDEN": "Garden Pipe",
-    "HDPE": "HDPE",
-    "MOULDING": "Injection Moulding",
-    "PTMT": "PTMT",
-    "CP": "CP Fittings",
-    "TANK": "Tanks",
+  "PIPE":     "Pipe & Fitting",
+  "GARDEN":   "Garden Pipe",
+  "HDPE":     "HDPE",
+  "MOULDING": "Injection Moulding",
+  "PTMT":     "PTMT",
+  "CP":       "CP Fittings",
+  "TANK":     "Tanks (KH)",
+  "TANK_VN":  "Tanks (VN)",
+  "TANK_WB":  "Tanks (WB)",
+  "GOM":      "Group-of-Moulding",
+  "ALL":      "All Plants",
 }
 
 FY_MONTHS = [
-    "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09",
-    "2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03",
+  "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09",
+  "2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03",
+]
+
+FY_MONTHS_2526 = [
+  "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09",
+  "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03",
+]
+
+# Tonnage-band definitions for Group-of-Moulding.
+# Machine counts in each band (25 total) — used to validate the grid.
+GOM_BANDS: list[str] = ["150", "200", "250", "275", "350", "450"]
+
+# Machine-label prefix patterns → tonnage band (first match wins).
+GOM_BAND_PREFIXES: list[tuple[str, str]] = [
+  ("C-150", "150"),
+  ("C-200", "200"),
+  ("C-250", "250"),
+  ("C-275", "275"),
+  ("C-350", "350"),
+  ("C-450", "450"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -149,23 +313,23 @@ FY_MONTHS = [
 # emitted machine id is "PTMT <code>" (see PTMT_ROSTER_IDS).
 # ---------------------------------------------------------------------------
 PTMT_GROUPS: dict[str, list[str]] = {
-    "PTMT – Injection (standard)": [
-        "80-1", "80-2", "80-3", "80-4", "80-5", "80-6",
-        "110-1", "110-2", "110-3", "125-1", "125-2",
-        "150-1", "150-2", "150-3", "150-4", "150-5", "150-6", "150-7", "150-8",
-        "200-2", "200-3",
-        "250-1", "250-2", "250-3", "250-4", "250-5", "250-6",
-        "350-1", "350-2", "130-TON", "450-1",
-    ],
-    "PTMT – Injection (N-line)": [
-        "N-80A", "N-80B",
-        "N-110A", "N-110B", "N-110C", "N-110D", "N-110E", "N-110F",
-        "N-200A", "N-200B", "N-200C", "N-200D", "N-200E", "N-200F",
-        "N-200G", "N-200H", "N-200I",
-    ],
-    "PTMT – Blow Moulding": ["Blow Mould 1", "Blow Mould 2", "Blow Mould 3"],
-    "PTMT – Corrugator": ["Corrugater"],
-    "PTMT – Grinding": ["GRINDER-1 (M)", "GRINDER-2 (S)", "GRINDER-3 (B)"],
+  "PTMT – Injection (standard)": [
+      "80-1", "80-2", "80-3", "80-4", "80-5", "80-6",
+      "110-1", "110-2", "110-3", "125-1", "125-2",
+      "150-1", "150-2", "150-3", "150-4", "150-5", "150-6", "150-7", "150-8",
+      "200-2", "200-3",
+      "250-1", "250-2", "250-3", "250-4", "250-5", "250-6",
+      "350-1", "350-2", "130-TON", "450-1",
+  ],
+  "PTMT – Injection (N-line)": [
+      "N-80A", "N-80B",
+      "N-110A", "N-110B", "N-110C", "N-110D", "N-110E", "N-110F",
+      "N-200A", "N-200B", "N-200C", "N-200D", "N-200E", "N-200F",
+      "N-200G", "N-200H", "N-200I",
+  ],
+  "PTMT – Blow Moulding": ["Blow Mould 1", "Blow Mould 2", "Blow Mould 3"],
+  "PTMT – Corrugator": ["Corrugater"],
+  "PTMT – Grinding": ["GRINDER-1 (M)", "GRINDER-2 (S)", "GRINDER-3 (B)"],
 }
 
 # The grinding group is regrind/finishing: its KG is never added to plant output.
@@ -173,18 +337,27 @@ PTMT_FINISHING_GROUP = "PTMT – Grinding"
 
 # bare machine code -> process group (flat lookup for routing).
 PTMT_ROSTER: dict[str, str] = {
-    code: group for group, codes in PTMT_GROUPS.items() for code in codes
+  code: group for group, codes in PTMT_GROUPS.items() for code in codes
 }
 
 
 def ptmt_roster_ids() -> set[str]:
-    """The 55 authoritative PTMT machine ids, in emitted form ("PTMT <code>")."""
-    return {f"PTMT {code}" for code in PTMT_ROSTER}
+  """The 55 authoritative PTMT machine ids, in emitted form ("PTMT <code>")."""
+  return {f"PTMT {code}" for code in PTMT_ROSTER}
 
 
 def ptmt_group(code: str) -> tuple[str, bool] | None:
-    """(process_group, is_finishing) for a bare PTMT code, or None if unknown."""
-    group = PTMT_ROSTER.get(str(code).strip())
-    if group is None:
-        return None
-    return group, (group == PTMT_FINISHING_GROUP)
+  """(process_group, is_finishing) for a bare PTMT code, or None if unknown."""
+  group = PTMT_ROSTER.get(str(code).strip())
+  if group is None:
+      return None
+  return group, (group == PTMT_FINISHING_GROUP)
+
+
+def gom_band(label: str) -> str:
+  """Tonnage band for a GOM machine label (e.g. 'C-150-1' → '150')."""
+  u = str(label).strip().upper()
+  for prefix, band in GOM_BAND_PREFIXES:
+      if u.startswith(prefix.upper()):
+          return band
+  return "Other"

@@ -205,6 +205,12 @@
           <option value="last_month" {% if p=='last_month' %}selected{% endif %} style="color:black">Last 30 Days</option>
           <option value="current_fy" {% if p=='current_fy' %}selected{% endif %} style="color:black">Current FY (Apr–Mar)</option>
           <option value="prior_fy" {% if p=='prior_fy' %}selected{% endif %} style="color:black">Prior FY</option>
+          <optgroup label="Quarter (FY)" style="color:black">
+            <option value="q1" {% if p=='q1' %}selected{% endif %} style="color:black">Q1 (Apr–Jun)</option>
+            <option value="q2" {% if p=='q2' %}selected{% endif %} style="color:black">Q2 (Jul–Sep)</option>
+            <option value="q3" {% if p=='q3' %}selected{% endif %} style="color:black">Q3 (Oct–Dec)</option>
+            <option value="q4" {% if p=='q4' %}selected{% endif %} style="color:black">Q4 (Jan–Mar)</option>
+          </optgroup>
           <optgroup label="Month" style="color:black">
             {% for mn, ml in [('1','Jan'),('2','Feb'),('3','Mar'),('4','Apr'),('5','May'),('6','Jun'),('7','Jul'),('8','Aug'),('9','Sep'),('10','Oct'),('11','Nov'),('12','Dec')] %}
             <option value="{{ mn }}" {% if p==mn %}selected{% endif %} style="color:black">{{ ml }}</option>

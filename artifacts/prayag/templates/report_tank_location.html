@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+  {% block title_suffix %} — {{ title }}{% endblock %}
+
+  {% block content %}
+  <div class="mb-3 flex items-center gap-2">
+    <a href="/reports" class="text-gray-400 hover:text-gray-600">
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </a>
+    <div>
+      <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">{{ title }}</h2>
+      <div class="text-xs text-gray-400">{{ period_label }}</div>
+    </div>
+  </div>
+
+  {% if summary_only %}
+  <div class="rounded-xl px-3 py-2 mb-3 text-xs flex items-center gap-2"
+       style="background:rgba(31,56,100,0.06);color:var(--navy)">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" class="flex-shrink-0">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    Annual summary data only — no daily workbook for this location.
+  </div>
+  {% endif %}
+
+  <!-- Overall KPI strip -->
+  {% if overall.total_count > 0 %}
+  <div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">
+    <div>
+      <div class="text-xs text-gray-500 mb-0.5">Total Production</div>
+      <div class="font-bold text-base" style="color:var(--navy)">{{ "{:,.0f}".format(overall.total_count) }}</div>
+    </div>
+    <div>
+      <div class="text-xs text-gray-500 mb-0.5">Total Rejection</div>
+      <div class="font-bold text-base text-red-500">{{ "{:,.0f}".format(overall.reject_count) }}</div>
+    </div>
+    <div>
+      <div class="text-xs text-gray-500 mb-0.5">Rejection %</div>
+      <div class="font-bold text-base {% if overall.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">
+        {{ overall.rejection_pct }}%
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Per-item per-month table -->
+  <div class="kpi-card p-3 mb-4">
+    <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Production by Item</h3>
+    {% if item_list %}
+    <div class="table-scroll">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-gray-500 border-b border-gray-100">
+            <th class="text-left pb-2 pr-2 font-medium min-w-28">Item</th>
+            {% for m in months %}
+            <th class="text-right pb-2 px-1 font-medium whitespace-nowrap">{{ month_disps[loop.index0] }}</th>
+            {% endfor %}
+            <th class="text-right pb-2 pl-2 font-medium">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in item_list %}
+          {% set row_total = namespace(v=0) %}
+          <tr class="border-b border-gray-50">
+            <td class="py-1.5 pr-2 font-medium text-gray-700 leading-tight max-w-28 truncate" title="{{ item }}">{{ item }}</td>
+            {% for m in months %}
+            {% set cell = items[item].get(m, {}) %}
+            {% set pv = cell.prod if cell else 0 %}
+            {% set _ = row_total.__setattr__('v', row_total.v + pv) %}
+            <td class="py-1.5 px-1 text-right text-gray-600">
+              {% if pv > 0 %}{{ "{:,.0f}".format(pv) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% endfor %}
+            <td class="py-1.5 pl-2 text-right font-semibold" style="color:var(--navy)">
+              {{ "{:,.0f}".format(row_total.v) if row_total.v > 0 else "—" }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-xs text-gray-400 text-center py-6">No data available for this period.</div>
+    {% endif %}
+  </div>
+
+  {% endblock %}
+  

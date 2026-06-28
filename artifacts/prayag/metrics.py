@@ -47,6 +47,9 @@ class Record:
     ideal_hours_sheet: float = 0.0  # raw planned hours as read from the sheet
     ideal_source: str = "sheet"     # "config" baseline | "sheet" placeholder
 
+    # --- location / geography ---
+    location: str = ""            # KH | Bhiwari | VN | WB (empty = legacy / unknown)
+
     # --- classification ---
     is_finishing: bool = False    # finishing/regrind line (e.g. PTMT Grinders).
                                   # Its throughput is regrind, not new production,
@@ -72,6 +75,9 @@ class Record:
     source_family: str = ""
     source_file: str = ""
     source_tab: str = ""
+
+    # --- tonnage band (Group-of-Moulding) ---
+    tonnage_band: str = ""        # "150" | "200" | "250" | "275" | "350" | "450"
 
 
 # Backwards-compatible alias for older call sites / demo data.
@@ -400,6 +406,23 @@ def rollup_by_mould(rows: List[Record]) -> Dict[str, MetricsResult]:
 
 def rollup_by_segment(rows: List[Record]) -> Dict[str, MetricsResult]:
     return rollup(rows, "segment")
+
+
+def rollup_by_tonnage_band(rows: List[Record]) -> Dict[str, MetricsResult]:
+    """Group-of-Moulding: aggregate by tonnage band (150/200/250/275/350/450)."""
+    groups: Dict[str, List[Record]] = {}
+    for r in rows:
+        key = r.tonnage_band or "Other"
+        groups.setdefault(key, []).append(r)
+    BAND_ORDER = ["150", "200", "250", "275", "350", "450"]
+    sorted_keys = sorted(groups.keys(),
+        key=lambda k: BAND_ORDER.index(k) if k in BAND_ORDER else 999)
+    return {k: compute_metrics(groups[k]) for k in sorted_keys}
+
+
+def rollup_by_location(rows: List[Record]) -> Dict[str, MetricsResult]:
+    """Aggregate by location (KH / Bhiwari / VN / WB)."""
+    return rollup(rows, "location")
 
 
 def downtime_pareto(rows: List[Record]) -> List[Dict]:
