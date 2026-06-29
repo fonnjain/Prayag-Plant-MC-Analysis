@@ -3117,6 +3117,12 @@ def _build_segment_inputs_view(months: list) -> dict:
         if sp:
             sp["disp"] = _month_disp(sp["month"])
             sp["prev_disp"] = _month_disp(sp["prev_month"])
+        for pt in unit.get("solar_trend", []):
+            pt["disp"] = _month_disp(pt["month"])
+        sa = unit.get("solar_alert")
+        if sa:
+            sa["disp"] = _month_disp(sa["month"])
+            sa["prev_disp"] = _month_disp(sa["prev_month"])
     return view
 
 

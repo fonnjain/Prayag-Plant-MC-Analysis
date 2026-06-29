@@ -84,6 +84,13 @@ FIELD_BY_KEY: Dict[str, dict] = {f["key"]: f for f in FIELDS}
 # attention cue, never a gate.
 SPIKE_THRESHOLD_PCT: float = 15.0
 
+# A month-over-month DROP in the solar share (solar / (grid + solar)), measured in
+# percentage points, at or beyond this magnitude is surfaced as a non-blocking
+# advisory ("solar share fell from 42% to 25%"). A drop in solar share means the
+# grid-vs-solar mix swung toward grid power — a real operational signal. Only a
+# drop is flagged (a rising solar share needs no warning); soft cue, never a gate.
+SOLAR_SHARE_DROP_PTS: float = 10.0
+
 
 def fields_for_unit(unit_key: str) -> List[dict]:
     """The manual fields applicable to one billing unit (some are unit-specific)."""
@@ -162,6 +169,17 @@ def build_segment_inputs(
             if power is not None and kg > 0:
                 per_kg_power = power / kg
 
+            # Solar share = solar / (grid + solar). Computed ONLY when BOTH the
+            # grid (elec_gen) and solar (solar_gen) figures exist for the month —
+            # never fabricated for an awaiting month, which is simply absent from
+            # the series. A second solar source (Unit-2) is intentionally NOT mixed
+            # in here: the share tracks the primary grid-vs-solar split.
+            elec = cells.get("elec_gen", {}).get("value")
+            solar = cells.get("solar_gen", {}).get("value")
+            solar_share: Optional[float] = None
+            if elec is not None and solar is not None and (elec + solar) > 0:
+                solar_share = solar / (elec + solar)
+
             row = {
                 "month": month,
                 "unit": ukey,
@@ -173,6 +191,7 @@ def build_segment_inputs(
                 "entered_any": entered_any,
                 "kg_production": kg,
                 "per_kg_power": per_kg_power,
+                "solar_share": solar_share,
             }
             rows.append(row)
             unit_rows.append(row)
@@ -211,6 +230,38 @@ def build_segment_inputs(
                 "exceeds": abs(pct) >= SPIKE_THRESHOLD_PCT,
             }
 
+        # Solar-share trend: only months where BOTH grid and solar exist (share
+        # computed). Awaiting months are absent (never fabricated).
+        solar_trend = [
+            {"month": r["month"], "value": r["solar_share"]}
+            for r in unit_rows
+            if r["solar_share"] is not None
+        ]
+
+        # Month-over-month solar-share drop alert. Mirrors the spike pattern: only
+        # CONSECUTIVE months that BOTH carry a solar_share form a valid comparison
+        # — an awaiting month between them breaks the chain and is never bridged.
+        # The advisory reflects the LATEST such pair (loop overwrites). Only a DROP
+        # is meaningful here, so ``exceeds`` is True solely when the share fell by
+        # at least the threshold (a rising share gives a negative drop, not shown).
+        # With fewer than two consecutive valued months it stays None.
+        solar_alert: Optional[dict] = None
+        for i in range(1, len(unit_rows)):
+            prev_s = unit_rows[i - 1]["solar_share"]
+            curr_s = unit_rows[i]["solar_share"]
+            if prev_s is None or curr_s is None:
+                continue
+            drop_pts = (prev_s - curr_s) * 100.0
+            solar_alert = {
+                "month": unit_rows[i]["month"],
+                "prev_month": unit_rows[i - 1]["month"],
+                "share": curr_s,
+                "prev_share": prev_s,
+                "drop_pts": drop_pts,
+                "threshold": SOLAR_SHARE_DROP_PTS,
+                "exceeds": drop_pts >= SOLAR_SHARE_DROP_PTS,
+            }
+
         by_unit.append({
             "key": ukey,
             "label": unit["label"],
@@ -218,6 +269,8 @@ def build_segment_inputs(
             "rows": unit_rows,
             "trend": trend,
             "spike": spike,
+            "solar_trend": solar_trend,
+            "solar_alert": solar_alert,
         })
 
     return {

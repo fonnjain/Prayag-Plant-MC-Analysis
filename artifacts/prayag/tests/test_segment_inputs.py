@@ -195,6 +195,113 @@ def test_spike_uses_latest_consecutive_pair():
     print("ok: latest consecutive pair drives the alert, not the older jump")
 
 
+def test_solar_share_computed_only_when_both_present():
+    # Share = solar / (grid + solar). Computed only when BOTH grid and solar are
+    # entered; an awaiting half leaves it None (never fabricated).
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 600.0, "solar_gen": 400.0},  # 0.4
+        ("2026-05", "UNIT-1"): {"elec_gen": 800.0},  # solar awaiting -> None
+        ("2026-06", "UNIT-1"): {"solar_gen": 500.0},  # grid awaiting -> None
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    assert abs(_row(view, "2026-04", "UNIT-1")["solar_share"] - 0.4) < 1e-9
+    assert _row(view, "2026-05", "UNIT-1")["solar_share"] is None
+    assert _row(view, "2026-06", "UNIT-1")["solar_share"] is None
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    # Only the one valued month appears in the solar trend.
+    assert [p["month"] for p in by_unit["UNIT-1"]["solar_trend"]] == ["2026-04"]
+    print("ok: solar share computed only when both grid & solar present")
+
+
+def test_solar_alert_flags_sharp_drop():
+    # Apr 50% -> May 30% is a 20-point drop, beyond the 10-pt threshold -> flagged.
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0},  # 0.50
+        ("2026-05", "UNIT-1"): {"elec_gen": 700.0, "solar_gen": 300.0},  # 0.30
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    sa = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"]
+    assert sa is not None
+    assert sa["exceeds"] is True
+    assert abs(sa["drop_pts"] - 20.0) < 1e-9
+    assert abs(sa["prev_share"] - 0.5) < 1e-9 and abs(sa["share"] - 0.3) < 1e-9
+    assert sa["prev_month"] == "2026-04" and sa["month"] == "2026-05"
+    print("ok: 20-pt solar share drop -> alert (exceeds)")
+
+
+def test_solar_alert_rise_not_flagged():
+    # A RISING solar share is good news, never an alert: drop_pts is negative and
+    # exceeds stays False.
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 700.0, "solar_gen": 300.0},  # 0.30
+        ("2026-05", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0},  # 0.50
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    sa = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"]
+    assert sa is not None
+    assert sa["exceeds"] is False
+    assert sa["drop_pts"] < 0
+    print("ok: rising solar share -> no alert (drop negative)")
+
+
+def test_solar_alert_small_drop_not_flagged():
+    # 50% -> 45% is a 5-pt drop, under the 10-pt threshold: present but not exceeds.
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0},  # 0.50
+        ("2026-05", "UNIT-1"): {"elec_gen": 550.0, "solar_gen": 450.0},  # 0.45
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    sa = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"]
+    assert sa is not None
+    assert abs(sa["drop_pts"] - 5.0) < 1e-9
+    assert sa["exceeds"] is False
+    print("ok: 5-pt solar share drop -> no alert (under threshold)")
+
+
+def test_solar_alert_never_bridges_awaiting_gap():
+    # Apr valued, May awaiting (no solar), Jun valued. Apr->Jun must NOT be a MoM
+    # comparison; with no consecutive valued pair the alert stays None.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0},  # 0.50
+        ("2026-05", "UNIT-1"): {"elec_gen": 800.0},  # solar awaiting
+        ("2026-06", "UNIT-1"): {"elec_gen": 900.0, "solar_gen": 100.0},  # 0.10
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    assert {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"] is None
+    print("ok: awaiting month between values -> no bridged solar alert (None)")
+
+
+def test_solar_alert_none_with_fewer_than_two_valued_months():
+    months = ["2026-04"]
+    inputs = {("2026-04", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0}}
+    view = si.build_segment_inputs(months, inputs, {})
+    assert {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"] is None
+    print("ok: single valued month -> no solar alert (nothing fabricated)")
+
+
+def test_solar_alert_uses_latest_consecutive_pair():
+    # Three valued months: 0.50 -> 0.20 (big drop) -> 0.18 (small drop). The alert
+    # reflects the LATEST pair (May->Jun, 2-pt drop, under threshold), not the older
+    # collapse.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"elec_gen": 500.0, "solar_gen": 500.0},  # 0.50
+        ("2026-05", "UNIT-1"): {"elec_gen": 800.0, "solar_gen": 200.0},  # 0.20
+        ("2026-06", "UNIT-1"): {"elec_gen": 820.0, "solar_gen": 180.0},  # 0.18
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    sa = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["solar_alert"]
+    assert sa["prev_month"] == "2026-05" and sa["month"] == "2026-06"
+    assert abs(sa["drop_pts"] - 2.0) < 1e-9
+    assert sa["exceeds"] is False
+    print("ok: latest consecutive pair drives the solar alert, not the older drop")
+
+
 def test_complete_when_all_entered():
     months = ["2026-04"]
     inputs = {}
@@ -218,5 +325,12 @@ if __name__ == "__main__":
     test_spike_never_bridges_awaiting_gap()
     test_spike_none_with_fewer_than_two_valued_months()
     test_spike_uses_latest_consecutive_pair()
+    test_solar_share_computed_only_when_both_present()
+    test_solar_alert_flags_sharp_drop()
+    test_solar_alert_rise_not_flagged()
+    test_solar_alert_small_drop_not_flagged()
+    test_solar_alert_never_bridges_awaiting_gap()
+    test_solar_alert_none_with_fewer_than_two_valued_months()
+    test_solar_alert_uses_latest_consecutive_pair()
     test_complete_when_all_entered()
     print("\nALL segment_inputs tests passed")
