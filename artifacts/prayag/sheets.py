@@ -775,10 +775,12 @@ _DAILY_LAYOUTS: dict = {
   "PIPE": [
       {
           "emit": "PIPE", "tab": "Report-11", "layout": "long",
-          # PIPE's per-machine ideal is published in a SEPARATE tab (Report-5) as
-          # "Ideal Run Hour Per Day"; it is read cross-tab, filtered to PIPE M/C
-          # rows and expanded to a monthly figure (see _emit_daily).
-          "ideal_runhr_tab": "Report-5",
+          # PIPE's utilisation baseline lives in a SEPARATE monthly-summary tab
+          # (Report-5): per-machine Ideal Run Hour/Day (col D), Total Run Days
+          # (col E) and Run Hours (col F). It is read cross-tab and joined to the
+          # daily M/C machines by machine number; utilisation is computed on a
+          # RUN-DAY basis (col F / (col D × col E)) — see _emit_daily.
+          "report5_tab": "Report-5",
           "long": dict(
               machine_col=("eq", "MACHINE NO."),
               out_col=("eq", "WEIGHT"),
@@ -788,6 +790,11 @@ _DAILY_LAYOUTS: dict = {
       },
       {
           "emit": "MOULDING", "tab": "Report-12", "layout": "long",
+          # Report-12 records moulding OUTPUT only (no run hours), so its
+          # utilisation baseline comes from the SAME workbook's Report-5 moulding
+          # rows (joined by the bare machine label, e.g. "A01(NU-200)"). Same
+          # run-day basis as PIPE — see _emit_daily.
+          "report5_tab": "Report-5",
           "long": dict(
               machine_col=("startswith", "MOULDING MACHI"),
               out_col=("contains", "WT IN KGS"),
@@ -873,6 +880,16 @@ def _mc_key(label) -> Optional[int]:
   if m:
       return int(m.group(1))
   return None
+
+
+def _r5_norm(label) -> str:
+  """Normalise a machine label for Report-5 ↔ daily joins by bare name.
+
+  Used for plants whose daily machines carry no M/C number (MOULDING's
+  ``A01(NU-200)`` etc.). Upper-cases and strips ALL whitespace so a stray space
+  in either source never breaks the match.
+  """
+  return "".join(str(label).split()).upper()
 
 
 def _daily_plants() -> List[str]:
@@ -1127,28 +1144,45 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           values, header_spec=spec["ideal_hours_col"], mc_header_spec=summary_mc)
       sheet_hours = {f"{emit} {lbl}".strip(): v for lbl, v in labels.items()}
 
-  # PIPE only: its ideal lives in a SEPARATE tab (Report-5) as an "Ideal Run Hour
-  # Per Day", on a split header shared with other machine families (Mixer /
-  # Moulding / Grinder). Read it, keep only PIPE M/C rows, and key by machine
-  # number so it joins onto the long-tab machines via _mc_key. The monthly figure
-  # is derived from this per-day rate × the configured day basis (calendar days),
-  # NOT the grid's flat 500-hour placeholder.
-  sheet_runhr_day: dict = {}  # _mc_key -> ideal run hours PER DAY (cross-tab)
-  rh_tab = spec.get("ideal_runhr_tab")
-  if rh_tab and rh_tab in tabs:
-      perday = parsers.parse_pipe_ideal_runhours(read_values(file_id, rh_tab, token))
-      for lbl, v in perday.items():
-          if "PIPE" not in str(lbl).upper():
-              continue  # exclude Moulding/Mixer/Grinder rows on the shared sheet
+  # PIPE / MOULDING: utilisation baseline lives in a SEPARATE monthly-summary tab
+  # (Report-5) shared by every machine family. Each row carries Ideal Run Hour Per
+  # Day (col D), Total Run Days (col E) and Run Hours (col F). Utilisation is
+  # RUN-DAY based — col F / (col D × col E) — so a low-activity month is judged
+  # against the days it actually ran, not the calendar. Report-5 is AUTHORITATIVE
+  # for both the numerator (run hours) and the denominator (ideal hours), so it
+  # overrides the daily tab's own run hours (which can disagree, and are 0 for
+  # output-only MOULDING). Two lookups so PIPE joins by machine number and MOULDING
+  # joins by its bare label (e.g. "A01(NU-200)"); no _mc_key collision because
+  # MOULDING's daily labels carry no M/C number.
+  r5_by_mckey: dict = {}   # _mc_key            -> (per_day, run_days, run_hours)
+  r5_by_label: dict = {}   # normalised label   -> (per_day, run_days, run_hours)
+  r5_tab = spec.get("report5_tab")
+  if r5_tab and r5_tab in tabs:
+      for lbl, triple in parsers.parse_pipe_run5(read_values(file_id, r5_tab, token)).items():
           k = _mc_key(lbl)
-          if k is not None and v > 0:
-              sheet_runhr_day[k] = v
+          if k is not None:
+              r5_by_mckey[k] = triple
+          r5_by_label[_r5_norm(lbl)] = triple
+
+  def _r5_hit(machine: str):
+      """Resolve a daily machine to its Report-5 (per_day, run_days, run_hours)."""
+      k = _mc_key(machine)
+      if k is not None and k in r5_by_mckey:
+          return r5_by_mckey[k]
+      lab = machine
+      pref = spec.get("long", {}).get("machine_prefix") or spec.get("machine_prefix")
+      if pref and lab.startswith(pref):
+          lab = lab[len(pref):]
+      return r5_by_label.get(_r5_norm(lab))
 
   # Active days per machine (full month) so per-day ideal hours reconcile to
-  # the monthly figure.
+  # the monthly figure; row count per machine so a Report-5 monthly figure spreads
+  # evenly across its daily rows (sum reconciles exactly).
   active: dict = {}
+  rowcount: dict = {}
   for r in raw:
       active.setdefault(r.machine, set()).add(r.date)
+      rowcount[r.machine] = rowcount.get(r.machine, 0) + 1
 
   # App-logic default monthly ideal hours for this plant (not in the sheets), and
   # whether the plant records run hours at all. The default is the lowest-priority
@@ -1187,14 +1221,19 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           r.ideal_hours = sheet_ideal[r.machine] / days
           r.ideal_output = 0.0  # no in-sheet output rate → efficiency hidden
           r.ideal_source = "sheet"
-      elif _mc_key(r.machine) in sheet_runhr_day:
-          # PIPE: per-day ideal run hours × calendar days = monthly ideal, spread
-          # over the machine's active days (one row per machine-day) so the sum
-          # reconciles to the monthly figure. Output rate stays unset → only
-          # utilisation publishes (efficiency is out of scope for this baseline).
-          per_day = sheet_runhr_day[_mc_key(r.machine)]
-          monthly = per_day * ideal_hours.days_in_month(ym)
-          r.ideal_hours = monthly / days
+      elif _r5_hit(r.machine) is not None:
+          # PIPE / MOULDING: Report-5 is authoritative. Monthly ideal = Ideal Run
+          # Hour/Day × Total Run DAYS (NOT calendar days); monthly actual = the
+          # sheet's own Run Hours. Both are spread evenly across the machine's daily
+          # rows so a full-month rollup reconciles exactly to the sheet figure and
+          # utilisation = Σrun hours / Σideal hours = col F / (col D × col E). An
+          # idle machine (run days = 0) gets ideal_hours = 0, so utilisation stays
+          # blank (never a fake 0%). No clamp — a grinder running past its ideal
+          # legitimately exceeds 100%. Output rate stays unset (efficiency hidden).
+          per_day, run_days, run_hours = _r5_hit(r.machine)
+          nrows = max(rowcount.get(r.machine, 0), 1)
+          r.ideal_hours = (per_day * run_days) / nrows
+          r.actual_hours = run_hours / nrows
           r.ideal_output = 0.0
           r.ideal_source = "derived"
       else:

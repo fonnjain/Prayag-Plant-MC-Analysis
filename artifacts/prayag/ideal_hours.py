@@ -39,11 +39,11 @@ from typing import Optional, Tuple
 
 # --- configuration ----------------------------------------------------------
 
-# How PIPE's "Ideal Run Hour Per Day" is expanded to a monthly figure. The basis
-# materially changes utilisation (calendar days >> the days a machine actually
-# ran), so it is a single explicit constant, not a guess scattered in the code.
-# "calendar" = every day in the month (the documented default); a plant that wants
-# "days it ran" should set per-machine overrides on the /input page instead.
+# Basis label for the /input override CAP hint only. PIPE/MOULDING utilisation is
+# now computed RUN-DAY based directly from Report-5 (Run Hours ÷ (Ideal Run Hour
+# Per Day × Total Run Days)) in sheets._emit_daily — it no longer expands a
+# per-day rate over the calendar here. The override sanity ceiling (cap_hours) is
+# still 24 h × calendar days, a physical maximum, so this label stays "calendar".
 PIPE_IDEAL_DAYS_BASIS = "calendar"
 
 # Per-plant monthly ideal-hours fallback, applied only when neither an override

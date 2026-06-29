@@ -770,22 +770,32 @@ def parse_matrix_summary_col(
     return out
 
 
-def parse_pipe_ideal_runhours(values: List[list]) -> dict:
-    """Map ``machine label -> Ideal Run Hour Per Day`` from PIPE ``Report-5``.
+def parse_pipe_run5(values: List[list]) -> dict:
+    """Map ``machine label -> (ideal_run_hour_per_day, run_days, run_hours)`` from
+    PIPE ``Report-5``.
 
-    PIPE's Report-5 is a multi-family daily sheet whose header is SPLIT across two
-    rows: the ``Ideal Run Hour Per Day`` label sits one row above the ``MACHINE``
-    column header, so the same-row :func:`parse_matrix_summary_col` cannot read it.
-    This scans the first few rows for each header independently, then reads the
-    per-machine per-day ideal from the data rows below. The sheet also lists Mixer
-    / Moulding / Grinder / Pulverizer families — the caller filters to PIPE M/C
-    rows (via label + machine-number join), so every label with a positive value
-    is returned here. Returns ``{}`` if either header is absent. Deterministic.
+    Report-5 is a multi-family monthly summary whose header is SPLIT across two
+    rows: ``Ideal Run Hour Per Day`` and ``Total Run Days`` sit one row above the
+    ``MACHINE`` / ``RUN HOURS`` headers, so the same-row
+    :func:`parse_matrix_summary_col` cannot read it. This scans the first few rows
+    for each header independently, then reads the three figures per machine row:
+
+      * **Col D — Ideal Run Hour Per Day** is per machine TYPE (22 for pipe/moulding
+        lines, 12 for grinders/pulverizers); it is read PER ROW, never assumed a
+        constant.
+      * **Col E — Total Run Days** is the data-driven count of days the machine ran.
+      * **Col F — Run Hours** is the machine's actual run hours for the month.
+
+    Utilisation = Run Hours / (Ideal Run Hour Per Day × Total Run Days) — a RUN-DAY
+    basis, not calendar days. ``TOTAL`` / blank rows are skipped (their Col D is a
+    column sum, not a machine baseline). The sheet lists Mixer / Pipe / Moulding /
+    Grinder / Pulverizer families; every machine row with a positive Col D is
+    returned and the caller joins to the daily machines it actually has. Returns
+    ``{}`` if the machine or ideal header is absent. Deterministic; no network.
     """
     if not values:
         return {}
-    val_c = -1
-    mc_c = -1
+    val_c = days_c = hrs_c = mc_c = -1
     last_hdr = 0
     for i, row in enumerate(values[:8]):
         for c, v in enumerate(row):
@@ -794,6 +804,12 @@ def parse_pipe_ideal_runhours(values: List[list]) -> dict:
                 continue
             if val_c < 0 and "ideal run hour" in s:
                 val_c, last_hdr = c, max(last_hdr, i)
+            if days_c < 0 and "run days" in s:
+                days_c, last_hdr = c, max(last_hdr, i)
+            # "RUN HOURS" (plural) is a distinct column from "Ideal Run Hour Per
+            # Day"; match it exactly so the ideal label never steals this slot.
+            if hrs_c < 0 and s in ("run hours", "running hours"):
+                hrs_c, last_hdr = c, max(last_hdr, i)
             if mc_c < 0 and s == "machine":
                 mc_c, last_hdr = c, max(last_hdr, i)
     if val_c < 0 or mc_c < 0:
@@ -803,9 +819,11 @@ def parse_pipe_ideal_runhours(values: List[list]) -> dict:
         label = str(row[mc_c]).strip() if mc_c < len(row) else ""
         if not label or label.upper() in _DAILY_SKIP_LABELS or "TOTAL" in label.upper():
             continue
-        val = num(row[val_c]) if val_c < len(row) else 0.0
-        if val > 0:
-            out[label] = val
+        per_day = num(row[val_c]) if val_c < len(row) else 0.0
+        run_days = num(row[days_c]) if (0 <= days_c < len(row)) else 0.0
+        run_hours = num(row[hrs_c]) if (0 <= hrs_c < len(row)) else 0.0
+        if per_day > 0:
+            out[label] = (per_day, run_days, run_hours)
     return out
 
 
