@@ -30,3 +30,9 @@ id = "GsYN_vI2R43qWh8uIpJIb"
 uri = "file://prayag_architecture.xlsx"
 type = "table"
 title = "Prayag Analytics — Complete Architecture Document"
+
+[[outputs]]
+id = "J-KluYhnDXK1UFFPKfBcz"
+uri = "file://exports/Prayag_Architecture.xlsx"
+type = "table"
+title = "Prayag Architecture (Webapp + Database)"
