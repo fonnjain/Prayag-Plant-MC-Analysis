@@ -1,0 +1,38 @@
+CONTEXT — Going forward (FY 2026-27 layout, where new data is being entered), pipe production
+and rejection must be reconciled between Report-5 and Report-11 at the MACHINE × DATE level,
+taking whichever source recorded MORE for each machine-date. Neither report alone is complete:
+some machine-dates are logged (or larger) in Report-5, others in Report-11.
+
+GRAIN & RULE:
+- Build, for each (machine, date), the output value from each source, then take the maximum:
+      corrected_output(machine, date) = max(R5_output, R11_output)   [missing source = 0]
+  Monthly corrected output = sum over the UNION of all (machine, date) pairs.
+- Apply the identical rule to rejection.
+
+SOURCE EXTRACTION (current FY layout):
+- REPORT-11 (daily): rows are (date, machine, item). Aggregate to (machine, date):
+  output = SUM of "Weight" (col 10); rejection = SUM of "Actual Wt (Kg)" (col 14).
+  Machine "PIPE M/C - N" → integer N. Date = date-only (drop time).
+- REPORT-5 (daily): the monthly summary sits in cols 1-14; the per-date detail starts at
+  COLUMN 15 in repeating 3-column groups [Run Hours, Output (KG), Rejection (KG)]. The DATE
+  for each group is in ROW 3 of the group's first column. Machine names are in col 3
+  ("Pipe M/C-N", rows ~5-13). For each machine row and each date group:
+  output = group_first_col + 1, rejection = group_first_col + 2. Normalize machine to N, date to date-only.
+- Match Report-5 "Pipe M/C-N" to Report-11 "PIPE M/C - N" on the integer N.
+
+OUTPUT OF THE STEP:
+- corrected monthly output & rejection (per machine and total),
+- plus an audit list: for each (machine, date), show R5 value, R11 value, which was picked,
+  and whether it was an R5-only / R11-only / both-but-R5-greater / both-but-R11-greater pickup.
+
+TYPE SPLIT (CPVC/UPVC/SWR/AGRI): Report-5 has NO type. Keep the type proportions from
+Report-11 for each machine, and SCALE them up to that machine's corrected total
+(pro-rata), so the four types still sum to the corrected machine total. Report any portion
+that cannot be typed (machine-dates present only in Report-5) as "untyped pickup".
+
+ACCEPTANCE TEST (April 2026): Report-5 total = 135,634 kg; Report-11 total = 157,278 kg;
+CORRECTED date-wise max = 157,883 kg (greater than both); corrected rejection = 13,030 kg.
+The pipeline must reproduce 157,883 for April pipe output.
+
+Keep moulding as-is (Report-12 authoritative). This date-wise max rule is for PIPE only,
+unless we later confirm the same gap exists on the moulding side.

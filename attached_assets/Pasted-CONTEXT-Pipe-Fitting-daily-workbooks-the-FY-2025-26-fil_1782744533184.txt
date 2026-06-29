@@ -1,0 +1,34 @@
+CONTEXT — Pipe & Fitting daily workbooks: the FY 2025-26 files use a DIFFERENT column
+layout than FY 2026-27. Our parsers currently assume fixed column positions and therefore
+read wrong columns on the older files. Fix parsing to locate columns by HEADER TEXT, never
+by fixed index, and apply the correct reconciliation. Do not change FY 2026-27 behaviour.
+
+SCOPE: All 12 FY 2025-26 Pipe & Fitting "… Plant Date Sheet & Monthly Report" workbooks
+(Apr-2025 … Mar-2026).
+
+1) REPORT-11 (pipe daily) — header is on row 5. Resolve these by header text:
+   - Machine = "MACHINE NO." (values like "PIPE M/C - 1"); normalize to the integer N.
+   - Production weight = the standalone column titled exactly "Weight" (the one immediately
+     after "Pcs"). DO NOT use "Ideal Weight (KG)".
+   - Rejection = "Actual Wt (Kg)". "FC" is a separate column — keep it separate, not in rejection.
+   - Pipe type = the FIRST "TYPES" column (CPVC/UPVC/SWR/AGRI). There is a DUPLICATE "TYPES"
+     column further right (~col 22) — ignore it.
+
+2) REPORT-12 (moulding daily) — in FY 2025-26 this is shifted one column LEFT vs FY 2026-27.
+   Resolve by header text:
+   - Find the "Moulding Machine" header → column M (it is col 4 in FY25-26, col 5 in FY26-27).
+   - Output kg = the "Wt in Kgs" sub-column under "Output Production" = column M+5
+     (col 9 in FY25-26, col 10 in FY26-27).
+   - Rejection = the column whose header contains "Actual Rejection" (col 25 in FY25-26,
+     col 26 in FY26-27).
+
+3) SOURCING RULE:
+   - Pipe production & rejection: take from REPORT-11 (daily), validated against Report-13
+     (Report-13 = daily by-type pivot of Report-11; they must tie to the kg). Do NOT use
+     Report-5 for pipe — it is unreliable (it matched in most FY25-26 months but broke in
+     Mar-2026, reading only 49% of the daily log).
+   - Moulding production & rejection: REPORT-12 (daily) is authoritative; Report-5 moulding
+     agrees and may be used only as a cross-check.
+
+4) EMPTY MONTHS: the Aug-2025 workbook is entirely zero (Report-5 and Report-11 both 0).
+   Do
