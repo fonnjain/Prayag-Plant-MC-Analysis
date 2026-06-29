@@ -167,6 +167,31 @@ def test_validate_sums_multi_month_rollup():
     print("ok test_validate_sums_multi_month_rollup")
 
 
+def test_flow_window_suppresses_balance_and_isolates_days():
+    # A sub-monthly window aggregates only its own dated day rows and blanks the
+    # month-level opening/closing stock (a partial window has no stock balance).
+    by = {"CPVC": [_mixer_month(1000.0, [
+        {**_day(8000.0, 7777.0, 7000.0, 10.0), "date": "2026-06-10"},
+        {**_day(4000.0, 3333.0, 3000.0, 5.0),  "date": "2026-06-20"},
+    ])]}
+    comp = compound.build_compilation(by, ["2026-06"], window=("2026-06-10", "2026-06-10"))
+    assert comp["flow"] is True
+    col = next(c for c in comp["cols"] if c["key"] == "CPVC")
+    assert col["flow"] is True
+    assert col["material"] == 7777.0          # ONLY the in-window day
+    assert col["opening"] is None             # stock balance suppressed
+    assert col["closing"] is None
+    assert comp["total"]["opening"] is None    # ...and at the total level
+    assert comp["total"]["closing"] is None
+    # No window = full balance as before.
+    full = compound.build_compilation(by, ["2026-06"])
+    fcol = next(c for c in full["cols"] if c["key"] == "CPVC")
+    assert full["flow"] is False
+    assert fcol["material"] == 7777.0 + 3333.0
+    assert fcol["opening"] == 1000.0 and fcol["closing"] is not None
+    print("ok test_flow_window_suppresses_balance_and_isolates_days")
+
+
 def test_validate_no_rollup_is_na():
     by = {"CPVC": [_mixer_month(0.0, [_day(100.0, 99.0, 95.0, 1.0)])]}
     comp = compound.build_compilation(by, ["2026-06"])
@@ -184,5 +209,6 @@ if __name__ == "__main__":
     test_item_matrix_and_yield()
     test_validate_pass_fail_na()
     test_validate_sums_multi_month_rollup()
+    test_flow_window_suppresses_balance_and_isolates_days()
     test_validate_no_rollup_is_na()
     print("all compound tests passed")

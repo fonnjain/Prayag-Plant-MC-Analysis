@@ -36,8 +36,21 @@
       <option value="{{ m }}" {% if period == m|string %}selected{% endif %}>{{ nm }}</option>
       {% endfor %}
     </optgroup>
+    <optgroup label="Daily flow">
+      <option value="last_updated" {% if period == 'last_updated' %}selected{% endif %}>Last updated day</option>
+      <option value="yesterday" {% if period == 'yesterday' %}selected{% endif %}>Yesterday</option>
+      <option value="last_week" {% if period == 'last_week' %}selected{% endif %}>Last 7 days</option>
+      <option value="last_month" {% if period == 'last_month' %}selected{% endif %}>Last 30 days</option>
+    </optgroup>
   </select>
 </form>
+
+{% if comp.flow %}
+<div class="text-xs text-gray-500 mb-4 -mt-2 px-1 rounded-lg bg-gray-50 border border-gray-100 p-2">
+  Daily flow view: only this window's logbook days are summed. Opening/closing stock
+  (a month-level balance) is shown as “—”, and reconciliation against the monthly rollup is N/A.
+</div>
+{% endif %}
 
 {% if not comp.has_data %}
 <div class="kpi-card p-6 text-center">

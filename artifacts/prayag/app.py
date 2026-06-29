@@ -2759,19 +2759,34 @@ def report_compound_compilation():
     except SheetReadError as e:
         return render_template("sheet_error.html", message=str(e)), 200
 
-    comp = compound_mod.build_compilation(data["by_compound"], data["months"])
-    validation = compound_mod.validate(comp, data["rollup"])
+    # A sub-monthly window (Yesterday / Last 7 days / a single date) is served as
+    # a FLOW slice: only that window's day rows are summed and opening/closing
+    # stock (a month-level balance) is left blank. Reconciliation against the
+    # in-sheet monthly rollup is N/A for a partial window.
+    window = (pinfo["from_iso"], pinfo["to_iso"]) if pinfo.get("sub_monthly") else None
+    comp = compound_mod.build_compilation(data["by_compound"], data["months"], window=window)
+    if window:
+        validation = {
+            "available": False, "status": "NA", "rows": [],
+            "n_pass": 0, "n_fail": 0, "n_na": 0,
+            "note": "Reconciliation runs against the monthly rollup; a daily "
+                    "window shows compound flow only (no stock balance).",
+        }
+    else:
+        validation = compound_mod.validate(comp, data["rollup"])
 
     # Yield: compound consumed by the Pipe plant vs Pipe extruded output (best
     # effort — never blocks the page; pipe output is net-of-rejection so a yield
-    # under 100% is expected).
+    # under 100% is expected). Suppressed in a window view (pipe output below is
+    # whole-month, so the ratio against a windowed "given" would be misleading).
     pipe_output = None
-    try:
-        drecs = get_daily_records(data["months"])[0] if data["months"] else []
-        pipe_output = sum(r.total_count for r in drecs
-                          if r.plant == "PIPE" and not getattr(r, "is_finishing", False))
-    except SheetReadError:
-        pipe_output = None
+    if not window:
+        try:
+            drecs = get_daily_records(data["months"])[0] if data["months"] else []
+            pipe_output = sum(r.total_count for r in drecs
+                              if r.plant == "PIPE" and not getattr(r, "is_finishing", False))
+        except SheetReadError:
+            pipe_output = None
     yield_pct = None
     if pipe_output and comp["pipe_given"]:
         yield_pct = pipe_output / comp["pipe_given"] * 100.0

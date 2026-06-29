@@ -60,6 +60,41 @@ def test_compound_report_renders_pass():
     print("ok: /reports/compound_compilation -> 200, table + PASS badge")
 
 
+def _dated_data():
+    """Two dated logbook days in June so a single-date window can be isolated."""
+    return {
+        "by_compound": {
+            "CPVC": [{"opening": 1000.0, "given_label": "Total Compound given", "days": [
+                {"date": "2026-06-10", "batch": 8000.0, "material": 7777.0, "given": 7000.0,
+                 "loss": 10.0, "pulvizer": 5.0, "chems": {"Resin K-67": 7000.0}},
+                {"date": "2026-06-20", "batch": 4000.0, "material": 3333.0, "given": 3000.0,
+                 "loss": 5.0, "pulvizer": 0.0, "chems": {"Resin K-67": 3000.0}},
+            ]}],
+        },
+        "rollup": {"2026-06": {"CPVC": {"batch": 12000.0, "material": 11110.0, "given": 10000.0}}},
+        "months": ["2026-06"],
+    }
+
+
+def test_compound_report_daily_window_isolates_one_day():
+    client = _install(loader=lambda months: _dated_data())
+    resp = client.get("/reports/compound_compilation?period=2026-06-10")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.get_data(as_text=True)
+    # Only the 2026-06-10 day is summed (material 7,777) — NOT both days (11,110).
+    assert "7,777" in body, "windowed-day figure missing"
+    assert "11,110" not in body, "window leaked the out-of-window day into the total"
+    # Flow view: explicit daily-flow note + N/A reconciliation (the monthly
+    # rollup cannot reconcile a partial window).
+    assert "Daily flow view" in body
+    assert "N/A" in body
+    assert "PASS" not in body
+    # Yield is whole-month, so it is suppressed (—) in a window view rather than
+    # shown as a misleading window-given ÷ month-output ratio.
+    assert "Conversion" in body and "11,110" not in body
+    print("ok: ?period=<iso-date> -> only that day's figures, flow N/A reconciliation")
+
+
 def test_compound_report_read_outage_is_honest():
     def boom(months):
         raise SheetReadError("temporary Google Sheets limit")
@@ -75,5 +110,6 @@ def test_compound_report_read_outage_is_honest():
 
 if __name__ == "__main__":
     test_compound_report_renders_pass()
+    test_compound_report_daily_window_isolates_one_day()
     test_compound_report_read_outage_is_honest()
     print("all compound route tests passed")

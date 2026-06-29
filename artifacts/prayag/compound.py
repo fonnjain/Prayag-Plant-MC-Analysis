@@ -50,8 +50,27 @@ PIPE_KEYS = {"CPVC", "UPVC", "AGRI", "SWR"}
 PASS, FAIL, NA = "PASS", "FAIL", "NA"
 
 
-def _agg_mixer(parses: List[dict]) -> dict:
-    opening = parses[0].get("opening", 0.0) if parses else 0.0
+def _in_window(d: dict, window: Optional[tuple]) -> bool:
+    """True if day ``d`` falls inside an inclusive [start_iso, end_iso] window.
+    No window → every day passes. A day missing its date is excluded in a window
+    (a partial slice cannot honestly include an undated row)."""
+    if not window:
+        return True
+    ds = d.get("date")
+    return bool(ds) and window[0] <= ds <= window[1]
+
+
+def _agg_mixer(parses: List[dict], window: Optional[tuple] = None) -> dict:
+    """Aggregate a compound's mixer-logbook day rows.
+
+    Default (no window) = a month/FY BALANCE: opening from the first month,
+    closing = opening + material − given. With a sub-monthly ``window`` it is a
+    FLOW view: only the window's day rows are summed and opening/closing stock
+    (a point-in-time month figure) are left blank — a partial slice has no
+    meaningful opening/closing balance.
+    """
+    flow = window is not None
+    opening = None if flow else (parses[0].get("opening", 0.0) if parses else 0.0)
     batch = material = given = loss = pulvizer = 0.0
     chems: Dict[str, float] = {}
     days: List[dict] = []
@@ -59,6 +78,8 @@ def _agg_mixer(parses: List[dict]) -> dict:
     for p in parses:
         given_label = p.get("given_label") or given_label
         for d in p.get("days", []):
+            if not _in_window(d, window):
+                continue
             batch += d["batch"]
             material += d["material"]
             given += d["given"]
@@ -67,37 +88,41 @@ def _agg_mixer(parses: List[dict]) -> dict:
             for nm, v in d["chems"].items():
                 chems[nm] = chems.get(nm, 0.0) + v
             days.append(d)
-    closing = opening + material - given
+    closing = None if flow else opening + material - given
     loss_pct = (loss / batch) if batch else None
     return {
-        "kind": "mixer", "opening": opening, "pulvizer": pulvizer, "batch": batch,
-        "material": material, "given": given, "loss": loss, "loss_pct": loss_pct,
-        "closing": closing, "chems": chems, "days": days,
+        "kind": "mixer", "flow": flow, "opening": opening, "pulvizer": pulvizer,
+        "batch": batch, "material": material, "given": given, "loss": loss,
+        "loss_pct": loss_pct, "closing": closing, "chems": chems, "days": days,
         "given_label": given_label or "Total Compound given",
         "has_data": bool(days),
     }
 
 
-def _agg_cg(parses: List[dict]) -> dict:
-    opening = parses[0].get("opening", 0.0) if parses else 0.0
+def _agg_cg(parses: List[dict], window: Optional[tuple] = None) -> dict:
+    flow = window is not None
+    opening = None if flow else (parses[0].get("opening", 0.0) if parses else 0.0)
     purchase = issue = 0.0
     days: List[dict] = []
     for p in parses:
         for d in p.get("days", []):
+            if not _in_window(d, window):
+                continue
             purchase += d["purchase"]
             issue += d["issue"]
             days.append(d)
-    closing = opening + purchase - issue
+    closing = None if flow else opening + purchase - issue
     return {
-        "kind": "cg", "opening": opening, "pulvizer": 0.0, "batch": 0.0,
-        "material": purchase, "given": issue, "loss": 0.0, "loss_pct": None,
-        "closing": closing, "purchase": purchase, "issue": issue,
+        "kind": "cg", "flow": flow, "opening": opening, "pulvizer": 0.0,
+        "batch": 0.0, "material": purchase, "given": issue, "loss": 0.0,
+        "loss_pct": None, "closing": closing, "purchase": purchase, "issue": issue,
         "chems": {}, "days": days, "given_label": "Issued to Fitting",
         "has_data": bool(days),
     }
 
 
-def build_compilation(by_compound: Dict[str, List[dict]], months: List[str]) -> dict:
+def build_compilation(by_compound: Dict[str, List[dict]], months: List[str],
+                      window: Optional[tuple] = None) -> dict:
     """Assemble the full compound-balance compilation.
 
     ``by_compound``: {compound_key: [per-month parse dict, chronological]}.
@@ -108,9 +133,10 @@ def build_compilation(by_compound: Dict[str, List[dict]], months: List[str]) -> 
     total = {k: 0.0 for k in ("opening", "pulvizer", "batch", "material", "given", "loss", "closing")}
     item_matrix: Dict[str, Dict[str, float]] = {}
 
+    flow = window is not None
     for spec in COMPOUNDS:
         parses = by_compound.get(spec["key"], [])
-        bal = _agg_cg(parses) if spec["layout"] == "cg" else _agg_mixer(parses)
+        bal = _agg_cg(parses, window) if spec["layout"] == "cg" else _agg_mixer(parses, window)
         col = dict(spec)
         col.update(bal)
         cols.append(col)
@@ -121,6 +147,10 @@ def build_compilation(by_compound: Dict[str, List[dict]], months: List[str]) -> 
                 item_matrix.setdefault(nm, {})[spec["key"]] = item_matrix.get(nm, {}).get(spec["key"], 0.0) + v
 
     total["loss_pct"] = (total["loss"] / total["batch"]) if total["batch"] else None
+    if flow:
+        # A partial window has no opening/closing stock balance — only flow.
+        total["opening"] = None
+        total["closing"] = None
 
     items: List[dict] = []
     for nm, bycol in item_matrix.items():
@@ -143,6 +173,7 @@ def build_compilation(by_compound: Dict[str, List[dict]], months: List[str]) -> 
         "has_data": any(c["has_data"] for c in cols),
         "pipe_given": pipe_given,
         "fitting_given": fitting_given,
+        "flow": flow,
     }
 
 
