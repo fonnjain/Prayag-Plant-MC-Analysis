@@ -1138,20 +1138,30 @@ def confirmation_claude_review():
                         "review": _claude_reviews[review_ck]})
 
     od = data["overall"].to_dict()
+    # Output is reported per unit (never a single cross-unit sum): "12,345 kg ·
+    # 6,789 Ltr" when the period mixes plants of different units, else one value.
+    _obu = od.get("output_by_unit") or {}
+    if len(_obu) > 1:
+        _out_label = " · ".join(f"{v:,.0f} {u}" for u, v in _obu.items())
+    elif _obu:
+        u, v = next(iter(_obu.items()))
+        _out_label = f"{v:,.0f} {u}"
+    else:
+        _out_label = f"{od['total_count']:,.0f}"
     if od.get("oee_available"):
         metrics_summary = {
             "OEE": f"{od['oee']}%",
             "Availability": f"{od['availability']}%",
             "Performance": f"{od['performance']}%",
             "Quality": f"{od['quality']}%",
-            "Total Output (kg/pcs)": od["total_count"],
+            "Total Output": _out_label,
             "Rejection %": f"{od['rejection_pct']}%",
         }
     else:
         metrics_summary = {
             "Output Efficiency": f"{od['output_efficiency']}%",
             "Utilisation": f"{od['utilisation']}%",
-            "Total Output (kg/pcs)": od["total_count"],
+            "Total Output": _out_label,
             "Rejection %": f"{od['rejection_pct']}%",
         }
 
@@ -1968,7 +1978,7 @@ def _build_report_table(report_id: str, rows, data: dict):
     elif report_id == "injection_summary":
         by_machine = rollup_by_machine(rows)
         oee_av = any(r.has_oee for r in rows)
-        headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Output (pcs)", "Reject %", "Runner %", "Utilisation %"]
+        headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Output (kg)", "Reject %", "Runner %", "Utilisation %"]
         table_rows = []
         chart_labels, chart_values = [], []
         for mc, m in sorted(by_machine.items()):
@@ -2000,7 +2010,7 @@ def _build_report_table(report_id: str, rows, data: dict):
 
     elif report_id == "mould_efficiency":
         by_mould = rollup_by_mould(rows)
-        headers = ["Mould", "Output (pcs)", "Ideal Hrs", "Actual Hrs", "Efficiency %"]
+        headers = ["Mould", "Output (kg)", "Ideal Hrs", "Actual Hrs", "Efficiency %"]
         table_rows = []
         chart_labels, chart_values = [], []
         for mould, m in sorted(by_mould.items()):
@@ -2016,7 +2026,7 @@ def _build_report_table(report_id: str, rows, data: dict):
 
     elif report_id == "tank_summary":
         by_mould = rollup_by_mould(rows)
-        headers = ["Tank Size", "Production (pcs)", "Reject (pcs)", "Reject %"]
+        headers = ["Tank Size", "Production (Ltr)", "Reject (Ltr)", "Reject %"]
         table_rows = []
         chart_labels, chart_values = [], []
         for mould, m in sorted(by_mould.items()):
@@ -2026,7 +2036,7 @@ def _build_report_table(report_id: str, rows, data: dict):
                                 f"{m.rejection_pct_display:.2f}%"])
             chart_labels.append(mould)
             chart_values.append(round(m.total_count, 0))
-        return headers, table_rows, chart_labels, chart_values, "Production (pcs)"
+        return headers, table_rows, chart_labels, chart_values, "Production (Ltr)"
 
     elif report_id == "compound_summary":
         by_compound = {}

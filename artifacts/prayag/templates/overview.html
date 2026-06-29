@@ -106,11 +106,18 @@
     {% endif %}
   </div>
 
-  <!-- Output -->
+  <!-- Output (per unit — output is never summed across units) -->
   <div class="kpi-card p-3">
     <div class="text-xs text-gray-500 mb-1">Total Output{{ info('UNITS') }}</div>
+    {% if o.output_by_unit and o.output_by_unit|length > 1 %}
+    <div class="text-base font-bold leading-tight" style="color:var(--navy)">
+      {% for u, v in o.output_by_unit.items() %}<div>{{ "{:,.0f}".format(v) }} <span class="text-xs font-normal text-gray-400">{{ u }}</span></div>{% endfor %}
+    </div>
+    <div class="text-xs text-gray-400 mt-0.5">by unit</div>
+    {% else %}
     <div class="text-xl font-bold" style="color:var(--navy)">{{ "{:,.0f}".format(o.total_count) }}</div>
-    <div class="text-xs text-gray-400 mt-0.5">units</div>
+    <div class="text-xs text-gray-400 mt-0.5">{{ o.unit or 'units' }}</div>
+    {% endif %}
   </div>
 
   <!-- Plan Attainment -->
@@ -122,13 +129,20 @@
     <div class="text-xs text-gray-400 mt-0.5">vs plan</div>
   </div>
 
-  <!-- Rejection % -->
+  <!-- Rejection % (per unit when mixed — never a cross-unit blended rate) -->
   <div class="kpi-card p-3">
     <div class="text-xs text-gray-500 mb-1">Rejection %{{ info('REJECT_PCT') }}</div>
+    {% if o.is_mixed_unit %}
+    <div class="text-sm font-bold leading-tight" style="color:var(--navy)">
+      {% for u, pct in o.rejection_pct_by_unit.items() %}<div>{{ pct }}% <span class="text-xs font-normal text-gray-400">{{ u }}</span></div>{% endfor %}
+    </div>
+    <div class="text-xs text-gray-400 mt-0.5">by unit</div>
+    {% else %}
     <div class="text-xl font-bold {% if o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
       {{ o.rejection_pct }}%
     </div>
-    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} pcs</div>
+    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} {{ o.unit or 'rejected' }}</div>
+    {% endif %}
   </div>
 
   <!-- Downtime -->

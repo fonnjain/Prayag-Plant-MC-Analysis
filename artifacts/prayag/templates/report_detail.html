@@ -88,12 +88,24 @@
     {% endif %}
   </div>
   <div class="kpi-card p-3 text-center">
-    <div class="text-xs text-gray-500 mb-1">Output{{ info('UNITS') }}</div>
+    <div class="text-xs text-gray-500 mb-1">Output{% if o.unit %} ({{ o.unit }}){% endif %}{{ info('UNITS') }}</div>
+    {% if o.is_mixed_unit %}
+    <div class="text-sm font-bold leading-tight" style="color:var(--navy)">
+      {% for u, v in o.output_by_unit.items() %}<div>{{ "{:,.0f}".format(v) }} <span class="text-xs font-normal text-gray-400">{{ u }}</span></div>{% endfor %}
+    </div>
+    {% else %}
     <div class="text-lg font-bold" style="color:var(--navy)">{{ "{:,.0f}".format(o.total_count) }}</div>
+    {% endif %}
   </div>
   <div class="kpi-card p-3 text-center">
     <div class="text-xs text-gray-500 mb-1">Reject %{{ info('REJECT_PCT') }}</div>
+    {% if o.is_mixed_unit %}
+    <div class="text-sm font-bold leading-tight" style="color:var(--navy)">
+      {% for u, pct in o.rejection_pct_by_unit.items() %}<div>{{ pct }}% <span class="text-xs font-normal text-gray-400">{{ u }}</span></div>{% endfor %}
+    </div>
+    {% else %}
     <div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
+    {% endif %}
   </div>
   {% if o.oee_available %}
   <div class="kpi-card p-3 text-center">

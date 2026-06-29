@@ -1020,9 +1020,11 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
              seg: str, report: dict) -> Tuple[List[Record], dict]:
   """Emit daily rows from the Tank per-item PROD. REPORT.
 
-  Tank output is recorded per item (no machine, no run hours) in pieces, so
-  rows carry ``machine=""`` and ``unit="pcs"``; utilisation/efficiency stay
-  hidden. Distinguishes a genuine no-production period from a parse failure."""
+  Tank output is recorded per item (no machine, no run hours). The sheet reports
+  the same run in litres, pieces and kg; litres is Tank's primary headline unit,
+  so rows carry ``machine=""`` and ``unit="Ltr"`` (pcs/kg kept as secondary on
+  each Record); utilisation/efficiency stay hidden. Distinguishes a genuine
+  no-production period from a parse failure."""
   tab = spec["tab"]
   tabs = list_tabs(file_id, token)
   actual = next((t for t in tabs if str(t).strip().upper() == tab.upper()), None)
@@ -1036,7 +1038,7 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
       str(c).strip() for c in (values[0] if values else []) if str(c).strip()
   ][:40]
   raw = parsers.parse_tank_prod(
-      values, plant=emit, segment=seg, unit="pcs", year_month=ym,
+      values, plant=emit, segment=seg, unit="Ltr", year_month=ym,
       source_file=file_id, source_tab=actual,
   )
   for r in raw:

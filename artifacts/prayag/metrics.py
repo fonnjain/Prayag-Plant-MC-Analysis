@@ -30,7 +30,13 @@ class Record:
     mould: str = ""
     product: str = ""
     material: str = ""            # CPVC / UPVC / AGRI / SWR ...
-    unit: str = "kg"             # kg / pcs / ltr
+    unit: str = "kg"             # the figure's OWN unit: kg / pcs / Ltr. Read per
+                                  # plant from its sheet header; never assumed global.
+    secondary_counts: dict = field(default_factory=dict)
+    # Alternative-unit measures of the SAME production (e.g. TANK records litres as
+    # the primary unit but the sheet also gives the run in pcs and kg → {"pcs":…,
+    # "kg":…}). Display-only: never summed into a rollup total and never used in a
+    # ratio, so cross-unit contamination is impossible.
 
     # --- production ---
     total_count: float = 0.0      # actual output (kg / pcs / ltr)
@@ -145,6 +151,18 @@ class MetricsResult:
     row_count: int = 0
     warnings: List[str] = field(default_factory=list)
 
+    # ---- units ----
+    # ``unit`` is the SOLE unit of the contributing rows (e.g. "kg" for a single
+    # kg plant, "Ltr" for TANK) or "" when the rollup mixes units (the cross-plant
+    # overall). ``output_by_unit`` always carries the per-unit output split so a
+    # mixed rollup is shown per unit, never as a meaningless single number — output
+    # is NEVER summed across units. ``secondary_counts`` are alt-unit views of the
+    # same production (TANK pcs/kg), display-only.
+    unit: str = ""
+    output_by_unit: Dict[str, float] = field(default_factory=dict)
+    reject_by_unit: Dict[str, float] = field(default_factory=dict)
+    secondary_counts: Dict[str, float] = field(default_factory=dict)
+
     # ---- ratings ----
     @property
     def oee_rating(self) -> str:
@@ -243,6 +261,15 @@ class MetricsResult:
             "ideal_hours": round(self.ideal_hours, 1),
             "ideal_output": round(self.ideal_output, 2),
             "total_count": round(self.total_count, 2),
+            "unit": self.unit,
+            "output_by_unit": {k: round(v, 2) for k, v in self.output_by_unit.items()},
+            "reject_by_unit": {k: round(v, 2) for k, v in self.reject_by_unit.items()},
+            "rejection_pct_by_unit": {
+                k: round(_safe_div(self.reject_by_unit.get(k, 0.0), v) * 100, 1)
+                for k, v in self.output_by_unit.items()
+            },
+            "is_mixed_unit": len(self.output_by_unit) > 1,
+            "secondary_counts": {k: round(v, 2) for k, v in self.secondary_counts.items()},
             "reject_count": round(self.reject_count, 2),
             "good_count": round(self.good_count, 2),
             "runner_lumps": round(self.runner_lumps, 2),
@@ -318,6 +345,19 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
         m.power_cost += r.power_cost
         m.solar_cost += r.solar_cost
 
+        # Output is bucketed by the row's OWN unit so a mixed rollup never collapses
+        # into a meaningless single number. total_count above keeps the raw sum for
+        # ratio backward-compatibility, but the UI reads output_by_unit / unit.
+        # ``getattr`` guards against a stale Record deserialized from the Postgres
+        # L2 cache that predates the secondary_counts field (an old pickle lacks the
+        # dataclass default, so a bare attribute access would raise on deploy).
+        _u = (getattr(r, "unit", "") or "").strip()
+        if _u:
+            m.output_by_unit[_u] = m.output_by_unit.get(_u, 0.0) + r.total_count
+            m.reject_by_unit[_u] = m.reject_by_unit.get(_u, 0.0) + r.reject_count
+        for _su, _sv in (getattr(r, "secondary_counts", None) or {}).items():
+            m.secondary_counts[_su] = m.secondary_counts.get(_su, 0.0) + _sv
+
         if r.grain == "daily" and r.shift_len_min > 0:
             # True shift-log row (mixer/shift log): derive worked vs available
             # hours from the time model. These rows also feed OEE below.
@@ -346,6 +386,12 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     m.good_count = m.total_count - m.reject_count
     m.run_time = m.actual_hours * 60.0
     m.shift_len_min = m.ideal_hours * 60.0
+
+    # Sole unit when every contributing row shares one (a single plant/machine);
+    # "" when the rollup mixes units (the cross-plant overall) so the UI shows the
+    # per-unit split instead of one number.
+    _units = {u for u in m.output_by_unit}
+    m.unit = next(iter(_units)) if len(_units) == 1 else ""
 
     m.utilisation = _safe_div(util_run, util_ideal)
     m.output_efficiency = _safe_div(eff_out, m.ideal_output)

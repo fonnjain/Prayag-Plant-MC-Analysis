@@ -94,7 +94,7 @@
     <div class="grid grid-cols-3 gap-2 text-center border-t border-gray-100 pt-3">
       <div>
         <div class="text-sm font-bold text-gray-800">{{ "{:,.0f}".format(m.total_count) }}</div>
-        <div class="text-xs text-gray-400">Output{{ info('UNITS') }}</div>
+        <div class="text-xs text-gray-400">Output ({{ m.unit or 'units' }}){{ info('UNITS') }}</div>
       </div>
       <div>
         <div class="text-sm font-bold {% if m.attainment >= 90 %}text-green-600{% elif m.attainment >= 75 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.attainment }}%</div>

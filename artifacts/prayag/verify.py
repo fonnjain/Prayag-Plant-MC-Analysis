@@ -101,6 +101,7 @@ def build_verification(
                 "output": 0.0,
                 "output_kg": 0.0,
                 "output_pcs": 0.0,
+                "output_ltr": 0.0,
                 "reject": 0.0,
                 "run_hours": 0.0,
                 "breakdown_hours": 0.0,
@@ -113,10 +114,13 @@ def build_verification(
                 "source_ref": r.machine or "(plant total)",
             }
         g["output"] += r.total_count
-        if (r.unit or "").lower() == "kg":
+        _ru = (r.unit or "").lower()
+        if _ru == "kg":
             g["output_kg"] += r.total_count
-        elif (r.unit or "").lower() in ("pcs", "nos", "no", "pieces"):
+        elif _ru in ("pcs", "nos", "no", "pieces"):
             g["output_pcs"] += r.total_count
+        elif _ru in ("ltr", "litre", "litres", "l"):
+            g["output_ltr"] += r.total_count
         g["reject"] += r.reject_count
         g["run_hours"] += r.actual_hours
         g["breakdown_hours"] += getattr(r, "downtime_min", 0.0) / 60.0
@@ -305,7 +309,7 @@ def _check_plant_vs_machines(monthly_rows, tol_pct: float) -> dict:
 
 CSV_HEADER = [
     "plant", "machine", "year_month",
-    "output", "unit", "output_kg", "output_pcs",
+    "output", "unit", "output_kg", "output_pcs", "output_ltr",
     "reject", "run_hours", "breakdown_hours",
     "ideal_hours_used", "ideal_source",
     "source_file_id", "source_sheet", "source_ref",
@@ -324,7 +328,7 @@ def rows_to_csv(result: dict) -> str:
         w.writerow([
             g["plant"], g["machine"], g["year_month"],
             f"{g['output']:.1f}", g["unit"],
-            f"{g['output_kg']:.1f}", f"{g['output_pcs']:.1f}",
+            f"{g['output_kg']:.1f}", f"{g['output_pcs']:.1f}", f"{g['output_ltr']:.1f}",
             f"{g['reject']:.1f}", f"{g['run_hours']:.1f}",
             f"{g['breakdown_hours']:.1f}",
             f"{g['ideal_hours_used']:.1f}", g["ideal_source"],

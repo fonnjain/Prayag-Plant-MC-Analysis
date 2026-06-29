@@ -63,7 +63,7 @@
         <div class="flex items-center justify-between mb-2">
           <div>
             <div class="font-semibold text-gray-800">{{ item.machine }}</div>
-            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} units{{ info('UNITS') }}{% if m.oee_available %} · {{ "{:,.0f}".format(m.downtime_min) }} min DT{{ info('DT') }}{% endif %}</div>
+            <div class="text-xs text-gray-400">{{ "{:,.0f}".format(m.total_count) }} {{ m.unit or 'units' }}{{ info('UNITS') }}{% if m.oee_available %} · {{ "{:,.0f}".format(m.downtime_min) }} min DT{{ info('DT') }}{% endif %}</div>
           </div>
           <div class="ml-2 flex items-center gap-1 flex-shrink-0">
             <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ m.headline_label }}</span>{{ info('OEE' if m.oee_available else 'OUTPUT_EFF') }}

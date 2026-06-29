@@ -28,11 +28,11 @@
   {% if overall.total_count > 0 %}
   <div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Total Production</div>
+      <div class="text-xs text-gray-500 mb-0.5">Total Production{% if overall.unit %} ({{ overall.unit }}){% endif %}</div>
       <div class="font-bold text-base" style="color:var(--navy)">{{ "{:,.0f}".format(overall.total_count) }}</div>
     </div>
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Total Rejection</div>
+      <div class="text-xs text-gray-500 mb-0.5">Total Rejection{% if overall.unit %} ({{ overall.unit }}){% endif %}</div>
       <div class="font-bold text-base text-red-500">{{ "{:,.0f}".format(overall.reject_count) }}</div>
     </div>
     <div>

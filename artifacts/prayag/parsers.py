@@ -642,12 +642,17 @@ def parse_tank_prod(
     """Parse the TANK 'PROD. REPORT' (per-item production log) into daily Records.
 
     The Tank workbook records production per ITEM (size/colour), not per machine:
-    one row per (date, item code) with PRODUCTION IN PCS and REJECTION IN PCS.
-    There is no machine dimension, so emitted Records carry ``machine=""`` (plant
-    + item level only) and ``unit="pcs"``; the item code is kept as the ``mould``
-    so it browses as item detail. No run hours exist, so utilisation/efficiency
-    stay hidden. Columns are detected from the header; an unrecognised layout
-    returns ``[]``.
+    one row per (date, item code) reporting the same run in THREE units —
+    PRODUCTION IN LTR., IN PCS. and IN KG. Litres is Tank's primary headline unit
+    (the 'TANK Ltr. Summary'), so the emitted Record carries ``unit="Ltr"`` and
+    ``total_count`` from the litre column, while pcs/kg are kept in
+    ``secondary_counts`` (display-only, never summed or compared with the kg
+    plants). If a workbook lacks a litre column the parser falls back to pcs then
+    kg as the primary and sets ``unit`` accordingly. There is no machine
+    dimension, so emitted Records carry ``machine=""`` and the item code as the
+    ``mould`` so it browses as item detail. No run hours exist, so
+    utilisation/efficiency stay hidden. Columns are detected from the header; an
+    unrecognised layout returns ``[]``.
     """
     if not values:
         return []
@@ -667,20 +672,42 @@ def parse_tank_prod(
                     cols["size"] = c
                 elif u in ("COLOR", "COLOUR") and "color" not in cols:
                     cols["color"] = c
-                elif "PRODUCTION IN PC" in u and "out" not in cols:
-                    cols["out"] = c
-                elif "REJECTION IN PCS" in u and "rej" not in cols:
-                    cols["rej"] = c
+                elif "REJECT" in u:
+                    if "LTR" in u and "rej_ltr" not in cols:
+                        cols["rej_ltr"] = c
+                    elif "PC" in u and "rej_pcs" not in cols:
+                        cols["rej_pcs"] = c
+                    elif "KG" in u and "rej_kg" not in cols:
+                        cols["rej_kg"] = c
+                elif "LTR" in u and "ltr" not in cols:
+                    cols["ltr"] = c
+                elif "PC" in u and "pcs" not in cols:
+                    cols["pcs"] = c
+                elif "KG" in u and "kg" not in cols:
+                    cols["kg"] = c
             break
-    if header_idx < 0 or "date" not in cols or "out" not in cols:
+    # Primary output unit by precedence: litres → pcs → kg (whatever the sheet has).
+    if "ltr" in cols:
+        out_c, prim_unit, prim_key = cols["ltr"], "Ltr", "ltr"
+    elif "pcs" in cols:
+        out_c, prim_unit, prim_key = cols["pcs"], "pcs", "pcs"
+    elif "kg" in cols:
+        out_c, prim_unit, prim_key = cols["kg"], "kg", "kg"
+    else:
+        return []
+    if header_idx < 0 or "date" not in cols:
         return []
 
     date_c = cols["date"]
-    out_c = cols["out"]
-    rej_c = cols.get("rej", -1)
+    # Reject in the SAME unit as the primary output (never a cross-unit reject %).
+    rej_c = cols.get(f"rej_{prim_key}", -1)
+    if rej_c < 0:
+        rej_c = cols.get("rej_ltr", cols.get("rej_pcs", cols.get("rej_kg", -1)))
     item_c = cols.get("item", -1)
     size_c = cols.get("size", -1)
     color_c = cols.get("color", -1)
+    # Secondary (non-primary) production unit columns, kept for display only.
+    sec_cols = {u: cols[u] for u in ("ltr", "pcs", "kg") if u in cols and u != prim_key}
 
     def g(row, c):
         return row[c] if 0 <= c < len(row) else ""
@@ -697,22 +724,29 @@ def parse_tank_prod(
         key = (day, label)
         a = agg.get(key)
         if a is None:
-            a = {"out": 0.0, "rej": 0.0, "size": size, "color": color}
+            a = {"out": 0.0, "rej": 0.0, "size": size, "color": color,
+                 "sec": {u: 0.0 for u in sec_cols}}
             agg[key] = a
         a["out"] += num(g(row, out_c))
         a["rej"] += num(g(row, rej_c)) if rej_c >= 0 else 0.0
+        for u, c in sec_cols.items():
+            a["sec"][u] += num(g(row, c))
 
+    # Display labels for the secondary units (pcs → "pcs", kg → "kg").
+    _sec_label = {"pcs": "pcs", "kg": "kg", "ltr": "Ltr"}
     recs: List[Record] = []
     for (day, label), a in sorted(agg.items()):
         if a["out"] <= 0 and a["rej"] <= 0:
             continue  # nothing produced — don't fabricate
+        secondary = {_sec_label[u]: v for u, v in a["sec"].items() if v}
         recs.append(Record(
             grain="daily",
             period=year_month,
             date=f"{year_month}-{day:02d}",
             plant=plant,
             segment=segment,
-            unit=unit,
+            unit=prim_unit,
+            secondary_counts=secondary,
             machine="",          # tank workbook has no machine dimension
             mould=label,
             material=a["color"],
