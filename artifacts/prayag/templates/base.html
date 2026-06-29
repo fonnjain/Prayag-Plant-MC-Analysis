@@ -205,32 +205,36 @@
           <option value="last_month" {% if p=='last_month' %}selected{% endif %} style="color:black">Last 30 Days</option>
           <option value="current_fy" {% if p=='current_fy' %}selected{% endif %} style="color:black">Current FY (Apr–Mar)</option>
           <option value="prior_fy" {% if p=='prior_fy' %}selected{% endif %} style="color:black">Prior FY</option>
+          {% set _qs = period_menu.quarters if period_menu else [] %}
+          {% if _qs %}
           <optgroup label="Quarter (FY)" style="color:black">
-            <option value="q1" {% if p=='q1' %}selected{% endif %} style="color:black">Q1 (Apr–Jun)</option>
-            <option value="q2" {% if p=='q2' %}selected{% endif %} style="color:black">Q2 (Jul–Sep)</option>
-            <option value="q3" {% if p=='q3' %}selected{% endif %} style="color:black">Q3 (Oct–Dec)</option>
-            <option value="q4" {% if p=='q4' %}selected{% endif %} style="color:black">Q4 (Jan–Mar)</option>
-          </optgroup>
-          <optgroup label="Month" style="color:black">
-            {% for mn, ml in [('1','Jan'),('2','Feb'),('3','Mar'),('4','Apr'),('5','May'),('6','Jun'),('7','Jul'),('8','Aug'),('9','Sep'),('10','Oct'),('11','Nov'),('12','Dec')] %}
-            <option value="{{ mn }}" {% if p==mn %}selected{% endif %} style="color:black">{{ ml }}</option>
+            {% for q in _qs %}
+            <option value="{{ q.value }}" {% if p==q.value %}selected{% endif %} style="color:black">{{ q.label }}</option>
             {% endfor %}
           </optgroup>
+          {% endif %}
+          {% set _ms = period_menu.months if period_menu else [] %}
+          {% if _ms %}
+          <optgroup label="Month" style="color:black">
+            {% for mo in _ms %}
+            <option value="{{ mo.value }}" {% if p==mo.value %}selected{% endif %} style="color:black">{{ mo.label }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endif %}
           <option value="custom" {% if p=='custom' %}selected{% endif %} style="color:black">Custom…</option>
         </select>
         <button type="submit" class="bg-terra text-white text-xs font-semibold px-3 py-1.5 rounded-lg">Go</button>
       </div>
-      <!-- Custom date inputs (dd-mm-yyyy display; converted to yyyy-mm-dd on submit) -->
+      <!-- Custom date inputs: native date pickers (tap to open a calendar). The
+           value + submit format is ISO yyyy-mm-dd, which parse_period expects;
+           the browser displays it in the device locale. max=today blocks future
+           dates to match the future-aware month/quarter options above. -->
       {% set _fd = request.args.get('from_date','') %}
       {% set _td = request.args.get('to_date','') %}
-      {% set _fv = _fd[8:10] ~ '-' ~ _fd[5:7] ~ '-' ~ _fd[0:4] if _fd|length == 10 else _fd %}
-      {% set _tv = _td[8:10] ~ '-' ~ _td[5:7] ~ '-' ~ _td[0:4] if _td|length == 10 else _td %}
       <div id="custom-dates" class="{% if period != 'custom' %}hidden{% endif %} flex gap-2 mt-1.5">
-        <input type="text" name="from_date" value="{{ _fv }}"
-          placeholder="DD-MM-YYYY" maxlength="10"
+        <input type="date" name="from_date" value="{{ _fd }}" max="{{ today_iso }}"
           class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white"/>
-        <input type="text" name="to_date" value="{{ _tv }}"
-          placeholder="DD-MM-YYYY" maxlength="10"
+        <input type="date" name="to_date" value="{{ _td }}" max="{{ today_iso }}"
           class="flex-1 text-xs rounded-lg px-2 py-1.5 border-0 outline-none" style="background:rgba(255,255,255,0.15);color:white"/>
       </div>
       <!-- Period label + today's date -->
@@ -386,17 +390,6 @@ function handlePeriodChange(sel) {
 
 // Pass current query params to filter form action based on current page
 document.getElementById('filter-form').action = window.location.pathname;
-
-// Convert dd-mm-yyyy text inputs → yyyy-mm-dd before form submission (server expects ISO)
-document.getElementById('filter-form').addEventListener('submit', function() {
-  ['from_date', 'to_date'].forEach(function(name) {
-    var inp = document.querySelector('#filter-form [name="' + name + '"]');
-    if (inp && /^\d{2}-\d{2}-\d{4}$/.test(inp.value)) {
-      var p = inp.value.split('-');
-      inp.value = p[2] + '-' + p[1] + '-' + p[0];
-    }
-  });
-});
 
 syncHeaderOffset();
 window.addEventListener('resize', syncHeaderOffset);

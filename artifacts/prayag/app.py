@@ -55,6 +55,14 @@ from glossary import (
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
 
+
+@app.context_processor
+def _inject_period_menu():
+    """Make the future-aware month/quarter options and today's ISO date available
+    to EVERY template (the period selector lives in base.html, which report pages
+    render without going through _common_ctx)."""
+    return {"period_menu": _period_menu(), "today_iso": _today().isoformat()}
+
 # In-process store: (fingerprint, resolved model) → Claude review text.
 # Keyed by data fingerprint so a changed sheet invalidates the prior review, AND
 # by the resolved model so a fast-tier review is never served when a deep-tier
@@ -106,6 +114,31 @@ def _today() -> datetime.date:
 
 def _fmt(d: datetime.date) -> str:
     return d.strftime("%d-%m-%Y")
+
+
+def _period_menu(today: datetime.date | None = None) -> dict:
+    """Month + quarter dropdown options for the CURRENT FY, with future periods
+    omitted. The FY runs Apr–Mar, so a month/quarter is shown only when its
+    start is on or before the current month — selecting a not-yet-happened
+    period would just show "no data". Months are in FY order (Apr → Mar); each
+    option carries the month-number value parse_period already understands."""
+    today = today or _today()
+    fy_start = today.year if today.month >= 4 else today.year - 1
+    names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    months = []
+    for m in [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]:
+        yr = fy_start if m >= 4 else fy_start + 1
+        if (yr, m) <= (today.year, today.month):
+            months.append({"value": str(m), "label": f"{names[m - 1]} {yr}"})
+    quarters = [
+        {"value": "q1", "label": "Q1 (Apr–Jun)", "start": (fy_start, 4)},
+        {"value": "q2", "label": "Q2 (Jul–Sep)", "start": (fy_start, 7)},
+        {"value": "q3", "label": "Q3 (Oct–Dec)", "start": (fy_start, 10)},
+        {"value": "q4", "label": "Q4 (Jan–Mar)", "start": (fy_start + 1, 1)},
+    ]
+    quarters = [q for q in quarters if q["start"] <= (today.year, today.month)]
+    return {"months": months, "quarters": quarters}
 
 
 def _months_between(f: datetime.date, t: datetime.date) -> list[str]:
