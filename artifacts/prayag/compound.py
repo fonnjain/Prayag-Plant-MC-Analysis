@@ -177,29 +177,53 @@ def build_compilation(by_compound: Dict[str, List[dict]], months: List[str],
     }
 
 
-def month_trend(by_compound: Dict[str, List[dict]], months: List[str]) -> List[dict]:
+def month_trend(by_compound: Dict[str, List[dict]], months: List[str]) -> dict:
     """Per-month series for the FY trend chart.
 
     For each month in ``months`` (chronological), recompute the whole-month
-    balance and return the total compound given (kg) and the average weight-loss
-    %. Pure: re-uses ``build_compilation`` over each month's parses (tagged with
-    ``ym`` at load time), so the trend ties out to the same daily-first numbers
-    the grid shows.
+    balance and return BOTH the 7-compound grand total (given kg + average
+    weight-loss %) AND a per-compound breakdown, so the chart can show WHICH
+    compound is driving an overall month-over-month change — not just the total.
+    Pure: re-uses ``build_compilation`` over each month's parses (tagged with
+    ``ym`` at load time), so every figure ties out to the same daily-first
+    numbers the grid shows.
+
+    Returns ``{months, total, compounds}``:
+    - ``months``    — the chronological ``ym`` keys that actually have data.
+    - ``total``     — ``[{ym, given, loss_pct}]`` grand-total series (7 compounds).
+    - ``compounds`` — ``[{key, label, given:[...], loss_pct:[...]}]`` (the 7
+      in-total compounds, each aligned position-for-position to ``months``). A
+      month a compound never logged is ``given`` ``0`` and ``loss_pct`` ``None``
+      (a gap on the line, never a fake 0%); ``loss_pct`` is also ``None`` for the
+      purchase/issue compound (CPVC F) which has no weight loss.
     """
-    out: List[dict] = []
+    months_out: List[str] = []
+    total: List[dict] = []
+    series: Dict[str, dict] = {
+        spec["key"]: {"key": spec["key"], "label": spec["label"],
+                      "given": [], "loss_pct": []}
+        for spec in COMPOUNDS if spec["in_total"]
+    }
     for ym in months:
         sub = {k: [p for p in plist if p.get("ym") == ym]
                for k, plist in by_compound.items()}
         comp = build_compilation(sub, [ym])
         if not comp["has_data"]:
             continue
-        total = comp["total"]
-        out.append({
+        months_out.append(ym)
+        tot = comp["total"]
+        total.append({
             "ym": ym,
-            "given": round(total["given"] or 0.0, 0),
-            "loss_pct": round((total["loss_pct"] or 0.0) * 100, 2),
+            "given": round(tot["given"] or 0.0, 0),
+            "loss_pct": round((tot["loss_pct"] or 0.0) * 100, 2),
         })
-    return out
+        bykey = {c["key"]: c for c in comp["cols"]}
+        for key, s in series.items():
+            col = bykey.get(key)
+            s["given"].append(round((col.get("given") if col else 0.0) or 0.0, 0))
+            lp = col.get("loss_pct") if col else None
+            s["loss_pct"].append(round(lp * 100, 2) if lp is not None else None)
+    return {"months": months_out, "total": total, "compounds": list(series.values())}
 
 
 def stale_rollup_alerts(by_compound: Dict[str, List[dict]],

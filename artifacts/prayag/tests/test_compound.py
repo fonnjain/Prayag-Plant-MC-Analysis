@@ -195,6 +195,53 @@ def test_flow_window_suppresses_balance_and_isolates_days():
     print("ok test_flow_window_suppresses_balance_and_isolates_days")
 
 
+def test_month_trend_per_compound_breakdown():
+    # The trend returns BOTH the grand total AND a per-compound breakdown, each
+    # aligned position-for-position to the months that have data.
+    by = {
+        "CPVC": [
+            {**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-04"},
+            {**_mixer_month(0.0, [_day(2000.0, 1980.0, 1900.0, 40.0)]), "ym": "2026-05"},
+        ],
+        "UPVC": [
+            {**_mixer_month(0.0, [_day(500.0, 495.0, 480.0, 5.0)]), "ym": "2026-04"},
+            # UPVC has NO May data -> given 0, loss_pct None for that month.
+        ],
+    }
+    trend = compound.month_trend(by, ["2026-04", "2026-05"])
+    assert trend["months"] == ["2026-04", "2026-05"]
+    # Grand-total series still produced.
+    assert [t["ym"] for t in trend["total"]] == ["2026-04", "2026-05"]
+    assert trend["total"][0]["given"] == 950.0 + 480.0
+    # Per-compound series for all 7 in-total compounds (FC excluded).
+    bykey = {c["key"]: c for c in trend["compounds"]}
+    assert set(bykey) == {"CPVC", "UPVC", "AGRI", "SWR", "UPVC_F", "SWR_F", "CPVC_F"}
+    assert "FC" not in bykey
+    # CPVC drifts up Apr->May; UPVC absent in May reads 0 given, None loss.
+    assert bykey["CPVC"]["given"] == [950.0, 1900.0]
+    assert abs(bykey["CPVC"]["loss_pct"][1] - 2.0) < 1e-9   # 40/2000 = 2%
+    assert bykey["UPVC"]["given"] == [480.0, 0.0]
+    assert bykey["UPVC"]["loss_pct"][1] is None
+    # A compound that never logged anything is a flat row of zeros / None.
+    assert bykey["AGRI"]["given"] == [0.0, 0.0]
+    assert bykey["AGRI"]["loss_pct"] == [None, None]
+    print("ok test_month_trend_per_compound_breakdown")
+
+
+def test_month_trend_skips_empty_months():
+    # Months with no data anywhere are dropped, and per-compound arrays stay
+    # aligned to the surviving months only.
+    by = {"CPVC": [
+        {**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-06"},
+    ]}
+    trend = compound.month_trend(by, ["2026-04", "2026-05", "2026-06"])
+    assert trend["months"] == ["2026-06"]
+    bykey = {c["key"]: c for c in trend["compounds"]}
+    assert bykey["CPVC"]["given"] == [950.0]
+    assert len(bykey["CPVC"]["loss_pct"]) == 1
+    print("ok test_month_trend_skips_empty_months")
+
+
 def test_validate_no_rollup_is_na():
     by = {"CPVC": [_mixer_month(0.0, [_day(100.0, 99.0, 95.0, 1.0)])]}
     comp = compound.build_compilation(by, ["2026-06"])
@@ -228,7 +275,7 @@ def test_month_trend_ties_to_aggregate_total():
         ],
     }
     months = ["2026-04", "2026-05"]
-    series = compound.month_trend(by, months)
+    series = compound.month_trend(by, months)["total"]
     assert [s["ym"] for s in series] == months
 
     # Sum of per-month "given" == the aggregated grand TOTAL given.
@@ -255,7 +302,7 @@ def test_month_trend_single_month_and_window():
     ])]}
 
     # Single-month period: exactly one trend point, tying to the month's total.
-    series = compound.month_trend(by, ["2026-06"])
+    series = compound.month_trend(by, ["2026-06"])["total"]
     assert len(series) == 1
     agg = compound.build_compilation(by, ["2026-06"])
     assert series[0]["given"] == round(agg["total"]["given"], 0)
@@ -265,8 +312,9 @@ def test_month_trend_single_month_and_window():
     # contract the app relies on to blank the trend for a sub-monthly window:
     # build_compilation(window=...) is a flow view with no monthly balance to
     # chart, so the trend is suppressed entirely.
-    assert compound.month_trend(by, ["2026-07"]) == []
-    assert compound.month_trend(by, []) == []
+    assert compound.month_trend(by, ["2026-07"])["months"] == []
+    assert compound.month_trend(by, ["2026-07"])["total"] == []
+    assert compound.month_trend(by, [])["total"] == []
     win = compound.build_compilation(by, ["2026-06"], window=("2026-06-10", "2026-06-10"))
     assert win["flow"] is True
     assert win["total"]["opening"] is None and win["total"]["closing"] is None
@@ -344,6 +392,8 @@ if __name__ == "__main__":
     test_validate_pass_fail_na()
     test_validate_sums_multi_month_rollup()
     test_flow_window_suppresses_balance_and_isolates_days()
+    test_month_trend_per_compound_breakdown()
+    test_month_trend_skips_empty_months()
     test_validate_no_rollup_is_na()
     test_month_trend_ties_to_aggregate_total()
     test_month_trend_single_month_and_window()

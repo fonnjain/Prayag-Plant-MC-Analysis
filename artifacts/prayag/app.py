@@ -2830,15 +2830,18 @@ def report_compound_compilation():
     if pipe_output and comp["pipe_given"]:
         yield_pct = pipe_output / comp["pipe_given"] * 100.0
 
-    # Month-over-month FY trend (total compound given per month). Suppressed in a
-    # sub-monthly flow window (no monthly balance to chart).
+    # Month-over-month FY trend — both the grand total AND a per-compound
+    # breakdown (so managers can see WHICH compound is drifting, not just the
+    # total). Suppressed in a sub-monthly flow window (no monthly balance to
+    # chart).
     if window:
-        trend_labels = trend_given = trend_loss = []
+        trend_labels = trend_given = trend_loss = trend_compounds = []
     else:
-        series = compound_mod.month_trend(data["by_compound"], sorted(data["months"]))
-        trend_labels = [_month_disp(s["ym"]) for s in series]
-        trend_given = [s["given"] for s in series]
-        trend_loss = [s["loss_pct"] for s in series]
+        trend = compound_mod.month_trend(data["by_compound"], sorted(data["months"]))
+        trend_labels = [_month_disp(ym) for ym in trend["months"]]
+        trend_given = [t["given"] for t in trend["total"]]
+        trend_loss = [t["loss_pct"] for t in trend["total"]]
+        trend_compounds = trend["compounds"]
 
     return render_template("report_compound.html",
         comp=comp, validation=validation,
@@ -2846,6 +2849,7 @@ def report_compound_compilation():
         trend_labels=_safe_json(trend_labels),
         trend_given=_safe_json(trend_given),
         trend_loss=_safe_json(trend_loss),
+        trend_compounds=_safe_json(trend_compounds),
         period_label=pinfo["label"], period=period_arg,
         month_disps=[_month_disp(m) for m in data["months"]],
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
