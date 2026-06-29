@@ -863,23 +863,27 @@ def _load_daily_cached(plant: str, ym: str, token: str):
 _DAILY_LAYOUTS: dict = {
   "PIPE": [
       {
-          "emit": "PIPE", "tab": "Report-11", "layout": "long",
-          # Production tab resolved by Index DESCRIPTION (keyed by meaning, not the
-          # bare "Report-11" number); falls back to the hardcoded tab if the Index
-          # is unavailable or its report has no matching tab.
-          "resolve": ["m/c & item wise", "production"],
-          # PIPE's utilisation baseline lives in a SEPARATE monthly-summary tab
-          # (Report-5): per-machine Ideal Run Hour/Day (col D), Total Run Days
-          # (col E) and Run Hours (col F). It is read cross-tab and joined to the
-          # daily M/C machines by machine number; utilisation is computed on a
-          # RUN-DAY basis (col F / (col D × col E)) — see _emit_daily.
+          # PIPE production is read from Report-5, the AUTHORITATIVE per-machine
+          # daily matrix: one row per Pipe M/C with per-date Run Hours / Output (KG)
+          # / Rejection (KG) triplets (from col O). Each machine's per-date Output
+          # and Rejection sum EXACTLY to Report-5's own monthly Col G (OUTPUT) and
+          # Col H (REJ) totals, and run hours sum to Col F. Report-11 (the
+          # "M/C & Item Wise Actual Production" log) is deliberately NOT used: it is
+          # an incomplete item-level journal whose per-row weights undercount the
+          # true output (e.g. Pipe M/C-1 Report-11 = 5503 KG vs Report-5 Col G =
+          # 7214 KG), so reading it produced wrong figures.
+          "emit": "PIPE", "tab": "Report-5", "layout": "matrix",
+          # Report-5 holds SEVERAL machine families in one tab (Pipe M/C, Socket,
+          # Mixer, Grinder/Pulverizer, Moulding A01…D07). Only the primary extruder
+          # rows (M/C-n) are PIPE plant output, so keep just those (mc_only): the
+          # auxiliaries are synthesised separately below (is_finishing) and Moulding
+          # is read from its own Report-12 tab — neither must leak into the headline.
+          "mc_only": True,
+          "summary_mc_header": ("eq", "MACHINE"),
+          # Utilisation baseline ALSO comes from Report-5: per-machine Ideal Run
+          # Hour/Day (col D) × Total Run Days (col E); run hours (col F) come from
+          # the matrix itself. Utilisation is RUN-DAY based — see _emit_daily.
           "report5_tab": "Report-5",
-          "long": dict(
-              machine_col=("eq", "MACHINE NO."),
-              out_col=("eq", "WEIGHT"),
-              run_col=("startswith", "RUNNING HOUR"),
-              rej_col=("eq", "ACTUAL WT (KG)"),
-          ),
       },
       {
           "emit": "MOULDING", "tab": "Report-12", "layout": "long",
@@ -887,8 +891,10 @@ _DAILY_LAYOUTS: dict = {
           # Report-12 records moulding OUTPUT only (no run hours), so its
           # utilisation baseline comes from the SAME workbook's Report-5 moulding
           # rows (joined by the bare machine label, e.g. "A01(NU-200)"). Same
-          # run-day basis as PIPE — see _emit_daily.
-          "report5_tab": "Report-5",
+          # run-day basis as PIPE — see _emit_daily. ``r5_runhours`` tells the
+          # _r5_hit branch to take run hours FROM Report-5 (this source has none);
+          # PIPE omits it because its Report-5 matrix already carries per-date hours.
+          "report5_tab": "Report-5", "r5_runhours": True,
           "long": dict(
               machine_col=("startswith", "MOULDING MACHI"),
               out_col=("contains", "WT IN KGS"),
@@ -1234,6 +1240,13 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           mc_header_spec=spec.get("summary_mc_header"),
       )
 
+  # PIPE's Report-5 matrix carries multiple machine families in one tab. Keep
+  # only the primary extruder rows (M/C-n) as PIPE output — the Socket / Mixer /
+  # Grinder / Pulverizer auxiliaries are synthesised separately below (finishing)
+  # and Moulding is read from its own tab, so neither must leak in here.
+  if spec.get("mc_only"):
+      raw = [r for r in raw if _mc_key(r.machine) is not None]
+
   # PTMT runs several processes on one Report-5 matrix; route each machine to
   # its process group and flag grinder/regrind lines as finishing so their KG
   # is excluded from PTMT's plant output (compared within-group, not plant-wide).
@@ -1370,7 +1383,15 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           info = _r5_hit(r.machine)
           nrows = max(rowcount.get(r.machine, 0), 1)
           r.ideal_hours = (info["per_day"] * info["run_days"]) / nrows
-          r.actual_hours = info["run_hours"] / nrows
+          # Run hours: PIPE reads its own per-date run hours from the Report-5
+          # matrix (they already sum to col F), so keep them. Only an output-ONLY
+          # source flagged ``r5_runhours`` (MOULDING's Report-12, which carries NO
+          # run hours of its own) falls back to Report-5's monthly run hours, spread
+          # across its rows so the rollup still reconciles to col F. Gating on the
+          # explicit flag (not a per-row actual_hours==0 test) means a PIPE row with
+          # 0 hours is never silently backfilled, keeping ΣPIPE hours == col F.
+          if spec.get("r5_runhours"):
+              r.actual_hours = info["run_hours"] / nrows
           # Output efficiency = (output / run hours) / Ideal Output Per Hour
           # (Report-5 Col I, per machine — NOT global). Wire the per-machine rate so
           # efficiency computes as (G / F) / I in compute_metrics. A BLANK Col I
