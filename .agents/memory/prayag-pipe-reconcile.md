@@ -1,0 +1,18 @@
+---
+name: PIPE Report-5 ↔ Report-11 reconciliation
+description: Why PIPE headline output/rejection is a date-wise MAX of two sheet sources, not one authoritative tab.
+---
+
+PIPE output & rejection headline = **date-wise MAX over the UNION of (machine, date) cells** from Report-5 (per-machine matrix) and Report-11 (item journal). `pipe_reconcile.reconcile(r5, r11)`; integrated in `sheets._emit_daily` behind PIPE spec flags `pipe_reconcile=True` + `report11_tab="Report-11"`.
+
+**Why:** Neither source alone is complete. Report-5 has authoritative run hours and most machine-days; Report-11 logs machine-days Report-5 omits (and sometimes a higher per-cell figure). Earlier the code trusted Report-5 ALONE ("Report-5 NOT Report-11") which UNDERCOUNTED. Live April 2026 proof: R5=135,634, R11=157,278, reconciled=157,883 out / 13,030 rej. It is a max PER CELL, never a sum of both sources, so no double-count.
+
+**How to apply:**
+- Output and rejection maxima are picked INDEPENDENTLY per cell (a cell can take output from R5 and reject from R11).
+- Both readers are HEADER-BASED (locate columns by text: standalone "Weight" output — NOT "Ideal Weight (KG)" — "Actual Wt (Kg)" reject, "TYPES", "MACHINE NO.", "DATE"). This is what lets ONE reader handle BOTH FY2025-26 and FY2026-27 layouts. Never reintroduce fixed column indices.
+- Type split (CPVC/UPVC/SWR/AGRI) is pro-rata from Report-11's TYPES, scaled to each cell's corrected output. A cell with no R11 type signal = "untyped pickup". Type split is AUDIT-ONLY (`report["pipe_reconcile"]`), never reduces headline; invariant Σ types + untyped == corrected output (build-state #17b enforces).
+- Report-11-only machine-days (no R5 run hours) are appended as daily rows with `actual_hours=0` and flagged — efficiency is understated (output rose, logged run hours did not). Expected, not a bug.
+- Headline EXCLUDES `is_finishing` (grinder/pulverizer aux is a separate segment). Build-state #1/#2 sum non-finishing only; the all-grain sum includes the large finishing aux and is NOT the headline.
+- FY2025-26 prior-year file IDs are wired in `DAILY_SOURCES["PIPE"]` (selectable as the `prior_fy` period). Same workbook feeds PIPE (Report-5↔Report-11) AND MOULDING (Report-12). The header-based readers parse the older layout with no code change. Validated live: Apr-25 PIPE R11=385,135 (reconciled headline 393,784 = R11 + 8,649 R5-only pickup), MOULDING headline=84,552; Mar-26 R11≈321,503 (reconciled 323,116; R5-only 157,436 correctly NOT used). MOULDING grinders (Grinder-n) are is_finishing so they are EXCLUDED from the moulding headline — a moulding total that overshoots by a grinder's KG means you forgot the not-is_finishing filter, not a parse bug.
+- `sources.EMPTY_SOURCES` = `{(plant, "YYYY-MM")}` of wired-but-empty template workbooks (e.g. PIPE 2025-08, all-zero tabs). `_load_daily` short-circuits these to a no-record "empty / awaiting source" report — never read as a real zero-output month (which would drag averages down). Don't delete the file ID; list it here so it's retained but flagged.
+- Build-state ground truth: #1 PIPE May reconciled = 115,745; #17 April = 157,883/13,030; #17b type coherence. Re-measure with `sheets.clear_caches()` first — L1/L2 pickle cache will otherwise serve stale pre-reconcile numbers.

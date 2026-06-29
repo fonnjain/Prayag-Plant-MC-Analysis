@@ -2522,13 +2522,20 @@ def build_state():
     # STATIC: code / config (no I/O)                                      #
     # ------------------------------------------------------------------ #
 
-    # #4  Pipe output uses Report-11 only (no Summary / Report-13 in the sum)
+    # #4  PIPE reconciles Report-5 (run hours + matrix) with Report-11 (type +
+    #     missing machine-days): headline = date-wise max over their union.
     pipe_specs = _sht._DAILY_LAYOUTS.get("PIPE", [])
-    pipe_out_tabs = [s.get("tab", "") for s in pipe_specs if s.get("emit") == "PIPE"]
-    _chk(4, "Pipe daily output tab = Report-11 only (not Summary / Report-13)",
-         pipe_out_tabs == ["Report-11"],
-         "['Report-11']", str(pipe_out_tabs),
-         "overlapping-tab double-count")
+    pipe_emit = next((s for s in pipe_specs if s.get("emit") == "PIPE"), {})
+    _pipe_rc_ok = (
+        pipe_emit.get("tab") == "Report-5"
+        and pipe_emit.get("pipe_reconcile") is True
+        and pipe_emit.get("report11_tab") == "Report-11"
+    )
+    _chk(4, "PIPE daily = Report-5 ↔ Report-11 reconciliation (date-wise max)",
+         _pipe_rc_ok, "tab=Report-5 + pipe_reconcile + report11_tab=Report-11",
+         f"tab={pipe_emit.get('tab')} reconcile={pipe_emit.get('pipe_reconcile')} "
+         f"r11={pipe_emit.get('report11_tab')}",
+         "reconciliation not wired")
 
     # #5  'Last 7 days' is on the daily path
     _chk(5, "'Last 7 days' uses daily path (sub_monthly=True)",
@@ -2615,7 +2622,9 @@ def build_state():
     # ------------------------------------------------------------------ #
     # LIVE DATA: assert ground-truth figures from the live sheets          #
     # ------------------------------------------------------------------ #
-    PIPE_MAY_EXP  = 107_609
+    PIPE_MAY_EXP  = 115_745   # reconciled (date-wise max Report-5 ↔ Report-11)
+    PIPE_APR_EXP  = 157_883   # reconciled April output (audited)
+    PIPE_APR_REJ  = 13_030    # reconciled April rejection (audited)
     MOULD_MAY_EXP = 75_771
     TOL = 0.005
 
@@ -2626,11 +2635,12 @@ def build_state():
 
     if not _tok:
         for _n, _d in [
-            (1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-11 detail rows)"),
-            (2, "PIPE May detail-row sum == Report-11 TOTAL row"),
+            (1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-5 ↔ Report-11 reconciled)"),
+            (2, "PIPE May monthly view uses daily-only reconciled path"),
             (3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)"),
             (6, "HDPE current-month daily rows > 0"),
             (7, "Garden current-month rows > 0  AND  Tank May rows > 0"),
+            (17, f"PIPE April reconciled output ≈ {PIPE_APR_EXP:,} & rejection ≈ {PIPE_APR_REJ:,}"),
         ]:
             _skip(_n, _d, "no Sheets connection", "reconnect integration")
     else:
@@ -2648,17 +2658,20 @@ def build_state():
                  "-", f"ERROR: {_may_err}", "sheet read failed")
             _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,}", False,
                  "-", f"ERROR: {_may_err}", "sheet read failed")
-            _skip(2, "PIPE detail == Report-11 TOTAL row",
+            _skip(2, "PIPE May monthly view uses daily-only reconciled path",
                   f"May read failed: {_may_err}")
         else:
-            _pipe_sum  = sum(r.total_count for r in _rows_may if r.plant == "PIPE")
+            # Headline EXCLUDES is_finishing (grinder/pulverizer/socket/mixer
+            # auxiliaries are a separate finishing segment, not plant output).
+            _pipe_sum  = sum(r.total_count for r in _rows_may
+                             if r.plant == "PIPE" and not r.is_finishing)
             _mould_sum = sum(r.total_count for r in _rows_may if r.plant == "MOULDING")
             _tank_may_n = sum(1 for r in _rows_may if r.plant == "TANK")
 
-            _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-11 detail rows)",
+            _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-5 ↔ Report-11 reconciled)",
                  abs(_pipe_sum - PIPE_MAY_EXP) / PIPE_MAY_EXP <= TOL,
                  f"{PIPE_MAY_EXP:,} ±0.5%", f"{_pipe_sum:,.0f}",
-                 "one-authoritative-tab fix not live")
+                 "reconciliation not live / drift")
 
             _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)",
                  abs(_mould_sum - MOULD_MAY_EXP) / MOULD_MAY_EXP <= TOL,
@@ -2675,7 +2688,8 @@ def build_state():
                 _gd5 = get_data(_IMMD([("period", "5")]))
                 _daily_used5 = _gd5.get("daily_used", False)
                 _gd5_pipe = sum(
-                    r.total_count for r in _gd5.get("rows", []) if r.plant == "PIPE"
+                    r.total_count for r in _gd5.get("rows", [])
+                    if r.plant == "PIPE" and not r.is_finishing
                 )
                 # daily_used must be True; PIPE figure must be close to the
                 # daily-read total (within 1% — quarantine may remove a handful of rows)
@@ -2692,6 +2706,51 @@ def build_state():
             except Exception as _e2:
                 _skip(2, "Monthly May view: daily-only path",
                       f"get_data error: {_e2}")
+
+            # #17  PIPE April reconciliation ground truth (date-wise max of
+            #      Report-5 and Report-11): audited output 157,883 / rej 13,030.
+            try:
+                _rows_apr, _reps_apr, _ = get_daily_records(["2026-04"])
+                _pipe_apr = sum(r.total_count for r in _rows_apr
+                                if r.plant == "PIPE" and not r.is_finishing)
+                _pipe_apr_rej = sum(r.reject_count for r in _rows_apr
+                                    if r.plant == "PIPE" and not r.is_finishing)
+                _apr_ok = (
+                    abs(_pipe_apr - PIPE_APR_EXP) / PIPE_APR_EXP <= TOL
+                    and abs(_pipe_apr_rej - PIPE_APR_REJ) / PIPE_APR_REJ <= TOL
+                )
+                _chk(17,
+                     f"PIPE April reconciled output ≈ {PIPE_APR_EXP:,} & rejection ≈ "
+                     f"{PIPE_APR_REJ:,} (date-wise max Report-5 ↔ Report-11)",
+                     _apr_ok,
+                     f"out≈{PIPE_APR_EXP:,} rej≈{PIPE_APR_REJ:,} ±0.5%",
+                     f"out={_pipe_apr:,.0f} rej={_pipe_apr_rej:,.0f}",
+                     "reconciliation drift")
+
+                # #17b  Type split + untyped pickup must reconcile to the
+                #       corrected output (audit coherence — never lose/invent KG).
+                _apr_rc = None
+                for _rp in (_reps_apr or []):
+                    if isinstance(_rp, dict) and _rp.get("pipe_reconcile"):
+                        _apr_rc = _rp["pipe_reconcile"]
+                        break
+                if _apr_rc:
+                    _au = _apr_rc["audit"]
+                    _alloc = sum(_au["type_totals"].values()) + _au["untyped_kg"]
+                    _ot = _au["out_total"]
+                    _chk("17b",
+                         "PIPE type split + untyped pickup == reconciled output",
+                         _ot > 0 and abs(_alloc - _ot) / _ot <= TOL,
+                         "types+untyped == out_total",
+                         f"{_alloc:,.0f} vs {_ot:,.0f}  "
+                         f"types={sorted(_au['type_totals'])}",
+                         "type allocation loses/invents output")
+                else:
+                    _skip("17b", "PIPE type split coherence",
+                          "no pipe_reconcile audit in April reports")
+            except Exception as _e3:
+                _chk(17, "PIPE April reconciliation ground truth", False,
+                     "-", f"ERROR: {_e3}", "April read/reconcile failed")
 
         # --- Current-month data: GARDEN + TANK ---
         # HDPE May already in _rows_may above (per-date matrix rows from "Daily

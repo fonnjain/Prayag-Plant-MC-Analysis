@@ -211,9 +211,29 @@ DAILY_SOURCES: dict[str, dict] = {
   "PIPE": {
       "folder_ids": ["1eE1xSVAvi8t4wO_eZnCvbxMjQiqBiRG6"],
       "files": {
+          # FY2026-27 (current year).
           "2026-04": "1eNUSktOldFHRtM55VYfLiYp5nLDRk3ovOEdYYKfI0hU",
           "2026-05": "17__f7pP28bIoctVXV-iku3WIlffAuonvRhCaViVu-bA",
           "2026-06": "1uwuhCylN3h9HizK5qNUCH-sjktE3GEH74Y_UeNq6eec",
+          # FY2025-26 (prior year). The header-based Report-5/Report-11/Report-12
+          # readers parse the older FY2025-26 layout with no code change, so these
+          # feed PIPE (Report-5 ↔ Report-11 reconciliation) AND MOULDING (Report-12)
+          # for the prior year. Owned by preeti.chauhan@prayagindia.com.
+          "2025-04": "10GHWEV7pY_qcpFLmXqKwwDtmidAjL6FG0MOtAwUJ484",
+          "2025-05": "13cC3moR19el7Q3pYYNq08P5YXXZBh_lbgxGt9yagrRQ",
+          "2025-06": "1xkWuDcyTegPJCOAzOMdIzBl75xzhXUm2MwXO5TZdkgg",
+          "2025-07": "1zE3D83XSgTE-Z4tuLvwP1bQfnPzEjefqrTOJ7vexix8",
+          # Aug-2025: EMPTY workbook (Report-5 AND Report-11 all zeros) — listed in
+          # EMPTY_SOURCES so it is surfaced as "empty / awaiting source", never a
+          # real zero-output month. The idle detector already yields no rows.
+          "2025-08": "1zVCB6taXefFOR6U3tJh5QjokQCtt9wTJBitQxm0-w2w",
+          "2025-09": "1ATjAaTkoqf3Bz5BHYXdb8fzgc1ah0RDz5L_07KIGdTI",
+          "2025-10": "1zzaNoN1F9LC7FX3FAI2PKMR5Y35MT94hqSBXPoTcMZw",
+          "2025-11": "1oYDIFrPYJ9BhLS35Ss4RUNFUz1gJW5Dsl76uJL_omX8",
+          "2025-12": "1wyMZVW8q0AxSjOS0JKAPLtf4eV57_K_h47t9VwwlTko",
+          "2026-01": "1vaj-Ex3rgWV6QA4VQlgIhOubMyagWv1XeoHBvTS6bU8",
+          "2026-02": "1cdrzhx5hYwU8dLo0AT65YWy66J8SmtF_vKRgzPK2UAI",
+          "2026-03": "1waJo0TZivjwg-JLPdV_JXaBH4oBiP16CqY_Wme5l0ns",
       },
   },
   "PTMT": {
@@ -256,6 +276,14 @@ DAILY_SOURCES: dict[str, dict] = {
       "folder_ids": ["17thg66c3u0DMqy8bXjt6JSYp6sKqQISE"],
       "files": {},
   },
+}
+
+# (plant, "YYYY-MM") workbooks that are wired but KNOWN to be empty templates
+# (all-zero Report tabs). They are listed so the file ID is retained, but the
+# loader skips the read and surfaces them as "empty / awaiting source" — never a
+# real zero-output month (which would wrongly drag down averages).
+EMPTY_SOURCES: set[tuple[str, str]] = {
+  ("PIPE", "2025-08"),
 }
 
 # Friendly names for plants/segments shown in the UI.

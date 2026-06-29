@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import dataclasses
 import time
 import random
 import datetime
@@ -29,6 +30,7 @@ import parsers
 import sources
 import baselines
 import ideal_hours
+import pipe_reconcile
 import store as _store
 
 # ---------------------------------------------------------------------------
@@ -873,6 +875,14 @@ _DAILY_LAYOUTS: dict = {
           # true output (e.g. Pipe M/C-1 Report-11 = 5503 KG vs Report-5 Col G =
           # 7214 KG), so reading it produced wrong figures.
           "emit": "PIPE", "tab": "Report-5", "layout": "matrix",
+          # PIPE headline output/rejection is the DATE-WISE MAX of Report-5 and
+          # Report-11 per (machine, date): neither source is complete on its own
+          # (each misses machine-days the other records), so the corrected figure
+          # = max(R5, R11) over their UNION. Report-11 also carries the pipe TYPE
+          # (CPVC/UPVC/SWR/AGRI). Header-based reader handles both FY layouts.
+          # See pipe_reconcile.py. Run hours / utilisation baseline stay from
+          # Report-5 (Report-11 has none) — a R11-only machine-date has no hours.
+          "pipe_reconcile": True, "report11_tab": "Report-11",
           # Report-5 holds SEVERAL machine families in one tab (Pipe M/C, Socket,
           # Mixer, Grinder/Pulverizer, Moulding A01…D07). Only the primary extruder
           # rows (M/C-n) are PIPE plant output, so keep just those (mc_only): the
@@ -898,6 +908,7 @@ _DAILY_LAYOUTS: dict = {
           "long": dict(
               machine_col=("startswith", "MOULDING MACHI"),
               out_col=("contains", "WT IN KGS"),
+              rej_col=("contains", "ACTUAL REJECTION"),
               runner_col=("startswith", "RUNNER PRODUCE"),
               machine_prefix="MOULDING ",
           ),
@@ -1247,6 +1258,96 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   if spec.get("mc_only"):
       raw = [r for r in raw if _mc_key(r.machine) is not None]
 
+  # PIPE reconciliation: the headline output/rejection is the DATE-WISE MAX of
+  # Report-5 (parsed above as ``raw``) and Report-11 over the UNION of every
+  # (machine, date) either reports. Neither source is complete on its own, so the
+  # max recovers the true total (audited April: R5 135,634 + R11 157,278 →
+  # corrected 157,883 out / 13,030 rej). Report-11 also carries the pipe TYPE;
+  # its proportions are scaled pro-rata to the corrected output (R5-only cells are
+  # "untyped pickup"). Run hours stay from Report-5 only — a Report-11-only
+  # machine-date has output but NO run hours (flagged: efficiency understated).
+  if spec.get("pipe_reconcile"):
+      r11_tab = spec.get("report11_tab", "Report-11")
+      r11 = {}
+      if r11_tab in tabs:
+          r11 = pipe_reconcile.parse_report11(
+              read_values(file_id, r11_tab, token), ym, _mc_key)
+      # Report-5 output/rejection per (machine number, date) from the matrix rows.
+      r5: dict = {}
+      label_for: dict = {}
+      by_key: dict = {}
+      for r in raw:
+          k = _mc_key(r.machine)
+          if k is None:
+              continue
+          d = r5.get((k, r.date))
+          if d is None:
+              d = {"out": 0.0, "rej": 0.0}
+              r5[(k, r.date)] = d
+          d["out"] += r.total_count
+          d["rej"] += r.reject_count
+          label_for.setdefault(k, r.machine)
+          by_key[(k, r.date)] = r
+      corrected, audit = pipe_reconcile.reconcile(r5, r11)
+      r11_only_out: dict = {}
+      for (k, date), c in corrected.items():
+          tgt = by_key.get((k, date))
+          if tgt is not None:
+              # Apply the corrected headline to the existing Report-5 row;
+              # run hours / baseline are untouched.
+              tgt.total_count = c["out"]
+              tgt.reject_count = c["rej"]
+              tgt.material = ""  # headline row is type-agnostic (split is audit-only)
+          else:
+              # Report-11-only machine-date: real output, but no Report-5 run
+              # hours. Append a daily row with actual_hours=0 so the output is
+              # counted while utilisation/efficiency stay suppressed for it.
+              lbl = label_for.get(k, f"PIPE M/C-{k}")
+              if raw:
+                  newr = dataclasses.replace(
+                      raw[0], machine=lbl, date=date, period=date,
+                      actual_hours=0.0, total_count=c["out"],
+                      reject_count=c["rej"], ideal_hours=0.0,
+                      ideal_output=0.0, material="",
+                      source_file=file_id, source_tab=r11_tab,
+                  )
+              else:
+                  newr = Record(
+                      grain="daily", period=date, date=date, plant=emit,
+                      segment=seg, machine=lbl, unit=unit,
+                      total_count=c["out"], reject_count=c["rej"],
+                      source_file=file_id, source_tab=r11_tab,
+                  )
+              raw.append(newr)
+              r11_only_out[k] = r11_only_out.get(k, 0.0) + c["out"]
+      report["pipe_reconcile"] = {
+          "audit": audit,
+          "report11_present": bool(r11),
+          "r5_out": round(sum(d["out"] for d in r5.values()), 1),
+          "r11_out": round(sum(d["out"] for d in r11.values()), 1),
+          "r5_rej": round(sum(d["rej"] for d in r5.values()), 1),
+          "r11_rej": round(sum(d["rej"] for d in r11.values()), 1),
+          "type_totals": {t: round(v, 1) for t, v in audit["type_totals"].items()},
+          "untyped_kg": round(audit["untyped_kg"], 1),
+          "r11_only_machines": {
+              label_for.get(k, f"M/C-{k}"): round(v, 1)
+              for k, v in sorted(r11_only_out.items())
+          },
+      }
+      # Efficiency sanity check (non-blocking): machines whose output includes
+      # Report-11-only production carry output with no matching run hours, so any
+      # output-per-hour / efficiency reading for them is understated.
+      if r11_only_out:
+          names = ", ".join(
+              f"{label_for.get(k, f'M/C-{k}')} (+{v:,.0f} {unit})"
+              for k, v in sorted(r11_only_out.items()))
+          note = (
+              f"{emit} {ym}: {len(r11_only_out)} machine(s) have Report-11-only "
+              f"output with no Report-5 run hours — efficiency is understated for "
+              f"them: {names}."
+          )
+          report.setdefault("notes", []).append(note)
+
   # PTMT runs several processes on one Report-5 matrix; route each machine to
   # its process group and flag grinder/regrind lines as finishing so their KG
   # is excluded from PTMT's plant output (compared within-group, not plant-wide).
@@ -1505,6 +1606,19 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
   file_id = sources.DAILY_SOURCES.get(plant, {}).get("files", {}).get(ym)
   if not file_id:
       return []
+  # Known-empty template (e.g. a prior-year month whose workbook is all zeros):
+  # do NOT read it as a real zero-output month — return an "awaiting source"
+  # report (no records) for each logical plant the workbook would emit.
+  if (plant, ym) in getattr(sources, "EMPTY_SOURCES", set()):
+      return [
+          ([], {
+              "emit": spec["emit"], "ym": ym, "record_count": 0,
+              "empty_source": True,
+              "notes": [f"{spec['emit']} {ym}: source workbook is empty "
+                        "(awaiting data) — not a real zero-output month."],
+          })
+          for spec in _DAILY_LAYOUTS.get(plant, [])
+      ]
   out: List[Tuple[List[Record], dict]] = []
   for spec in _DAILY_LAYOUTS.get(plant, []):
       recs, report = _emit_daily(spec["emit"], ym, file_id, spec, token)
