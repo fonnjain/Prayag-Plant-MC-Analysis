@@ -43,6 +43,7 @@ from narrative import (
 )
 import manifest as manifest_mod
 import store
+import segment_inputs
 import baselines
 import ideal_hours
 import verify
@@ -2764,9 +2765,22 @@ def report_gom_summary():
     trend_labels = [_month_disp(m) for m in months]
     trend_values = [round(by_month[m].total_count, 0) for m in months]
 
+    # Advisory validation (never blocks): GOM figures are recomputed from the
+    # Group-of-Moulding source grid, so they equal the source by construction;
+    # there is no independent daily workbook for an extra cross-check here.
+    validation = {
+        "available": True,
+        "status": "info",
+        "label": "Recomputed from source grid",
+        "note": "Output and rejection are recomputed in Python from the "
+                "Group-of-Moulding summary grid — stored % cells are never trusted. "
+                "No separate daily workbook exists for an extra cross-check.",
+    }
+
     return render_template("report_gom_summary.html",
         band_rows=band_rows, overall=overall.to_dict(),
         trend_labels=_safe_json(trend_labels), trend_values=_safe_json(trend_values),
+        validation=validation,
         period_label=pinfo["label"], period=period_arg,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
@@ -2858,11 +2872,23 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         all_months.add(r.period)
     months = sorted(all_months)
 
+    # Advisory validation (never blocks): this location has only an annual summary
+    # sheet (no daily workbook), so figures are read straight from that sheet and
+    # there is no independent daily figure to reconcile against.
+    validation = {
+        "available": True,
+        "status": "info",
+        "label": "Annual summary source",
+        "note": "Figures come directly from the annual summary sheet for this "
+                "location — there is no daily workbook to cross-check against.",
+    }
+
     return render_template("report_tank_location.html",
         plant=plant, location=location, title=title,
         items=dict(items), item_list=sorted(items.keys()),
         months=months, month_disps=[_month_disp(m) for m in months],
         overall=overall.to_dict(),
+        validation=validation,
         period_label=pinfo["label"], period=period_arg,
         summary_only=True,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
@@ -2917,14 +2943,128 @@ def report_segment_labour():
     months = sorted(wanted_months & {r["month"] for r in all_rows})
     units = sorted(pivot.keys())
 
+    # Group B — manual monthly inputs (power / solar / contractor). These do not
+    # exist in any production sheet; show them per (month, unit) with "awaiting
+    # input" until a manager captures them on /segment-input.
+    seg_months = sorted(wanted_months)
+    manual = _build_segment_inputs_view(seg_months)
+
     return render_template("report_segment_labour.html",
         pivot=dict({u: dict({s: dict(m) for s, m in sv.items()}) for u, sv in pivot.items()}),
         units=units, months=months,
         month_disps=[_month_disp(m) for m in months],
         period_label=pinfo["label"], period=period_arg,
         sources_used=sources_used,
+        manual=manual,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Group B — Segment Labour / Solar / Power manual monthly inputs
+# ---------------------------------------------------------------------------
+_SEG_PLANT_TO_UNIT = {
+    p: uk for uk, plants in segment_inputs.UNIT_PLANTS.items() for p in plants
+}
+
+
+def _seg_input_months() -> list:
+    """All FY months a manager may capture inputs for: prior FY then current FY."""
+    return list(FY_MONTHS_2526) + list(FY_MONTHS)
+
+
+def _unit_prod(months: list) -> dict:
+    """Recompute per-(month, unit) production bucketed by unit-of-measure.
+
+    Daily-first: sums daily-grain output for each unit's plants. Used ONLY for the
+    per-kg power cost; never fabricates — degrades to ``{}`` on a read outage so the
+    cost simply shows as awaiting/uncomputable rather than a wrong number.
+    """
+    if not months:
+        return {}
+    try:
+        rows, _r, _w = get_daily_records(list(months))
+    except SheetReadError:
+        return {}
+    out: dict = {}
+    mset = set(months)
+    for r in rows:
+        if getattr(r, "grain", "daily") != "daily":
+            continue
+        uk = _SEG_PLANT_TO_UNIT.get(r.plant)
+        if not uk:
+            continue
+        m = (r.period or r.date or "")[:7]
+        if m not in mset:
+            continue
+        d = out.setdefault((m, uk), {})
+        uom = (r.unit or "kg")
+        d[uom] = d.get(uom, 0.0) + float(r.total_count or 0.0)
+    return out
+
+
+def _build_segment_inputs_view(months: list) -> dict:
+    """Assemble the manual-input view for the given months (read-only)."""
+    inputs = store.seg_inputs_for(months)
+    prod = _unit_prod(months)
+    view = segment_inputs.build_segment_inputs(months, inputs, prod)
+    view["month_disps"] = {m: _month_disp(m) for m in months}
+    return view
+
+
+@app.route("/segment-input")
+def segment_input_view():
+    """Capture surface for the Group B manual monthly inputs (power/solar/contractor)."""
+    months = _seg_input_months()
+    view = _build_segment_inputs_view(months)
+    return render_template(
+        "segment_input.html",
+        view=view,
+        store_ok=store.AVAILABLE,
+        input_msg=request.args.get("input_msg", ""),
+        period="current_fy",
+        period_label="Segment manual inputs",
+        plant_filter="", segment_filter="", machine_filter="",
+        plant_names=PLANT_NAMES,
+        demo_mode=is_demo_mode(),
+    )
+
+
+@app.route("/segment-input/save", methods=["POST"])
+def segment_input_save():
+    """Persist manual inputs for one (month, unit). Blank fields are omitted so a
+    field stays 'awaiting input' until a real number is entered. Values live ONLY
+    in the app DB — never written back to any Google Sheet."""
+    form = request.form
+    month = (form.get("month", "") or "").strip()
+    unit = (form.get("unit", "") or "").strip()
+    set_by = (form.get("set_by", "") or "").strip()
+    note = (form.get("note", "") or "").strip()
+    if not store.AVAILABLE:
+        return redirect("/segment-input?input_msg=" + quote(
+            "No database configured — saving is disabled."))
+    if not _YM_RE.match(month) or unit not in segment_inputs.UNIT_KEYS:
+        return redirect("/segment-input?input_msg=" + quote("Invalid month or unit."))
+    if not set_by:
+        return redirect("/segment-input?input_msg=" + quote("Please enter your name."))
+    values: dict = {}
+    for f in segment_inputs.fields_for_unit(unit):
+        raw = (form.get(f["key"], "") or "").strip().replace(",", "")
+        if raw == "":
+            continue
+        try:
+            values[f["key"]] = float(raw)
+        except ValueError:
+            return redirect("/segment-input?input_msg=" + quote(
+                f"{f['label']} must be a number."))
+    try:
+        store.seg_input_record(
+            month=month, unit=unit, values=values, set_by=set_by, note=note)
+    except store.StoreError as e:
+        return redirect("/segment-input?input_msg=" + quote(f"Could not save: {e}"))
+    label = segment_inputs.UNIT_LABELS.get(unit, unit)
+    return redirect("/segment-input?input_msg=" + quote(
+        f"Saved {label} for {_month_disp(month)}."))
 
 
 if __name__ == "__main__":

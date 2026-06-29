@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Segment Inputs{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-3 pb-24">
+
+  <!-- Intro -->
+  <div class="mt-3 mb-3 flex items-start gap-2">
+    <a href="/reports/segment_labour" class="text-gray-400 hover:text-gray-600 mt-1">
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </a>
+    <div>
+      <h1 class="text-lg font-bold" style="color:var(--navy)">Segment manual inputs</h1>
+      <p class="text-sm text-gray-600 mt-1">
+        Grid power, electricity &amp; solar generation, tariff rates, and contractor
+        labour are <strong>not</strong> in any production workbook — they must be
+        captured here each month (source: JVVL electricity bill, Solar Reading
+        Details, contractor invoices). Values are saved in this app only and never
+        written back to the Google Sheets. Until a field is entered the report shows
+        it as <em>awaiting input</em>; production figures are unaffected.
+      </p>
+    </div>
+  </div>
+
+  <!-- Flash message -->
+  {% if input_msg %}
+  <div class="mb-3 px-3 py-2 rounded-lg text-sm border"
+       style="background:#FBF3EC;border-color:var(--terra);color:#7A3608">
+    {{ input_msg }}
+  </div>
+  {% endif %}
+
+  {% if not store_ok %}
+  <div class="mb-3 px-3 py-2 rounded-lg text-sm border border-red-300 bg-red-50 text-red-800">
+    The input store is unavailable (no database configured). Values shown are
+    read-only; saving is disabled.
+  </div>
+  {% endif %}
+
+  <div class="text-xs text-gray-500 mb-4">
+    {% if view.n_awaiting > 0 %}
+    <span class="font-medium" style="color:var(--terra)">{{ view.n_awaiting }}</span>
+    of {{ view.n_fields_total }} fields awaiting input across both financial years.
+    {% else %}
+    <span class="text-green-600 font-medium">All {{ view.n_fields_total }} fields captured.</span>
+    {% endif %}
+  </div>
+
+  {% for unit in view.by_unit %}
+  <div class="mb-6">
+    <div class="flex items-center gap-2 mb-2">
+      <div class="w-1 h-5 rounded-full bg-terra flex-shrink-0"></div>
+      <h2 class="text-sm font-bold" style="color:var(--navy)">{{ unit.label }}</h2>
+    </div>
+
+    {% for r in unit.rows %}
+    <form method="post" action="/segment-input/save"
+          class="bg-white border border-gray-200 rounded-lg p-3 mb-2 shadow-sm">
+      <input type="hidden" name="month" value="{{ r.month }}">
+      <input type="hidden" name="unit" value="{{ unit.key }}">
+
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-semibold" style="color:var(--navy)">
+          {{ view.month_disps.get(r.month, r.month) }}
+        </div>
+        {% if r.set_by %}
+        <div class="text-[10px] text-gray-400">
+          last by {{ r.set_by }}{% if r.when_disp %} · {{ r.when_disp }}{% endif %}
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
+        {% for f in unit.fields %}
+        {% set cell = r.cells.get(f.key) %}
+        <div>
+          <label class="block text-[11px] font-medium text-gray-500 mb-0.5">
+            {{ f.label }} <span class="text-gray-300">({{ f.unit }})</span>
+          </label>
+          <input type="number" step="any" min="0" name="{{ f.key }}"
+                 value="{% if cell and not cell.awaiting %}{{ '%g'|format(cell.value) }}{% endif %}"
+                 placeholder="awaiting input"
+                 class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right"
+                 {% if not store_ok %}disabled{% endif %}>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="flex flex-wrap items-end gap-2">
+        <div class="flex-1 min-w-[120px]">
+          <label class="block text-[11px] font-medium text-gray-500 mb-0.5">Saved by</label>
+          <input type="text" name="set_by" placeholder="Your name" value="{{ r.set_by }}"
+                 class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                 {% if not store_ok %}disabled{% endif %}>
+        </div>
+        <div class="flex-1 min-w-[120px]">
+          <label class="block text-[11px] font-medium text-gray-500 mb-0.5">Note (optional)</label>
+          <input type="text" name="note" placeholder="Source / reason" value="{{ r.note }}"
+                 class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                 {% if not store_ok %}disabled{% endif %}>
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 rounded-lg text-sm font-semibold text-white shadow-sm
+                       {% if not store_ok %}opacity-50 cursor-not-allowed{% endif %}"
+                style="background:var(--terra)"
+                {% if not store_ok %}disabled{% endif %}>
+          Save
+        </button>
+      </div>
+      {% if r.per_kg_power is not none %}
+      <div class="text-[10px] text-gray-400 mt-1.5">
+        Per-kg power cost ≈ ₹{{ "%.2f"|format(r.per_kg_power) }}/kg
+        (on {{ "{:,.0f}".format(r.kg_production) }} kg recomputed production).
+      </div>
+      {% endif %}
+    </form>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}

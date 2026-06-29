@@ -24,6 +24,15 @@
   </div>
   {% endif %}
 
+  {% if validation %}
+  <div class="rounded-xl px-3 py-2 mb-3 text-xs flex items-start gap-2"
+       style="background:rgba(31,56,100,0.06);color:var(--navy)">
+    <span class="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+          style="color:#fff;background:var(--navy)">{{ validation.label }}</span>
+    <span class="text-gray-600 leading-snug">{{ validation.note }}</span>
+  </div>
+  {% endif %}
+
   <!-- Overall KPI strip -->
   {% if overall.total_count > 0 %}
   <div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">

@@ -422,6 +422,126 @@ def ideal_overrides_for(month: str) -> Dict[Tuple[str, str], Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Segment manual monthly inputs (Group B — power / solar / contractor)
+# ---------------------------------------------------------------------------
+# These fields do not exist in any production workbook (grid-power amount, solar
+# generation, tariff rates, contractor head-count/wages) and must be captured by a
+# person each month. Append-only: the latest row per (month, unit) wins. The value
+# columns are stored as a JSON blob so the field set can evolve without a schema
+# migration. Degrades to a safe no-op (no inputs) when no store is configured.
+_SEG_INPUT_TABLE = "segment_manual_inputs"
+_seg_input_initialised = False
+
+
+def _init_seg_inputs() -> None:
+    """Create the segment manual-input table if absent (idempotent, lazy)."""
+    global _seg_input_initialised
+    if _seg_input_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_SEG_INPUT_TABLE} (
+        id          BIGSERIAL   PRIMARY KEY,
+        month       TEXT        NOT NULL,
+        unit        TEXT        NOT NULL,
+        values_json TEXT        NOT NULL DEFAULT '{{}}',
+        set_by      TEXT        NOT NULL,
+        note        TEXT        NOT NULL DEFAULT '',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_SEG_INPUT_TABLE}_lookup
+        ON {_SEG_INPUT_TABLE} (month, unit, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _seg_input_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def seg_input_record(
+    *,
+    month: str,
+    unit: str,
+    values: Dict[str, float],
+    set_by: str,
+    note: str = "",
+) -> None:
+    """Append a set of manual values for one (month, unit).
+
+    ``values`` is a mapping of field key → number; blank fields should simply be
+    omitted by the caller (a later save with a field re-included updates it). A
+    name is required and recorded as an attestation — there is no login.
+    """
+    if not (set_by or "").strip():
+        raise StoreError("A name is required.")
+    if not (month or "").strip() or not (unit or "").strip():
+        raise StoreError("month and unit are required.")
+    clean: Dict[str, float] = {}
+    for k, v in (values or {}).items():
+        if v is None:
+            continue
+        f = float(v)
+        if not math.isfinite(f):
+            raise StoreError(f"{k} must be a finite number.")
+        if f < 0:
+            raise StoreError(f"{k} cannot be negative.")
+        clean[k] = f
+    _init_seg_inputs()
+    sql = f"""
+        INSERT INTO {_SEG_INPUT_TABLE} (month, unit, values_json, set_by, note)
+        VALUES (%s,%s,%s,%s,%s)
+    """
+    params = (month, unit, json.dumps(clean), set_by.strip(), (note or "").strip())
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+    except StoreError:
+        raise
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def seg_inputs_for(months: List[str]) -> Dict[Tuple[str, str], Dict]:
+    """Effective manual inputs for the given months.
+
+    Returns ``{(month, unit): {<field>: value, ..., "set_by", "when_disp", "note"}}``
+    — the latest row per (month, unit) wins. Degrades to ``{}`` when no store is
+    configured or no months are requested.
+    """
+    if not AVAILABLE or not months:
+        return {}
+    try:
+        _init_seg_inputs()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT DISTINCT ON (month, unit) *
+                    FROM {_SEG_INPUT_TABLE}
+                    WHERE month = ANY(%s)
+                    ORDER BY month, unit, created_at DESC, id DESC""",
+                (list(months),),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[Tuple[str, str], Dict] = {}
+    for r in rows:
+        shaped = _shape(r)
+        try:
+            vals = json.loads(shaped.get("values_json") or "{}")
+        except (ValueError, TypeError):
+            vals = {}
+        entry: Dict = dict(vals)
+        entry["set_by"] = shaped.get("set_by", "")
+        entry["when_disp"] = shaped.get("when_disp", "")
+        entry["note"] = shaped.get("note", "")
+        out[(r["month"], r["unit"])] = entry
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Verification log (append-only audit trail for the read-only Verification view)
 # ---------------------------------------------------------------------------
 # Recorded only on an explicit "Run & log this verification" action. It captures
