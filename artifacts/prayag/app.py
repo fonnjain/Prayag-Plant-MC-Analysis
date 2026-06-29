@@ -2740,6 +2740,7 @@ def reports_index():
             locations.append({"id": loc, "name": _LOCATION_NAMES.get(loc, loc), "reports": items})
     return render_template("reports.html",
         locations=locations,
+        seg_input_summary=_seg_input_summary(),
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
     )
@@ -3014,6 +3015,33 @@ def _build_segment_inputs_view(months: list) -> dict:
     view = segment_inputs.build_segment_inputs(months, inputs, prod)
     view["month_disps"] = {m: _month_disp(m) for m in months}
     return view
+
+
+def _seg_input_summary() -> list:
+    """Per-FY 'awaiting input' completeness counts for the segment manual inputs.
+
+    Lightweight by design: it reads ONLY the stored inputs and runs the pure
+    ``build_segment_inputs`` tally — it deliberately skips the daily-production read
+    (needed only for per-kg cost, never for the awaiting count). Returns one entry
+    per FY (current first), each ``{fy, n_awaiting, n_fields_total, complete}``,
+    so a prompt can be surfaced without opening the report. Degrades to an empty
+    list when no store is configured (counts would be meaningless).
+    """
+    if not store.AVAILABLE:
+        return []
+    all_months = list(FY_MONTHS) + list(FY_MONTHS_2526)
+    inputs = store.seg_inputs_for(all_months)
+    out: list = []
+    for label, months in (("current_fy", FY_MONTHS), ("prior_fy", FY_MONTHS_2526)):
+        view = segment_inputs.build_segment_inputs(list(months), inputs)
+        fy_label = parse_period({"period": label})["label"]
+        out.append({
+            "fy": fy_label,
+            "n_awaiting": view["n_awaiting"],
+            "n_fields_total": view["n_fields_total"],
+            "complete": view["complete"],
+        })
+    return out
 
 
 @app.route("/segment-input")
