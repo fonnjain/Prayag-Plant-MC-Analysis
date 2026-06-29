@@ -12,7 +12,10 @@ reconciliation reference only. Covers:
 - raw-material item matrix rollup and ordering,
 - the yield split (Pipe-extrusion compounds vs Fitting compounds),
 - validate() PASS within tol, FAIL beyond it, NA when the rollup lacks a figure,
-- validate() multi-month rollup summing.
+- validate() multi-month rollup summing,
+- the closing-stock arbiter: verdict "daily" when the published closing ties out
+  to the daily flows but NOT to the understated rollup cells (April/May pattern),
+  and NO diagnosis when the rollup is self-consistent (June control).
 
 Pure / no network — fixture parse dicts only.
 
@@ -270,6 +273,68 @@ def test_month_trend_single_month_and_window():
     print("ok test_month_trend_single_month_and_window")
 
 
+def test_validate_arbiter_understated_rollup_verdict_daily():
+    # Reproduces the April/May understated-rollup pattern for SWR / AGRI F: the
+    # daily Mixer-Logbook detail carries the true flows, the sheet's published
+    # period-closing stock ties out to those daily flows, but the rollup's own
+    # monthly Batch/Material/Given cells are understated and would imply a
+    # different (lower) closing. The arbiter must declare the daily detail
+    # authoritative.
+    by = {"SWR_F": [
+        _mixer_month(1000.0, [_day(3000.0, 2900.0, 2400.0, 100.0)]),  # April
+        _mixer_month(9999.0, [_day(3000.0, 2900.0, 2400.0, 100.0)]),  # May (opening ignored)
+    ]}
+    comp = compound.build_compilation(by, ["2026-04", "2026-05"])
+    col = next(c for c in comp["cols"] if c["key"] == "SWR_F")
+    # Daily-flow closing = first-opening + Σmaterial − Σgiven.
+    assert col["closing"] == 1000.0 + 5800.0 - 4800.0  # == 2000
+
+    rollup = {
+        # Understated monthly cells; published closing carried from daily flows.
+        "2026-04": {"SWR_F": {"opening": 1000.0, "batch": 2000.0, "material": 2000.0,
+                              "given": 2400.0, "closing": 600.0}},
+        "2026-05": {"SWR_F": {"batch": 2000.0, "material": 2000.0,
+                              "given": 2400.0, "closing": 2000.0}},
+    }
+    res = compound.validate(comp, rollup, tol=0.005)
+    # The understated material/given cells must trip a FAIL...
+    assert res["status"] == compound.FAIL
+    # ...and the arbiter must emit exactly one "daily" verdict for SWR / AGRI F.
+    assert len(res["diagnoses"]) == 1
+    diag = res["diagnoses"][0]
+    assert diag["compound"] == "SWR / AGRI F"
+    assert diag["verdict"] == "daily"
+    # The published closing (2000) is cited, not the rollup-self closing (200).
+    assert "2,000 kg" in diag["text"]
+    assert "200 kg" in diag["text"]
+    print("ok test_validate_arbiter_understated_rollup_verdict_daily")
+
+
+def test_validate_arbiter_self_consistent_rollup_no_diagnosis():
+    # Control (June): the rollup's own Batch/Material/Given cells reconcile to its
+    # OWN published closing stock, even though they differ from the daily detail.
+    # Because the rollup is self-consistent, the arbiter must NOT declare the daily
+    # detail authoritative — no diagnosis is emitted (even though a check FAILs).
+    by = {"SWR_F": [_mixer_month(1000.0, [_day(3000.0, 5800.0, 4800.0, 100.0)])]}
+    comp = compound.build_compilation(by, ["2026-06"])
+    col = next(c for c in comp["cols"] if c["key"] == "SWR_F")
+    assert col["closing"] == 1000.0 + 5800.0 - 4800.0  # == 2000
+
+    rollup = {
+        # material − given = 3000 − 2000 = 1000, so opening(1000)+1000 = 2000 ==
+        # the published closing: the rollup reconciles with itself.
+        "2026-06": {"SWR_F": {"opening": 1000.0, "batch": 3000.0, "material": 3000.0,
+                              "given": 2000.0, "closing": 2000.0}},
+    }
+    res = compound.validate(comp, rollup, tol=0.005)
+    # The differing material/given still FAIL the cell-level reconciliation...
+    assert res["status"] == compound.FAIL
+    assert res["n_fail"] > 0
+    # ...but the arbiter stays silent because the rollup is self-consistent.
+    assert res["diagnoses"] == []
+    print("ok test_validate_arbiter_self_consistent_rollup_no_diagnosis")
+
+
 if __name__ == "__main__":
     test_mixer_balance_identity()
     test_cg_purchase_issue_identity()
@@ -282,4 +347,6 @@ if __name__ == "__main__":
     test_validate_no_rollup_is_na()
     test_month_trend_ties_to_aggregate_total()
     test_month_trend_single_month_and_window()
+    test_validate_arbiter_understated_rollup_verdict_daily()
+    test_validate_arbiter_self_consistent_rollup_no_diagnosis()
     print("all compound tests passed")
