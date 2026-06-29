@@ -2578,7 +2578,7 @@ _REPORT_CATALOGUE = [
 ]
 
 _LOCATION_ORDER = ["KH", "Bhiwari", "VN", "WB", "ALL"]
-_LOCATION_NAMES = {"KH": "Khandala", "Bhiwari": "Bhiwari", "VN": "Vasna", "WB": "Wambori", "ALL": "All Locations"}
+_LOCATION_NAMES = {"KH": "Kaharani", "Bhiwari": "Bhiwadi (RICO)", "VN": "Varanasi", "WB": "West Bengal", "ALL": "All Locations"}
 
 
 @app.route("/reports")
@@ -2661,12 +2661,12 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
 
 @app.route("/reports/tank_vn")
 def report_tank_vn():
-    return _tank_location_report("tank_vn", "TANK_VN", "VN", "Tanks (Vasna)")
+    return _tank_location_report("tank_vn", "TANK_VN", "VN", "Tanks (Varanasi)")
 
 
 @app.route("/reports/tank_wb")
 def report_tank_wb():
-    return _tank_location_report("tank_wb", "TANK_WB", "WB", "Tanks (Wambori)")
+    return _tank_location_report("tank_wb", "TANK_WB", "WB", "Tanks (West Bengal)")
 
 
 @app.route("/reports/tank_kh")
