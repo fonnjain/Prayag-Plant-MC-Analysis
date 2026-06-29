@@ -39,3 +39,22 @@ columns — that would lose the only rejection figure the sheet provides.
 A cleaner long-term fix would separate daily rejection from the monthly-summary
 rejection column so single-day views aren't distorted, but that is a parser /
 data-model change, not a validity-tier change.
+
+# The empty-day skip must NOT drop a reject-only last day
+
+`parse_daily_matrix` skips empty days. The guard must be
+`if run <= 0 and out <= 0 and rej <= 0: continue` — NOT just run/output.
+
+**Why:** because the whole month's rejection lands on the last day's row (above),
+a machine that did NOT run/produce on the month's final calendar day still owns
+that lumped rejection there. A `run<=0 and out<=0` guard skipped that row and
+silently zeroed the machine-month rejection. This was the PTMT 80-1 May/June bug:
+April read correctly only because 80-1 happened to produce on Apr 30; in May/June
+it was idle on the last day so its rejection vanished.
+
+**How to apply:** keep rejection in the empty-day guard. Normal date-groups have
+no per-date reject column (`rej_c == -1` → `rej = 0`), so they behave unchanged —
+a fully empty day is still dropped, no fabricated rows. Regression coverage:
+`test_matrix_keeps_reject_only_last_day_when_machine_idle` and
+`test_matrix_no_reject_column_does_not_fabricate_zero_rows` in
+`tests/test_daily_parsers.py`.

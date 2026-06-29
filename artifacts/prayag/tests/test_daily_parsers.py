@@ -297,6 +297,59 @@ def test_mc_key_joins_main_machines_only():
     print("PASS: _mc_key joins only M/C-n and MACHINE-n, ignoring auxiliary/die rows")
 
 
+def test_matrix_keeps_reject_only_last_day_when_machine_idle():
+    # PTMT/HDPE matrices append ONE monthly "Actual Rejection Weight" column
+    # inside the LAST date-group's span, so the whole month's rejection lands on
+    # the last day's row. A machine that did NOT run on that last day (run=0,
+    # output=0 in the last group) still owns that rejection — the row must be
+    # kept, not dropped as an empty day, or its machine-month reject reads 0.
+    # This is the PTMT 80-1 May/June bug (Apr worked only because it produced on
+    # the last day).
+    values = [
+        ["MACHINE", "Apr, 1", "", "Apr, 2", "", "", "", ""],
+        ["",        "RUN HRS", "OUTPUT", "RUN HRS", "OUTPUT",
+         "Wt in Kgs", "Actual Rejection Weight (in Kgs)", "100 % Wastage"],
+        # IDLE-1 ran day 1, nothing on the last day, but carries monthly reject.
+        ["IDLE-1",  "8", "100", "0", "0", "0", "55.1", "0"],
+        # RAN-1 also produced on the last day — already worked before the fix.
+        ["RAN-1",   "8", "120", "8", "90", "0", "23.3", "0"],
+    ]
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-05",
+        source_file="f", source_tab="Report-5",
+    )
+    from collections import defaultdict
+    rej = defaultdict(float); out = defaultdict(float)
+    for r in recs:
+        rej[r.machine] += r.reject_count
+        out[r.machine] += r.total_count
+    assert rej["PTMT IDLE-1"] == 55.1, \
+        f"idle-on-last-day machine must keep its lumped monthly reject, got {rej['PTMT IDLE-1']}"
+    assert out["PTMT IDLE-1"] == 100.0, "output unchanged (only day 1 produced)"
+    assert rej["PTMT RAN-1"] == 23.3, rej["PTMT RAN-1"]
+    print("PASS: matrix keeps the reject-only last-day row when a machine is idle "
+          "on the month's final day")
+
+
+def test_matrix_no_reject_column_does_not_fabricate_zero_rows():
+    # A group with NO reject column (rej_c=-1 → rej=0) must still drop a fully
+    # empty day — the fix only retains rows whose rejection is genuinely non-zero.
+    values = [
+        ["MACHINE", "Apr, 1", "", "Apr, 2", ""],
+        ["",        "RUN HRS", "OUTPUT", "RUN HRS", "OUTPUT"],
+        ["M/C-1",   "8", "100", "0", "0"],   # day 2 fully empty → dropped
+    ]
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Report-5",
+    )
+    dates = {r.date for r in recs}
+    assert dates == {"2026-04-01"}, f"empty day must still be dropped, got {dates}"
+    print("PASS: matrix still drops fully-empty days when no reject column exists")
+
+
 if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
@@ -308,4 +361,6 @@ if __name__ == "__main__":
     test_long_date_day_all_formats()
     test_matrix_mc_header_spec_picks_canonical_over_alias()
     test_mc_key_joins_main_machines_only()
+    test_matrix_keeps_reject_only_last_day_when_machine_idle()
+    test_matrix_no_reject_column_does_not_fabricate_zero_rows()
     print("\nAll daily parser/normalisation unit tests passed.")

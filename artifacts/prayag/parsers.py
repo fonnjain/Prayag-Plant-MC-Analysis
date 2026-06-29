@@ -492,8 +492,16 @@ def parse_daily_matrix(
             run = num(row[run_c]) if 0 <= run_c < len(row) else 0.0
             out = num(row[out_c]) if 0 <= out_c < len(row) else 0.0
             rej = num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
-            if run <= 0 and out <= 0:
-                continue  # day not yet produced — don't fabricate
+            if run <= 0 and out <= 0 and rej <= 0:
+                # Day not yet produced — don't fabricate. But a day carrying ONLY
+                # rejection is real data, not a blank: PTMT/HDPE matrices append a
+                # single monthly "Actual Rejection Weight" column inside the LAST
+                # date-group's span, so the whole month's rejection lands on the
+                # last day's row. A machine that didn't run on that last day still
+                # owns that rejection — skipping the row here would silently drop
+                # it (the machine-month reject would read 0 even though the sheet
+                # has it), so keep any row whose rejection is non-zero.
+                continue
             recs.append(Record(
                 grain="daily",
                 period=year_month,
@@ -1535,7 +1543,10 @@ def parse_index(rows: List[list]) -> List[dict]:
         units, primary = _index_units(desc)
         reports.append({
             "report": rep,
-            "report_key": _index_norm(rep),
+            # Space-insensitive key so "Report-8 (A)" and "Report-8(A)" map to
+            # one identity — prevents false added/removed change-flags across
+            # months from cosmetic spacing edits in the Index.
+            "report_key": re.sub(r"\s+", "", _index_norm(rep)),
             "sno": cell(row, "sno"),
             "frequency": freq,
             "frequency_class": fclass,

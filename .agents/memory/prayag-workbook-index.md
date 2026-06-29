@@ -1,45 +1,47 @@
 ---
-name: Prayag Workbook Index layer
-description: How the per-workbook "Index" tab drives tab metadata, by-description resolution, and month-over-month change flags.
+name: Prayag workbook Index tab as authoritative tab-metadata
+description: How the Index tab drives description-keyed tab resolution, and the hard rule that figures must never depend on an unverified Index.
 ---
 
-# Workbook Index as authoritative tab metadata
+# The Index tab is advisory metadata, never on a figure's critical path
 
-Each PTMT / Pipe&Fitting daily workbook ships an "Index" sheet documenting every
-Report-N tab (description, frequency, owner, include/feeds). The dashboard treats
-it as the source of truth for what each tab MEANS.
+Each PTMT / Pipe&Fitting Google-Sheets workbook has its own "Index" tab — the
+authoritative description of every Report-N tab. The app reads it to: key tabs by
+(plant + report DESCRIPTION) not bare number (the same number means different
+things across workbooks), drive daily-slicing by frequency, infer unit from the
+description, surface unwired tabs on /sources, and flag month-over-month changes.
 
-- **Key tabs by (plant + description), never bare number.** The same "Report-N"
-  number means different things across workbooks (e.g. PIPE Report-12 = Moulding
-  production, PTMT Report-12 = Wastage Mgmt). `resolve_report_tab` matches by
-  description keywords and falls back to the configured hardcoded tab, so figures
-  never depend on the Index being present/correct.
+**The hard rule:** a production FIGURE must never silently change based on the
+Index. `sheets.resolve_report_tab(plant, keywords, fallback, ...)` may only switch
+the daily-production tab away from the configured `fallback` when it can
+POSITIVELY VERIFY (via `list_tabs`) that the Index-named tab exists.
 
-- **Frequency governs slicing.** `resolve_report_tab(require_sliceable=True)` is
-  the default: daily ingestion may ONLY resolve to a Daily (sliceable) report, so
-  a weekly/monthly snapshot tab that shares description keywords can never be
-  picked for per-day figures. This is the enforcement point for "only Daily
-  sliceable" — do not remove the gate.
+**Why:** an earlier version returned `(cand, True)` whenever the tab list was
+unavailable (offline / transient `list_tabs` failure), trusting an unverified
+Index id even when it differed from the fallback — its comment claimed "only if
+it differs by spacing" but the code didn't enforce that. A transient read could
+then point ingestion at a wrong/non-existent tab and zero out figures.
 
-- **Change-flag baseline is keyed by (plant, report_key), NOT file_id.**
-  **Why:** every month is a NEW workbook file, so a file_id key would make every
-  month look like first-sight and never detect a change. The plant-level key lets
-  the engine compare this month's Index against the previously-seen desc/frequency.
-  First sight is baselined silently (not flagged); on conflict the baseline's
-  desc/frequency are LEFT INTACT (only observed_at/file_id refresh) so a genuine
-  desc/frequency change keeps flagging. Tradeoff: a legitimate permanent change
-  flags forever (no ack/rebaseline UI was built — acceptable as a strict alert,
-  and ingestion is unaffected because resolution is by description, not baseline).
+**How to apply:** when tab listing is unavailable, keep the fallback (return
+`fallback, False`). The ONLY safe offline switch is when the candidate equals the
+fallback modulo spacing — a no-op — and even then return the known-good
+configured fallback string. `require_sliceable=True` additionally bars resolving
+daily ingestion to a weekly/monthly snapshot report. Degradation: no Index tab /
+read failure → `[]`; no `DATABASE_URL` → change-tracking is a no-op.
 
-- **Resolution falls back to configured tab.** For all CURRENT tabs resolved ==
-  configured, so wiring it into `_emit_daily` changed no figures. PTMT production
-  (Report-6 "...KG & Pcs") has no bare tab (split into Report-6 (A/B/C)), so its
-  resolver correctly falls back; PTMT OEE stays on the Report-5 matrix.
+# Report-5 sub-blocks and report_key identity
 
-- **`/sources` surfaces the full catalogue** with status wired / available (tab
-  exists, not ingested) / documented (in Index, no matching tab in this workbook).
+Report-5's first machine family ("Pipe M/C") lives on the MAIN report row's
+Include; the other two families (Mixer/Grinder/Pulverizer, Moulding M/C) are
+continuation rows (blank "Reports" cell) folded in as `sub_blocks`. So Report-5
+has 2 sub_blocks, not 3. Frequency is a merged cell (blank = inherit from the row
+above); PTMT Report-12's frequency ("Every Monday") is mis-typed into the Types
+column and is recovered from there.
 
-**Gotcha:** `app.py` imports sheet functions by NAME (`from sheets import ...`),
-it does NOT bind a `sheets` module. A broad `except Exception` once masked a
-`NameError` from calling `sheets.index_catalogue`; the builder now catches
-`SheetReadError` narrowly and logs unexpected errors via `logging`.
+`report_key` is space-insensitive (`re.sub(r"\s+","", ...)`) so "Report-8 (A)"
+and "Report-8(A)" are one identity — otherwise cosmetic spacing edits in the Index
+produce false added/removed change-flags month-over-month. The change-flag
+baseline (store.index_baseline, keyed UNIQUE(plant, report_key)) records first
+sight WITHOUT flagging; only a later description/frequency change flags.
+
+Tests: `tests/test_index_parser.py`, `tests/test_resolve_report_tab.py`.

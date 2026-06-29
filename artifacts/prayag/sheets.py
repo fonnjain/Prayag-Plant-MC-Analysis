@@ -1597,10 +1597,14 @@ def resolve_report_tab(plant: str, keywords, fallback: str,
           real = title_norm.get(_norm_tab(cand))
           if real:
               return real, True
-          # No tab list (offline) — trust the Index id but only if it differs
-          # from the fallback by nothing more than spacing.
-          if not titles and cand:
-              return cand, True
+          # Tab listing unavailable (offline / transient list_tabs failure): we
+          # cannot verify the Index-named tab actually exists, so we MUST keep
+          # the configured fallback — a figure must never depend on an
+          # unverified Index id. The only safe switch is when the candidate is
+          # the SAME tab as the fallback modulo spacing (a no-op), in which case
+          # we still return the known-good configured fallback string.
+          if not titles and cand and _norm_tab(cand) == _norm_tab(fallback):
+              return fallback, True
   return fallback, False
 
 
