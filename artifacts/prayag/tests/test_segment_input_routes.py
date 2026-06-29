@@ -66,6 +66,51 @@ def test_segment_labour_shows_per_kg_power():
     print("ok: /reports/segment_labour -> manual panel + per-kg power 4.00")
 
 
+def _fill_all(month):
+    """Every applicable field for every unit, for one month — a fully-captured month."""
+    import segment_inputs as si
+    out = {}
+    for uk in si.UNIT_KEYS:
+        out[(month, uk)] = {f["key"]: 1.0 for f in si.fields_for_unit(uk)}
+    return out
+
+
+def test_seg_input_summary_lists_awaiting_months():
+    import segment_inputs as si
+
+    store.AVAILABLE = True
+    # Fully capture only the first current-FY month; every other month awaits.
+    filled_month = appmod.FY_MONTHS[0]
+    store.seg_inputs_for = lambda months: _fill_all(filled_month)
+
+    summary = appmod._seg_input_summary()
+    cur = summary[0]  # current_fy is first
+
+    months = [m["month"] for m in cur["awaiting_months"]]
+    assert filled_month not in months, months          # captured month omitted
+    # Every other current-FY month present, in FY order.
+    expected = [m for m in appmod.FY_MONTHS if m != filled_month]
+    assert months == expected, (months, expected)
+    # disp is the short month name (no year).
+    assert all(len(m["disp"]) <= 3 for m in cur["awaiting_months"])
+    print("ok: _seg_input_summary lists awaiting months, omits captured")
+
+
+def test_reports_banner_shows_awaiting_months():
+    store.AVAILABLE = True
+    store.seg_inputs_for = lambda months: {}
+    appmod.get_daily_records = lambda months: ([], [], [])
+    client = _client()
+    resp = client.get("/reports")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.get_data(as_text=True)
+    assert "awaiting" in body
+    # The first current-FY month's short name appears in the banner month list.
+    short = appmod._month_short(appmod.FY_MONTHS[0])
+    assert short in body, short
+    print("ok: /reports banner surfaces specific awaiting months")
+
+
 def test_gom_and_tank_have_validation_badge():
     client = _client()
     g = client.get("/reports/gom_summary?period=prior_fy")

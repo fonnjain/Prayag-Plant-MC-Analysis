@@ -24,6 +24,13 @@
       <div class="text-xs text-gray-500 mt-0.5 leading-snug">
         {% for fy in seg_pending %}{% if not loop.first %} · {% endif %}<span class="font-semibold">{{ fy.n_awaiting }}</span> of {{ fy.n_fields_total }} awaiting for {{ fy.fy }}{% endfor %}
       </div>
+      {% set ns = namespace(any_months=false) %}
+      {% for fy in seg_pending %}{% if fy.awaiting_months %}{% set ns.any_months = true %}{% endif %}{% endfor %}
+      {% if ns.any_months %}
+      <div class="text-xs text-gray-500 mt-1 leading-snug">
+        {% for fy in seg_pending %}{% if fy.awaiting_months %}{% if not loop.first %} · {% endif %}<span class="text-gray-400">{{ fy.fy }}:</span> {{ fy.awaiting_months | map(attribute='disp') | join(', ') }} awaiting{% endif %}{% endfor %}
+      </div>
+      {% endif %}
     </div>
     <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#C55A11" stroke-width="2" class="flex-shrink-0">
       <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>

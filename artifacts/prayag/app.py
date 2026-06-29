@@ -161,6 +161,14 @@ def _month_disp(ym: str) -> str:
         return ym
 
 
+def _month_short(ym: str) -> str:
+    """Short month name ('Apr') — used where the FY already gives the year context."""
+    try:
+        return datetime.date(int(ym[:4]), int(ym[5:7]), 1).strftime("%b")
+    except (ValueError, IndexError):
+        return ym
+
+
 def _fmt_age(seconds: int) -> str:
     """Human-readable age string, e.g. '3m', '2h 15m', '1d 4h'."""
     if seconds < 60:
@@ -3126,11 +3134,23 @@ def _seg_input_summary() -> list:
     for label, months in (("current_fy", FY_MONTHS), ("prior_fy", FY_MONTHS_2526)):
         view = segment_inputs.build_segment_inputs(list(months), inputs)
         fy_label = parse_period({"period": label})["label"]
+        # Which specific months have ANY awaiting field (across all units), in FY
+        # order. A month fully captured everywhere is omitted so the prompt points
+        # straight at the gaps. Sourced purely from the build_segment_inputs tally.
+        awaiting_set = {
+            row["month"]
+            for row in view["rows"]
+            if any(c["awaiting"] for c in row["cells"].values())
+        }
+        awaiting_months = [
+            {"month": m, "disp": _month_short(m)} for m in months if m in awaiting_set
+        ]
         out.append({
             "fy": fy_label,
             "n_awaiting": view["n_awaiting"],
             "n_fields_total": view["n_fields_total"],
             "complete": view["complete"],
+            "awaiting_months": awaiting_months,
         })
     return out
 
