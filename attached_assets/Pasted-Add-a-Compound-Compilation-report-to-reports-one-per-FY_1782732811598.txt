@@ -1,0 +1,43 @@
+Add a "Compound Compilation" report to /reports (one per FY: 2026-27 and
+2025-26). This is NOT a machine report - it is a MATERIAL / COMPOUND BALANCE for
+the Pipe plant, tracked per compound type. Recompute from daily data; mirror the
+final sheet for styling.
+
+WHAT IT IS:
+Per compound type (columns): CPVC, UPVC, AGRI, SWR, UPVC-F, AGRI-F/SWR-F, CPVC-F
+(+ TOTAL). Rows track the compound mass balance:
+  Opening Stock (Compound)
+  Pulverizer (recycled material added)
+  Total Batch Weight (KG)            [into mixer]
+  Total Material out of Mixer
+  Total Compound given to Pipe Plant
+  Total Weight Loss at Mixer
+  Avg. Weight Loss %age
+  Closing Stock (Compound)
+  then an ITEM breakdown: per raw chemical (Resin K-67, CaCO-3, CaZn-3210,
+  PE-WAX, TiO-2, Resin J-700, one-pack additives, etc.) x compound type.
+
+RECOMPUTE SOURCE (daily-first, framework lineage):
+  Pipe & Fitting daily workbook -> Report-6 (CPVC compound), Report-7 (UPVC),
+  Report-8A (AGRI), Report-8B (SWR) [owner Mr. Shelendra] -> sum daily entries
+  per compound type into the monthly balance -> roll months into the FY TOTAL.
+  Tabs in the final sheet: TOTAL + one per month (APR..MAR) - reproduce that.
+
+UNIT: kg. Recompute from raw daily cells; weight-loss % = loss / batch weight
+(compute, don't read stored %).
+
+RELATE TO EXISTING DATA (show this link):
+  "Total Compound given to Pipe Plant" (this report) is the material INPUT that
+  the Pipe machines (existing Pipe M/C Summary, Report-5) extrude into pipe
+  OUTPUT. Add a small linked view / note so management can see compound consumed
+  vs pipe produced (yield). Same plant, two sides.
+
+PAGE: new report type "compound balance grid" (compound types as columns; stock/
+batch/loss rows; expandable raw-material item breakdown). FY + period selector
+(monthly/quarterly/FY; daily where Report-6/7/8 has daily rows). Validation badge
+vs the final sheet. Brand navy #1F3864 + terracotta, kg, DD-MM-YYYY.
+
+FILE IDS (native sheets; validation/styling targets):
+  2026-27: 1XV_cMWmVzYAqzPMlcibTpSBdve6S-quX_lnLd-_ZHUc
+  2025-26: 1UbnyDTCYD_mZzX2urOhoQOtpf4-QHcFUC-bCXumKK3g
+Validate recompute against the 2025-26 sheet (fully populated; 26-27 is near-empty).
