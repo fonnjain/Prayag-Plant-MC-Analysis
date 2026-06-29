@@ -96,6 +96,105 @@ def test_per_kg_power_trend_skips_awaiting_months():
     print("ok: per-kg power trend includes only months with power+kg, in order")
 
 
+def test_spike_alert_latest_consecutive_pair():
+    # Apr→May per-kg power goes 2.0 → 3.0 (+50%), so the latest consecutive
+    # change must flag a spike (exceeds the 15% threshold), direction "up".
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-2"): {"jvvl_power": 100000.0},
+        ("2026-05", "UNIT-2"): {"jvvl_power": 120000.0},
+    }
+    prod = {
+        ("2026-04", "UNIT-2"): {"kg": 50000.0},  # 2.0 ₹/kg
+        ("2026-05", "UNIT-2"): {"kg": 40000.0},  # 3.0 ₹/kg
+    }
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    sp = by_unit["UNIT-2"]["spike"]
+    assert sp is not None
+    assert sp["exceeds"] is True
+    assert sp["direction"] == "up"
+    assert abs(sp["pct"] - 50.0) < 1e-9
+    assert sp["prev_month"] == "2026-04" and sp["month"] == "2026-05"
+    print("ok: +50% per-kg power MoM -> spike alert (up, exceeds)")
+
+
+def test_spike_below_threshold_not_flagged():
+    # 2.0 → 2.2 is only +10%, under the 15% threshold: spike present but
+    # exceeds is False (the template shows nothing).
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-2"): {"jvvl_power": 100000.0},
+        ("2026-05", "UNIT-2"): {"jvvl_power": 110000.0},
+    }
+    prod = {
+        ("2026-04", "UNIT-2"): {"kg": 50000.0},  # 2.0 ₹/kg
+        ("2026-05", "UNIT-2"): {"kg": 50000.0},  # 2.2 ₹/kg
+    }
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    sp = by_unit["UNIT-2"]["spike"]
+    assert sp is not None
+    assert abs(sp["pct"] - 10.0) < 1e-9
+    assert sp["exceeds"] is False
+    print("ok: +10% per-kg power MoM -> no spike (under threshold)")
+
+
+def test_spike_never_bridges_awaiting_gap():
+    # Apr has a value, May is awaiting (no power), Jun has a value. The Apr→Jun
+    # change must NOT be computed as a MoM spike (the awaiting May breaks the
+    # chain). With no consecutive valued pair, spike stays None.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-2"): {"jvvl_power": 100000.0},
+        # 2026-05 power not entered -> awaiting gap
+        ("2026-06", "UNIT-2"): {"jvvl_power": 300000.0},
+    }
+    prod = {
+        ("2026-04", "UNIT-2"): {"kg": 50000.0},  # 2.0 ₹/kg
+        ("2026-05", "UNIT-2"): {"kg": 50000.0},
+        ("2026-06", "UNIT-2"): {"kg": 50000.0},  # 6.0 ₹/kg
+    }
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    assert by_unit["UNIT-2"]["spike"] is None
+    print("ok: awaiting month between values -> no bridged spike (None)")
+
+
+def test_spike_none_with_fewer_than_two_valued_months():
+    months = ["2026-04"]
+    inputs = {("2026-04", "UNIT-2"): {"jvvl_power": 100000.0}}
+    prod = {("2026-04", "UNIT-2"): {"kg": 50000.0}}
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    assert by_unit["UNIT-2"]["spike"] is None
+    print("ok: single valued month -> no spike (nothing fabricated)")
+
+
+def test_spike_uses_latest_consecutive_pair():
+    # Three consecutive valued months: 2.0 -> 4.0 (+100%) -> 4.2 (+5%). The
+    # alert must reflect the LATEST pair (May->Jun, +5%, under threshold), not
+    # the older big jump.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-2"): {"jvvl_power": 100000.0},
+        ("2026-05", "UNIT-2"): {"jvvl_power": 200000.0},
+        ("2026-06", "UNIT-2"): {"jvvl_power": 210000.0},
+    }
+    prod = {
+        ("2026-04", "UNIT-2"): {"kg": 50000.0},  # 2.0
+        ("2026-05", "UNIT-2"): {"kg": 50000.0},  # 4.0
+        ("2026-06", "UNIT-2"): {"kg": 50000.0},  # 4.2
+    }
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    sp = by_unit["UNIT-2"]["spike"]
+    assert sp["prev_month"] == "2026-05" and sp["month"] == "2026-06"
+    assert abs(sp["pct"] - 5.0) < 1e-9
+    assert sp["exceeds"] is False
+    print("ok: latest consecutive pair drives the alert, not the older jump")
+
+
 def test_complete_when_all_entered():
     months = ["2026-04"]
     inputs = {}
@@ -113,5 +212,11 @@ if __name__ == "__main__":
     test_entered_value_and_per_kg_power()
     test_per_kg_power_none_without_production()
     test_unit_specific_fields()
+    test_per_kg_power_trend_skips_awaiting_months()
+    test_spike_alert_latest_consecutive_pair()
+    test_spike_below_threshold_not_flagged()
+    test_spike_never_bridges_awaiting_gap()
+    test_spike_none_with_fewer_than_two_valued_months()
+    test_spike_uses_latest_consecutive_pair()
     test_complete_when_all_entered()
     print("\nALL segment_inputs tests passed")

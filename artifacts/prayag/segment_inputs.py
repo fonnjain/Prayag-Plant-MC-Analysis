@@ -79,6 +79,12 @@ FIELD_KEYS: List[str] = [f["key"] for f in FIELDS]
 FIELD_BY_KEY: Dict[str, dict] = {f["key"]: f for f in FIELDS}
 
 
+# A per-kg power cost month-over-month change at or beyond this magnitude (%) is
+# surfaced as a non-blocking advisory ("jumped 34% vs last month"). It is a soft
+# attention cue, never a gate.
+SPIKE_THRESHOLD_PCT: float = 15.0
+
+
 def fields_for_unit(unit_key: str) -> List[dict]:
     """The manual fields applicable to one billing unit (some are unit-specific)."""
     return [f for f in FIELDS if unit_key in f["units"]]
@@ -180,12 +186,38 @@ def build_segment_inputs(
             if r["per_kg_power"] is not None
         ]
 
+        # Month-over-month spike alert on per-kg power cost. Only CONSECUTIVE
+        # months that BOTH carry a per_kg_power value form a valid comparison —
+        # an awaiting month between them breaks the chain and is never bridged
+        # (unit_rows are one-per-month in the requested order, so adjacency here
+        # IS calendar adjacency). The advisory reflects the LATEST such pair, so
+        # the loop overwrites and keeps the most recent valid comparison. With
+        # fewer than two consecutive valued months it stays None (nothing shown).
+        spike: Optional[dict] = None
+        for i in range(1, len(unit_rows)):
+            prev_v = unit_rows[i - 1]["per_kg_power"]
+            curr_v = unit_rows[i]["per_kg_power"]
+            if prev_v is None or curr_v is None or prev_v == 0:
+                continue
+            pct = (curr_v - prev_v) / prev_v * 100.0
+            spike = {
+                "month": unit_rows[i]["month"],
+                "prev_month": unit_rows[i - 1]["month"],
+                "value": curr_v,
+                "prev_value": prev_v,
+                "pct": pct,
+                "direction": "up" if pct >= 0 else "down",
+                "threshold": SPIKE_THRESHOLD_PCT,
+                "exceeds": abs(pct) >= SPIKE_THRESHOLD_PCT,
+            }
+
         by_unit.append({
             "key": ukey,
             "label": unit["label"],
             "fields": applicable,
             "rows": unit_rows,
             "trend": trend,
+            "spike": spike,
         })
 
     return {

@@ -3113,6 +3113,10 @@ def _build_segment_inputs_view(months: list) -> dict:
     for unit in view.get("by_unit", []):
         for pt in unit.get("trend", []):
             pt["disp"] = _month_disp(pt["month"])
+        sp = unit.get("spike")
+        if sp:
+            sp["disp"] = _month_disp(sp["month"])
+            sp["prev_disp"] = _month_disp(sp["prev_month"])
     return view
 
 
