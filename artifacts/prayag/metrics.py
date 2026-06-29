@@ -46,6 +46,10 @@ class Record:
                                    # otherwise the sheet placeholder)
     ideal_hours_sheet: float = 0.0  # raw planned hours as read from the sheet
     ideal_source: str = "sheet"     # "config" baseline | "sheet" placeholder
+    runhours_tracked: bool = True   # False for output-only plants (GARDEN/TANK):
+                                    # an ideal denominator may exist, but run hours
+                                    # are not recorded, so utilisation stays
+                                    # suppressed (never a fake 0%) until they are.
 
     # --- location / geography ---
     location: str = ""            # KH | Bhiwari | VN | WB (empty = legacy / unknown)
@@ -300,6 +304,10 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     # TOTALS below, but must NOT pollute the ratio — otherwise its run hours land
     # in the numerator with a zero denominator and silently inflate the figure.
     util_run = 0.0
+    util_ideal = 0.0   # utilisation denominator: only hours from rows that ACTUALLY
+                       # track run time (excludes output-only plants), so an
+                       # app-default denominator on GARDEN/TANK neither fabricates a
+                       # 0% nor dilutes a mixed rollup's utilisation.
     eff_out = 0.0
     for r in prod_rows:
         m.total_count += r.total_count
@@ -320,6 +328,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             m.ideal_output += (row_run / 60.0) * r.ideal_rate
             m.downtime_min += r.downtime_min
             util_run += row_run / 60.0
+            util_ideal += r.shift_len_min / 60.0
             if r.ideal_rate > 0:
                 eff_out += r.total_count
         else:
@@ -328,8 +337,9 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             m.actual_hours += r.actual_hours
             m.ideal_hours += r.ideal_hours
             m.ideal_output += r.ideal_output
-            if r.ideal_hours > 0:
+            if r.ideal_hours > 0 and r.runhours_tracked:
                 util_run += r.actual_hours
+                util_ideal += r.ideal_hours
             if r.ideal_output > 0:
                 eff_out += r.total_count
 
@@ -337,9 +347,9 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     m.run_time = m.actual_hours * 60.0
     m.shift_len_min = m.ideal_hours * 60.0
 
-    m.utilisation = _safe_div(util_run, m.ideal_hours)
+    m.utilisation = _safe_div(util_run, util_ideal)
     m.output_efficiency = _safe_div(eff_out, m.ideal_output)
-    m.util_available = m.ideal_hours > 0
+    m.util_available = util_ideal > 0
     m.eff_available = m.ideal_output > 0
     m.rejection_pct = _safe_div(m.reject_count, m.total_count)
     m.runner_pct = _safe_div(m.runner_lumps, m.total_count)

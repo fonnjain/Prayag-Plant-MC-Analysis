@@ -13,11 +13,21 @@ Precedence, highest first:
                           which is multiplied by the month's calendar days to a
                           monthly figure (kind ``"derived"``). Both are stamped on
                           the Record in ``sheets._emit_daily``.
-  3. app DEFAULT        — a per-plant fallback in ``APP_DEFAULT_IDEAL_HOURS``. Ships
-                          EMPTY: only real, business-supplied planned hours belong
-                          here, never an estimate or a placeholder.
+  3. app DEFAULT        — a per-plant fallback in ``APP_DEFAULT_IDEAL_HOURS``,
+                          real planned-hours figures supplied by the business that
+                          do NOT live in the source sheets (Garden Pipe / Tank =
+                          500 h, HDPE = 550 h per machine per month). Used only
+                          when neither an override nor a live sheet value exists.
+                          Source badge "app default".
   4. NOT SET            — no baseline: utilisation is suppressed (shown as "no
                           baseline set"), never a misleading 0%.
+
+NOTE on output-only plants: a default supplies the ideal-hours DENOMINATOR, but
+utilisation (run hours / ideal) still needs real run hours. Plants in
+``PLANTS_WITHOUT_RUNHOURS`` record output only (no run hours), so their daily
+records are stamped ``runhours_tracked=False`` and ``compute_metrics`` keeps
+their utilisation SUPPRESSED (never a fake 0%) until run hours are recorded — the
+default alone does not flip them to a live figure.
 
 v1 covers ideal HOURS only (→ utilisation). Ideal output-per-hour (→ efficiency)
 is explicitly out of scope here. Pure module: no network, no DB.
@@ -37,10 +47,21 @@ from typing import Optional, Tuple
 PIPE_IDEAL_DAYS_BASIS = "calendar"
 
 # Per-plant monthly ideal-hours fallback, applied only when neither an override
-# nor a live sheet value exists. Ships EMPTY on purpose — populate ONLY with real
-# planned hours supplied by the business, never an estimate or the grid's flat
-# 500-hour placeholder.
-APP_DEFAULT_IDEAL_HOURS: dict = {}
+# nor a live sheet value exists. These are real planned hours supplied by the
+# business that are NOT published in the source sheets — never an estimate or the
+# grid's flat 500-hour placeholder. Keys are plant codes (sources.ANNUAL_SOURCES
+# / DAILY layout ``emit``).
+APP_DEFAULT_IDEAL_HOURS: dict = {
+    "GARDEN": 500.0,   # Garden Pipe — app-logic default (not in sheet)
+    "TANK": 500.0,     # Tanks (KH) — app-logic default (not in sheet)
+    "HDPE": 550.0,     # HDPE — app-logic default (not in sheet)
+}
+
+# Plants that record OUTPUT only and carry NO run hours. An app-default ideal
+# still supplies their utilisation denominator, but utilisation must stay
+# suppressed (not a fake 0%) until run hours are actually recorded — enforced via
+# ``Record.runhours_tracked=False`` and the gate in ``metrics.compute_metrics``.
+PLANTS_WITHOUT_RUNHOURS = frozenset({"GARDEN", "TANK"})
 
 # Source labels (also used as CSS/badge keys on the page).
 SRC_OVERRIDE = "override"

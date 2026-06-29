@@ -1150,7 +1150,16 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   for r in raw:
       active.setdefault(r.machine, set()).add(r.date)
 
+  # App-logic default monthly ideal hours for this plant (not in the sheets), and
+  # whether the plant records run hours at all. The default is the lowest-priority
+  # tier (override > sheet > derived > config baseline > APP DEFAULT > none); for
+  # output-only plants it supplies the denominator but utilisation stays suppressed
+  # (runhours_tracked=False) until run hours exist — never a fake 0%.
+  app_default = ideal_hours.APP_DEFAULT_IDEAL_HOURS.get(emit)
+  tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
+
   for r in raw:
+      r.runhours_tracked = tracks_hours
       days = max(len(active.get(r.machine, ())), 1)
       if sheet_rate.get(r.machine, 0) > 0:
           # A plant that publishes its OWN per-machine "Ideal Output" rate in the
@@ -1163,8 +1172,17 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           r.ideal_rate = rate
           r.ideal_output = r.actual_hours * rate
           ih_month = sheet_hours.get(r.machine, 0.0)
-          r.ideal_hours = (ih_month / days) if ih_month > 0 else 0.0
-          r.ideal_source = "sheet"
+          if ih_month > 0:
+              r.ideal_hours = ih_month / days
+              r.ideal_source = "sheet"
+          elif app_default and app_default > 0:
+              # No in-sheet ideal HOURS → fall to the app-logic default (HDPE's
+              # 550). The in-sheet output rate above still drives efficiency.
+              r.ideal_hours = app_default / days
+              r.ideal_source = "app_default"
+          else:
+              r.ideal_hours = 0.0
+              r.ideal_source = "none"
       elif r.machine in sheet_ideal:
           r.ideal_hours = sheet_ideal[r.machine] / days
           r.ideal_output = 0.0  # no in-sheet output rate → efficiency hidden
@@ -1188,6 +1206,14 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
                   r.ideal_rate = rate
                   r.ideal_output = r.actual_hours * rate
               r.ideal_source = "config"
+          elif app_default and app_default > 0:
+              # App-logic default (GARDEN/TANK = 500): supplies the utilisation
+              # denominator. For these output-only plants utilisation stays
+              # suppressed in compute_metrics (runhours_tracked=False) until run
+              # hours are recorded — the denominator alone is not a live figure.
+              r.ideal_hours = app_default / days
+              r.ideal_output = 0.0
+              r.ideal_source = "app_default"
           else:
               r.ideal_hours = 0.0
               r.ideal_output = 0.0

@@ -1640,6 +1640,7 @@ _IDEAL_SRC_FROM_RECORD = {
     "derived": ideal_hours.SRC_DERIVED,
     "sheet": ideal_hours.SRC_SHEET,
     "config": ideal_hours.SRC_APP_DEFAULT,
+    "app_default": ideal_hours.SRC_APP_DEFAULT,
 }
 
 
