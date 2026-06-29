@@ -1,0 +1,48 @@
+Automate monthly rollover using the connected Drive (folder scan + name-pattern
+match). No human file-ID entry, no external trigger — run inside the existing
+auto-refresh scheduler.
+
+NAMING PATTERN (fixed except month/year):
+  "N. {PLANT} Date Sheet & Monthly Report - {Mon} ' {YYYY}"
+  Only {Mon} and {YYYY} change month to month. Match must be NORMALIZED, not
+  exact, because:
+   - leading "N." (1./2./3./4.) rotates — IGNORE it.
+   - spacing around the apostrophe varies ("- May ' 2026", "- June ' 2026") —
+     collapse whitespace before matching.
+   - {Mon} is the 3-4 letter abbreviation (Apr, May, June, July, ...).
+
+RESOLVER (run per plant on each refresh):
+  1) Folder scan (primary): list the plant's known folder; for each file,
+     normalize the title (strip leading "N.", collapse spaces, lowercase) and
+     match on: contains {PLANT} AND {current-month-abbrev} AND {current-year}.
+     If multiple match, pick the most recently modified.
+  2) Name-pattern resolve (fallback): construct the expected normalized title
+     for the current period and search for it.
+  3) When matched, register/refresh that file's ID automatically — no UI step.
+  4) If neither finds it: do NOT error. Mark the plant "awaiting <Month> sheet"
+     (INFO) on the Data Health page and keep reading last month's file.
+
+PLANTS / FOLDERS: store a folder ID per active plant (PTMT, Pipe & Fitting,
+Garden Pipe, HDPE, TANK; VN/WB tanks; CP pending). Resolve each independently —
+they live in different folders and roll over independently.
+
+MONTH-BOUNDARY HANDLING (critical):
+  - Don't hard-switch on the 1st. Keep reading the previous month's file until
+    the new month's file has REAL rows (rows_found > 0 with a date in the new
+    month). "New file present but empty" = normal "awaiting entry" (INFO), reuse
+    the date-vs-today / last-entered classification — never an error.
+  - Allow overlap: late-prev-month entries may still post to the old sheet while
+    the new one is live; during transition, read both and prefer the new file
+    for the new month's dates.
+
+MANIFEST: this is the ingest manifest's "expected universe" rolling forward one
+period. Reuse manifest + reconciliation (expected vs fetched; drive_actual vs
+expected) and surface on the Data Health page. Log each rollover: which file was
+auto-matched per plant, its modified time, and first date with data.
+
+VALIDATION:
+  - Simulate July 2026: with a "PTMT ... - July ' 2026" file in the PTMT folder
+    (even empty), the resolver auto-registers it; dashboard shows PTMT "awaiting
+    entry" until it has rows, then switches automatically on the next refresh.
+  - A plant with no July file yet shows "awaiting July sheet", still serves June.
+  - No duplicate registration; most-recently-modified wins on title collisions.

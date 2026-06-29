@@ -778,7 +778,8 @@ def parse_pipe_run5(values: List[list]) -> dict:
     rows: ``Ideal Run Hour Per Day`` and ``Total Run Days`` sit one row above the
     ``MACHINE`` / ``RUN HOURS`` headers, so the same-row
     :func:`parse_matrix_summary_col` cannot read it. This scans the first few rows
-    for each header independently, then reads the three figures per machine row:
+    for each header independently, then reads per machine row a dict of
+    ``{per_day, run_days, run_hours, output, reject, ideal_out}``:
 
       * **Col D — Ideal Run Hour Per Day** is per machine TYPE (22 for pipe/moulding
         lines, 12 for grinders/pulverizers); it is read PER ROW, never assumed a
@@ -790,8 +791,10 @@ def parse_pipe_run5(values: List[list]) -> dict:
     basis, not calendar days. ``TOTAL`` / blank rows are skipped (their Col D is a
     column sum, not a machine baseline). The sheet lists Mixer / Pipe / Moulding /
     Grinder / Pulverizer families; every machine row with a positive Col D is
-    returned and the caller joins to the daily machines it actually has. Returns
-    ``{}`` if the machine or ideal header is absent. Deterministic; no network.
+    returned and the caller joins to the daily machines it actually has. Rows with
+    NO daily tab (grinders, pulverizers, sockets, mixers) are synthesised into
+    month-grain records by the caller so they still surface. Returns ``{}`` if the
+    machine or ideal header is absent. Deterministic; no network.
     """
     if not values:
         return {}
@@ -814,16 +817,32 @@ def parse_pipe_run5(values: List[list]) -> dict:
                 mc_c, last_hdr = c, max(last_hdr, i)
     if val_c < 0 or mc_c < 0:
         return {}
+    # OUTPUT (KG), REJ (KG) and Ideal Output Per Hour sit immediately to the right
+    # of RUN HOURS (cols G/H/I after F). They are read by fixed offset from RUN
+    # HOURS because the sheet carries THREE "output"-named headers (Output, Ideal
+    # Output Per Hour, Avg per hour output) that a text match cannot disambiguate.
+    # Ideal Output Per Hour can be BLANK (e.g. Grinder-3, whose in-sheet efficiency
+    # is #DIV/0!) — it is returned as 0.0 so the caller hides efficiency rather than
+    # dividing by zero.
+    out_c = hrs_c + 1 if hrs_c >= 0 else -1
+    rej_c = hrs_c + 2 if hrs_c >= 0 else -1
+    io_c = hrs_c + 3 if hrs_c >= 0 else -1
     out: dict = {}
     for row in values[last_hdr + 1:]:
         label = str(row[mc_c]).strip() if mc_c < len(row) else ""
         if not label or label.upper() in _DAILY_SKIP_LABELS or "TOTAL" in label.upper():
             continue
         per_day = num(row[val_c]) if val_c < len(row) else 0.0
-        run_days = num(row[days_c]) if (0 <= days_c < len(row)) else 0.0
-        run_hours = num(row[hrs_c]) if (0 <= hrs_c < len(row)) else 0.0
-        if per_day > 0:
-            out[label] = (per_day, run_days, run_hours)
+        if per_day <= 0:
+            continue
+        out[label] = {
+            "per_day": per_day,
+            "run_days": num(row[days_c]) if (0 <= days_c < len(row)) else 0.0,
+            "run_hours": num(row[hrs_c]) if (0 <= hrs_c < len(row)) else 0.0,
+            "output": num(row[out_c]) if (0 <= out_c < len(row)) else 0.0,
+            "reject": num(row[rej_c]) if (0 <= rej_c < len(row)) else 0.0,
+            "ideal_out": num(row[io_c]) if (0 <= io_c < len(row)) else 0.0,
+        }
     return out
 
 

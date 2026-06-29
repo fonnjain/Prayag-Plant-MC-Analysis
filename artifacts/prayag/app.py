@@ -410,6 +410,8 @@ def get_data(args):
             # strings compare lexicographically, so plain ``>`` finds the max.
             fresh_by_plant: dict = {}
             for r in drecs:
+                if r.grain != "daily":
+                    continue  # month-grain aux rows (Report-5 grinders) aren't a daily date
                 if r.date and r.date > fresh_by_plant.get(r.plant, ""):
                     fresh_by_plant[r.plant] = r.date
             freshness = [
@@ -420,13 +422,20 @@ def get_data(args):
             ]
             # "last_updated" period: narrow to the actual last date with data.
             if pinfo["period"] == "last_updated":
-                last_date = max((r.date for r in drecs if r.date), default=None)
+                last_date = max((r.date for r in drecs if r.date and r.grain == "daily"), default=None)
                 if last_date:
                     pinfo["from_iso"] = last_date
                     pinfo["to_iso"] = last_date
                     pinfo["label"] = f"Last updated: {_fmt(datetime.date.fromisoformat(last_date))}"
             fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
             win = [r for r in drecs if fwin <= r.date <= twin]
+            if pinfo.get("sub_monthly"):
+                # Month-grain records (Report-5-only auxiliary machines: grinders,
+                # pulverizers, sockets, mixers) carry a whole-month figure dated to
+                # the 1st — they have no per-day breakdown, so a sub-monthly window
+                # cannot honestly slice them. Drop them from day-level windows; they
+                # still appear on month/FY views.
+                win = [r for r in win if r.grain != "monthly"]
             # Daily files are the only source for current figures. Months in
             # this period without a daily workbook show no data — the monthly
             # summary is not substituted.

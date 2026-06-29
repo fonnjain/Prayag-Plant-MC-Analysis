@@ -1,0 +1,43 @@
+Report-5 per-machine column logic (Pipe & Fitting workbook). Read these from
+the SUMMARY columns; do not re-derive output/run-hours your own way. The daily
+block is 3 cols per day: Run Hours, Output(KG), Rejection(KG), starting at
+col O (O/P/Q = day1, R/S/T = day2, U/V/W = day3, ... in threes).
+
+INPUTS / BASELINES (read as-is per machine):
+  C  Machine name
+  D  Ideal Run Hour Per Day      = 22 (pipe & moulding) | 12 (grinder/pulverizer)
+  I  Ideal Output Per Hour (KG)  = per-machine constant (e.g. 120/150/200/280/
+                                   320/400; grinders 110/200/300). NOT global.
+  M  Monthly reference hours      = 500 (flat constant)
+
+DERIVED (compute exactly like the sheet, from the daily cells):
+  E  Total Run Days   = COUNT of days whose RUN-HOURS cell is non-empty
+  F  Run Hours        = SUM of daily run-hours cells (O,R,U,...)
+  G  Output (KG)      = SUM of daily output cells     (P,S,V,...)
+  H  Rejection (KG)   = SUM of daily rejection cells  (Q,T,W,...)
+  J  Avg per hour     = G / F                 (0 if F=0)
+  K  Efficiency %     = J / I = (G/F)/I       (0/blank if F=0 or I missing)
+  L  Rejection %      = H / G                 (0 if G=0)
+  N  Hours util (ref) = F / M = run hours / 500
+
+CRITICAL — there are THREE different denominators in this sheet; pick the right
+one and don't mix them:
+  - Output EFFICIENCY (headline, Col K) = (output/run hours) / ideal output per
+    hour. Unit-bound: output in KG, ideal/hr in KG/hr.
+  - Run-day UTILISATION = run hours / (D * E) = run hours / (22 * run days).
+    Use this when you want "how fully did it run on the days it ran".
+  - Col N utilisation = run hours / 500 (flat monthly ref). Different number.
+  Decide per metric which denominator the dashboard uses and label it clearly.
+  Most "wrong" figures come from using the wrong denominator here.
+
+RULES:
+  - Output unit = KG for this plant (read per plant; Tank = Ltr).
+  - Recompute J/K/L/N from raw G/F/H/I/M cells; do NOT read the stored % cells.
+  - IFERROR behaviour: if run hours = 0 (idle) or ideal missing -> show blank/
+    n/a, never 0% (idle != 0% efficient).
+  - Do NOT clamp >100% (grinders legitimately exceed; show real value).
+  - Parse machine rows only (Col C has a name, Col D numeric, not 'TOTAL');
+    exclude TOTAL rows (14,19,32) and blank rows. Ranges: pipe 5-13,
+    grinders/pulverizers 26-31, moulding 34-60.
+  - Roll-ups: SUM F, G, H across machines first, THEN compute ratios. Never
+    average the per-machine percentages.

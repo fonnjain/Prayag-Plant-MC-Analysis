@@ -892,6 +892,34 @@ def _r5_norm(label) -> str:
   return "".join(str(label).split()).upper()
 
 
+def _r5_aux_class(label: str) -> Optional[Tuple[Optional[str], str, bool]]:
+  """Classify a Report-5 AUXILIARY machine → (owner_plant | None, segment, finishing).
+
+  Only grinders / pulverizers / sockets / mixers qualify — these appear ONLY in
+  Report-5 (no daily tab) and must be surfaced. Returns ``None`` for anything
+  else (real pipe / moulding production lines), which the daily path already
+  handles; without this guard an untagged moulding row or an idle pipe machine
+  would leak in as a bogus auxiliary. The owner plant comes from the label's
+  ``(PIPE)`` / ``(MOULD)`` tag; untagged rows (sockets, mixers) return ``None``
+  so the caller defaults them to PIPE. All are reprocessing / auxiliary lines
+  (is_finishing=True), so their output never inflates the plant headline — they
+  still show in full inside their own segment.
+  """
+  u = label.upper()
+  if "GRIND" in u:
+      seg = "Grinding"
+  elif "PULVER" in u:
+      seg = "Pulverizing"
+  elif "SOCKET" in u:
+      seg = "Socketing"
+  elif "MIXER" in u:
+      seg = "Mixing"
+  else:
+      return None
+  owner = "MOULDING" if "(MOULD" in u else ("PIPE" if "(PIPE" in u else None)
+  return owner, seg, True
+
+
 def _daily_plants() -> List[str]:
   """Workbook plants we read at daily grain — every plant that has a daily
   file configured. Each may emit one or more logical plants (see
@@ -1154,15 +1182,17 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   # output-only MOULDING). Two lookups so PIPE joins by machine number and MOULDING
   # joins by its bare label (e.g. "A01(NU-200)"); no _mc_key collision because
   # MOULDING's daily labels carry no M/C number.
-  r5_by_mckey: dict = {}   # _mc_key            -> (per_day, run_days, run_hours)
-  r5_by_label: dict = {}   # normalised label   -> (per_day, run_days, run_hours)
+  r5_parsed: dict = {}     # raw label -> {per_day,run_days,run_hours,output,reject,ideal_out}
+  r5_by_mckey: dict = {}   # _mc_key            -> info dict
+  r5_by_label: dict = {}   # normalised label   -> info dict
   r5_tab = spec.get("report5_tab")
   if r5_tab and r5_tab in tabs:
-      for lbl, triple in parsers.parse_pipe_run5(read_values(file_id, r5_tab, token)).items():
+      r5_parsed = parsers.parse_pipe_run5(read_values(file_id, r5_tab, token))
+      for lbl, info in r5_parsed.items():
           k = _mc_key(lbl)
           if k is not None:
-              r5_by_mckey[k] = triple
-          r5_by_label[_r5_norm(lbl)] = triple
+              r5_by_mckey[k] = info
+          r5_by_label[_r5_norm(lbl)] = info
 
   def _r5_hit(machine: str):
       """Resolve a daily machine to its Report-5 (per_day, run_days, run_hours)."""
@@ -1230,10 +1260,10 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           # idle machine (run days = 0) gets ideal_hours = 0, so utilisation stays
           # blank (never a fake 0%). No clamp — a grinder running past its ideal
           # legitimately exceeds 100%. Output rate stays unset (efficiency hidden).
-          per_day, run_days, run_hours = _r5_hit(r.machine)
+          info = _r5_hit(r.machine)
           nrows = max(rowcount.get(r.machine, 0), 1)
-          r.ideal_hours = (per_day * run_days) / nrows
-          r.actual_hours = run_hours / nrows
+          r.ideal_hours = (info["per_day"] * info["run_days"]) / nrows
+          r.actual_hours = info["run_hours"] / nrows
           r.ideal_output = 0.0
           r.ideal_source = "derived"
       else:
@@ -1257,6 +1287,60 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
               r.ideal_hours = 0.0
               r.ideal_output = 0.0
               r.ideal_source = "none"
+
+  # ----- Report-5-only auxiliary machines (no daily tab) --------------------
+  # Grinders, pulverizers, sockets and mixers live ONLY in the Report-5 monthly
+  # summary — they have no per-machine daily tab, so without this they vanish
+  # from the app entirely (the reported bug). Surface each as a MONTH-grain
+  # record carrying its run-day utilisation — run hours / (ideal/day × run days)
+  # — and, where the sheet publishes an Ideal Output Per Hour, its efficiency.
+  # Skip any Report-5 row already matched to a daily machine (handled above).
+  # Route by the label's "(PIPE)"/"(MOULD)" tag; untagged socket/mixer rows
+  # belong to PIPE. Idle rows (0 run days) get 0 ideal hours so utilisation /
+  # efficiency stay BLANK — never a fake 0%. is_finishing keeps reprocessing
+  # output out of the plant headline (their own segment still shows them).
+  aux_notes: List[str] = []
+  if r5_parsed:
+      pref = spec.get("long", {}).get("machine_prefix") or spec.get("machine_prefix")
+      seen_mckey = {_mc_key(r.machine) for r in raw if _mc_key(r.machine) is not None}
+      seen_label = {_r5_norm(r.machine) for r in raw}
+      for r in raw:
+          lab = r.machine
+          if pref and lab.startswith(pref):
+              lab = lab[len(pref):]
+          seen_label.add(_r5_norm(lab))
+      for lbl, info in r5_parsed.items():
+          k = _mc_key(lbl)
+          if (k is not None and k in seen_mckey) or _r5_norm(lbl) in seen_label:
+              continue  # already represented by a daily machine
+          cls = _r5_aux_class(lbl)
+          if cls is None:
+              continue  # real pipe/moulding line — handled by the daily path
+          owner, seg, fin = cls
+          if (owner or "PIPE") != emit:
+              continue  # routed to the other plant's emit
+          core = re.sub(r"\s*\([^)]*\)\s*$", "", lbl).strip() or lbl
+          ideal_h = info["per_day"] * info["run_days"]
+          ideal_rate = info["ideal_out"]
+          raw.append(Record(
+              grain="monthly", period=ym, date=f"{ym}-01",
+              plant=emit, segment=f"{emit} \u2013 {seg}",
+              machine=f"{emit} {core}".strip(), unit="kg",
+              total_count=info["output"], reject_count=info["reject"],
+              actual_hours=info["run_hours"],
+              ideal_hours=ideal_h, ideal_hours_sheet=ideal_h,
+              ideal_rate=ideal_rate,
+              ideal_output=info["run_hours"] * ideal_rate,
+              ideal_source="derived", runhours_tracked=True, is_finishing=fin,
+              source_family=f"{emit} {seg}", source_file=file_id, source_tab=r5_tab,
+          ))
+          if info["run_days"] > 0 and ideal_rate <= 0:
+              aux_notes.append(
+                  f"{emit} {core}: missing ideal output/hour in Report-5 — "
+                  "efficiency shown as n/a (utilisation still computed)."
+              )
+  if aux_notes:
+      report["notes"] = aux_notes
 
   report["detail_tabs"] = sorted({r.machine for r in raw})
   report["record_count"] = len(raw)
@@ -1356,6 +1440,8 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
           reports.append(report)
           if report.get("warning"):
               warnings.append(report["warning"])
+          for n in report.get("notes") or []:
+              warnings.append(n)
           # Daily-vs-grid reconciliation data is kept in report["reconcile"]
           # for the Sources diagnostic page, but is no longer emitted as a
           # user-visible warning — daily files are the authoritative source.
