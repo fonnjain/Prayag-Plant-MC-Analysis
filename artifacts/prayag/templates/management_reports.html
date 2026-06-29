@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+  {% block title_suffix %} — Management Reports{% endblock %}
+
+  {% block content %}
+  <div class="mb-4">
+    <h2 class="text-lg font-bold" style="color:var(--navy)">Management Reports</h2>
+    <div class="text-xs text-gray-400 mt-0.5">Annual reports recomputed from daily data — tap to open</div>
+  </div>
+
+  <!-- Reports work without manual entries + link to the manual-entries page -->
+  <div class="mb-5 p-3.5 rounded-xl border"
+       style="background:rgba(31,56,100,0.05);border-color:rgba(31,56,100,0.20)">
+    <div class="flex items-start gap-3">
+      <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+           style="background:rgba(31,56,100,0.10)">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="font-semibold text-sm" style="color:var(--navy)">Reports work without manual entries</div>
+        <div class="text-xs text-gray-500 mt-0.5 leading-snug">
+          Production, utilisation and efficiency recompute straight from daily data — open any
+          report now. Power, solar and contractor figures are the only manual inputs; until
+          entered they show <em>awaiting input</em> and never block a report.
+        </div>
+        <a href="/management-entries"
+           class="inline-flex items-center gap-1 mt-2 text-xs font-semibold" style="color:var(--terra)">
+          Management manual entries
+          <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="#C55A11" stroke-width="2.2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  {% for loc in locations %}
+  <div class="mb-5">
+    <div class="flex items-center gap-2 mb-2">
+      <div class="w-1 h-5 rounded-full bg-terra flex-shrink-0"></div>
+      <h3 class="text-sm font-bold" style="color:var(--navy)">{{ loc.name }}</h3>
+    </div>
+    <div class="space-y-2">
+      {% for rpt in loc.reports %}
+      <a href="/reports/{{ rpt.id }}"
+         class="kpi-card p-3.5 flex items-center gap-3 hover:shadow-md transition-shadow block">
+        <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+             style="background:rgba(31,56,100,0.08)">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-gray-800 text-sm leading-snug">{{ rpt.title }}</div>
+          <div class="text-xs text-gray-400 mt-0.5 leading-snug">{{ rpt.desc }}</div>
+        </div>
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#9ca3af" stroke-width="2" class="flex-shrink-0">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+        </svg>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  {% endblock %}

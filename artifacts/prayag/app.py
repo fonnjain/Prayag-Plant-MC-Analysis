@@ -2848,6 +2848,27 @@ _LOCATION_ORDER = ["KH", "Bhiwari", "VN", "WB", "ALL"]
 _LOCATION_NAMES = {"KH": "Kaharani", "Bhiwari": "Bhiwadi (RICO)", "VN": "Varanasi", "WB": "West Bengal", "ALL": "All Locations"}
 
 
+@app.route("/management-reports")
+def management_reports_index():
+    """Management Reports — a dedicated landing for the annual management report
+    set, kept separate from the operational Reports tab. Report compute is reused
+    from the existing /reports/<id> detail routes; the cards link straight there."""
+    from collections import defaultdict
+    by_loc = defaultdict(list)
+    for r in _REPORT_CATALOGUE:
+        by_loc[r["location"]].append(r)
+    locations = []
+    for loc in _LOCATION_ORDER:
+        items = by_loc.get(loc, [])
+        if items:
+            locations.append({
+                "id": loc,
+                "name": _LOCATION_NAMES.get(loc, loc),
+                "reports": items,
+            })
+    return render_template("management_reports.html", locations=locations)
+
+
 @app.route("/reports")
 def reports_index():
     """All 14 management reports grouped by Location → Plant."""
@@ -3199,48 +3220,49 @@ def _seg_input_summary() -> list:
     return out
 
 
-@app.route("/segment-input")
-def segment_input_view():
-    """Capture surface for the Group B manual monthly inputs (power/solar/contractor)."""
+@app.route("/management-entries")
+def management_entries_view():
+    """Management Manual Entries — capture surface for the Group B manual monthly
+    inputs (power/solar/contractor). These do not exist in any production workbook
+    and are optional: reports recompute from daily data and show 'awaiting input'
+    until a figure is entered. Values live ONLY in the app DB."""
     months = _seg_input_months()
     view = _build_segment_inputs_view(months)
-    # Optional deep-link from the reports reminder: ?month=YYYY-MM pre-selects that
+    # Optional deep-link from a reports reminder: ?month=YYYY-MM pre-selects that
     # month's rows so the manager lands straight on the gap they tapped. Validated
     # against the real format; anything else is ignored (no highlight).
     focus_month = (request.args.get("month", "") or "").strip()
     if not _YM_RE.match(focus_month):
         focus_month = ""
     return render_template(
-        "segment_input.html",
+        "management_entries.html",
         view=view,
         focus_month=focus_month,
         store_ok=store.AVAILABLE,
         input_msg=request.args.get("input_msg", ""),
         period="current_fy",
-        period_label="Segment manual inputs",
+        period_label="Management manual entries",
         plant_filter="", segment_filter="", machine_filter="",
         plant_names=PLANT_NAMES,
         demo_mode=is_demo_mode(),
     )
 
 
-@app.route("/segment-input/save", methods=["POST"])
-def segment_input_save():
+def _persist_seg_input(form) -> str:
     """Persist manual inputs for one (month, unit). Blank fields are omitted so a
     field stays 'awaiting input' until a real number is entered. Values live ONLY
-    in the app DB — never written back to any Google Sheet."""
-    form = request.form
+    in the app DB — never written back to any Google Sheet. Returns a flash message
+    (success or the reason it could not save)."""
+    if not store.AVAILABLE:
+        return "No database configured — saving is disabled."
     month = (form.get("month", "") or "").strip()
     unit = (form.get("unit", "") or "").strip()
     set_by = (form.get("set_by", "") or "").strip()
     note = (form.get("note", "") or "").strip()
-    if not store.AVAILABLE:
-        return redirect("/segment-input?input_msg=" + quote(
-            "No database configured — saving is disabled."))
     if not _YM_RE.match(month) or unit not in segment_inputs.UNIT_KEYS:
-        return redirect("/segment-input?input_msg=" + quote("Invalid month or unit."))
+        return "Invalid month or unit."
     if not set_by:
-        return redirect("/segment-input?input_msg=" + quote("Please enter your name."))
+        return "Please enter your name."
     values: dict = {}
     for f in segment_inputs.fields_for_unit(unit):
         raw = (form.get(f["key"], "") or "").strip().replace(",", "")
@@ -3249,16 +3271,101 @@ def segment_input_save():
         try:
             values[f["key"]] = float(raw)
         except ValueError:
-            return redirect("/segment-input?input_msg=" + quote(
-                f"{f['label']} must be a number."))
+            return f"{f['label']} must be a number."
     try:
         store.seg_input_record(
             month=month, unit=unit, values=values, set_by=set_by, note=note)
     except store.StoreError as e:
-        return redirect("/segment-input?input_msg=" + quote(f"Could not save: {e}"))
+        return f"Could not save: {e}"
     label = segment_inputs.UNIT_LABELS.get(unit, unit)
-    return redirect("/segment-input?input_msg=" + quote(
-        f"Saved {label} for {_month_disp(month)}."))
+    return f"Saved {label} for {_month_disp(month)}."
+
+
+@app.route("/management-entries/save", methods=["POST"])
+def management_entries_save():
+    """Persist one (month, unit) manual-input row, then return to the entries page."""
+    msg = _persist_seg_input(request.form)
+    return redirect("/management-entries?input_msg=" + quote(msg))
+
+
+@app.route("/management-entries/export.xlsx")
+def management_entries_export():
+    """Download every captured manual entry (both financial years) as an .xlsx.
+
+    One wide row per (month, unit): each manual field is its own column, with
+    fields that do not apply to a unit shown as 'n/a' and un-entered fields as
+    'awaiting'. Network-free — reads only the app DB via the pure builder (no
+    daily-production read needed for export)."""
+    import io
+    from flask import send_file
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    all_months = list(FY_MONTHS) + list(FY_MONTHS_2526)
+    inputs = store.seg_inputs_for(all_months)
+    view = segment_inputs.build_segment_inputs(all_months, inputs)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Manual Inputs"
+    headers = (
+        ["Month", "Unit"]
+        + [f"{f['label']} ({f['unit']})" for f in segment_inputs.FIELDS]
+        + ["Saved by", "When", "Note"]
+    )
+    ws.append(headers)
+    head_fill = PatternFill("solid", fgColor="1F3864")
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = head_fill
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for r in view["rows"]:
+        row = [_month_disp(r["month"]), r["unit_label"]]
+        for f in segment_inputs.FIELDS:
+            cell = r["cells"].get(f["key"])
+            if cell is None:
+                row.append("n/a")
+            elif cell["awaiting"]:
+                row.append("awaiting")
+            else:
+                row.append(cell["value"])
+        row += [r["set_by"], r["when_disp"], r["note"]]
+        ws.append(row)
+
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        width = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 34)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = "prayag_management_manual_entries_" + _today().strftime("%Y%m%d") + ".xlsx"
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname,
+    )
+
+
+@app.route("/segment-input")
+def segment_input_view():
+    """Back-compat: the manual-entry surface now lives at /management-entries.
+    Preserve any ?month deep-link from older reports reminders."""
+    month = (request.args.get("month", "") or "").strip()
+    target = "/management-entries"
+    if _YM_RE.match(month):
+        target += "?month=" + quote(month) + "#m-" + month
+    return redirect(target)
+
+
+@app.route("/segment-input/save", methods=["POST"])
+def segment_input_save():
+    """Back-compat save endpoint — persists then returns to /management-entries."""
+    msg = _persist_seg_input(request.form)
+    return redirect("/management-entries?input_msg=" + quote(msg))
 
 
 if __name__ == "__main__":

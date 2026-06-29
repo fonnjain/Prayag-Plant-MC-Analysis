@@ -2,7 +2,8 @@
 
 Exercises the Flask wiring offline by monkeypatching the daily-records reader and
 the store so nothing touches the network or the DB. Guards:
-  * /segment-input renders 200 with the capture form for all three units;
+  * /management-entries renders 200 with the capture form for all three units;
+  * the legacy /segment-input redirects to /management-entries;
   * an empty store shows "awaiting input";
   * /reports/segment_labour renders the manual-inputs panel with the validation
     of "awaiting input" cells and a per-kg power figure once inputs + production
@@ -35,18 +36,42 @@ def _client():
     return appmod.app.test_client()
 
 
-def test_segment_input_page_awaiting():
+def test_management_entries_page_awaiting():
     store.seg_inputs_for = lambda months: {}
     appmod.get_daily_records = lambda months: ([], [], [])
     client = _client()
-    resp = client.get("/segment-input")
+    resp = client.get("/management-entries")
     assert resp.status_code == 200, resp.status_code
     body = resp.get_data(as_text=True)
-    assert "Segment manual inputs" in body
+    assert "Management Manual Entries" in body
     assert "UNIT-1" in body and "UNIT-2" in body and "UNIT-3" in body
     assert "awaiting input" in body
     assert "JVVL Power" in body
-    print("ok: /segment-input -> 200, capture form, awaiting input")
+    assert "Export Excel" in body
+    print("ok: /management-entries -> 200, capture form, awaiting input, export")
+
+
+def test_segment_input_redirects_to_management_entries():
+    client = _client()
+    resp = client.get("/segment-input")
+    assert resp.status_code == 302, resp.status_code
+    assert "/management-entries" in resp.headers.get("Location", "")
+    # The deep-link month is preserved through the redirect.
+    resp2 = client.get("/segment-input?month=2026-04")
+    assert resp2.status_code == 302, resp2.status_code
+    assert "2026-04" in resp2.headers.get("Location", "")
+    print("ok: /segment-input -> 302 /management-entries (month preserved)")
+
+
+def test_management_entries_export_xlsx():
+    store.seg_inputs_for = lambda months: {}
+    client = _client()
+    resp = client.get("/management-entries/export.xlsx")
+    assert resp.status_code == 200, resp.status_code
+    assert "spreadsheetml" in resp.headers.get("Content-Type", "")
+    assert ".xlsx" in resp.headers.get("Content-Disposition", "")
+    assert resp.get_data()[:2] == b"PK"   # a real zip/xlsx container
+    print("ok: /management-entries/export.xlsx -> valid workbook download")
 
 
 def test_segment_labour_shows_per_kg_power():
@@ -122,8 +147,24 @@ def test_gom_and_tank_have_validation_badge():
     print("ok: gom + tank advisory validation badges present")
 
 
+def test_management_reports_page():
+    client = _client()
+    resp = client.get("/management-reports")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.get_data(as_text=True)
+    assert "Management Reports" in body
+    assert "Reports work without manual entries" in body
+    # Cards deep-link to the existing report detail routes.
+    assert "/reports/extrusion_summary" in body
+    assert "/management-entries" in body
+    print("ok: /management-reports -> 200, catalogue links + entries banner")
+
+
 if __name__ == "__main__":
-    test_segment_input_page_awaiting()
+    test_management_entries_page_awaiting()
+    test_segment_input_redirects_to_management_entries()
+    test_management_entries_export_xlsx()
+    test_management_reports_page()
     test_segment_labour_shows_per_kg_power()
     test_gom_and_tank_have_validation_badge()
     print("\nALL segment_input route tests passed")
