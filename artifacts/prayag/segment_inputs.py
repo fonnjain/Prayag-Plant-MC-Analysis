@@ -91,6 +91,13 @@ SPIKE_THRESHOLD_PCT: float = 15.0
 # drop is flagged (a rising solar share needs no warning); soft cue, never a gate.
 SOLAR_SHARE_DROP_PTS: float = 10.0
 
+# A month-over-month JUMP in contractor cost-per-head (contractor_wages /
+# contractor_count) at or beyond this magnitude (%) is surfaced as a non-blocking
+# advisory ("contractor cost per head jumped 34% vs last month"). Only an increase
+# is flagged (a falling cost-per-head needs no warning — it is good news), mirroring
+# the one-directional solar-share alert. Soft attention cue, never a gate.
+CONTRACTOR_JUMP_PCT: float = 25.0
+
 
 def fields_for_unit(unit_key: str) -> List[dict]:
     """The manual fields applicable to one billing unit (some are unit-specific)."""
@@ -180,6 +187,16 @@ def build_segment_inputs(
             if elec is not None and solar is not None and (elec + solar) > 0:
                 solar_share = solar / (elec + solar)
 
+            # Contractor cost-per-head = contractor_wages / contractor_count.
+            # Computed ONLY when BOTH the head-count and wages exist for the month
+            # (and the head-count is > 0) — never fabricated for an awaiting month,
+            # which is simply absent from the series.
+            ccount = cells.get("contractor_count", {}).get("value")
+            cwages = cells.get("contractor_wages", {}).get("value")
+            contractor_cph: Optional[float] = None
+            if ccount is not None and cwages is not None and ccount > 0:
+                contractor_cph = cwages / ccount
+
             row = {
                 "month": month,
                 "unit": ukey,
@@ -192,6 +209,7 @@ def build_segment_inputs(
                 "kg_production": kg,
                 "per_kg_power": per_kg_power,
                 "solar_share": solar_share,
+                "contractor_cph": contractor_cph,
             }
             rows.append(row)
             unit_rows.append(row)
@@ -262,6 +280,39 @@ def build_segment_inputs(
                 "exceeds": drop_pts >= SOLAR_SHARE_DROP_PTS,
             }
 
+        # Contractor cost-per-head trend: only months where BOTH the head-count and
+        # wages exist (cph computed). Awaiting months are absent (never fabricated).
+        contractor_trend = [
+            {"month": r["month"], "value": r["contractor_cph"]}
+            for r in unit_rows
+            if r["contractor_cph"] is not None
+        ]
+
+        # Month-over-month contractor cost-per-head JUMP alert. Mirrors the spike
+        # pattern: only CONSECUTIVE months that BOTH carry a contractor_cph form a
+        # valid comparison — an awaiting month between them breaks the chain and is
+        # never bridged. The advisory reflects the LATEST such pair (loop
+        # overwrites). Only a JUMP (increase) is meaningful here, so ``exceeds`` is
+        # True solely when the cost-per-head rose by at least the threshold (a
+        # falling cost gives a negative pct, not shown). With fewer than two
+        # consecutive valued months it stays None.
+        contractor_alert: Optional[dict] = None
+        for i in range(1, len(unit_rows)):
+            prev_c = unit_rows[i - 1]["contractor_cph"]
+            curr_c = unit_rows[i]["contractor_cph"]
+            if prev_c is None or curr_c is None or prev_c == 0:
+                continue
+            pct = (curr_c - prev_c) / prev_c * 100.0
+            contractor_alert = {
+                "month": unit_rows[i]["month"],
+                "prev_month": unit_rows[i - 1]["month"],
+                "value": curr_c,
+                "prev_value": prev_c,
+                "pct": pct,
+                "threshold": CONTRACTOR_JUMP_PCT,
+                "exceeds": pct >= CONTRACTOR_JUMP_PCT,
+            }
+
         by_unit.append({
             "key": ukey,
             "label": unit["label"],
@@ -271,6 +322,8 @@ def build_segment_inputs(
             "spike": spike,
             "solar_trend": solar_trend,
             "solar_alert": solar_alert,
+            "contractor_trend": contractor_trend,
+            "contractor_alert": contractor_alert,
         })
 
     return {

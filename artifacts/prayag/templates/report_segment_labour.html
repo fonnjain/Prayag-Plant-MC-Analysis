@@ -117,6 +117,22 @@
         </div>
       </div>
       {% endif %}
+      {% if unit.contractor_alert and unit.contractor_alert.exceeds %}
+      <div class="mt-3 pt-3 border-t border-gray-100">
+        <div class="flex items-start gap-1.5 rounded-lg px-2 py-1.5 text-[11px]"
+             style="background:rgba(197,90,17,0.08);color:var(--terra)">
+          <svg width="14" height="14" class="flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008M10.34 3.94l-7.5 12.99A1.5 1.5 0 004.14 19.5h15.72a1.5 1.5 0 001.3-2.57l-7.5-12.99a1.5 1.5 0 00-2.6 0z"/>
+          </svg>
+          <span>
+            Contractor cost per head jumped
+            <span class="font-bold">{{ "%.0f"|format(unit.contractor_alert.pct) }}%</span>
+            ({{ unit.contractor_alert.prev_disp }} → {{ unit.contractor_alert.disp }}:
+            ₹{{ "%.0f"|format(unit.contractor_alert.prev_value) }} → ₹{{ "%.0f"|format(unit.contractor_alert.value) }} per head)
+          </span>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

@@ -302,6 +302,121 @@ def test_solar_alert_uses_latest_consecutive_pair():
     print("ok: latest consecutive pair drives the solar alert, not the older drop")
 
 
+def test_contractor_cph_computed_only_when_both_present():
+    # Cost-per-head = wages / count. Computed only when BOTH count and wages are
+    # entered (and count > 0); an awaiting half leaves it None (never fabricated).
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 50000.0},  # 5000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0},  # wages awaiting -> None
+        ("2026-06", "UNIT-1"): {"contractor_wages": 50000.0},  # count awaiting -> None
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    assert abs(_row(view, "2026-04", "UNIT-1")["contractor_cph"] - 5000.0) < 1e-9
+    assert _row(view, "2026-05", "UNIT-1")["contractor_cph"] is None
+    assert _row(view, "2026-06", "UNIT-1")["contractor_cph"] is None
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    # Only the one valued month appears in the contractor trend.
+    assert [p["month"] for p in by_unit["UNIT-1"]["contractor_trend"]] == ["2026-04"]
+    print("ok: contractor cost-per-head computed only when both count & wages present")
+
+
+def test_contractor_cph_none_when_count_zero():
+    # A zero head-count must NOT divide-by-zero — cost-per-head stays None.
+    months = ["2026-04"]
+    inputs = {("2026-04", "UNIT-1"): {"contractor_count": 0.0, "contractor_wages": 50000.0}}
+    view = si.build_segment_inputs(months, inputs, {})
+    assert _row(view, "2026-04", "UNIT-1")["contractor_cph"] is None
+    print("ok: zero contractor head-count -> cost-per-head None (no div-by-zero)")
+
+
+def test_contractor_alert_flags_sharp_jump():
+    # Apr 4000 -> May 6000 cost-per-head is +50%, beyond the 25% threshold -> flagged.
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 40000.0},  # 4000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 60000.0},  # 6000
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    ca = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"]
+    assert ca is not None
+    assert ca["exceeds"] is True
+    assert abs(ca["pct"] - 50.0) < 1e-9
+    assert ca["prev_month"] == "2026-04" and ca["month"] == "2026-05"
+    assert abs(ca["prev_value"] - 4000.0) < 1e-9 and abs(ca["value"] - 6000.0) < 1e-9
+    print("ok: +50% contractor cost-per-head MoM -> alert (exceeds)")
+
+
+def test_contractor_alert_drop_not_flagged():
+    # A FALLING cost-per-head is good news — never flagged (one-directional).
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 60000.0},  # 6000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 30000.0},  # 3000
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    ca = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"]
+    assert ca is not None
+    assert ca["pct"] < 0
+    assert ca["exceeds"] is False
+    print("ok: contractor cost-per-head drop -> not flagged")
+
+
+def test_contractor_alert_small_jump_not_flagged():
+    # 4000 -> 4400 is only +10%, under the 25% threshold: alert present but
+    # exceeds is False (the template shows nothing).
+    months = ["2026-04", "2026-05"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 40000.0},  # 4000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 44000.0},  # 4400
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    ca = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"]
+    assert ca is not None
+    assert abs(ca["pct"] - 10.0) < 1e-9
+    assert ca["exceeds"] is False
+    print("ok: +10% contractor cost-per-head MoM -> no alert (under threshold)")
+
+
+def test_contractor_alert_never_bridges_awaiting_gap():
+    # Apr valued, May awaiting (no wages), Jun valued. The Apr->Jun change must NOT
+    # be computed as a MoM jump (awaiting May breaks the chain). Alert stays None.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 40000.0},  # 4000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0},  # wages awaiting -> gap
+        ("2026-06", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 90000.0},  # 9000
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    assert {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"] is None
+    print("ok: awaiting month between values -> no bridged contractor alert (None)")
+
+
+def test_contractor_alert_none_with_fewer_than_two_valued_months():
+    months = ["2026-04"]
+    inputs = {("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 40000.0}}
+    view = si.build_segment_inputs(months, inputs, {})
+    assert {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"] is None
+    print("ok: single valued month -> no contractor alert (nothing fabricated)")
+
+
+def test_contractor_alert_uses_latest_consecutive_pair():
+    # Three valued months: 4000 -> 8000 (+100%) -> 8400 (+5%). The alert reflects
+    # the LATEST pair (May->Jun, +5%, under threshold), not the older big jump.
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 40000.0},  # 4000
+        ("2026-05", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 80000.0},  # 8000
+        ("2026-06", "UNIT-1"): {"contractor_count": 10.0, "contractor_wages": 84000.0},  # 8400
+    }
+    view = si.build_segment_inputs(months, inputs, {})
+    ca = {u["key"]: u for u in view["by_unit"]}["UNIT-1"]["contractor_alert"]
+    assert ca["prev_month"] == "2026-05" and ca["month"] == "2026-06"
+    assert abs(ca["pct"] - 5.0) < 1e-9
+    assert ca["exceeds"] is False
+    print("ok: latest consecutive pair drives the contractor alert, not the older jump")
+
+
 def test_complete_when_all_entered():
     months = ["2026-04"]
     inputs = {}
@@ -332,5 +447,13 @@ if __name__ == "__main__":
     test_solar_alert_never_bridges_awaiting_gap()
     test_solar_alert_none_with_fewer_than_two_valued_months()
     test_solar_alert_uses_latest_consecutive_pair()
+    test_contractor_cph_computed_only_when_both_present()
+    test_contractor_cph_none_when_count_zero()
+    test_contractor_alert_flags_sharp_jump()
+    test_contractor_alert_drop_not_flagged()
+    test_contractor_alert_small_jump_not_flagged()
+    test_contractor_alert_never_bridges_awaiting_gap()
+    test_contractor_alert_none_with_fewer_than_two_valued_months()
+    test_contractor_alert_uses_latest_consecutive_pair()
     test_complete_when_all_entered()
     print("\nALL segment_inputs tests passed")

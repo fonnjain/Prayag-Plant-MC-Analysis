@@ -3123,6 +3123,12 @@ def _build_segment_inputs_view(months: list) -> dict:
         if sa:
             sa["disp"] = _month_disp(sa["month"])
             sa["prev_disp"] = _month_disp(sa["prev_month"])
+        for pt in unit.get("contractor_trend", []):
+            pt["disp"] = _month_disp(pt["month"])
+        ca = unit.get("contractor_alert")
+        if ca:
+            ca["disp"] = _month_disp(ca["month"])
+            ca["prev_disp"] = _month_disp(ca["prev_month"])
     return view
 
 
