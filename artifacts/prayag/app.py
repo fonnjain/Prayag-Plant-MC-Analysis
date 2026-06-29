@@ -771,6 +771,10 @@ def _build_freshness() -> dict:
     out["partial"] = bool(read_errors)
     out["read_errors"] = read_errors
     out["stale_rollups"] = _build_stale_rollup_alerts()
+    out["stale_rollup_store_ok"] = store.AVAILABLE
+    out["stale_rollups_open"] = sum(
+        1 for a in out["stale_rollups"] if not a.get("acknowledged")
+    )
     return out
 
 
@@ -793,8 +797,21 @@ def _build_stale_rollup_alerts() -> list:
     alerts = compound_mod.stale_rollup_alerts(
         data["by_compound"], data["rollup"], data["months"]
     )
+    # Apply manager acknowledgements: an ack mutes a known alert until its data
+    # state changes. The ack is keyed to the stable compound·month identity AND
+    # the alert's data fingerprint, so an ack made against a now-superseded
+    # state (the rollup drifted again after a fix) no longer matches and the
+    # alert re-surfaces automatically.
+    acks = store.stale_rollup_acks()
     for a in alerts:
         a["month_disp"] = _month_disp(a["month"])
+        ack = acks.get(a["key"])
+        if ack and ack.get("fingerprint") == a["fingerprint"]:
+            a["acknowledged"] = True
+            a["ack"] = ack
+        else:
+            a["acknowledged"] = False
+            a["ack"] = None
     return alerts
 
 
@@ -1139,6 +1156,75 @@ def _do_ack(action: str, form):
         else "Acknowledgement removed — the issue is active again."
     )
     return _redirect_to_confirmation(form, msg)
+
+
+@app.route("/confirmation/ack_rollup", methods=["POST"])
+def confirmation_ack_rollup():
+    return _do_rollup_ack("ack", request.form)
+
+
+@app.route("/confirmation/unack_rollup", methods=["POST"])
+def confirmation_unack_rollup():
+    return _do_rollup_ack("unack", request.form)
+
+
+def _redirect_with_msg(path: str, msg: str = ""):
+    """Redirect to a safe internal ``path`` carrying a freshness-panel message."""
+    target = _safe_next(path or "/confirmation")
+    if msg:
+        from urllib.parse import quote
+        sep = "&" if "?" in target else "?"
+        target = f"{target}{sep}fresh_msg={quote(msg)}"
+    return redirect(target)
+
+
+def _do_rollup_ack(action: str, form):
+    """Acknowledge (or un-acknowledge) a known stale-rollup alert so it stops
+    nagging in the freshness panel. The freshness panel is view-independent, so
+    the alert is identified by its stable compound·month key plus the data
+    fingerprint of the state being acknowledged — re-computed against the live
+    alerts so we only ever ack an alert that exists NOW."""
+    nxt = form.get("next", "/confirmation")
+    if not store.AVAILABLE:
+        return _redirect_with_msg(nxt, "Review store is unavailable.")
+    approver = (form.get("approver", "") or "").strip()
+    if action == "ack" and not approver:
+        return _redirect_with_msg(nxt, "Please enter your name to acknowledge an alert.")
+    alert_key = (form.get("alert_key", "") or "").strip()
+    if not alert_key:
+        return _redirect_with_msg(nxt, "No alert specified.")
+    fingerprint = (form.get("fingerprint", "") or "").strip()
+
+    # For an ack, confirm the alert is still current with this exact data state.
+    if action == "ack":
+        current = {a["key"]: a for a in _build_stale_rollup_alerts()}
+        match = current.get(alert_key)
+        if match is None or match.get("fingerprint") != fingerprint:
+            return _redirect_with_msg(
+                nxt, "That alert is no longer current — nothing to acknowledge."
+            )
+
+    try:
+        store.stale_rollup_ack_record(
+            action,
+            alert_key=alert_key,
+            fingerprint=fingerprint,
+            compound=form.get("compound", ""),
+            month=form.get("month", ""),
+            message=form.get("message", ""),
+            approver=approver or "(removed)",
+            role=form.get("role", ""),
+            note=form.get("note", ""),
+        )
+    except store.StoreError as e:
+        return _redirect_with_msg(nxt, f"Could not save: {e}")
+
+    msg = (
+        "Stale-rollup alert acknowledged — it will stay muted until the data changes again."
+        if action == "ack"
+        else "Acknowledgement removed — the stale-rollup alert is active again."
+    )
+    return _redirect_with_msg(nxt, msg)
 
 
 @app.route("/confirmation/claude_review", methods=["POST"])

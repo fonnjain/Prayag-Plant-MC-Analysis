@@ -308,6 +308,123 @@ def acks_for(period_key: str) -> Dict[str, Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Stale-rollup alert acknowledgements (dismiss a known stale compound rollup)
+# ---------------------------------------------------------------------------
+# The freshness panel shows a standing "stale rollup" alert when a compound's
+# published "Compound 6-10" monthly summary drifts from its daily Mixer-Logbook
+# detail. A manager who already knows about a specific compound·month drift
+# (e.g. waiting on a plant team to fix the sheet) can acknowledge it so the
+# panel stays clean. Append-only, latest-row-per-alert wins: an ``ack`` mutes
+# the alert, a later ``unack`` reactivates it. Each ack is keyed to a STABLE
+# alert identity (compound·month) AND the data ``fingerprint`` of that alert's
+# figures — so the ack holds while the data state is unchanged but the alert
+# RE-SURFACES automatically if the rollup drifts again to a new state after a
+# fix (the fingerprint no longer matches). Degrades to a safe no-op (no acks)
+# when no DATABASE_URL is configured.
+_STALE_ACK_TABLE = "stale_rollup_acks"
+_stale_ack_initialised = False
+
+
+def _init_stale_acks() -> None:
+    """Create the stale-rollup acknowledgement table if absent (idempotent)."""
+    global _stale_ack_initialised
+    if _stale_ack_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_STALE_ACK_TABLE} (
+        id           BIGSERIAL   PRIMARY KEY,
+        action       TEXT        NOT NULL,
+        alert_key    TEXT        NOT NULL,
+        fingerprint  TEXT        NOT NULL DEFAULT '',
+        compound     TEXT        NOT NULL DEFAULT '',
+        month        TEXT        NOT NULL DEFAULT '',
+        message      TEXT        NOT NULL DEFAULT '',
+        approver     TEXT        NOT NULL,
+        role         TEXT        NOT NULL DEFAULT '',
+        note         TEXT        NOT NULL DEFAULT '',
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_STALE_ACK_TABLE}_lookup
+        ON {_STALE_ACK_TABLE} (alert_key, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _stale_ack_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def stale_rollup_ack_record(
+    action: str,
+    *,
+    alert_key: str,
+    fingerprint: str = "",
+    compound: str = "",
+    month: str = "",
+    message: str = "",
+    approver: str,
+    role: str = "",
+    note: str = "",
+) -> None:
+    """Append an acknowledge / un-acknowledge event for one stale-rollup alert."""
+    if action not in ("ack", "unack"):
+        raise StoreError(f"Unknown action: {action!r}")
+    if not (approver or "").strip():
+        raise StoreError("An approver name is required.")
+    if not (alert_key or "").strip():
+        raise StoreError("An alert reference is required.")
+    _init_stale_acks()
+    sql = f"""
+        INSERT INTO {_STALE_ACK_TABLE}
+            (action, alert_key, fingerprint, compound, month, message,
+             approver, role, note)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+    params = (
+        action, alert_key, fingerprint, compound, month, message,
+        approver.strip(), (role or "").strip(), (note or "").strip(),
+    )
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+    except StoreError:
+        raise
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def stale_rollup_acks() -> Dict[str, Dict]:
+    """Effective stale-rollup acks: ``{alert_key: ack_dict}`` (latest wins).
+
+    Only alerts whose latest action is ``ack`` are returned. The caller compares
+    the stored ``fingerprint`` against the live alert's fingerprint to decide
+    whether the ack still applies (an ack made against a now-superseded data
+    state lets the alert re-surface). Degrades to ``{}`` without a store.
+    """
+    if not AVAILABLE:
+        return {}
+    try:
+        _init_stale_acks()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT DISTINCT ON (alert_key) *
+                    FROM {_STALE_ACK_TABLE}
+                    ORDER BY alert_key, created_at DESC, id DESC"""
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[str, Dict] = {}
+    for r in rows:
+        if r.get("action") == "ack":
+            out[r["alert_key"]] = _shape(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Ideal run-hours overrides (manager-supplied monthly ideal hours per machine)
 # ---------------------------------------------------------------------------
 # Append-only, latest-wins, keyed (plant, machine, month YYYY-MM). A ``set`` row

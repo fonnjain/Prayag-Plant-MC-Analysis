@@ -14,6 +14,7 @@ Pure and network-free.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Dict, List, Optional
 
 # Compound type -> source tab + layout. Order matches the factory compilation.
@@ -256,10 +257,19 @@ def stale_rollup_alerts(by_compound: Dict[str, List[dict]],
         v = validate(comp, {ym: rd})
         for d in v.get("diagnoses", []):
             if d.get("verdict") == "daily":
+                # Stable identity (compound·month) survives figure drift so an
+                # acknowledgement persists; the fingerprint hashes the alert's
+                # own figures (carried in ``text``) so a manager's ack applies
+                # only to THIS data state and the alert re-surfaces if the
+                # rollup later drifts again to a different state after a fix.
                 alerts.append({
                     "compound": d["compound"],
                     "month": ym,
                     "text": d["text"],
+                    "key": f"{d['compound']}|{ym}",
+                    "fingerprint": hashlib.sha256(
+                        f"{d['compound']}|{ym}|{d['text']}".encode("utf-8")
+                    ).hexdigest()[:16],
                 })
     alerts.sort(key=lambda a: (a["month"], a["compound"]))
     return alerts
