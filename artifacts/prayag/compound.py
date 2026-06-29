@@ -177,6 +177,31 @@ def build_compilation(by_compound: Dict[str, List[dict]], months: List[str],
     }
 
 
+def month_trend(by_compound: Dict[str, List[dict]], months: List[str]) -> List[dict]:
+    """Per-month series for the FY trend chart.
+
+    For each month in ``months`` (chronological), recompute the whole-month
+    balance and return the total compound given (kg) and the average weight-loss
+    %. Pure: re-uses ``build_compilation`` over each month's parses (tagged with
+    ``ym`` at load time), so the trend ties out to the same daily-first numbers
+    the grid shows.
+    """
+    out: List[dict] = []
+    for ym in months:
+        sub = {k: [p for p in plist if p.get("ym") == ym]
+               for k, plist in by_compound.items()}
+        comp = build_compilation(sub, [ym])
+        if not comp["has_data"]:
+            continue
+        total = comp["total"]
+        out.append({
+            "ym": ym,
+            "given": round(total["given"] or 0.0, 0),
+            "loss_pct": round((total["loss_pct"] or 0.0) * 100, 2),
+        })
+    return out
+
+
 def validate(comp: dict, rollup: Dict[str, dict], tol: float = 0.005) -> dict:
     """Reconcile the recomputed daily balance against the in-sheet "Compound
     6-10" monthly rollup (summed across the period).

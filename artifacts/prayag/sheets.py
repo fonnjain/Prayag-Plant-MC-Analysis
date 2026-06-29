@@ -774,6 +774,7 @@ def load_compound_data(months: List[str]) -> dict:
                 p = (parsers.parse_cg_logbook(vals) if s["layout"] == "cg"
                      else parsers.parse_mixer_logbook(vals))
                 if p:
+                    p["ym"] = ym
                     by_compound[s["key"]].append(p)
                     if p.get("days"):
                         any_data = True

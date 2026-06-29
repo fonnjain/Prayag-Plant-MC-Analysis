@@ -2791,9 +2791,22 @@ def report_compound_compilation():
     if pipe_output and comp["pipe_given"]:
         yield_pct = pipe_output / comp["pipe_given"] * 100.0
 
+    # Month-over-month FY trend (total compound given per month). Suppressed in a
+    # sub-monthly flow window (no monthly balance to chart).
+    if window:
+        trend_labels = trend_given = trend_loss = []
+    else:
+        series = compound_mod.month_trend(data["by_compound"], sorted(data["months"]))
+        trend_labels = [_month_disp(s["ym"]) for s in series]
+        trend_given = [s["given"] for s in series]
+        trend_loss = [s["loss_pct"] for s in series]
+
     return render_template("report_compound.html",
         comp=comp, validation=validation,
         pipe_output=pipe_output, yield_pct=yield_pct,
+        trend_labels=_safe_json(trend_labels),
+        trend_given=_safe_json(trend_given),
+        trend_loss=_safe_json(trend_loss),
         period_label=pinfo["label"], period=period_arg,
         month_disps=[_month_disp(m) for m in data["months"]],
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),

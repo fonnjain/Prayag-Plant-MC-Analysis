@@ -122,6 +122,16 @@
 <div class="text-xs text-gray-400 mb-4 -mt-2 px-1">Pipe output is net-of-rejection, so a conversion below 100% is expected.</div>
 {% endif %}
 
+<!-- Month-over-month trend -->
+{% if trend_labels != '[]' %}
+<div class="kpi-card p-3 mb-4">
+  <div class="text-xs font-semibold text-gray-600 mb-2">Compound Trend <span class="font-normal text-gray-400">— given (kg, bars) &amp; weight-loss % (line)</span></div>
+  <div class="chart-box" style="height:150px">
+    <canvas id="compTrend"></canvas>
+  </div>
+</div>
+{% endif %}
+
 <!-- Compound mass-balance grid -->
 <div class="kpi-card p-3 mb-4">
   <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Compound Mass-Balance <span class="text-xs font-normal text-gray-400">(kg)</span></h3>
@@ -203,4 +213,36 @@
 {% endif %}
 
 {% endif %}
+
+<script>
+(function(){
+  var labels = {{ trend_labels|safe }};
+  var given = {{ trend_given|safe }};
+  var loss = {{ trend_loss|safe }};
+  var el = document.getElementById('compTrend');
+  if (!el || !labels.length) return;
+  new Chart(el, {
+    data: {
+      labels: labels,
+      datasets: [
+        { type: 'bar', label: 'Compound given (kg)', data: given, yAxisID: 'y',
+          backgroundColor: 'rgba(197,90,17,0.75)', borderRadius: 4, order: 2 },
+        { type: 'line', label: 'Weight-loss %', data: loss, yAxisID: 'y1',
+          borderColor: '#1F3864', backgroundColor: '#1F3864',
+          borderWidth: 2, pointRadius: 3, tension: 0.3, order: 1 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { font: { size: 10 }, boxWidth: 12 } } },
+      scales: {
+        y:  { position: 'left',  ticks: { font: { size: 10 } }, title: { display: false } },
+        y1: { position: 'right', ticks: { font: { size: 10 }, callback: function(v){ return v + '%'; } },
+              grid: { drawOnChartArea: false }, beginAtZero: true },
+        x:  { ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}
