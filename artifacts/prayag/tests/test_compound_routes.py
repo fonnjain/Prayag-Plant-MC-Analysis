@@ -95,6 +95,66 @@ def test_compound_report_daily_window_isolates_one_day():
     print("ok: ?period=<iso-date> -> only that day's figures, flow N/A reconciliation")
 
 
+def _trend_data():
+    """Two ym-tagged months so month_trend yields a real FY series.
+
+    The same dataset is requested two ways below: a whole-FY view (trend chart
+    populated) vs a single-date window (trend chart suppressed). Using one
+    dataset for both proves the *route's* window branch is what blanks the
+    chart — not an empty trend.
+    """
+    return {
+        "by_compound": {
+            "CPVC": [
+                {"ym": "2026-05", "opening": 1000.0, "given_label": "Total Compound given", "days": [
+                    {"date": "2026-05-15", "batch": 5000.0, "material": 4900.0, "given": 4800.0,
+                     "loss": 50.0, "pulvizer": 0.0, "chems": {"Resin K-67": 4800.0}},
+                ]},
+                {"ym": "2026-06", "opening": 1200.0, "given_label": "Total Compound given", "days": [
+                    {"date": "2026-06-15", "batch": 6000.0, "material": 5900.0, "given": 5800.0,
+                     "loss": 60.0, "pulvizer": 0.0, "chems": {"Resin K-67": 5800.0}},
+                ]},
+            ],
+        },
+        "rollup": {
+            "2026-05": {"CPVC": {"batch": 5000.0, "material": 4900.0, "given": 4800.0}},
+            "2026-06": {"CPVC": {"batch": 6000.0, "material": 5900.0, "given": 5800.0}},
+        },
+        "months": ["2026-05", "2026-06"],
+    }
+
+
+def test_compound_report_whole_month_shows_trend():
+    client = _install(loader=lambda months: _trend_data())
+    resp = client.get("/reports/compound_compilation?period=current_fy")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.get_data(as_text=True)
+    # Whole-FY view: the month-over-month trend chart IS rendered (the card only
+    # appears when trend_labels is a non-empty JSON array).
+    assert "Compound Trend" in body, "whole-month view should render the trend chart"
+    assert 'id="compTrend"' in body, "whole-month view should emit the trend canvas"
+    print("ok: whole-FY view -> populated month-over-month trend chart")
+
+
+def test_compound_report_window_hides_trend():
+    client = _install(loader=lambda months: _trend_data())
+    # Single-date window over a day that DOES have logbook data, so the page
+    # renders the flow slice (the same dataset shows a trend for current_fy).
+    resp = client.get("/reports/compound_compilation?period=2026-06-15")
+    assert resp.status_code == 200, resp.status_code
+    body = resp.get_data(as_text=True)
+    # The trend chart is cleanly suppressed for a sub-monthly window: the card
+    # heading and its canvas are both absent (trend series emptied by the route).
+    assert "Compound Trend" not in body, "window view must hide the trend chart"
+    assert 'id="compTrend"' not in body, "window view must not emit the trend canvas"
+    # ...and the page switches to the flow-only validation: an N/A reconciliation
+    # badge plus the daily-flow note explaining a window shows flow only.
+    assert "Daily flow view" in body, "window view should show the flow-only note"
+    assert "N/A" in body
+    assert "PASS" not in body
+    print("ok: sub-monthly window -> trend chart hidden, flow-only validation")
+
+
 def test_compound_report_read_outage_is_honest():
     def boom(months):
         raise SheetReadError("temporary Google Sheets limit")
@@ -111,5 +171,7 @@ def test_compound_report_read_outage_is_honest():
 if __name__ == "__main__":
     test_compound_report_renders_pass()
     test_compound_report_daily_window_isolates_one_day()
+    test_compound_report_whole_month_shows_trend()
+    test_compound_report_window_hides_trend()
     test_compound_report_read_outage_is_honest()
     print("all compound route tests passed")
