@@ -171,11 +171,21 @@ def build_segment_inputs(
             rows.append(row)
             unit_rows.append(row)
 
+        # Per-kg power cost trend: only months where BOTH grid power and kg
+        # production exist (per_kg_power computed). Never fabricated for awaiting
+        # months — those are simply absent from the series.
+        trend = [
+            {"month": r["month"], "value": r["per_kg_power"]}
+            for r in unit_rows
+            if r["per_kg_power"] is not None
+        ]
+
         by_unit.append({
             "key": ukey,
             "label": unit["label"],
             "fields": applicable,
             "rows": unit_rows,
+            "trend": trend,
         })
 
     return {

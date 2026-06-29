@@ -72,6 +72,30 @@ def test_unit_specific_fields():
     print("ok: unit-specific fields restricted correctly")
 
 
+def test_per_kg_power_trend_skips_awaiting_months():
+    months = ["2026-04", "2026-05", "2026-06"]
+    inputs = {
+        ("2026-04", "UNIT-2"): {"jvvl_power": 100000.0},
+        ("2026-05", "UNIT-2"): {"jvvl_power": 120000.0},
+        # 2026-06 power not entered -> excluded from trend (never fabricated).
+    }
+    prod = {
+        ("2026-04", "UNIT-2"): {"kg": 50000.0},
+        ("2026-05", "UNIT-2"): {"kg": 40000.0},
+        ("2026-06", "UNIT-2"): {"kg": 30000.0},
+    }
+    view = si.build_segment_inputs(months, inputs, prod)
+    by_unit = {u["key"]: u for u in view["by_unit"]}
+    trend = by_unit["UNIT-2"]["trend"]
+    # Only the two months with BOTH power and kg appear, in order.
+    assert [p["month"] for p in trend] == ["2026-04", "2026-05"]
+    assert abs(trend[0]["value"] - 2.0) < 1e-9  # 100000 / 50000
+    assert abs(trend[1]["value"] - 3.0) < 1e-9  # 120000 / 40000
+    # A unit with no captured power has an empty trend (no fabricated points).
+    assert by_unit["UNIT-1"]["trend"] == []
+    print("ok: per-kg power trend includes only months with power+kg, in order")
+
+
 def test_complete_when_all_entered():
     months = ["2026-04"]
     inputs = {}

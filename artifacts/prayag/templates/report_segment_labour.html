@@ -72,6 +72,19 @@
           </tbody>
         </table>
       </div>
+      {% if unit.trend and unit.trend|length > 0 %}
+      <div class="mt-3 pt-3 border-t border-gray-100">
+        <div class="text-[11px] font-semibold mb-1" style="color:var(--navy)">
+          Power cost per kg — trend
+          <span class="font-normal text-gray-400">(₹/kg, months with power &amp; production)</span>
+        </div>
+        <div class="chart-box" style="height:120px">
+          <canvas id="pkgTrend-{{ unit.key }}"
+                  data-labels='{{ unit.trend | map(attribute="disp") | list | tojson }}'
+                  data-values='{{ unit.trend | map(attribute="value") | list | tojson }}'></canvas>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
@@ -144,6 +157,47 @@
   </div>
   {% endfor %}
 
+  {% endif %}
+  {% endblock %}
+
+  {% block scripts %}
+  {% if manual and manual.by_unit %}
+  <script>
+  (function(){
+    if (typeof Chart === 'undefined') return;
+    document.querySelectorAll('canvas[id^="pkgTrend-"]').forEach(function(el){
+      var labels, values;
+      try {
+        labels = JSON.parse(el.dataset.labels || '[]');
+        values = JSON.parse(el.dataset.values || '[]');
+      } catch (e) { return; }
+      if (!values.length) return;
+      new Chart(el, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Power cost (₹/kg)',
+            data: values,
+            backgroundColor: 'rgba(197,90,17,0.75)',
+            borderRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: function(c){ return '₹' + Number(c.parsed.y).toFixed(2) + '/kg'; } } }
+          },
+          scales: {
+            y: { beginAtZero: true, ticks: { font: { size: 10 }, callback: function(v){ return '₹' + v; } } },
+            x: { ticks: { font: { size: 10 } } }
+          }
+        }
+      });
+    });
+  })();
+  </script>
   {% endif %}
   {% endblock %}
   

@@ -3014,6 +3014,11 @@ def _build_segment_inputs_view(months: list) -> dict:
     prod = _unit_prod(months)
     view = segment_inputs.build_segment_inputs(months, inputs, prod)
     view["month_disps"] = {m: _month_disp(m) for m in months}
+    # Stamp display labels onto each unit's per-kg power trend points (the pure
+    # module stays display-agnostic; never adds points for awaiting months).
+    for unit in view.get("by_unit", []):
+        for pt in unit.get("trend", []):
+            pt["disp"] = _month_disp(pt["month"])
     return view
 
 
