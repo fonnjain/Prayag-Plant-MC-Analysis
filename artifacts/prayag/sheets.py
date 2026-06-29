@@ -99,6 +99,7 @@ def clear_caches() -> None:
     _data_cache.clear()
     _daily_cache.clear()
     _report_cache.clear()
+    _compound_cache.clear()
     _seg_labour_cache.clear()
     _index_cache.clear()
     _last_fetch_status.clear()
@@ -708,6 +709,78 @@ def load_report_records(family: str) -> List[Record]:
                 continue
         _report_cache[family] = (now, recs)
         return recs
+
+
+# ---------------------------------------------------------------------------
+# Compound Compilation — on-demand load of the Pipe mixer-logbook tabs
+# ---------------------------------------------------------------------------
+_compound_cache: dict = {}       # months-key -> (ts, payload)
+_COMPOUND_TTL = 900.0
+_compound_lock = threading.Lock()
+
+
+def load_compound_data(months: List[str]) -> dict:
+    """Read the Pipe & Fitting compound mixer-logbook tabs for ``months``.
+
+    Only the /reports/compound_compilation route calls this, so the main
+    dashboard cold start never pays for it. Each month is a separate PIPE daily
+    workbook; per-month/per-tab read failures are isolated. Cached in-process.
+
+    Returns ``{"by_compound": {key: [parse per month]}, "rollup": {ym: dict},
+    "months": [ym with data]}``. Empty in demo mode.
+    """
+    import compound as _cmp
+
+    if is_demo_mode():
+        return {"by_compound": {s["key"]: [] for s in _cmp.COMPOUNDS}, "rollup": {}, "months": []}
+
+    wanted = sorted(m for m in months if m in sources.DAILY_SOURCES.get("PIPE", {}).get("files", {}))
+    key = tuple(wanted)
+    now = time.time()
+    cached = _compound_cache.get(key)
+    if cached and now - cached[0] < _COMPOUND_TTL:
+        return cached[1]
+    with _compound_lock:
+        now = time.time()
+        cached = _compound_cache.get(key)
+        if cached and now - cached[0] < _COMPOUND_TTL:
+            return cached[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError(
+                "The Google Sheets connection isn't authorized. "
+                "Reconnect it from the integrations panel and try again."
+            )
+        tabs = [s["tab"] for s in _cmp.COMPOUNDS] + ["Compound 6-10"]
+        by_compound: dict = {s["key"]: [] for s in _cmp.COMPOUNDS}
+        rollup: dict = {}
+        got_months: List[str] = []
+        for ym in wanted:
+            fid = sources.DAILY_SOURCES["PIPE"]["files"].get(ym)
+            if not fid:
+                continue
+            try:
+                res = batch_get(fid, tabs, token)
+            except SheetReadError:
+                logger.warning("compound: read failed for PIPE %s", ym)
+                continue
+            any_data = False
+            for s in _cmp.COMPOUNDS:
+                vals = res.get(s["tab"], [])
+                p = (parsers.parse_cg_logbook(vals) if s["layout"] == "cg"
+                     else parsers.parse_mixer_logbook(vals))
+                if p:
+                    by_compound[s["key"]].append(p)
+                    if p.get("days"):
+                        any_data = True
+            rd = parsers.parse_compound_rollup(res.get("Compound 6-10", []))
+            if rd:
+                rollup[ym] = rd
+            if any_data:
+                got_months.append(ym)
+        out = {"by_compound": by_compound, "rollup": rollup, "months": got_months}
+        _compound_cache[key] = (now, out)
+        return out
 
 
 # Per-key single-flight locks for the daily cache. The monthly path uses one

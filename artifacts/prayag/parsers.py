@@ -1561,3 +1561,276 @@ def parse_index(rows: List[list]) -> List[dict]:
             "sub_blocks": [],
         })
     return reports
+
+
+# ---------------------------------------------------------------------------
+# Compound mixer-logbook parsers (Pipe & Fitting daily workbook)
+# ---------------------------------------------------------------------------
+# Each pipe/fitting compound type has its own "Mixer Logbook - Daily" tab
+# (Report-6=CPVC, 7=UPVC, 8(A)=AGRI, 8(B)=SWR, 9=UPVC Fittings,
+# 10=SWR/AGRI Fittings, plus the separate FC tab). The layout is:
+#   title rows -> header row (Date | ...chems... | Pulvizer X |
+#   Total Batch Weight in KG | Total Material out of Mixer |
+#   Total Compound given to Pipe Plant/Fitting | Total Weight Loss at Mixer |
+#   Av. Weight Loss %age | Compound Floor Stock) -> a chemical-NAME sub-row ->
+#   a TOTAL row -> WEEK sub-totals + daily date rows.
+# CPVC Fittings (CG 122) uses a purchase / issue / balance layout instead.
+#
+# Every figure is summed from the per-day rows (daily-first, verified to
+# reconcile to the sheet's own TOTAL row); the TOTAL row is a reconciliation
+# reference only. Weight-loss % is always recomputed (loss / batch), never read.
+
+_LOGBOOK_DATE_FORMATS = (
+    "%b %d, %Y", "%B %d, %Y", "%d-%b-%Y", "%d-%B-%Y",
+    "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y",
+)
+
+
+def _cnorm(s) -> str:
+    """Collapse whitespace, lower-case; '' for blank/None."""
+    return re.sub(r"\s+", " ", str(s or "").strip()).lower()
+
+
+def _logbook_date(cell):
+    """Parse a mixer-logbook date label -> datetime.date, else None."""
+    import datetime as _dt
+    s = str(cell or "").strip()
+    if not s:
+        return None
+    for fmt in _LOGBOOK_DATE_FORMATS:
+        try:
+            return _dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_mixer_logbook(rows: List[list]) -> Optional[dict]:
+    """Parse a mixer-logbook compound tab -> daily balance + chemical breakdown.
+
+    Returns ``None`` if no recognisable header row is found. The result:
+      ``opening``        month opening stock (kg)
+      ``given_label``    the sheet's own "...given to Pipe Plant/Fitting" label
+      ``days``           list of per-day dicts (date, day, batch, material,
+                         given, loss, closing, pulvizer, chems{name: kg})
+      ``chem_names``     chemical column names in sheet order (excl. pulvizer)
+      ``pulvizer_names`` pulvizer column names
+      ``total_chems``    summed kg per chemical across all days
+    """
+    if not rows:
+        return None
+    hdr_i = None
+    for i, row in enumerate(rows[:10]):
+        cells = [_cnorm(c) for c in row]
+        if any(c == "date" for c in cells) and any("total batch weight" in c for c in cells):
+            hdr_i = i
+            break
+    if hdr_i is None:
+        return None
+    raw_hdr = rows[hdr_i]
+    hdr = [_cnorm(c) for c in raw_hdr]
+    sub = rows[hdr_i + 1] if hdr_i + 1 < len(rows) else []
+
+    def find(*subs):
+        for j, c in enumerate(hdr):
+            for s in subs:
+                if s in c:
+                    return j
+        return None
+
+    col_date = next((j for j, c in enumerate(hdr) if c == "date"), 1)
+    col_batch = find("total batch weight")
+    col_material = find("total material out")
+    col_given = find("total compound given")
+    col_loss = find("total weight loss")
+    col_closing = find("compound floor stock", "closing stock")
+    if col_batch is None:
+        return None
+    given_label = str(raw_hdr[col_given]).strip() if col_given is not None and col_given < len(raw_hdr) else ""
+
+    col_first = next((j for j, c in enumerate(hdr) if c == "1st"), 6)
+    chem_cols, pulv_cols = [], []
+    for j in range(col_first, col_batch):
+        h = hdr[j] if j < len(hdr) else ""
+        name = ""
+        if j < len(sub) and str(sub[j]).strip():
+            name = str(sub[j]).strip()
+        elif j < len(raw_hdr) and str(raw_hdr[j]).strip():
+            name = str(raw_hdr[j]).strip()
+        if not name:
+            continue
+        if "pulviz" in h or "pulvyz" in h:
+            pulv_cols.append((j, name))
+        else:
+            chem_cols.append((j, name))
+
+    opening = 0.0
+    for i in range(hdr_i):
+        done = False
+        for j, c in enumerate(rows[i]):
+            if _cnorm(c) in ("op. stock", "op stock", "opening stock"):
+                vr = rows[i + 1] if i + 1 < len(rows) else []
+                if j < len(vr):
+                    opening = num(vr[j])
+                done = True
+                break
+        if done:
+            break
+
+    def cell(row, j):
+        return num(row[j]) if (j is not None and j < len(row)) else 0.0
+
+    days, total_chems = [], {}
+    for i in range(hdr_i + 1, len(rows)):
+        row = rows[i]
+        if col_date >= len(row):
+            continue
+        lbl = str(row[col_date]).strip()
+        if not lbl or lbl.upper().startswith(("TOTAL", "WEEK", "RATIO", "PART", "%")):
+            continue
+        d = _logbook_date(row[col_date])
+        if d is None:
+            continue
+        chems = {}
+        for j, nm in chem_cols:
+            v = cell(row, j)
+            if v:
+                chems[nm] = chems.get(nm, 0.0) + v
+                total_chems[nm] = total_chems.get(nm, 0.0) + v
+        days.append({
+            "date": d.isoformat(),
+            "day": d.day,
+            "batch": cell(row, col_batch),
+            "material": cell(row, col_material),
+            "given": cell(row, col_given),
+            "loss": cell(row, col_loss),
+            "closing": cell(row, col_closing),
+            "pulvizer": sum(cell(row, j) for j, _ in pulv_cols),
+            "chems": chems,
+        })
+
+    return {
+        "opening": opening,
+        "given_label": given_label,
+        "days": days,
+        "chem_names": [nm for _, nm in chem_cols],
+        "pulvizer_names": [nm for _, nm in pulv_cols],
+        "total_chems": total_chems,
+    }
+
+
+def parse_cg_logbook(rows: List[list]) -> Optional[dict]:
+    """Parse the CPVC-Fittings (CG 122) purchase/issue/balance tab.
+
+    Returns ``None`` if no header found. Result: ``opening`` (month op. stock),
+    ``days`` [{date, day, purchase, issue, balance}].
+    """
+    if not rows:
+        return None
+    hdr_i = None
+    for i, row in enumerate(rows[:8]):
+        cells = [_cnorm(c) for c in row]
+        if any(c == "date" for c in cells) and any("balance" in c for c in cells):
+            hdr_i = i
+            break
+    if hdr_i is None:
+        return None
+    hdr = [_cnorm(c) for c in rows[hdr_i]]
+
+    def find(*subs):
+        for j, c in enumerate(hdr):
+            for s in subs:
+                if s in c:
+                    return j
+        return None
+
+    col_date = next((j for j, c in enumerate(hdr) if c == "date"), 1)
+    col_purchase = find("purchase")
+    col_issue = find("issue")
+    col_balance = find("balance")
+    col_op = find("op. stock", "op stock")
+
+    def cell(row, j):
+        return num(row[j]) if (j is not None and j < len(row)) else 0.0
+
+    opening = 0.0
+    total_row = rows[hdr_i + 1] if hdr_i + 1 < len(rows) else []
+    if col_op is not None:
+        opening = cell(total_row, col_op)
+
+    days = []
+    for i in range(hdr_i + 1, len(rows)):
+        row = rows[i]
+        if col_date >= len(row):
+            continue
+        lbl = str(row[col_date]).strip()
+        if not lbl or lbl.upper().startswith(("TOTAL", "WEEK")):
+            continue
+        d = _logbook_date(row[col_date])
+        if d is None:
+            continue
+        days.append({
+            "date": d.isoformat(),
+            "day": d.day,
+            "purchase": cell(row, col_purchase),
+            "issue": cell(row, col_issue),
+            "balance": cell(row, col_balance),
+        })
+    return {"opening": opening, "days": days}
+
+
+# Map "Compound 6-10" rollup column headers -> compound keys (longest first so
+# "CPVC F" wins over "CPVC"). Used only for the reconciliation badge.
+_ROLLUP_COL_KEYS = [
+    ("cpvc f", "CPVC_F"), ("upvc f", "UPVC_F"), ("swr f", "SWR_F"),
+    ("agri f", "SWR_F"), ("cpvc", "CPVC"), ("upvc", "UPVC"),
+    ("agri", "AGRI"), ("swr", "SWR"),
+]
+_ROLLUP_ROW_KEYS = [
+    ("opening stock", "opening"), ("pulvizer", "pulvizer"),
+    ("total batch weight", "batch"), ("total material out", "material"),
+    ("total compound given", "given"), ("total weight loss", "loss"),
+    ("closing stock", "closing"),
+]
+
+
+def parse_compound_rollup(rows: List[list]) -> dict:
+    """Parse the in-sheet "Compound 6-10" monthly rollup -> {key: {field: kg}}.
+
+    Reconciliation reference ONLY (never a headline figure). Returns {} if the
+    TYPES header row isn't found.
+    """
+    if not rows:
+        return {}
+    hdr_i = None
+    for i, row in enumerate(rows[:6]):
+        if any(_cnorm(c) == "types" for c in row):
+            hdr_i = i
+            break
+    if hdr_i is None:
+        return {}
+    hdr = rows[hdr_i]
+    col_key = {}
+    for j, c in enumerate(hdr):
+        cc = _cnorm(c)
+        for token, key in _ROLLUP_COL_KEYS:
+            if cc == token:
+                col_key[j] = key
+                break
+    out: dict = {}
+    for i in range(hdr_i + 1, len(rows)):
+        row = rows[i]
+        if not row or len(row) < 2:
+            continue
+        label = _cnorm(row[1]) if len(row) > 1 else ""
+        field = None
+        for token, fk in _ROLLUP_ROW_KEYS:
+            if token in label:
+                field = fk
+                break
+        if not field:
+            continue
+        for j, key in col_key.items():
+            if j < len(row):
+                out.setdefault(key, {})[field] = num(row[j])
+    return out

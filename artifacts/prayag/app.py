@@ -18,7 +18,7 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    load_report_records, index_catalogue,
+    load_report_records, load_compound_data, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
 )
 from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
@@ -47,6 +47,7 @@ import baselines
 import ideal_hours
 import verify
 import freshness
+import compound as compound_mod
 from pdf_export import generate_report_pdf, generate_ai_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -2684,6 +2685,7 @@ _REPORT_CATALOGUE = [
     {"id": "mould_summary",     "title": "Mould-wise Summary",     "location": "KH",      "desc": "Per-mould output, run hours, runner %, rejection %"},
     {"id": "mould_efficiency",  "title": "Mould Age-in-Efficiency","location": "KH",      "desc": "Per-mould production, ideal vs actual hours, efficiency %"},
     {"id": "compound_summary",  "title": "Compound / Material",    "location": "KH",      "desc": "Batch weight, mixer output, weight-loss % by compound"},
+    {"id": "compound_compilation", "title": "Compound Compilation", "location": "KH",     "desc": "Pipe compound mass-balance (opening → batch → given → closing) + raw-material breakdown"},
     {"id": "tank_kh",           "title": "Tanks (KH)",             "location": "KH",      "desc": "Per-item daily production and rejection"},
     {"id": "injection_summary", "title": "Injection Moulding M/C", "location": "Bhiwari", "desc": "PTMT / CP: ideal vs actual hours, output, rejection, utilisation %"},
     {"id": "tank_vn",           "title": "Tanks (VN)",             "location": "VN",      "desc": "Annual summary — production & rejection by item"},
@@ -2741,6 +2743,44 @@ def report_gom_summary():
         band_rows=band_rows, overall=overall.to_dict(),
         trend_labels=_safe_json(trend_labels), trend_values=_safe_json(trend_values),
         period_label=pinfo["label"], period=period_arg,
+        today_disp=_fmt(_today()), last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/reports/compound_compilation")
+def report_compound_compilation():
+    """Pipe compound mass-balance (opening → batch → given → closing) recomputed
+    daily-first from the Pipe & Fitting mixer-logbook tabs, with raw-material
+    breakdown and a reconciliation badge vs the in-sheet rollup."""
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    try:
+        data = load_compound_data(pinfo["months"])
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    comp = compound_mod.build_compilation(data["by_compound"], data["months"])
+    validation = compound_mod.validate(comp, data["rollup"])
+
+    # Yield: compound consumed by the Pipe plant vs Pipe extruded output (best
+    # effort — never blocks the page; pipe output is net-of-rejection so a yield
+    # under 100% is expected).
+    pipe_output = None
+    try:
+        drecs = get_daily_records(data["months"])[0] if data["months"] else []
+        pipe_output = sum(r.total_count for r in drecs
+                          if r.plant == "PIPE" and not getattr(r, "is_finishing", False))
+    except SheetReadError:
+        pipe_output = None
+    yield_pct = None
+    if pipe_output and comp["pipe_given"]:
+        yield_pct = pipe_output / comp["pipe_given"] * 100.0
+
+    return render_template("report_compound.html",
+        comp=comp, validation=validation,
+        pipe_output=pipe_output, yield_pct=yield_pct,
+        period_label=pinfo["label"], period=period_arg,
+        month_disps=[_month_disp(m) for m in data["months"]],
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
 

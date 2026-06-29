@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Compound Compilation{% endblock %}
+
+{% block content %}
+{% macro kg(v) -%}
+{%- if v is none -%}—{%- else -%}{{ "{:,.0f}".format(v) }}{%- endif -%}
+{%- endmacro %}
+
+<div class="mb-3 flex items-center gap-2">
+  <a href="/reports" class="text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div>
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">Compound Compilation</h2>
+    <div class="text-xs text-gray-400">Pipe &amp; Fitting · {{ period_label }}{% if month_disps %} · {{ month_disps|join(', ') }}{% endif %}</div>
+  </div>
+</div>
+
+<!-- Period selector -->
+<form method="get" class="mb-4">
+  <select name="period" onchange="this.form.submit()"
+          class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white">
+    <optgroup label="Fiscal Year">
+      <option value="current_fy" {% if period == 'current_fy' %}selected{% endif %}>Current FY (2026-27)</option>
+    </optgroup>
+    <optgroup label="Quarter">
+      <option value="q1" {% if period == 'q1' %}selected{% endif %}>Q1 (Apr–Jun)</option>
+      <option value="q2" {% if period == 'q2' %}selected{% endif %}>Q2 (Jul–Sep)</option>
+      <option value="q3" {% if period == 'q3' %}selected{% endif %}>Q3 (Oct–Dec)</option>
+      <option value="q4" {% if period == 'q4' %}selected{% endif %}>Q4 (Jan–Mar)</option>
+    </optgroup>
+    <optgroup label="Month">
+      {% for m, nm in [(4,'April'),(5,'May'),(6,'June'),(7,'July'),(8,'August'),(9,'September'),(10,'October'),(11,'November'),(12,'December'),(1,'January'),(2,'February'),(3,'March')] %}
+      <option value="{{ m }}" {% if period == m|string %}selected{% endif %}>{{ nm }}</option>
+      {% endfor %}
+    </optgroup>
+  </select>
+</form>
+
+{% if not comp.has_data %}
+<div class="kpi-card p-6 text-center">
+  <div class="text-gray-400 text-sm">No compound data for this period.</div>
+  <div class="text-xs text-gray-300 mt-1">The Pipe &amp; Fitting daily workbooks cover April–June 2026.</div>
+</div>
+{% else %}
+
+<!-- Reconciliation badge -->
+<div class="kpi-card p-3 mb-4">
+  <div class="flex items-center justify-between">
+    <div class="text-xs font-semibold text-gray-600">Reconciliation vs in-sheet rollup</div>
+    {% if not validation.available %}
+      <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">N/A</span>
+    {% elif validation.status == 'PASS' %}
+      <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">PASS</span>
+    {% else %}
+      <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{{ validation.n_fail }} MISMATCH</span>
+    {% endif %}
+  </div>
+  {% if validation.available %}
+  <div class="text-xs text-gray-400 mt-1">
+    {{ validation.n_pass }} pass · {{ validation.n_fail }} fail · {{ validation.n_na }} n/a
+    (tolerance {{ "%.1f"|format(validation.tol_pct) }}%) — daily-recomputed totals checked against the sheet's own “Compound 6-10” monthly rollup.
+  </div>
+  {% if validation.n_fail %}
+  <div class="table-scroll mt-2">
+    <table class="w-full text-xs">
+      <thead><tr class="text-gray-400 border-b border-gray-100">
+        <th class="text-left pb-1 font-medium">Compound</th>
+        <th class="text-left pb-1 font-medium">Field</th>
+        <th class="text-right pb-1 font-medium">Recomputed</th>
+        <th class="text-right pb-1 font-medium">Sheet</th>
+        <th class="text-right pb-1 font-medium">Δ%</th>
+      </tr></thead>
+      <tbody>
+        {% for r in validation.rows if r.status == 'FAIL' %}
+        <tr class="border-b border-gray-50">
+          <td class="py-1 font-semibold" style="color:var(--navy)">{{ r.compound }}</td>
+          <td class="py-1 text-gray-500">{{ r.field }}</td>
+          <td class="py-1 text-right text-gray-700">{{ kg(r.recomputed) }}</td>
+          <td class="py-1 text-right text-gray-500">{{ kg(r.sheet) }}</td>
+          <td class="py-1 text-right text-red-600 font-semibold">{{ r.diff_pct }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+
+<!-- Yield -->
+<div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">
+  <div>
+    <div class="text-xs text-gray-500 mb-0.5">Given to Pipe</div>
+    <div class="font-bold text-base" style="color:var(--navy)">{{ kg(comp.pipe_given) }}<span class="text-xs font-normal text-gray-400"> kg</span></div>
+  </div>
+  <div>
+    <div class="text-xs text-gray-500 mb-0.5">Pipe Output</div>
+    <div class="font-bold text-base text-gray-700">{{ kg(pipe_output) }}<span class="text-xs font-normal text-gray-400"> kg</span></div>
+  </div>
+  <div>
+    <div class="text-xs text-gray-500 mb-0.5">Conversion</div>
+    <div class="font-bold text-base" style="color:var(--terra)">{% if yield_pct is none %}—{% else %}{{ "%.1f"|format(yield_pct) }}%{% endif %}</div>
+  </div>
+</div>
+{% if yield_pct is not none %}
+<div class="text-xs text-gray-400 mb-4 -mt-2 px-1">Pipe output is net-of-rejection, so a conversion below 100% is expected.</div>
+{% endif %}
+
+<!-- Compound mass-balance grid -->
+<div class="kpi-card p-3 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Compound Mass-Balance <span class="text-xs font-normal text-gray-400">(kg)</span></h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs whitespace-nowrap">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-200">
+          <th class="text-left pb-2 pr-3 font-medium sticky left-0 bg-white">Balance</th>
+          {% for c in comp.cols %}
+          <th class="text-right pb-2 px-2 font-semibold {% if not c.in_total %}text-gray-400{% endif %}" style="{% if c.in_total %}color:var(--navy){% endif %}">{{ c.label }}</th>
+          {% endfor %}
+          <th class="text-right pb-2 pl-2 font-bold" style="color:var(--terra)">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for field, label in comp.balance_rows %}
+        <tr class="border-b border-gray-50">
+          <td class="py-1.5 pr-3 text-gray-600 sticky left-0 bg-white">{{ label }}</td>
+          {% for c in comp.cols %}
+          <td class="py-1.5 px-2 text-right {% if not c.in_total %}text-gray-400{% else %}text-gray-700{% endif %}">
+            {%- if field == 'loss_pct' -%}
+              {% if c.loss_pct is none %}—{% else %}{{ "%.2f"|format(c.loss_pct * 100) }}%{% endif %}
+            {%- elif field == 'given' -%}
+              {{ kg(c.given) }}
+            {%- else -%}
+              {{ kg(c[field]) }}
+            {%- endif -%}
+          </td>
+          {% endfor %}
+          <td class="py-1.5 pl-2 text-right font-bold" style="color:var(--terra)">
+            {%- if field == 'loss_pct' -%}
+              {% if comp.total.loss_pct is none %}—{% else %}{{ "%.2f"|format(comp.total.loss_pct * 100) }}%{% endif %}
+            {%- elif field == 'pulvizer' or field == 'batch' or field == 'loss' -%}
+              {{ kg(comp.total[field]) }}
+            {%- else -%}
+              {{ kg(comp.total[field]) }}
+            {%- endif -%}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-xs text-gray-400 mt-2">
+    Closing = Opening + Material out − Given (recomputed). CPVC F (CG 122) is purchase/issue.
+    FC is a separate fitting compound — shown for reference, excluded from TOTAL and reconciliation.
+  </div>
+</div>
+
+<!-- Raw-material breakdown -->
+{% if comp.materials %}
+<details class="kpi-card p-3 mb-4">
+  <summary class="text-sm font-semibold cursor-pointer" style="color:var(--navy)">Raw-Material Breakdown <span class="text-xs font-normal text-gray-400">({{ comp.materials|length }} items, kg)</span></summary>
+  <div class="table-scroll mt-3">
+    <table class="w-full text-xs whitespace-nowrap">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-200">
+          <th class="text-left pb-2 pr-3 font-medium sticky left-0 bg-white">Material</th>
+          {% for c in comp.cols if c.in_total %}
+          <th class="text-right pb-2 px-2 font-semibold" style="color:var(--navy)">{{ c.label }}</th>
+          {% endfor %}
+          <th class="text-right pb-2 pl-2 font-bold" style="color:var(--terra)">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in comp.materials %}
+        <tr class="border-b border-gray-50">
+          <td class="py-1.5 pr-3 text-gray-700 sticky left-0 bg-white">{{ it.name }}</td>
+          {% for c in comp.cols if c.in_total %}
+          <td class="py-1.5 px-2 text-right text-gray-600">{{ kg(it.by.get(c.key)) if it.by.get(c.key) else '' }}</td>
+          {% endfor %}
+          <td class="py-1.5 pl-2 text-right font-semibold" style="color:var(--terra)">{{ kg(it.total) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+
+{% endif %}
+{% endblock %}
