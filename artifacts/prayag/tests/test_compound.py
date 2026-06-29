@@ -201,6 +201,75 @@ def test_validate_no_rollup_is_na():
     print("ok test_validate_no_rollup_is_na")
 
 
+def _tagged(ym, opening, days, **extra):
+    """A per-month mixer parse dict tagged with its ``ym`` (as load_compound_data
+    stamps it), optionally carrying junk fields (e.g. a stored loss_pct) that the
+    engine must ignore."""
+    p = {"ym": ym, "opening": opening, "given_label": "Total Compound given", "days": days}
+    p.update(extra)
+    return p
+
+
+def test_month_trend_ties_to_aggregate_total():
+    # Per-month trend points must sum to exactly what build_compilation reports
+    # over the whole period — otherwise the chart silently desyncs from the grid.
+    # One month carries a bogus stored "loss_pct" the engine must NOT read.
+    by = {
+        "CPVC": [
+            _tagged("2026-04", 1000.0, [_day(1000.0, 990.0, 950.0, 10.0)], loss_pct=99.0),
+            _tagged("2026-05", 9999.0, [_day(2000.0, 1980.0, 1900.0, 40.0)]),
+        ],
+        "UPVC": [
+            _tagged("2026-04", 0.0, [_day(500.0, 495.0, 480.0, 5.0)]),
+            _tagged("2026-05", 0.0, [_day(700.0, 690.0, 670.0, 7.0)]),
+        ],
+    }
+    months = ["2026-04", "2026-05"]
+    series = compound.month_trend(by, months)
+    assert [s["ym"] for s in series] == months
+
+    # Sum of per-month "given" == the aggregated grand TOTAL given.
+    agg = compound.build_compilation(by, months)
+    assert sum(s["given"] for s in series) == round(agg["total"]["given"], 0)
+    assert sum(s["given"] for s in series) == round(950.0 + 1900.0 + 480.0 + 670.0, 0)
+
+    # Each month's loss% is recomputed loss/batch (NOT the stored 99.0).
+    for ym in months:
+        sub = {k: [p for p in plist if p["ym"] == ym] for k, plist in by.items()}
+        mcomp = compound.build_compilation(sub, [ym])
+        pt = next(s for s in series if s["ym"] == ym)
+        expected = round((mcomp["total"]["loss"] / mcomp["total"]["batch"]) * 100, 2)
+        assert pt["loss_pct"] == expected
+    # 2026-04: loss 15 / batch 1500 = 1.0% ; the stored 99.0 was ignored.
+    assert next(s for s in series if s["ym"] == "2026-04")["loss_pct"] == 1.0
+    print("ok test_month_trend_ties_to_aggregate_total")
+
+
+def test_month_trend_single_month_and_window():
+    by = {"CPVC": [_tagged("2026-06", 0.0, [
+        {**_day(1000.0, 990.0, 950.0, 10.0), "date": "2026-06-10"},
+        {**_day(2000.0, 1980.0, 1900.0, 20.0), "date": "2026-06-20"},
+    ])]}
+
+    # Single-month period: exactly one trend point, tying to the month's total.
+    series = compound.month_trend(by, ["2026-06"])
+    assert len(series) == 1
+    agg = compound.build_compilation(by, ["2026-06"])
+    assert series[0]["given"] == round(agg["total"]["given"], 0)
+    assert series[0]["loss_pct"] == round((agg["total"]["loss_pct"] or 0.0) * 100, 2)
+
+    # A month with no matching ym data is skipped → empty series. This is the
+    # contract the app relies on to blank the trend for a sub-monthly window:
+    # build_compilation(window=...) is a flow view with no monthly balance to
+    # chart, so the trend is suppressed entirely.
+    assert compound.month_trend(by, ["2026-07"]) == []
+    assert compound.month_trend(by, []) == []
+    win = compound.build_compilation(by, ["2026-06"], window=("2026-06-10", "2026-06-10"))
+    assert win["flow"] is True
+    assert win["total"]["opening"] is None and win["total"]["closing"] is None
+    print("ok test_month_trend_single_month_and_window")
+
+
 if __name__ == "__main__":
     test_mixer_balance_identity()
     test_cg_purchase_issue_identity()
@@ -211,4 +280,6 @@ if __name__ == "__main__":
     test_validate_sums_multi_month_rollup()
     test_flow_window_suppresses_balance_and_isolates_days()
     test_validate_no_rollup_is_na()
+    test_month_trend_ties_to_aggregate_total()
+    test_month_trend_single_month_and_window()
     print("all compound tests passed")
