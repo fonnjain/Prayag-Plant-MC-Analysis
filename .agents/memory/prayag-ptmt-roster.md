@@ -26,6 +26,22 @@ authoritative 55 lets completeness surface a never-reporting machine as a gap.
 - Grinding group = finishing (`PTMT_FINISHING_GROUP`); its KG stays out of plant
   output (Record.is_finishing).
 
+**PTMT segments are process groups, not "PTMT":** machines carry
+`PTMT – Injection (standard)` / `– Corrugator` / `– Grinding` / `– Blow Moulding`
+/ `– Injection (N-line)`. A report config that lists a plant token (e.g.
+`injection_summary` = `["PTMT","CP"]`) must match these by PREFIX
+(`segment.startswith(token + " ")`), not exact `in` — otherwise the report shows
+"No data" even though the engine computed PTMT utilisation correctly. This was the
+real reason "PTMT utilisation isn't wired" — the engine was always right; the
+dedicated report's segment filter just couldn't see PTMT's groups.
+
+**PTMT utilisation baseline:** read live from Report-5 Col E (IDEAL HOUR) via the
+in-sheet `ideal_col` precedence; recomputed as Col D (run hrs) ÷ Col E, NEVER the
+stored Col F %. Col E is a FLAT 572 h/machine/month — verified identical across
+Apr/May/Jun 2026, so it does NOT scale with calendar days; read per-month as-is.
+Do NOT add 572 to baselines.json: the in-sheet read takes precedence so the entry
+would be dead config, and hardcoding defeats live tracking if the plant revises E.
+
 **Non-per-machine plants (TANK):** do NOT fabricate gaps. tier-1 only emits
 "appears in data but not in master roster" for segments/moulds when that plant
 actually HAS a roster for that dimension (`if m_segs` / `if m_moulds`); a

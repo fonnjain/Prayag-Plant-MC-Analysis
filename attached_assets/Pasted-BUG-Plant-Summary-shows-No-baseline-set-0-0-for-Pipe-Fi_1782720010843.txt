@@ -1,0 +1,47 @@
+BUG: Plant Summary shows "No baseline set" / 0.0% for Pipe & Fitting (and
+Garden, Injection Moulding) even when the baseline and production both exist.
+Confirmed example: April 2026, Pipe & Fitting — every machine in Report-5 has
+Ideal Run Hour Per Day (Col D=22), Ideal Output Per Hour (Col I, machine-
+specific), real run hours/output, and a computed efficiency (Col K: M/C-1=0.82,
+M/C-4=0.73, M/C-9=1.05...). Yet the app reports "no baseline." Only PTMT shows
+a bar.
+
+ROOT CAUSE
+The "no baseline set" check is reading the wrong tab. PIPE baselines do NOT live
+in Report-11 (the daily transactional log) or a separate planned-hours config —
+they live in Report-5 (the machine summary): Col D = Ideal Run Hour Per Day,
+Col I = Ideal Output Per Hour (per machine). This is the same wrong-tab class of
+bug as the earlier reject-vs-output false positives.
+
+FIX
+1) Source PIPE baselines from Report-5, per machine:
+     ideal_output_per_hour = Col I  (machine-specific: 120/150/200/280/320/400 —
+                                     never collapse to one global number)
+     ideal_run_hour_per_day = Col D (22 for pipe M/Cs, 12 for grinders)
+   Read live cells; do not hardcode.
+2) Compute efficiency in the engine (recompute from raw cells; do not read the
+   stored % in Col K):
+     efficiency   = (output_kg / run_hours) / ideal_output_per_hour
+     utilisation  = run_hours / (ideal_hr_per_day * run_days)   [Col D * Col E]
+   Use Report-5's summed Col F (run hrs), Col G (output), Col H (rejection) as
+   the authoritative monthly machine actuals.
+3) A plant counts as "baseline set" if Report-5 has Col I / Col D populated.
+   Stop emitting "No baseline set" for PIPE when those columns exist. The flag
+   should reflect a genuinely missing baseline column, not the wrong tab.
+4) Blank-guard: idle machine (run hrs=0 / output=0, e.g. M/C-7, M/C-8) -> show
+   blank/"n/a", not 0%. Plant rollup = sum F,G,H then ratio; never average %.
+
+AUDIT THE SAME PATTERN ELSEWHERE
+Check Garden Pipe and Injection Moulding the same way — do their summary tabs
+carry Ideal Output Per Hour / Ideal Run Hour Per Day columns (like Pipe
+Report-5)? If yes, wire them and drop their "no baseline" too. If a plant
+genuinely lacks the columns, keep it suppressed. Report back which plants have
+the baseline columns and which truly don't — don't assume "no baseline" without
+checking the summary tab.
+
+VALIDATION
+- April 2026 Pipe & Fitting shows a real efficiency bar (~70-80% range), not
+  "No baseline set". Per-machine efficiency matches Report-5 Col K.
+- PTMT unchanged. Idle machines show blank not 0%.
+- "No baseline set" only appears for plants whose summary tab genuinely lacks
+  the ideal columns.

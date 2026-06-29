@@ -1586,6 +1586,24 @@ REPORT_TYPES = [
 ]
 
 
+def _filter_report_segments(rows, wanted):
+    """Filter rows to the report's configured segment tokens.
+
+    A report may list a plant token (e.g. "PTMT") whose machines are split
+    across process-group segments ("PTMT – Injection (standard)",
+    "PTMT – Corrugator", …). Match the exact segment OR any process-group
+    segment that begins with the token followed by a space, so PTMT's per-process
+    machines surface under the injection report instead of it showing "No data".
+    Single-segment plants (Pipe/Garden Pipe/HDPE) still match exactly; no other
+    segment begins with one of these tokens + a space, so there is no over-match.
+    """
+    return [
+        r for r in rows
+        if r.segment in wanted
+        or any(r.segment.startswith(f"{w} ") for w in wanted)
+    ]
+
+
 @app.route("/reports/<report_id>")
 def report_detail(report_id: str):
     rpt = next((r for r in REPORT_TYPES if r["id"] == report_id), None)
@@ -1597,7 +1615,7 @@ def report_detail(report_id: str):
 
     rows = data["rows"]
     if rpt["segments"]:
-        rows = [r for r in rows if r.segment in rpt["segments"]]
+        rows = _filter_report_segments(rows, rpt["segments"])
 
     # Build table depending on report type
     headers, table_rows, chart_labels, chart_values, chart_label = _build_report_table(report_id, rows, data)
@@ -1779,7 +1797,7 @@ def export_pdf(report_id: str):
     data = get_data(request.args)
     rows = data["rows"]
     if rpt["segments"]:
-        rows = [r for r in rows if r.segment in rpt["segments"]]
+        rows = _filter_report_segments(rows, rpt["segments"])
 
     headers, table_rows, _, _, _ = _build_report_table(report_id, rows, data)
     sub_overall = compute_metrics(rows)
@@ -1845,7 +1863,7 @@ def _ai_report_payload(report_id: str):
     data = get_data(request.args)
     rows = data["rows"]
     if rpt["segments"]:
-        rows = [r for r in rows if r.segment in rpt["segments"]]
+        rows = _filter_report_segments(rows, rpt["segments"])
 
     headers, table_rows, _, _, _ = _build_report_table(report_id, rows, data)
     sub_overall = compute_metrics(rows)

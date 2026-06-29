@@ -1,0 +1,52 @@
+Pipe & Fitting HAS baselines after all — wire PIPE efficiency and utilisation.
+The earlier "PIPE has no planned-hours baseline" warning was reading the wrong
+tab (Report-11, the daily log). The baselines live in Report-5.
+
+SOURCE — Pipe & Fitting workbook, tab Report-5 (machine summary), per machine:
+  Col C = Machine (Pipe M/C-1..9, Grinder-1/2, Pulverizer, Mixer)
+  Col D = Ideal Run Hour Per Day      (input; 22 for pipe M/Cs, 12 for grinders)
+  Col E = Run Days                    (input/formula: count of days with data)
+  Col F = Run Hours    (actual, summed from daily cells)
+  Col G = Output (KG)  (actual, summed)
+  Col H = Rejection (KG) (actual, summed)
+  Col I = Ideal Output Per Hour       (input; machine-specific: 120/150/200/280/320/400)
+  Col J = Avg per hour output = G/F           (formula)
+  Col K = %age of Efficiency = J / I          (formula)
+  Col L = Rejection % = H / G                 (formula)
+
+WHAT TO DO
+1) For PIPE, read the baselines from Report-5 PER MACHINE:
+   - ideal output per hour = Col I (machine-specific — do NOT use one global value)
+   - ideal run hour per day = Col D
+   Read the live cells; don't hardcode (grinders use 12 hr/day and different
+   ideal rates than pipe machines).
+2) Compute in the engine (recompute from raw cells, our standard rule — do not
+   read the stored % in K/L):
+   - efficiency = (output_kg / run_hours) / ideal_output_per_hour   = (G/F)/I
+   - utilisation = run_hours / (ideal_hr_per_day * run_days)         = F/(D*E)
+   - rejection %  = rejection_kg / output_kg                          = H/G
+3) Source PIPE actuals (run hours F, output G, rejection H) from Report-5's
+   summed columns — these are the authoritative monthly machine totals. Keep
+   using Report-11 only for daily/date-level detail, NOT for the baseline.
+4) Blank-guard (match the sheet's IFERROR): if run_hours=0 or output=0 (idle
+   machine, e.g. M/C-7, M/C-8), show efficiency/utilisation as blank/"n/a",
+   not 0%. Idle != 0% efficient.
+5) Add PIPE ideal output/hour (Col I) and ideal hr/day (Col D) to the baseline
+   config, sourced live from Report-5. This REMOVES the "PIPE has no baseline,
+   utilisation/efficiency hidden" reconciliation warning — PIPE efficiency and
+   utilisation are now publishable.
+
+IMPORTANT — does MOULDING have the same?
+Report-5 here is the PIPE machine summary. Check whether the MOULDING summary
+(Report-12 / its summary tab) has the same Ideal Output Per Hour + Ideal Run
+Hour Per Day columns. If it does, wire MOULDING efficiency the same way and
+drop its "no baseline" warning too. If it genuinely lacks them, leave MOULDING
+suppressed. Tell me which.
+
+VALIDATION
+- PIPE efficiency per machine matches Report-5 Col K (e.g. M/C-1: (7214/95)/120
+  = 0.63). Idle machines (M/C-7/8) show blank, not 0%.
+- The "PIPE 7/7 machines no planned-hours baseline" warning disappears.
+- Plant/section rollups sum F, G, H first then compute ratios — never average
+  machine percentages.
+- PTMT utilisation (from its Report-5 Col E ideal hours) is unaffected.

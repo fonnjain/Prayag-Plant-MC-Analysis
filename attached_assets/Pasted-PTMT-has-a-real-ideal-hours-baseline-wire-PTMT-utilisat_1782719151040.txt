@@ -1,0 +1,42 @@
+PTMT has a real ideal-hours baseline — wire PTMT utilisation. PIPE and
+MOULDING still have NO baseline, so keep their utilisation suppressed.
+
+SOURCE (confirmed in the PTMT daily workbook, tab Report-5):
+  Column D = TOTAL RUN HOUR   (actual run hours, per machine, for the month)
+  Column E = IDEAL HOUR        (the management baseline — currently 572/month)
+  Column F = %age of Utilisation, a sheet formula = IFERROR(D/E, "")
+So utilisation = run hours (D) / ideal hours (E). The 572 baseline is a full
+calendar-month figure (572 / 30 days ≈ 19 hrs/day per machine), uniform across
+all ~55 PTMT machines (injection, blow moulding, corrugator, grinders).
+
+WHAT TO DO
+1) For PTMT, read IDEAL HOUR from Report-5 Column E, PER MACHINE, PER MONTH.
+   Do NOT hardcode 572 — read the live cell. If the plant revises the standard
+   or a month differs, Col E is where that change lives; hardcoding would drift.
+2) Compute utilisation in the engine as run_hours (D) / ideal_hours (E).
+   Recompute it ourselves from the raw D and E cells — do NOT read the stored
+   Column F percentage (our rule: never trust stored % cells, recompute from
+   raw). Column F is only confirmation that the intended formula is D/E.
+3) Preserve the blank-guard: if a machine ran 0 hours (e.g. 130-TON idle) or
+   ideal hours is missing/zero, show utilisation as blank/"n/a", NOT 0% — same
+   as the sheet's IFERROR behaviour. Idle != 0% utilised.
+4) Add PTMT ideal hours to baselines.json (or the baseline config) sourced from
+   Report-5 Col E. PIPE and MOULDING stay absent -> their utilisation/efficiency
+   remain suppressed exactly as now. This change is PTMT-only.
+
+PER-MONTH CHECK (do this and tell me the result)
+  Read Col E for PTMT in the Apr, May, and Jun 2026 workbooks.
+  - If E is identical (572) in all three -> it's a FLAT monthly constant; read
+    it as-is per month.
+  - If E scales with days in month (e.g. ~591 for a 31-day month, ~532 for Feb)
+    -> it's a 19-hrs/day x days rule; read the live per-month value (still just
+    read Col E, but expect it to move). Either way, read the cell; don't assume.
+
+VALIDATION
+- PTMT utilisation now shows per machine = D/E (e.g. a machine with 422 run hrs
+  vs 572 ideal -> ~74%). Idle machines show blank, not 0%.
+- PIPE and MOULDING utilisation unchanged (still suppressed, no baseline).
+- The PTMT plant/section utilisation rolls up from summed D over summed E, not
+  by averaging machine percentages.
+- Spot-check a couple of machines against the sheet's Column F to confirm our
+  recomputed D/E matches the plant's own formula.
