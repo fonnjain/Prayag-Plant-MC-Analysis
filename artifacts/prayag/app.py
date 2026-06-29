@@ -3164,9 +3164,16 @@ def segment_input_view():
     """Capture surface for the Group B manual monthly inputs (power/solar/contractor)."""
     months = _seg_input_months()
     view = _build_segment_inputs_view(months)
+    # Optional deep-link from the reports reminder: ?month=YYYY-MM pre-selects that
+    # month's rows so the manager lands straight on the gap they tapped. Validated
+    # against the real format; anything else is ignored (no highlight).
+    focus_month = (request.args.get("month", "") or "").strip()
+    if not _YM_RE.match(focus_month):
+        focus_month = ""
     return render_template(
         "segment_input.html",
         view=view,
+        focus_month=focus_month,
         store_ok=store.AVAILABLE,
         input_msg=request.args.get("input_msg", ""),
         period="current_fy",

@@ -47,6 +47,7 @@
     {% endif %}
   </div>
 
+  {% set seen_months = namespace(list=[]) %}
   {% for unit in view.by_unit %}
   <div class="mb-6">
     <div class="flex items-center gap-2 mb-2">
@@ -56,7 +57,9 @@
 
     {% for r in unit.rows %}
     <form method="post" action="/segment-input/save"
-          class="bg-white border border-gray-200 rounded-lg p-3 mb-2 shadow-sm">
+          {% if r.month not in seen_months.list %}id="m-{{ r.month }}"{% set seen_months.list = seen_months.list + [r.month] %}{% endif %}
+          class="bg-white rounded-lg p-3 mb-2 shadow-sm {% if r.month == focus_month %}border-2{% else %}border border-gray-200{% endif %}"
+          {% if r.month == focus_month %}style="border-color:var(--terra);box-shadow:0 0 0 3px rgba(197,90,17,0.15)"{% endif %}>
       <input type="hidden" name="month" value="{{ r.month }}">
       <input type="hidden" name="unit" value="{{ unit.key }}">
 
