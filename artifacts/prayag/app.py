@@ -5,12 +5,14 @@ All arithmetic is deterministic Python. Claude is used only for narrative prose.
 from __future__ import annotations
 import os
 import re
+import math
 import datetime
+import dataclasses
 import json
 import time
 from functools import lru_cache
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 from flask import Flask, render_template, request, jsonify, Response, abort, redirect
 
 from sheets import (
@@ -41,6 +43,7 @@ from narrative import (
 import manifest as manifest_mod
 import store
 import baselines
+import ideal_hours
 import verify
 import freshness
 from pdf_export import generate_report_pdf, generate_ai_report_pdf
@@ -309,6 +312,56 @@ def _apply_baselines(rows):
     return rows
 
 
+def _apply_ideal_overrides(rows):
+    """Layer manager ideal-hours overrides onto the loaded rows.
+
+    Overrides are keyed (plant, machine, month YYYY-MM) and live only in the app
+    DB — they are NEVER written back to the sheets. For each machine-month with a
+    ``set`` override we rescale that machine-month's rows so their ``ideal_hours``
+    SUM to the override monthly figure (one row per machine-day, so an equal split
+    reconciles exactly), and stamp ``ideal_source='override'``. An override of 0
+    means "not expected to run" → ``ideal_hours`` 0 → utilisation suppressed
+    (never a misleading 0%). The sheet/derived baseline already on each row is the
+    fallback wherever no override exists.
+
+    Returns a NEW list: overridden rows are *copies* (``dataclasses.replace``) so
+    the shared, in-process-cached Record objects keep their original sheet
+    baseline — clearing an override later must restore the sheet value, which a
+    cache-mutation would silently destroy. No-op when no override store / DB is
+    configured (``ideal_overrides_for`` returns ``{}``).
+    """
+    if not rows:
+        return rows
+    months = {(r.date or r.period or "")[:7] for r in rows if (r.date or r.period)}
+    ov_by_month: dict = {}
+    for m in months:
+        if len(m) == 7:
+            ov = store.ideal_overrides_for(m)
+            if ov:
+                ov_by_month[m] = ov
+    if not ov_by_month:
+        return rows
+    # Rows per (plant, machine, month) so the monthly override is split evenly.
+    counts: dict = {}
+    for r in rows:
+        mk = (r.date or r.period or "")[:7]
+        if ov_by_month.get(mk, {}).get((r.plant, r.machine)) is not None:
+            k = (r.plant, r.machine, mk)
+            counts[k] = counts.get(k, 0) + 1
+    out = []
+    for r in rows:
+        mk = (r.date or r.period or "")[:7]
+        ov = ov_by_month.get(mk, {}).get((r.plant, r.machine))
+        if ov is None:
+            out.append(r)
+            continue
+        monthly = float(ov.get("ideal_hours") or 0.0)
+        n = counts.get((r.plant, r.machine, mk), 1) or 1
+        per_row = (monthly / n) if monthly > 0 else 0.0
+        out.append(dataclasses.replace(r, ideal_hours=per_row, ideal_source="override"))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Data pipeline (read → filter → compute → validate)
 # ---------------------------------------------------------------------------
@@ -459,6 +512,10 @@ def get_data(args):
                 f"{pinfo['label']} → no daily workbook is configured for {disp}. "
                 "No production data for this period."
             )
+
+    # Layer manager ideal-hours overrides (DB-stored, never written to sheets)
+    # before any figure is computed, so utilisation reflects them everywhere.
+    all_rows = _apply_ideal_overrides(all_rows)
 
     # Quarantine physically-impossible rows (Tier 3 hard errors): they are held
     # aside with their raw value + provenance and EXCLUDED from every published
@@ -1568,6 +1625,201 @@ def verify_log():
     except store.StoreError as e:
         return _back(f"Could not record verification: {e}")
     return _back(f"Verification logged by {run_by}.")
+
+
+# ---------------------------------------------------------------------------
+# Ideal hours input (view / override monthly ideal run hours per machine)
+# ---------------------------------------------------------------------------
+# A manager view to inspect each machine's monthly ideal run hours and override it
+# where the live sheet value is wrong or missing. Overrides live ONLY in the app
+# DB (store.ideal_hours_overrides) — they are NEVER written back to the Google
+# Sheets — and drive utilisation through ideal_hours.resolve's precedence:
+# override > live sheet value > app default > not set. v1 is ideal HOURS only.
+
+_IDEAL_SRC_FROM_RECORD = {
+    "derived": ideal_hours.SRC_DERIVED,
+    "sheet": ideal_hours.SRC_SHEET,
+    "config": ideal_hours.SRC_APP_DEFAULT,
+}
+
+
+def _build_ideal_input(month: str, plant_filter: str = "") -> dict:
+    """Assemble the per-machine ideal-hours view for ``month`` (``YYYY-MM``).
+
+    The live sheet/derived baseline is read from the day-level Records (their
+    ``ideal_hours`` already sum to the monthly figure); the override (if any)
+    comes from the app DB. ``ideal_hours.resolve`` decides the effective figure
+    and its source for each machine. Read-only — no figure is mutated here.
+    """
+    try:
+        daily_rows, _r, _w = get_daily_records([month])
+    except SheetReadError:
+        daily_rows = []
+    # Aggregate the live baseline per (plant, machine): sum the per-row ideal and
+    # run hours, and remember the strongest non-override source seen.
+    agg: dict = {}
+    for r in daily_rows:
+        k = (r.plant, r.machine)
+        a = agg.setdefault(k, {"sheet": 0.0, "kind": "none", "run": 0.0})
+        a["sheet"] += float(r.ideal_hours or 0.0)
+        a["run"] += float(r.actual_hours or 0.0)
+        src = (r.ideal_source or "none")
+        if a["kind"] in ("none", "") and src not in ("none", "", "override"):
+            a["kind"] = src
+    overrides = store.ideal_overrides_for(month)
+    for k in overrides:  # surface override-only machines absent from this month
+        agg.setdefault(k, {"sheet": 0.0, "kind": "none", "run": 0.0})
+
+    cap = ideal_hours.cap_hours(month)
+    rows = []
+    for (plant, machine), a in agg.items():
+        if plant_filter and plant != plant_filter:
+            continue
+        ov = overrides.get((plant, machine))
+        ov_val = float(ov.get("ideal_hours")) if ov else None
+        sheet_val = a["sheet"] if a["sheet"] > 0 else None
+        sheet_kind = _IDEAL_SRC_FROM_RECORD.get(a["kind"], ideal_hours.SRC_SHEET)
+        eff, src = ideal_hours.resolve(
+            override=ov_val, sheet_value=sheet_val,
+            sheet_kind=sheet_kind, plant=plant,
+        )
+        rows.append({
+            "plant": plant,
+            "machine": machine,
+            "sheet_value": sheet_val,
+            "sheet_kind": sheet_kind,
+            "sheet_kind_label": ideal_hours.SRC_LABELS.get(sheet_kind, sheet_kind),
+            "override": ov_val,
+            "override_by": (ov or {}).get("set_by", ""),
+            "override_when": (ov or {}).get("when_disp", ""),
+            "override_note": (ov or {}).get("note", ""),
+            "effective": eff,
+            "source": src,
+            "source_label": ideal_hours.SRC_LABELS.get(src, src),
+            "run_hours": a["run"],
+            "over_cap": (eff is not None and cap > 0 and eff > cap),
+        })
+    rows.sort(key=lambda x: (x["plant"], x["machine"]))
+    return {
+        "month": month,
+        "month_label": _month_disp(month),
+        "rows": rows,
+        "plants": sorted({p for (p, _m) in agg}),
+        "cap": cap,
+        "days": ideal_hours.days_in_month(month),
+        "basis": ideal_hours.PIPE_IDEAL_DAYS_BASIS,
+        "store_ok": store.AVAILABLE,
+    }
+
+
+@app.route("/input")
+def ideal_input_view():
+    month = _verify_month(request.args)
+    plant_filter = (request.args.get("plant", "") or "").strip()
+    ctx = _build_ideal_input(month, plant_filter)
+    return render_template(
+        "ideal_input.html",
+        **ctx,
+        available_months=months_with_data(),
+        input_msg=request.args.get("input_msg", ""),
+        # Minimal chrome context for base.html.
+        period=month,
+        period_label=f"Ideal hours — {ctx['month_label']}",
+        plant_filter=plant_filter,
+        segment_filter="", machine_filter="",
+        plant_names=PLANT_NAMES,
+        demo_mode=is_demo_mode(),
+    )
+
+
+def _redirect_to_input(month: str, plant_filter: str = "", msg: str = ""):
+    qs = f"month={month}"
+    if plant_filter:
+        qs += f"&plant={quote(plant_filter)}"
+    if msg:
+        qs += f"&input_msg={quote(msg)}"
+    return redirect(f"/input?{qs}")
+
+
+@app.route("/input/save", methods=["POST"])
+def ideal_input_save():
+    """Persist ideal-hours overrides for a month. A blank field clears an existing
+    override (reverting that machine to the live sheet value); a number sets it
+    (0 = "not expected to run"). Values are stored ONLY in the app DB, never the
+    sheets. Unchanged fields are skipped so the audit trail stays meaningful."""
+    form = request.form
+    month = (form.get("month", "") or "").strip()
+    plant_filter = (form.get("plant", "") or "").strip()
+    if not _YM_RE.match(month):
+        return _redirect_to_input(month, plant_filter, "Invalid month.")
+    if not store.AVAILABLE:
+        return _redirect_to_input(
+            month, plant_filter, "Override store is unavailable (no database configured)."
+        )
+    set_by = (form.get("set_by", "") or "").strip()
+    note = (form.get("note", "") or "").strip()
+    if not set_by:
+        return _redirect_to_input(month, plant_filter, "Please enter your name to save changes.")
+    try:
+        n = int(form.get("n", "0"))
+    except ValueError:
+        n = 0
+
+    current = store.ideal_overrides_for(month)
+    cap = ideal_hours.cap_hours(month)
+    changed = 0
+    warns: list = []
+    errs: list = []
+    for i in range(n):
+        plant = (form.get(f"plant_{i}", "") or "").strip()
+        machine = (form.get(f"machine_{i}", "") or "").strip()
+        if not plant or not machine:
+            continue
+        raw = (form.get(f"hours_{i}", "") or "").strip()
+        prior = current.get((plant, machine))
+        prior_val = float(prior.get("ideal_hours")) if prior else None
+        if raw == "":
+            if prior is not None:  # blank clears an existing override
+                try:
+                    store.ideal_override_record(
+                        "clear", plant=plant, machine=machine, month=month,
+                        set_by=set_by, note=note,
+                    )
+                    changed += 1
+                except store.StoreError as e:
+                    errs.append(str(e))
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            errs.append(f"{machine}: '{raw}' is not a number.")
+            continue
+        if not math.isfinite(val):
+            errs.append(f"{machine}: '{raw}' is not a valid number.")
+            continue
+        if val < 0:
+            errs.append(f"{machine}: ideal hours cannot be negative.")
+            continue
+        if prior_val is not None and abs(prior_val - val) < 1e-9:
+            continue  # unchanged — don't write a redundant audit row
+        if cap > 0 and val > cap:
+            warns.append(
+                f"{machine}: {val:g} h exceeds {cap:g} h "
+                f"(24 h × {ideal_hours.days_in_month(month)} days) — saved anyway."
+            )
+        try:
+            store.ideal_override_record(
+                "set", plant=plant, machine=machine, month=month,
+                hours=val, set_by=set_by, note=note,
+            )
+            changed += 1
+        except store.StoreError as e:
+            errs.append(str(e))
+
+    parts = [f"Saved {changed} change{'s' if changed != 1 else ''}." if changed
+             else "No changes to save."]
+    parts += warns + errs
+    return _redirect_to_input(month, plant_filter, " ".join(parts))
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from metrics import Record
 import parsers
 import sources
 import baselines
+import ideal_hours
 import store as _store
 
 # ---------------------------------------------------------------------------
@@ -774,6 +775,10 @@ _DAILY_LAYOUTS: dict = {
   "PIPE": [
       {
           "emit": "PIPE", "tab": "Report-11", "layout": "long",
+          # PIPE's per-machine ideal is published in a SEPARATE tab (Report-5) as
+          # "Ideal Run Hour Per Day"; it is read cross-tab, filtered to PIPE M/C
+          # rows and expanded to a monthly figure (see _emit_daily).
+          "ideal_runhr_tab": "Report-5",
           "long": dict(
               machine_col=("eq", "MACHINE NO."),
               out_col=("eq", "WEIGHT"),
@@ -1122,6 +1127,23 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           values, header_spec=spec["ideal_hours_col"], mc_header_spec=summary_mc)
       sheet_hours = {f"{emit} {lbl}".strip(): v for lbl, v in labels.items()}
 
+  # PIPE only: its ideal lives in a SEPARATE tab (Report-5) as an "Ideal Run Hour
+  # Per Day", on a split header shared with other machine families (Mixer /
+  # Moulding / Grinder). Read it, keep only PIPE M/C rows, and key by machine
+  # number so it joins onto the long-tab machines via _mc_key. The monthly figure
+  # is derived from this per-day rate × the configured day basis (calendar days),
+  # NOT the grid's flat 500-hour placeholder.
+  sheet_runhr_day: dict = {}  # _mc_key -> ideal run hours PER DAY (cross-tab)
+  rh_tab = spec.get("ideal_runhr_tab")
+  if rh_tab and rh_tab in tabs:
+      perday = parsers.parse_pipe_ideal_runhours(read_values(file_id, rh_tab, token))
+      for lbl, v in perday.items():
+          if "PIPE" not in str(lbl).upper():
+              continue  # exclude Moulding/Mixer/Grinder rows on the shared sheet
+          k = _mc_key(lbl)
+          if k is not None and v > 0:
+              sheet_runhr_day[k] = v
+
   # Active days per machine (full month) so per-day ideal hours reconcile to
   # the monthly figure.
   active: dict = {}
@@ -1147,6 +1169,16 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           r.ideal_hours = sheet_ideal[r.machine] / days
           r.ideal_output = 0.0  # no in-sheet output rate → efficiency hidden
           r.ideal_source = "sheet"
+      elif _mc_key(r.machine) in sheet_runhr_day:
+          # PIPE: per-day ideal run hours × calendar days = monthly ideal, spread
+          # over the machine's active days (one row per machine-day) so the sum
+          # reconciles to the monthly figure. Output rate stays unset → only
+          # utilisation publishes (efficiency is out of scope for this baseline).
+          per_day = sheet_runhr_day[_mc_key(r.machine)]
+          monthly = per_day * ideal_hours.days_in_month(ym)
+          r.ideal_hours = monthly / days
+          r.ideal_output = 0.0
+          r.ideal_source = "derived"
       else:
           base = baselines.resolve(emit, r.machine, ym)
           if base:

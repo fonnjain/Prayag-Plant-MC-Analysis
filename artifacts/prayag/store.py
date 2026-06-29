@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import os
 import json
+import math
 import pickle
 import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 try:
     import psycopg2
@@ -303,6 +304,120 @@ def acks_for(period_key: str) -> Dict[str, Dict]:
     for r in rows:
         if r.get("action") == "ack":
             out[r["issue_key"]] = _shape(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Ideal run-hours overrides (manager-supplied monthly ideal hours per machine)
+# ---------------------------------------------------------------------------
+# Append-only, latest-wins, keyed (plant, machine, month YYYY-MM). A ``set`` row
+# carries the override hours; a ``clear`` row reverts that machine-month to the
+# live sheet value. These NEVER touch the Google Sheets — they live only here and
+# drive utilisation via ``ideal_hours.resolve``. Degrades to a safe no-op (no
+# overrides) when no DATABASE_URL is configured.
+_IDEAL_TABLE = "ideal_hours_overrides"
+_ideal_initialised = False
+
+
+def _init_ideal() -> None:
+    """Create the ideal-hours override table if absent (idempotent, lazy)."""
+    global _ideal_initialised
+    if _ideal_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_IDEAL_TABLE} (
+        id           BIGSERIAL   PRIMARY KEY,
+        action       TEXT        NOT NULL,
+        plant        TEXT        NOT NULL,
+        machine      TEXT        NOT NULL,
+        month        TEXT        NOT NULL,
+        ideal_hours  DOUBLE PRECISION NOT NULL DEFAULT 0,
+        set_by       TEXT        NOT NULL,
+        note         TEXT        NOT NULL DEFAULT '',
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS {_IDEAL_TABLE}_lookup
+        ON {_IDEAL_TABLE} (month, plant, machine, created_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _ideal_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def ideal_override_record(
+    action: str,
+    *,
+    plant: str,
+    machine: str,
+    month: str,
+    hours: Optional[float] = None,
+    set_by: str,
+    note: str = "",
+) -> None:
+    """Append a ``set`` (with hours) or ``clear`` event for one machine-month."""
+    if action not in ("set", "clear"):
+        raise StoreError(f"Unknown action: {action!r}")
+    if not (set_by or "").strip():
+        raise StoreError("A name is required.")
+    if not (plant or "").strip() or not (machine or "").strip() or not (month or "").strip():
+        raise StoreError("plant, machine and month are required.")
+    h = 0.0
+    if action == "set":
+        if hours is None:
+            raise StoreError("An ideal-hours value is required.")
+        h = float(hours)
+        if not math.isfinite(h):
+            raise StoreError("Ideal hours must be a finite number.")
+        if h < 0:
+            raise StoreError("Ideal hours cannot be negative.")
+    _init_ideal()
+    sql = f"""
+        INSERT INTO {_IDEAL_TABLE}
+            (action, plant, machine, month, ideal_hours, set_by, note)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+    """
+    params = (
+        action, plant, machine, month, h, set_by.strip(), (note or "").strip(),
+    )
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+    except StoreError:
+        raise
+    except Exception as e:
+        raise StoreError(str(e))
+
+
+def ideal_overrides_for(month: str) -> Dict[Tuple[str, str], Dict]:
+    """Effective overrides for a month: ``{(plant, machine): override_dict}``.
+
+    The latest row per (plant, machine) wins; only ones whose latest action is
+    ``set`` are returned. Degrades to ``{}`` when no store is configured.
+    """
+    if not AVAILABLE:
+        return {}
+    try:
+        _init_ideal()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT DISTINCT ON (plant, machine) *
+                    FROM {_IDEAL_TABLE}
+                    WHERE month=%s
+                    ORDER BY plant, machine, created_at DESC, id DESC""",
+                (month,),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[Tuple[str, str], Dict] = {}
+    for r in rows:
+        if r.get("action") == "set":
+            out[(r["plant"], r["machine"])] = _shape(r)
     return out
 
 
