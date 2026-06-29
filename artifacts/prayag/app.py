@@ -2906,15 +2906,27 @@ _REPORT_CATALOGUE = [
 _LOCATION_ORDER = ["KH", "Bhiwari", "VN", "WB", "ALL"]
 _LOCATION_NAMES = {"KH": "Kaharani", "Bhiwari": "Bhiwadi (RICO)", "VN": "Varanasi", "WB": "West Bengal", "ALL": "All Locations"}
 
+# AI-powered reports are exactly those served by the generic report_detail route
+# (REPORT_TYPES): they carry the "Generate report by AI" button + cached
+# Management Commentary narrative. Every other catalogue entry is purely
+# deterministic. The /reports tab shows ONLY the AI reports; /management-reports
+# shows ONLY the deterministic ones — so the two tabs no longer overlap.
+_AI_REPORT_IDS = {r["id"] for r in REPORT_TYPES}
+
 
 @app.route("/management-reports")
 def management_reports_index():
     """Management Reports — a dedicated landing for the annual management report
     set, kept separate from the operational Reports tab. Report compute is reused
-    from the existing /reports/<id> detail routes; the cards link straight there."""
+    from the existing /reports/<id> detail routes; the cards link straight there.
+
+    Shows ONLY the purely deterministic reports — no AI-generated output. The
+    AI-powered reports live exclusively on the /reports tab."""
     from collections import defaultdict
     by_loc = defaultdict(list)
     for r in _REPORT_CATALOGUE:
+        if r["id"] in _AI_REPORT_IDS:
+            continue
         by_loc[r["location"]].append(r)
     locations = []
     for loc in _LOCATION_ORDER:
@@ -2930,10 +2942,13 @@ def management_reports_index():
 
 @app.route("/reports")
 def reports_index():
-    """All 14 management reports grouped by Location → Plant."""
+    """AI-powered reports only, grouped by Location → Plant. The purely
+    deterministic reports live on the /management-reports tab instead."""
     from collections import defaultdict
     by_loc = defaultdict(list)
     for r in _REPORT_CATALOGUE:
+        if r["id"] not in _AI_REPORT_IDS:
+            continue
         by_loc[r["location"]].append(r)
     locations = []
     for loc in _LOCATION_ORDER:
