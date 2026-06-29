@@ -755,14 +755,18 @@ def load_compound_data(months: List[str]) -> dict:
         by_compound: dict = {s["key"]: [] for s in _cmp.COMPOUNDS}
         rollup: dict = {}
         got_months: List[str] = []
+        attempted = 0
+        failed = 0
         for ym in wanted:
             fid = sources.DAILY_SOURCES["PIPE"]["files"].get(ym)
             if not fid:
                 continue
+            attempted += 1
             try:
                 res = batch_get(fid, tabs, token)
             except SheetReadError:
                 logger.warning("compound: read failed for PIPE %s", ym)
+                failed += 1
                 continue
             any_data = False
             for s in _cmp.COMPOUNDS:
@@ -778,6 +782,15 @@ def load_compound_data(months: List[str]) -> dict:
                 rollup[ym] = rd
             if any_data:
                 got_months.append(ym)
+        # Honest failure: if every workbook we tried to read failed, this is a
+        # read OUTAGE, not an empty source — raise rather than masquerade as
+        # "no compound data". Do NOT cache a failed read.
+        if attempted and failed == attempted:
+            raise SheetReadError(
+                "Couldn't read the Pipe & Fitting daily workbooks for the "
+                "selected period. This is usually a temporary Google Sheets "
+                "limit — please try again in a moment."
+            )
         out = {"by_compound": by_compound, "rollup": rollup, "months": got_months}
         _compound_cache[key] = (now, out)
         return out
