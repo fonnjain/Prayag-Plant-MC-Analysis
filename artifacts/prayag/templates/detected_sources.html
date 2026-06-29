@@ -20,6 +20,86 @@
 
 {% include "_freshness_panel.html" %}
 
+{% if index_catalogue %}
+<div class="kpi-card p-4 mb-4">
+  <h2 class="text-base font-bold mb-1" style="color:var(--navy)">Workbook Index — tab catalogue</h2>
+  <p class="text-xs text-gray-500 leading-relaxed">
+    Read from each workbook's own “Index” sheet (the authoritative description of every
+    Report-N tab). Tabs are keyed by <span class="font-semibold">description</span>, not
+    number — the same report number means different things across workbooks. Tabs marked
+    <span class="font-semibold text-blue-700">available</span> exist in the sheet but the
+    dashboard does not ingest them yet; <span class="font-semibold text-amber-700">changed</span>
+    means a tab's description or frequency differs from when it was first seen.
+  </p>
+</div>
+
+{% for cat in index_catalogue %}
+<div class="kpi-card p-4 mb-3">
+  <div class="flex items-center justify-between gap-2 mb-1">
+    <div class="text-sm font-semibold text-gray-900">{{ cat.plant_name }} workbook</div>
+    <span class="text-[10px] text-gray-400">{{ cat.month }}</span>
+  </div>
+  <div class="text-[11px] text-gray-500 mb-2">
+    {{ cat.n_wired }} ingested · {{ cat.n_available }} available — not yet built ·
+    {{ cat.reports|length }} documented{% if cat.n_changed %} ·
+    <span class="text-amber-700 font-semibold">{{ cat.n_changed }} changed</span>{% endif %}
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-[11px]">
+      <thead>
+        <tr class="text-left text-gray-400">
+          <th class="py-1 pr-2 font-medium whitespace-nowrap">Report</th>
+          <th class="py-1 pr-2 font-medium">Description</th>
+          <th class="py-1 pr-2 font-medium whitespace-nowrap">Frequency</th>
+          <th class="py-1 pr-2 font-medium">Unit</th>
+          <th class="py-1 pr-2 font-medium">Owner</th>
+          <th class="py-1 pr-2 font-medium">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rp in cat.reports %}
+        <tr class="border-t border-gray-50 align-top {% if rp.change == 'changed' %}bg-amber-50{% endif %}">
+          <td class="py-1 pr-2 font-medium text-gray-800 whitespace-nowrap">{{ rp.report }}</td>
+          <td class="py-1 pr-2 text-gray-700">
+            {{ rp.description or '—' }}
+            {% if rp.sub_blocks %}
+            <div class="mt-0.5">
+              {% for sb in rp.sub_blocks %}
+              <div class="text-gray-400">↳ {{ sb.include or sb.description or sb.report }}{% if sb.owner %} · {{ sb.owner }}{% endif %}</div>
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% if rp.change == 'changed' %}
+            <div class="text-amber-700 mt-0.5">
+              ⚠ changed since baseline{% if rp.baseline.description and rp.baseline.description != rp.description %} (was: “{{ rp.baseline.description }}”){% endif %}{% if rp.baseline.frequency and rp.baseline.frequency != rp.frequency %} (frequency was: {{ rp.baseline.frequency }}){% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="py-1 pr-2 text-gray-600 whitespace-nowrap">
+            {{ rp.frequency or '—' }}{% if rp.sliceable %} <span class="text-green-600">·sliceable</span>{% endif %}
+          </td>
+          <td class="py-1 pr-2 text-gray-600">{{ rp.unit or '—' }}</td>
+          <td class="py-1 pr-2 text-gray-600">{{ rp.owner or '—' }}</td>
+          <td class="py-1 pr-2 whitespace-nowrap">
+            {% if rp.status == 'wired' %}<span class="text-green-700 font-semibold">ingested</span>
+            {% elif rp.status == 'available' %}<span class="text-blue-700">available</span>
+            {% else %}<span class="text-gray-400">documented</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if cat.removed %}
+  <div class="text-[11px] text-amber-700 mt-2">
+    ⚠ No longer present in this month's Index:
+    {% for rm in cat.removed %}{{ rm.report }}{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
 {% for r in reports %}
 <div class="kpi-card p-4 mb-3">
   <div class="flex items-start justify-between gap-2 mb-2">

@@ -1363,3 +1363,190 @@ def parse_segment_labour(
             "total": num(g(total_c)) if total_c >= 0 else 0.0,
         })
     return rows_out
+
+
+# ---------------------------------------------------------------------------
+# Per-workbook "Index" tab — authoritative tab metadata.
+#
+# Every PTMT and Pipe & Fitting monthly workbook ships an Index sheet whose rows
+# describe each Report-N tab:  S.No | Reports | Frequency | Types | Include |
+# By Whom | Action Taken By  (usually with a leading blank column A).
+#
+# The same bare report NUMBER means different things across workbooks
+# (Report-12 = Wastage in PTMT but Moulding M/C production in Pipe), so the
+# dashboard must key tabs by DESCRIPTION, not number. This parser turns the
+# Index into structured, description-keyed metadata. Real-world quirks handled:
+#   * leading "N." / blank column A,
+#   * Frequency is a MERGED cell — a blank inherits the value above,
+#   * a continuation row (blank "Reports" cell) is a SUB-BLOCK of the report
+#     above (Report-5 lists Pipe M/C / Mixer,Grinder,Pulverizer / Moulding M/C
+#     as three owners — this is why Pulverizer was missing),
+#   * a frequency token can be mis-typed into the Types column (PTMT Report-12).
+# Pure; no network.
+# ---------------------------------------------------------------------------
+_INDEX_HEADERS = {
+    "sno": "sno", "sno.": "sno", "s.no": "sno", "s.no.": "sno", "s. no.": "sno",
+    "s no": "sno", "s. no": "sno",
+    "reports": "reports", "report": "reports",
+    "frequency": "frequency",
+    "types": "types", "type": "types",
+    "include": "include",
+    "by whom": "by_whom", "bywhom": "by_whom",
+    "action taken by": "action_taken_by",
+}
+
+# Recognised frequency tokens (longest first so "every monday & thursday" wins
+# over "every monday"). Used both for the Frequency column and the quirk where a
+# frequency leaks into the Types column.
+_FREQ_TOKENS = [
+    "every monday & thursday", "every monday and thursday",
+    "every monday", "every week", "weekly", "fortnightly",
+    "monthly", "daily", "quarterly", "yearly", "annually",
+]
+
+
+def _index_norm(s) -> str:
+    """Lower-case, collapse whitespace; '' for blank/None."""
+    return re.sub(r"\s+", " ", str(s or "").strip()).lower()
+
+
+def _index_freq_class(freq: str) -> tuple[str, bool]:
+    """(frequency_class, sliceable) from a raw frequency string.
+
+    Only ``daily`` tabs hold true per-day rows and therefore support
+    daily / weekly / month-to-date slicing. ``weekly`` ("Every Monday") and
+    ``monthly`` tabs are PERIOD SNAPSHOTS — they must never be summed as if they
+    were daily. Unknown/blank → not sliceable (treated as a snapshot).
+    """
+    f = _index_norm(freq)
+    if "daily" in f:
+        return "daily", True
+    if "monday" in f or "thursday" in f or "week" in f or "fortnight" in f:
+        return "weekly", False
+    if "month" in f:
+        return "monthly", False
+    if "quarter" in f:
+        return "quarterly", False
+    if "year" in f or "annual" in f:
+        return "yearly", False
+    return "", False
+
+
+def _index_units(desc: str) -> tuple[list[str], str]:
+    """(units, primary_unit) inferred from a report's description text.
+
+    'in KG & Pcs' → both kg+pcs (pick KG for kg metrics); 'Ltr' → Ltr (Tank);
+    Reports marked only 'Pcs' → pcs. Empty when the description names no unit.
+    """
+    d = _index_norm(desc)
+    units: list[str] = []
+    if "ltr" in d or "litre" in d or "liter" in d:
+        units.append("Ltr")
+    if re.search(r"\bkg\b", d) or "in kgs" in d or "wt in kg" in d:
+        units.append("kg")
+    if re.search(r"\bpcs\b", d) or "pieces" in d or "in pcs" in d:
+        units.append("pcs")
+    primary = units[0] if units else ""
+    # Prefer kg as the primary metric unit when a tab carries both kg & pcs.
+    if "kg" in units:
+        primary = "kg"
+    if "Ltr" in units:
+        primary = "Ltr"
+    return units, primary
+
+
+def parse_index(rows: List[list]) -> List[dict]:
+    """Parse an Index tab value-matrix → list of report-metadata dicts.
+
+    Each dict: ``report`` (raw, e.g. "Report-5"), ``report_key`` (normalised,
+    e.g. "report-5"), ``sno``, ``frequency``, ``frequency_class``,
+    ``sliceable``, ``types``, ``include``, ``description`` (Types + Include),
+    ``owner`` (By Whom), ``action_taken_by``, ``units``, ``unit`` (primary),
+    ``sub_blocks`` (continuation rows: [{include, owner, types}]).
+    Returns [] when no recognisable header row is found.
+    """
+    if not rows:
+        return []
+
+    # Locate the header row: the first row carrying both "Reports" and
+    # "Frequency" cells (column A is often blank, so scan every cell).
+    hdr_i = -1
+    col: dict[str, int] = {}
+    for i, row in enumerate(rows[:8]):
+        m: dict[str, int] = {}
+        for j, cell in enumerate(row):
+            key = _INDEX_HEADERS.get(_index_norm(cell))
+            if key and key not in m:
+                m[key] = j
+        if "reports" in m and "frequency" in m:
+            hdr_i, col = i, m
+            break
+    if hdr_i < 0:
+        return []
+
+    def cell(row: list, key: str) -> str:
+        j = col.get(key, -1)
+        if 0 <= j < len(row):
+            return str(row[j]).strip()
+        return ""
+
+    reports: List[dict] = []
+    last_freq = ""
+    for row in rows[hdr_i + 1:]:
+        if not any(str(c).strip() for c in row):
+            continue
+        rep = cell(row, "reports")
+        types = cell(row, "types")
+        include = cell(row, "include")
+        by_whom = cell(row, "by_whom")
+        action = cell(row, "action_taken_by")
+
+        # Continuation row (blank "Reports") → a sub-block / extra owner of the
+        # report above. Report-5 uses these for its three machine families.
+        if not rep:
+            if reports and (include or by_whom or types):
+                reports[-1]["sub_blocks"].append({
+                    "include": include, "owner": by_whom, "types": types,
+                })
+            continue
+
+        # Frequency: prefer the Frequency column; inherit the merged value above
+        # when blank; finally fall back to a frequency token mis-typed into the
+        # Types column (PTMT Report-12 carries "Every Monday" there).
+        freq = cell(row, "frequency")
+        if not freq:
+            blob = _index_norm(f"{types} {include}")
+            for tok in _FREQ_TOKENS:
+                if tok in blob:
+                    freq = tok.title()
+                    break
+        if freq:
+            last_freq = freq
+        else:
+            freq = last_freq
+
+        # If the frequency came from the Types column, don't double-count it as
+        # part of the description.
+        if _index_norm(types) in {_index_norm(freq)} | {t for t in _FREQ_TOKENS}:
+            types = ""
+
+        desc = " — ".join([p for p in (types, include) if p])
+        fclass, sliceable = _index_freq_class(freq)
+        units, primary = _index_units(desc)
+        reports.append({
+            "report": rep,
+            "report_key": _index_norm(rep),
+            "sno": cell(row, "sno"),
+            "frequency": freq,
+            "frequency_class": fclass,
+            "sliceable": sliceable,
+            "types": types,
+            "include": include,
+            "description": desc,
+            "owner": by_whom,
+            "action_taken_by": action,
+            "units": units,
+            "unit": primary,
+            "sub_blocks": [],
+        })
+    return reports

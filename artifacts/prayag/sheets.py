@@ -100,6 +100,7 @@ def clear_caches() -> None:
     _daily_cache.clear()
     _report_cache.clear()
     _seg_labour_cache.clear()
+    _index_cache.clear()
     _last_fetch_status.clear()
     try:
         _store.pg_cache_clear()
@@ -660,6 +661,7 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
 # Live daily load — per-month workbooks (true day-level data)
 # ---------------------------------------------------------------------------
 _daily_cache: dict = {}          # (plant, ym) -> (ts, [(records, report), ...])
+_index_cache: dict = {}          # file_id -> (ts, [index report dicts])
 _seg_labour_cache: dict = {}     # file_id -> {rows, title, fy, tabs}
 
 # Report-only annual sources (REPORT_SOURCES) loaded on-demand by /reports/*.
@@ -775,6 +777,10 @@ _DAILY_LAYOUTS: dict = {
   "PIPE": [
       {
           "emit": "PIPE", "tab": "Report-11", "layout": "long",
+          # Production tab resolved by Index DESCRIPTION (keyed by meaning, not the
+          # bare "Report-11" number); falls back to the hardcoded tab if the Index
+          # is unavailable or its report has no matching tab.
+          "resolve": ["m/c & item wise", "production"],
           # PIPE's utilisation baseline lives in a SEPARATE monthly-summary tab
           # (Report-5): per-machine Ideal Run Hour/Day (col D), Total Run Days
           # (col E) and Run Hours (col F). It is read cross-tab and joined to the
@@ -790,6 +796,7 @@ _DAILY_LAYOUTS: dict = {
       },
       {
           "emit": "MOULDING", "tab": "Report-12", "layout": "long",
+          "resolve": ["moulding", "production"],
           # Report-12 records moulding OUTPUT only (no run hours), so its
           # utilisation baseline comes from the SAME workbook's Report-5 moulding
           # rows (joined by the bare machine label, e.g. "A01(NU-200)"). Same
@@ -826,6 +833,7 @@ _DAILY_LAYOUTS: dict = {
   }],
   "PTMT": [{
       "emit": "PTMT", "tab": "Report-5", "layout": "matrix",
+      "resolve": ["output", "hours"],
       "ideal_col": ("contains", "IDEAL HOUR"),
   }],
   # TANK records per-ITEM production (no machine dimension) on "PROD. REPORT".
@@ -1082,6 +1090,16 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   seg, unit = _daily_seg_unit(emit)
   layout = spec["layout"]
   tab = spec.get("tab", "")
+  resolve_note = None
+  if spec.get("resolve"):
+      resolved, via_index = resolve_report_tab(
+          emit, spec["resolve"], tab, ym=ym, token=token)
+      if via_index and resolved and resolved != tab:
+          resolve_note = (
+              f"{emit} {ym}: production tab resolved via the workbook Index by "
+              f"description to '{resolved}' (configured fallback was '{tab}')."
+          )
+          tab = resolved
   report = {
       "family": emit.lower(),
       "title": f"{sources.PLANT_NAMES.get(emit, emit)} — daily ({ym})",
@@ -1352,6 +1370,8 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
               )
   if aux_notes:
       report["notes"] = aux_notes
+  if resolve_note:
+      report.setdefault("notes", []).append(resolve_note)
 
   report["detail_tabs"] = sorted({r.machine for r in raw})
   report["record_count"] = len(raw)
@@ -1457,6 +1477,182 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
           # for the Sources diagnostic page, but is no longer emitted as a
           # user-visible warning — daily files are the authoritative source.
   return all_recs, reports, warnings
+
+
+# ---------------------------------------------------------------------------
+# Per-workbook "Index" tab — authoritative tab metadata.
+#
+# The PTMT and Pipe & Fitting daily workbooks each ship an "Index" sheet that
+# documents every Report-N tab (description, frequency, owner, unit). The app
+# uses it to key tabs by DESCRIPTION rather than a bare report number (the same
+# number means different things across workbooks) and to surface tabs that exist
+# but aren't wired yet. parsers.parse_index does the pure parsing; this layer
+# adds the live read + caching + tab resolution.
+# ---------------------------------------------------------------------------
+_INDEX_TTL = 600.0   # seconds; Index changes at most monthly
+
+
+def _index_tab_name(file_id: str, token: str) -> Optional[str]:
+  """The workbook's Index tab title (case-insensitive), or None."""
+  try:
+      titles = list_tabs(file_id, token)
+  except SheetReadError:
+      return None
+  for t in titles:
+      if str(t).strip().lower() == "index":
+          return t
+  for t in titles:
+      if "index" in str(t).strip().lower():
+          return t
+  return None
+
+
+def read_index(file_id: str, token: Optional[str] = None) -> List[dict]:
+  """Parsed Index metadata for one workbook file, cached per file id.
+
+  Returns [] (degrades quietly) when the workbook has no Index tab or the read
+  fails — the Index is advisory metadata, never on a figure's critical path.
+  """
+  if not file_id:
+      return []
+  now = time.time()
+  hit = _index_cache.get(file_id)
+  if hit and now - hit[0] < _INDEX_TTL:
+      return hit[1]
+  token = token or _get_access_token()
+  if not token:
+      return []
+  tab = _index_tab_name(file_id, token)
+  if not tab:
+      _index_cache[file_id] = (now, [])
+      return []
+  try:
+      rows = read_values(file_id, tab, token)
+  except SheetReadError:
+      return []
+  parsed = parsers.parse_index(rows)
+  _index_cache[file_id] = (now, parsed)
+  return parsed
+
+
+def _daily_file_id(plant: str, ym: Optional[str]) -> Optional[str]:
+  """The daily workbook file id for a plant, for ``ym`` or the latest month."""
+  files = sources.DAILY_SOURCES.get(plant, {}).get("files", {})
+  if not files:
+      return None
+  if ym and ym in files:
+      return files[ym]
+  return files[sorted(files)[-1]]
+
+
+def workbook_index(plant: str, ym: Optional[str] = None,
+                   token: Optional[str] = None) -> List[dict]:
+  """Parsed Index for a plant's daily workbook (``ym`` or latest month)."""
+  return read_index(_daily_file_id(plant, ym) or "", token)
+
+
+def _norm_tab(s: str) -> str:
+  """Tab title normaliser for existence checks: strip spaces, lower-case.
+
+  The Index lists "Report-8 (A)" while the real tab is "Report-8(A)"; matching
+  on the space-stripped form bridges that cosmetic gap."""
+  return re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def resolve_report_tab(plant: str, keywords, fallback: str,
+                       ym: Optional[str] = None,
+                       token: Optional[str] = None,
+                       require_sliceable: bool = True) -> Tuple[str, bool]:
+  """Resolve a production/summary tab by Index DESCRIPTION, not by number.
+
+  ``keywords`` is a string or list of substrings that must ALL appear in a
+  report's description. Returns ``(tab_title, matched_via_index)``. When the
+  Index is unavailable, the matched report's tab doesn't exist, or nothing
+  matches, returns ``(fallback, False)`` so figures never depend on the Index.
+
+  ``require_sliceable`` (default True) enforces the Index's own frequency rule:
+  daily ingestion may ONLY resolve to a Daily (sliceable) report, so a weekly or
+  monthly snapshot tab whose description happens to share keywords can never be
+  selected for per-day figures. Pass False to resolve any frequency.
+  """
+  if isinstance(keywords, str):
+      keywords = [keywords]
+  kws = [k.lower() for k in keywords if k]
+  reports = workbook_index(plant, ym, token)
+  if not reports:
+      return fallback, False
+  token = token or _get_access_token()
+  titles = []
+  try:
+      titles = list_tabs(_daily_file_id(plant, ym) or "", token) if token else []
+  except SheetReadError:
+      titles = []
+  title_norm = {_norm_tab(t): t for t in titles}
+  for rep in reports:
+      if require_sliceable and not rep.get("sliceable"):
+          continue
+      desc = str(rep.get("description", "")).lower()
+      if kws and all(k in desc for k in kws):
+          cand = rep.get("report", "")
+          real = title_norm.get(_norm_tab(cand))
+          if real:
+              return real, True
+          # No tab list (offline) — trust the Index id but only if it differs
+          # from the fallback by nothing more than spacing.
+          if not titles and cand:
+              return cand, True
+  return fallback, False
+
+
+def _wired_daily_tabs(plant: str) -> set:
+  """Tab titles the app actively reads for a plant (from _DAILY_LAYOUTS)."""
+  wired = set()
+  for e in _DAILY_LAYOUTS.get(plant, []):
+      for k in ("tab", "report5_tab"):
+          if e.get(k):
+              wired.add(_norm_tab(e[k]))
+  return wired
+
+
+def index_catalogue(plant: str, ym: Optional[str] = None,
+                    token: Optional[str] = None) -> dict:
+  """Index metadata for a plant's workbook, annotated with wired/unwired status.
+
+  Returns {available, plant, file_id, month, reports:[...]} where each report
+  gains ``wired`` (the app reads this tab) and ``tab_exists`` (a matching tab is
+  present in the workbook). Used by the Data Health page to show what is ingested
+  versus "available — not yet built".
+  """
+  file_id = _daily_file_id(plant, ym)
+  reports = read_index(file_id or "", token)
+  out = {
+      "available": bool(reports),
+      "plant": plant,
+      "plant_name": sources.PLANT_NAMES.get(plant, plant),
+      "file_id": file_id or "",
+      "month": ym or (sorted(sources.DAILY_SOURCES.get(plant, {}).get("files", {}))[-1]
+                      if sources.DAILY_SOURCES.get(plant, {}).get("files") else ""),
+      "reports": [],
+  }
+  if not reports:
+      return out
+  wired = _wired_daily_tabs(plant)
+  titles = []
+  token = token or _get_access_token()
+  if token:
+      try:
+          titles = list_tabs(file_id or "", token)
+      except SheetReadError:
+          titles = []
+  title_norm = {_norm_tab(t) for t in titles}
+  for rep in reports:
+      key = _norm_tab(rep.get("report", ""))
+      out["reports"].append({
+          **rep,
+          "wired": key in wired,
+          "tab_exists": (key in title_norm) if titles else True,
+      })
+  return out
 
 
 def detected_sources() -> List[dict]:

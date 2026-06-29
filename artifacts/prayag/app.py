@@ -9,6 +9,7 @@ import math
 import datetime
 import dataclasses
 import json
+import logging
 import time
 from functools import lru_cache
 from typing import Optional
@@ -17,7 +18,7 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    load_report_records,
+    load_report_records, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
 )
 from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
@@ -1234,6 +1235,78 @@ def _do_signoff(action: str, form):
     return _redirect_to_confirmation(form, msg)
 
 
+INDEX_PLANTS = ["PIPE", "PTMT"]
+
+
+def _norm_cmp(s) -> str:
+    """Whitespace/case-insensitive comparison key for descriptions/frequencies."""
+    return " ".join(str(s or "").split()).strip().lower()
+
+
+def _build_index_catalogue() -> list:
+    """Per-workbook Index metadata for the Data Health page.
+
+    For each Index-bearing workbook (PIPE, PTMT), annotate every documented
+    report with its wired/available status and a month-over-month change flag
+    (description or frequency differs from the recorded baseline). First sight
+    is silently baselined (not flagged). Degrades to [] on any read failure so
+    the page always renders.
+    """
+    log = logging.getLogger("prayag.index")
+    try:
+        baselines = store.index_baseline_state()
+    except Exception:
+        log.exception("index baseline read failed")
+        baselines = {}
+    out = []
+    for plant in INDEX_PLANTS:
+        try:
+            cat = index_catalogue(plant)
+        except SheetReadError:
+            continue
+        except Exception:
+            log.exception("index_catalogue failed for %s", plant)
+            continue
+        if not cat.get("available"):
+            continue
+        base = baselines.get(plant, {})
+        seen = set()
+        for rep in cat["reports"]:
+            rk = rep.get("report_key", "")
+            seen.add(rk)
+            b = base.get(rk)
+            changed = False
+            old = {}
+            if b and (_norm_cmp(b.get("description")) != _norm_cmp(rep.get("description"))
+                      or _norm_cmp(b.get("frequency")) != _norm_cmp(rep.get("frequency"))):
+                changed = True
+                old = {"description": b.get("description", ""),
+                       "frequency": b.get("frequency", "")}
+            rep["change"] = "changed" if changed else ""
+            rep["baseline"] = old
+            if rep.get("wired"):
+                rep["status"] = "wired"
+            elif rep.get("tab_exists"):
+                rep["status"] = "available"
+            else:
+                rep["status"] = "documented"
+        cat["removed"] = [
+            {"report": v.get("report") or k, **v}
+            for k, v in base.items() if k not in seen
+        ]
+        cat["n_wired"] = sum(1 for r in cat["reports"] if r["status"] == "wired")
+        cat["n_available"] = sum(1 for r in cat["reports"] if r["status"] == "available")
+        cat["n_changed"] = sum(1 for r in cat["reports"] if r["change"] == "changed")
+        # Record/refresh baselines AFTER comparing (first sight stores the
+        # baseline; an existing baseline's desc/frequency are left intact).
+        try:
+            store.index_baseline_record(plant, cat["reports"], cat.get("file_id", ""))
+        except Exception:
+            log.exception("index baseline record failed for %s", plant)
+        out.append(cat)
+    return out
+
+
 @app.route("/sources")
 def sources_view():
     data = get_data(request.args)
@@ -1258,6 +1331,7 @@ def sources_view():
         "annual_sources": ANNUAL_SOURCES,
         "daily_sources": DAILY_SOURCES,
         "freshness": _build_freshness(),
+        "index_catalogue": _build_index_catalogue(),
     })
     return render_template("detected_sources.html", **ctx)
 

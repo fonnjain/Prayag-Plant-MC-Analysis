@@ -804,6 +804,110 @@ def fingerprint_record(
 
 
 # ---------------------------------------------------------------------------
+# Index-tab baseline — month-over-month change tracking of tab metadata
+# ---------------------------------------------------------------------------
+# Each monthly workbook is a NEW file, so this baseline is keyed by PLANT (the
+# workbook family), not file_id — that is what lets the dashboard compare this
+# month's Index against the previously-seen description/frequency and flag a tab
+# whose meaning changed, rather than silently assuming last month's mapping.
+# First sight per (plant, report_key) is recorded as the baseline; an existing
+# baseline's description/frequency are left INTACT so a later month that differs
+# keeps flagging until intentionally re-baselined. No-op without DATABASE_URL.
+_IDX_TABLE = "index_baseline"
+_idx_initialised = False
+
+
+def _init_index_baseline() -> None:
+    """Create the Index-baseline table if it does not exist (idempotent)."""
+    global _idx_initialised
+    if _idx_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_IDX_TABLE} (
+        id          BIGSERIAL   PRIMARY KEY,
+        plant       TEXT        NOT NULL,
+        report_key  TEXT        NOT NULL,
+        report      TEXT        NOT NULL DEFAULT '',
+        description TEXT        NOT NULL DEFAULT '',
+        frequency   TEXT        NOT NULL DEFAULT '',
+        file_id     TEXT        NOT NULL DEFAULT '',
+        first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (plant, report_key)
+    );
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _idx_initialised = True
+    except Exception as e:  # pragma: no cover - infra failure
+        raise StoreError(str(e))
+
+
+def index_baseline_state() -> Dict[str, Dict[str, Dict]]:
+    """First-seen baseline per (plant, report_key): {plant: {report_key: {...}}}.
+
+    Each leaf carries ``report``/``description``/``frequency``/``first_seen``.
+    Degrades to ``{}`` when no store is configured or the read fails.
+    """
+    if not AVAILABLE:
+        return {}
+    try:
+        _init_index_baseline()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(f"SELECT * FROM {_IDX_TABLE}")
+            rows = cur.fetchall()
+    except Exception:
+        return {}
+    out: Dict[str, Dict[str, Dict]] = {}
+    for r in rows:
+        d = {
+            "report": r.get("report", ""),
+            "description": r.get("description", ""),
+            "frequency": r.get("frequency", ""),
+            "file_id": r.get("file_id", ""),
+        }
+        ts = r.get("first_seen")
+        if isinstance(ts, datetime.datetime):
+            d["first_seen_disp"] = ts.strftime("%d-%m-%Y")
+        out.setdefault(r["plant"], {})[r["report_key"]] = d
+    return out
+
+
+def index_baseline_record(plant: str, reports: List[Dict], file_id: str = "") -> None:
+    """Record first-seen baselines for a plant's Index reports (best-effort).
+
+    First sight per (plant, report_key) stores the baseline; an existing row's
+    description/frequency are NOT overwritten (only observed_at/file_id refresh),
+    so a changed description/frequency keeps surfacing on the Data Health page.
+    No-op without a store; never raises (change tracking must not break a render).
+    """
+    if not AVAILABLE or not plant or not reports:
+        return
+    try:
+        _init_index_baseline()
+        with _conn() as conn, conn.cursor() as cur:
+            for rep in reports:
+                rk = (rep.get("report_key") or "").strip()
+                if not rk:
+                    continue
+                cur.execute(
+                    f"""INSERT INTO {_IDX_TABLE}
+                            (plant, report_key, report, description, frequency, file_id)
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (plant, report_key) DO UPDATE
+                            SET observed_at = now(),
+                                file_id     = EXCLUDED.file_id""",
+                    (plant, rk, rep.get("report", ""), rep.get("description", ""),
+                     rep.get("frequency", ""), file_id),
+                )
+    except Exception:
+        return
+
+
+# ---------------------------------------------------------------------------
 # Postgres-backed sheet cache — shared across gunicorn workers
 # ---------------------------------------------------------------------------
 # Each gunicorn worker has its own in-process _data_cache/_daily_cache.
