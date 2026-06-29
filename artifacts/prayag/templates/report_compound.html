@@ -100,6 +100,16 @@
     </table>
   </div>
   {% endif %}
+  {% if validation.diagnoses %}
+  <div class="mt-3 space-y-2">
+    {% for d in validation.diagnoses %}
+    <div class="text-xs rounded-md p-2 border" style="background:#FBF3EC;border-color:var(--terra)">
+      <span class="font-semibold" style="color:var(--terra)">{{ d.compound }} — which figure is right?</span>
+      <span class="text-gray-600">{{ d.text }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
 </div>
 

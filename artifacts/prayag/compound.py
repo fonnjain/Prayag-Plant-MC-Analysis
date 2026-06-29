@@ -211,17 +211,27 @@ def validate(comp: dict, rollup: Dict[str, dict], tol: float = 0.005) -> dict:
     a mismatch is surfaced and located, never auto-passed.
     """
     if not rollup:
-        return {"available": False, "status": NA, "rows": [], "n_pass": 0, "n_fail": 0, "n_na": 0}
+        return {"available": False, "status": NA, "rows": [], "n_pass": 0, "n_fail": 0, "n_na": 0, "diagnoses": []}
 
-    # Sum the rollup across all months in the period.
+    # Sum the additive rollup fields across all months in the period, and track
+    # the FIRST month's opening stock and the LAST month's closing stock per
+    # compound (opening/closing are point-in-time balances, NOT additive). The
+    # rollup dict is keyed chronologically, so insertion order gives first/last.
     summed: Dict[str, Dict[str, float]] = {}
+    first_open: Dict[str, float] = {}
+    last_close: Dict[str, float] = {}
     for _ym, rd in rollup.items():
         for key, fields in rd.items():
             dst = summed.setdefault(key, {})
             for f, v in fields.items():
                 dst[f] = dst.get(f, 0.0) + v
+            if "opening" in fields and key not in first_open:
+                first_open[key] = fields["opening"]
+            if "closing" in fields:
+                last_close[key] = fields["closing"]
 
     rows: List[dict] = []
+    fail_keys: set = set()
     n_pass = n_fail = n_na = 0
     for col in comp["cols"]:
         if not col["in_total"]:
@@ -243,12 +253,50 @@ def validate(comp: dict, rollup: Dict[str, dict], tol: float = 0.005) -> dict:
                 else:
                     status = FAIL
                     n_fail += 1
+                    fail_keys.add(col["key"])
             rows.append({
                 "compound": col["label"], "field": flabel, "recomputed": recomputed,
                 "sheet": sheet, "status": status,
                 "diff_pct": round(diff_pct * 100, 2) if diff_pct is not None else None,
             })
 
+    # Closing-stock arbiter: for each MISMATCHED compound, decide whether the
+    # daily detail or the in-sheet rollup is the trustworthy figure. The sheet
+    # publishes its own period-closing stock; that closing can only have been
+    # carried from one set of flows. We test which:
+    #   daily-flow closing  = first-opening + Σ(daily material) − Σ(daily given)   [= col.closing]
+    #   rollup-self closing = first-opening + Σ(rollup material) − Σ(rollup given)
+    # If the sheet's published closing reconciles with the DAILY flows but NOT
+    # with its own (lower) summary cells, the daily Mixer-Logbook detail is
+    # authoritative and the rollup's monthly Batch/Material/Given cells are
+    # stale/understated — a source-sheet correction, not a parser bug.
+    col_by_key = {c["key"]: c for c in comp["cols"]}
+    diagnoses: List[dict] = []
+    for key in sorted(fail_keys):
+        col = col_by_key.get(key)
+        ref = summed.get(key) or {}
+        o = first_open.get(key)
+        cl = last_close.get(key)
+        if not col or o is None or cl is None:
+            continue
+        daily_close = col.get("closing")
+        rollup_self_close = o + ref.get("material", 0.0) - ref.get("given", 0.0)
+        matches_daily = daily_close is not None and abs(cl - daily_close) <= 1.0
+        matches_self = abs(cl - rollup_self_close) <= 1.0
+        if matches_daily and not matches_self:
+            diagnoses.append({
+                "compound": col["label"], "verdict": "daily",
+                "text": (
+                    "Daily detail is authoritative. The sheet's own published "
+                    "closing stock ({cl:,.0f} kg) reconciles with the daily "
+                    "Mixer-Logbook flows, not with the rollup's own "
+                    "Batch/Material/Given cells (which would leave {self:,.0f} kg) "
+                    "— so the rollup's monthly aggregate is understated and should "
+                    "be corrected in the source sheet."
+                ).format(cl=cl, self=rollup_self_close),
+            })
+
     status = FAIL if n_fail else (PASS if n_pass else NA)
     return {"available": True, "status": status, "rows": rows,
-            "n_pass": n_pass, "n_fail": n_fail, "n_na": n_na, "tol_pct": tol * 100}
+            "n_pass": n_pass, "n_fail": n_fail, "n_na": n_na, "tol_pct": tol * 100,
+            "diagnoses": diagnoses}
