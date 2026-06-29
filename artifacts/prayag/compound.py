@@ -202,6 +202,45 @@ def month_trend(by_compound: Dict[str, List[dict]], months: List[str]) -> List[d
     return out
 
 
+def stale_rollup_alerts(by_compound: Dict[str, List[dict]],
+                        rollup: Dict[str, dict],
+                        months: List[str]) -> List[dict]:
+    """Standing "stale source-sheet rollup" alert, per compound·month.
+
+    Re-uses the closing-stock arbiter in :func:`validate`. For each month with
+    compound data, recompute that single month's balance and reconcile it
+    against that month's in-sheet "Compound 6-10" rollup. When a compound's
+    published closing stock reconciles with the DAILY Mixer-Logbook flows but
+    NOT with the rollup's own Batch/Material/Given cells, the monthly summary is
+    stale (understated) and the daily detail is authoritative.
+
+    Returns a list of ``{compound, month, text}`` ordered by month then
+    compound — a concise, non-blocking signal management can act on the moment a
+    rollup drifts, rather than only when the compound report is opened. Pure;
+    no network.
+    """
+    alerts: List[dict] = []
+    for ym in sorted(months):
+        rd = rollup.get(ym)
+        if not rd:
+            continue
+        sub = {k: [p for p in plist if p.get("ym") == ym]
+               for k, plist in by_compound.items()}
+        comp = build_compilation(sub, [ym])
+        if not comp["has_data"]:
+            continue
+        v = validate(comp, {ym: rd})
+        for d in v.get("diagnoses", []):
+            if d.get("verdict") == "daily":
+                alerts.append({
+                    "compound": d["compound"],
+                    "month": ym,
+                    "text": d["text"],
+                })
+    alerts.sort(key=lambda a: (a["month"], a["compound"]))
+    return alerts
+
+
 def validate(comp: dict, rollup: Dict[str, dict], tol: float = 0.005) -> dict:
     """Reconcile the recomputed daily balance against the in-sheet "Compound
     6-10" monthly rollup (summed across the period).

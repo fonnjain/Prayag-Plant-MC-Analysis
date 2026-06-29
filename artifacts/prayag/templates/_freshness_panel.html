@@ -22,6 +22,23 @@
   </div>
   {% endif %}
 
+  {% if fr and fr.stale_rollups %}
+  <div class="rounded-lg p-2 mb-3 leading-relaxed" style="background:rgba(197,90,17,0.08)">
+    <div class="flex items-center gap-1.5 mb-1">
+      <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-white" style="background:var(--terra)">stale rollup</span>
+      <span class="text-[11px] font-semibold text-gray-800">Monthly summary out of date</span>
+    </div>
+    <p class="text-[11px] text-gray-600 mb-1.5">
+      A published "Compound 6-10" rollup no longer matches its own daily Mixer-Logbook detail — the daily figures are authoritative until the source sheet is corrected.
+    </p>
+    {% for a in fr.stale_rollups %}
+    <div class="text-[11px] text-gray-700 border-t border-amber-100 pt-1.5 {% if not loop.first %}mt-1.5{% endif %}">
+      <span class="font-semibold text-gray-900">{{ a.compound }} · {{ a.month_disp }}</span> — daily detail is authoritative; the monthly rollup cells are understated and should be corrected in the source sheet.
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if not fr or fr.demo %}
   <div class="text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2 leading-relaxed">
     Change tracking is paused in demo mode — connect the live Google Sheets to track real updates.

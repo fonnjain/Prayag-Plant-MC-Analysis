@@ -769,7 +769,32 @@ def _build_freshness() -> dict:
     # benign daily-vs-grid reconciliation note, so that would false-alarm.
     out["partial"] = bool(read_errors)
     out["read_errors"] = read_errors
+    out["stale_rollups"] = _build_stale_rollup_alerts()
     return out
+
+
+def _build_stale_rollup_alerts() -> list:
+    """Standing "stale source-sheet rollup" alerts for the freshness panel.
+
+    Re-uses the compound closing-stock arbiter across every month that holds
+    data: flags any compound whose published "Compound 6-10" rollup closing
+    reconciles with the daily Mixer-Logbook detail but NOT its own monthly
+    summary cells (so the daily detail is authoritative and the rollup cell is
+    stale). Best-effort and non-blocking — a read failure or absent compound
+    data simply yields no alerts (never raises, never gates a page). Skipped in
+    demo mode."""
+    if is_demo_mode():
+        return []
+    try:
+        data = load_compound_data(months_with_data())
+    except SheetReadError:
+        return []
+    alerts = compound_mod.stale_rollup_alerts(
+        data["by_compound"], data["rollup"], data["months"]
+    )
+    for a in alerts:
+        a["month_disp"] = _month_disp(a["month"])
+    return alerts
 
 
 def _sync_ctx() -> dict:
