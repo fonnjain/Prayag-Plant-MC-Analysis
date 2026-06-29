@@ -1261,12 +1261,21 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           # utilisation = Σrun hours / Σideal hours = col F / (col D × col E). An
           # idle machine (run days = 0) gets ideal_hours = 0, so utilisation stays
           # blank (never a fake 0%). No clamp — a grinder running past its ideal
-          # legitimately exceeds 100%. Output rate stays unset (efficiency hidden).
+          # legitimately exceeds 100%.
           info = _r5_hit(r.machine)
           nrows = max(rowcount.get(r.machine, 0), 1)
           r.ideal_hours = (info["per_day"] * info["run_days"]) / nrows
           r.actual_hours = info["run_hours"] / nrows
-          r.ideal_output = 0.0
+          # Output efficiency = (output / run hours) / Ideal Output Per Hour
+          # (Report-5 Col I, per machine — NOT global). Wire the per-machine rate so
+          # efficiency computes as (G / F) / I in compute_metrics. A BLANK Col I
+          # (e.g. moulding lines, Grinder-3 whose in-sheet K is #DIV/0!) leaves the
+          # rate at 0 → ideal_output 0 → efficiency stays n/a, never a fake 0%
+          # (the spec's IFERROR rule). No clamp: a machine past its ideal output
+          # legitimately reads >100%.
+          rate = info.get("ideal_out", 0.0)
+          r.ideal_rate = rate
+          r.ideal_output = r.actual_hours * rate if rate > 0 else 0.0
           r.ideal_source = "derived"
       else:
           base = baselines.resolve(emit, r.machine, ym)
