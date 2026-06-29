@@ -185,6 +185,32 @@ def _fmt_age(seconds: int) -> str:
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _has_production(r) -> bool:
+    """A daily Record represents REAL production only when it carries output or
+    run hours. A freshly-created daily tab dated ahead of actual data entry (a
+    placeholder for tomorrow, or a date that looks like the future because the
+    sheets are kept in IST while the server clock is UTC) emits rows that are all
+    zero — an empty in-progress day that must NOT count as the latest data.
+
+    Rejection is deliberately EXCLUDED: a wide-matrix parser books the whole
+    month's rejection onto the last calendar day's row (see PTMT), so the last
+    day of every month carries reject>0 with zero output — counting it would
+    re-introduce the empty-day bug this guards against.
+    """
+    return (getattr(r, "total_count", 0) or 0) > 0 \
+        or (getattr(r, "actual_hours", 0) or 0) > 0
+
+
+def _latest_production_date(drecs) -> str | None:
+    """Most recent daily date with real production across ``drecs`` (skips empty
+    in-progress days). ISO date strings compare lexicographically."""
+    return max(
+        (r.date for r in drecs
+         if r.date and getattr(r, "grain", None) == "daily" and _has_production(r)),
+        default=None,
+    )
+
+
 def parse_period(args) -> dict:
     """Resolve the requested period to calendar months (the source grain).
 
@@ -447,16 +473,15 @@ def get_data(args):
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read: {e}"
         if not daily_err:
-            # Per-plant data freshness: the latest date each plant has daily
-            # data, computed from daily rows only (idle/empty days produce no
-            # rows, so they never count). Surfaced in the completeness panel so
-            # laggard plants are visible without blocking on them. ISO date
-            # strings compare lexicographically, so plain ``>`` finds the max.
+            # Per-plant data freshness: the latest date each plant has REAL daily
+            # data (see _has_production — empty in-progress days never count).
+            # Surfaced in the completeness panel so laggard plants are visible
+            # without blocking on them. ISO date strings compare lexicographically.
             fresh_by_plant: dict = {}
             for r in drecs:
                 if r.grain != "daily":
                     continue  # month-grain aux rows (Report-5 grinders) aren't a daily date
-                if r.date and r.date > fresh_by_plant.get(r.plant, ""):
+                if r.date and _has_production(r) and r.date > fresh_by_plant.get(r.plant, ""):
                     fresh_by_plant[r.plant] = r.date
             freshness = [
                 {"plant": p, "name": PLANT_NAMES.get(p, p),
@@ -464,9 +489,12 @@ def get_data(args):
                 for p, d in sorted(
                     fresh_by_plant.items(), key=lambda kv: kv[1], reverse=True)
             ]
-            # "last_updated" period: narrow to the actual last date with data.
+            # "last_updated" period: narrow to the actual last date with REAL
+            # production, skipping empty in-progress days (the documented
+            # "freshest snapshot" behaviour) so the headline never lands on a
+            # zero-output placeholder day.
             if pinfo["period"] == "last_updated":
-                last_date = max((r.date for r in drecs if r.date and r.grain == "daily"), default=None)
+                last_date = _latest_production_date(drecs)
                 if last_date:
                     pinfo["from_iso"] = last_date
                     pinfo["to_iso"] = last_date
@@ -489,7 +517,7 @@ def get_data(args):
             recon_warnings = list(dwarn)
             daily_used = True
             if not win:
-                latest = max((r.date for r in drecs), default=None)
+                latest = _latest_production_date(drecs)
                 if latest:
                     latest_disp = _fmt(datetime.date.fromisoformat(latest))
                     grain_banner = (

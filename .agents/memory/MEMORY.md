@@ -24,3 +24,4 @@
 - [Prayag daily-source plant set](prayag-daily-sources-roster.md) — DAILY_SOURCES.keys() is the only truth for daily-capable plants (CP daily, MOULDING annual-only); the docs list is stale.
 - [Jinja dict-method collision](jinja-dict-method-collision.md) — `ctx.items`/`.keys`/`.values` in a Jinja template resolve to the dict METHOD, not the key; name template dict keys to avoid `items`/`keys`/`values`/`get` or use bracket access.
 - [Stale-rollup acks vs issue acks](prayag-stale-rollup-acks.md) — two ack stores treat the fingerprint oppositely: issue acks survive drift (stable key only), stale-rollup acks re-surface on drift (key + fingerprint). Don't unify.
+- [Last Updated resolution](prayag-last-updated-resolution.md) — default period picks freshest day with total_count>0 or actual_hours>0; EXCLUDE reject (matrix lumps month reject on last day) and skip empty future/in-progress days.
