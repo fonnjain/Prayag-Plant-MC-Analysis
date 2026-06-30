@@ -676,8 +676,8 @@ def parse_tank_prod(
                     cols["date"] = c
                 elif "ITEM CODE" in u and "item" not in cols:
                     cols["item"] = c
-                elif u == "SIZE" and "size" not in cols:
-                    cols["size"] = c
+                elif "SIZE" in u and "size" not in cols:
+                    cols["size"] = c    # "SIZE (LTR.)" must NOT be read as litres output
                 elif u in ("COLOR", "COLOUR") and "color" not in cols:
                     cols["color"] = c
                 elif "REJECT" in u:
@@ -694,19 +694,32 @@ def parse_tank_prod(
                 elif "KG" in u and "kg" not in cols:
                     cols["kg"] = c
             break
-    # Primary output unit by precedence: litres → pcs → kg (whatever the sheet has).
-    if "ltr" in cols:
-        out_c, prim_unit, prim_key = cols["ltr"], "Ltr", "ltr"
-    elif "pcs" in cols:
-        out_c, prim_unit, prim_key = cols["pcs"], "pcs", "pcs"
-    elif "kg" in cols:
-        out_c, prim_unit, prim_key = cols["kg"], "kg", "kg"
-    else:
-        return []
     if header_idx < 0 or "date" not in cols:
         return []
-
     date_c = cols["date"]
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    def _col_total(c):
+        if c is None or c < 0:
+            return 0.0
+        return sum(num(g(row, c)) for row in values[header_idx + 1:]
+                   if _long_date_day(g(row, date_c)) is not None)
+
+    # Primary output unit by precedence: litres → pcs → kg, but only a column that
+    # ACTUALLY carries data. Some TANK workbooks publish the litres column header
+    # yet log production only in pcs/kg (the litres column left blank); picking an
+    # all-empty litres column as primary would silently drop every row, so fall
+    # through to the next unit that has real values. Never fabricates a figure.
+    out_c = prim_unit = prim_key = None
+    for _k, _lbl in (("ltr", "Ltr"), ("pcs", "pcs"), ("kg", "kg")):
+        if _k in cols and _col_total(cols[_k]) > 0:
+            out_c, prim_unit, prim_key = cols[_k], _lbl, _k
+            break
+    if out_c is None:
+        return []     # no unit column carries production — genuinely empty
+
     # Reject in the SAME unit as the primary output (never a cross-unit reject %).
     rej_c = cols.get(f"rej_{prim_key}", -1)
     if rej_c < 0:
@@ -716,9 +729,6 @@ def parse_tank_prod(
     color_c = cols.get("color", -1)
     # Secondary (non-primary) production unit columns, kept for display only.
     sec_cols = {u: cols[u] for u in ("ltr", "pcs", "kg") if u in cols and u != prim_key}
-
-    def g(row, c):
-        return row[c] if 0 <= c < len(row) else ""
 
     agg: dict = {}
     for row in values[header_idx + 1:]:

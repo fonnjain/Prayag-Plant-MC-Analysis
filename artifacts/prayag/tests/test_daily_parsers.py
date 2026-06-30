@@ -19,7 +19,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from parsers import parse_daily_long, parse_daily_blocks, parse_daily_matrix, _long_date_day
+from parsers import (
+    parse_daily_long, parse_daily_blocks, parse_daily_matrix,
+    parse_tank_prod, _long_date_day,
+)
 from sheets import _mc_key
 
 
@@ -229,6 +232,67 @@ def test_blocks_parser_no_output_column_returns_empty():
     )
     assert recs == [], f"expected [] for unrecognised layout, got {recs}"
     print("PASS: blocks parser returns [] (not empty-production) when no KG column found")
+
+
+# ---------------------------------------------------------------------------
+# parse_tank_prod — TANK 'PROD. REPORT' per-item log
+# ---------------------------------------------------------------------------
+
+def _tank_values(rows):
+    # Mirrors the real TANK 'PROD. REPORT' header (note the "SIZE (LTR.)" column,
+    # whose label contains "LTR" and must NOT be read as the litres OUTPUT column).
+    header = ["", "DATE", "ITEM CODE", "SIZE (LTR.)", "COLOR", "TANK WEIGHT",
+              "PRODUCTION HOURS", "NO. OF CYCLE", "PRODUCTION IN PCS.",
+              "PRODUCTION IN LTR.", "REJECTION IN PCS.", "REJECTION IN KG.",
+              "PRODUCTION IN KG."]
+    return [[""], ["", "DAILY PRODUCTION"], [], header] + rows
+
+
+def _tank_kwargs():
+    return dict(plant="TANK", segment="Tanks (KH)", unit="Ltr",
+                year_month="2026-06", source_file="f", source_tab="PROD. REPORT")
+
+
+def test_tank_size_ltr_column_not_read_as_litres_output():
+    # The litres OUTPUT column is blank; production is logged in pcs + kg. The
+    # parser must (a) not mistake "SIZE (LTR.)" for the litres column, and
+    # (b) fall through to pcs as the primary unit (litres present-but-empty).
+    rows = [
+        # date, item, size, color, weight, hrs, cycles, PCS, LTR, rejP, rejK, KG
+        ["", "Jun 1, 2026", "WT-3LL-10", "", "WHITE", "21", "", "7", "40", "", "", "", "840"],
+        ["", "Jun 2, 2026", "WT-3LL-05", "", "WHITE", "11", "", "",  "18", "", "", "", "198"],
+    ]
+    recs = parse_tank_prod(_tank_values(rows), **_tank_kwargs())
+    assert recs, "expected TANK records when pcs/kg carry production"
+    assert {r.unit for r in recs} == {"pcs"}, f"primary unit must be pcs, got {[r.unit for r in recs]}"
+    assert sum(r.total_count for r in recs) == 58, "pcs total 40+18"
+    # kg kept as a secondary display count; litres (blank) is not fabricated.
+    kg = sum(r.secondary_counts.get("kg", 0) for r in recs)
+    assert kg == 1038, f"kg secondary 840+198, got {kg}"
+    assert all("Ltr" not in r.secondary_counts for r in recs), "blank litres must not appear"
+    print("PASS: TANK 'SIZE (LTR.)' not read as litres; pcs primary when litres blank")
+
+
+def test_tank_uses_litres_when_litres_has_data():
+    # When the litres OUTPUT column actually carries data, it stays the primary.
+    rows = [
+        # PCS blank, LTR=500 (col 9), KG=840 — litres carries data so it stays primary
+        ["", "Jun 1, 2026", "WT-3LL-10", "", "WHITE", "21", "", "7", "", "500", "", "", "840"],
+    ]
+    recs = parse_tank_prod(_tank_values(rows), **_tank_kwargs())
+    assert recs and {r.unit for r in recs} == {"Ltr"}, "litres must win when it has data"
+    assert sum(r.total_count for r in recs) == 500, "litres total"
+    print("PASS: TANK keeps litres primary when the litres column carries data")
+
+
+def test_tank_truly_empty_returns_no_rows():
+    # No unit column carries any production → no records (never fabricate).
+    rows = [
+        ["", "Jun 1, 2026", "WT-3LL-10", "", "WHITE", "21", "", "", "", "", "", ""],
+    ]
+    recs = parse_tank_prod(_tank_values(rows), **_tank_kwargs())
+    assert recs == [], f"expected [] for a blank production log, got {recs}"
+    print("PASS: TANK with no production in any unit returns [] (no fabrication)")
 
 
 # ---------------------------------------------------------------------------

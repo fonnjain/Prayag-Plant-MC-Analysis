@@ -27,6 +27,27 @@ idle; only an unrecognised layout is a parse failure.
 source tab's raw values. If the tab opens and the data area is blank/zeroed, it is
 idle — do nothing. Do not fabricate rows.
 
+# TANK unit-column selection: header presence ≠ data presence
+
+The TANK `PROD. REPORT` logs the same run in three unit columns — PRODUCTION IN PCS./LTR./KG.
+— plus a `SIZE (LTR.)` descriptor column. Two traps cost a real outage where TANK silently
+vanished from "Last updated" despite June having ~800 pcs of real production:
+
+- **`SIZE (LTR.)` is NOT the litres output column.** Its label contains "LTR", so a loose
+  `"LTR" in u` header match grabbed the (blank) size column as `cols["ltr"]`. Match the size
+  column FIRST with `"SIZE" in u` (an exact `u == "SIZE"` misses `SIZE (LTR.)`).
+- **A unit column can be present-but-empty.** Some workbooks publish the litres header yet log
+  only pcs/kg. Primary-unit precedence (litres→pcs→kg) must pick the first column that has
+  ACTUAL non-zero data over the date rows, not the first whose header merely exists — otherwise
+  every row aggregates to 0 output and is dropped (the "nothing produced" skip), zeroing the plant.
+
+**Why:** picking an all-blank column as primary makes a producing plant look idle, and TANK
+then disappears from the per-plant freshest-snapshot view — indistinguishable from a genuine
+empty template unless you read the raw cells.
+**How to apply:** for any multi-unit per-item log, select the headline unit by data presence,
+not header presence; and detect descriptor columns (SIZE, etc.) before the unit columns so a
+unit token in their label can't hijack them. Genuinely all-empty (every unit 0) still → `[]`.
+
 # PIPE/MOULDING have NO real planned-hours baseline — show "baseline not set"
 
 The monthly grid's "Ideal Hours" column is a FLAT PLACEHOLDER (500 for every machine),
