@@ -223,10 +223,11 @@ def parse_period(args) -> dict:
     sub_monthly = False
 
     if period == "last_updated":
-        # Use the last 30 days as the search window; get_data narrows to the
-        # actual last date that has production entries once records are loaded.
+        # Search a 60-day window so a plant that reports less frequently (e.g.
+        # HDPE) is still found; get_data then narrows to EACH plant's own most
+        # recent day with real production (the per-plant freshest snapshot).
         t = yesterday
-        f = t - datetime.timedelta(days=29)
+        f = t - datetime.timedelta(days=59)
         label = "Last Updated"   # refined in get_data once records are known
         sub_monthly = True
     elif period == "yesterday":
@@ -494,20 +495,29 @@ def get_data(args):
             # "freshest snapshot" behaviour) so the headline never lands on a
             # zero-output placeholder day.
             if pinfo["period"] == "last_updated":
-                last_date = _latest_production_date(drecs)
-                if last_date:
-                    pinfo["from_iso"] = last_date
-                    pinfo["to_iso"] = last_date
-                    pinfo["label"] = f"Last updated: {_fmt(datetime.date.fromisoformat(last_date))}"
-            fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
-            win = [r for r in drecs if fwin <= r.date <= twin]
-            if pinfo.get("sub_monthly"):
-                # Month-grain records (Report-5-only auxiliary machines: grinders,
-                # pulverizers, sockets, mixers) carry a whole-month figure dated to
-                # the 1st — they have no per-day breakdown, so a sub-monthly window
-                # cannot honestly slice them. Drop them from day-level windows; they
-                # still appear on month/FY views.
-                win = [r for r in win if r.grain != "monthly"]
+                # Per-plant freshest snapshot: each plant contributes the rows from
+                # ITS OWN most-recent day with real production (fresh_by_plant,
+                # computed above), so a plant that reports less often (e.g. Moulding,
+                # HDPE) still appears with its latest figures instead of vanishing
+                # because a different plant reported more recently. Plants with no
+                # daily production in the search window simply don't appear — the
+                # figures are never fabricated.
+                win = [r for r in drecs
+                       if r.grain == "daily" and fresh_by_plant.get(r.plant) == r.date]
+                if fresh_by_plant:
+                    pinfo["from_iso"] = min(fresh_by_plant.values())
+                    pinfo["to_iso"] = max(fresh_by_plant.values())
+                    pinfo["label"] = "Last updated"
+            else:
+                fwin, twin = pinfo["from_iso"], pinfo["to_iso"]
+                win = [r for r in drecs if fwin <= r.date <= twin]
+                if pinfo.get("sub_monthly"):
+                    # Month-grain records (Report-5-only auxiliary machines: grinders,
+                    # pulverizers, sockets, mixers) carry a whole-month figure dated to
+                    # the 1st — they have no per-day breakdown, so a sub-monthly window
+                    # cannot honestly slice them. Drop them from day-level windows; they
+                    # still appear on month/FY views.
+                    win = [r for r in win if r.grain != "monthly"]
             # Daily files are the only source for current figures. Months in
             # this period without a daily workbook show no data — the monthly
             # summary is not substituted.
@@ -533,7 +543,17 @@ def get_data(args):
                 disp_plants = ", ".join(
                     PLANT_NAMES.get(p, p) for p in sorted({r.plant for r in win})
                 )
-                if pinfo.get("sub_monthly"):
+                if pinfo["period"] == "last_updated":
+                    parts = ", ".join(
+                        f"{PLANT_NAMES.get(p, p)} {_fmt(datetime.date.fromisoformat(d))}"
+                        for p, d in sorted(fresh_by_plant.items(),
+                                           key=lambda kv: kv[1], reverse=True)
+                    )
+                    grain_banner = (
+                        "Showing each plant's latest reporting day — " + parts
+                        + ". A plant with no recent daily data isn't shown."
+                    )
+                elif pinfo.get("sub_monthly"):
                     grain_banner = (
                         f"{pinfo['label']} → true daily data for {disp_plants}. "
                         "Any plant not listed had no run recorded on these days."
@@ -2913,6 +2933,10 @@ _LOCATION_NAMES = {"KH": "Kaharani", "Bhiwari": "Bhiwadi (RICO)", "VN": "Varanas
 # shows ONLY the deterministic ones — so the two tabs no longer overlap.
 _AI_REPORT_IDS = {r["id"] for r in REPORT_TYPES}
 
+# Reports that have their own dedicated top-level page (and bottom-nav tab), so
+# they are NOT listed again on the Management Reports index (avoids duplication).
+_STANDALONE_REPORT_IDS = {"compound_compilation"}
+
 
 @app.route("/management-reports")
 def management_reports_index():
@@ -2925,7 +2949,7 @@ def management_reports_index():
     from collections import defaultdict
     by_loc = defaultdict(list)
     for r in _REPORT_CATALOGUE:
-        if r["id"] in _AI_REPORT_IDS:
+        if r["id"] in _AI_REPORT_IDS or r["id"] in _STANDALONE_REPORT_IDS:
             continue
         by_loc[r["location"]].append(r)
     locations = []
@@ -3004,6 +3028,7 @@ def report_gom_summary():
     )
 
 
+@app.route("/compound")
 @app.route("/reports/compound_compilation")
 def report_compound_compilation():
     """Pipe compound mass-balance (opening → batch → given → closing) recomputed
