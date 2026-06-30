@@ -28,6 +28,7 @@ Mobile-first Flask dashboard that reads Prayag's real production Google Sheets (
 - `ideal_hours.py` — ideal-denominator precedence + app-default planned hours.
 - `confirm.py` — four-tier Data Confirmation engine (pure, no network).
 - `verify.py` — read-only Data Verification + provenance (network-free).
+- `recon.py` — pure standardized report-reconciliation badge engine: daily-first vs the monthly summary grid. The grid undercounts for every plant, so a positive delta is expected (info, never a fail); the only flagged concern is daily-first falling SHORT of the grid. Degrades to honest "recomputed only" where no grid is wired. Rendered by `templates/_recon_badge.html` on report-detail pages.
 - `freshness.py` — spreadsheet-change tracking (content-hash fingerprints; Google's true modifiedTime is unreachable).
 - `store.py` — durable Postgres stores: sign-offs, issue acks, source fingerprints, ideal-hours overrides, L2 sheet cache. All no-op without `DATABASE_URL`.
 - `narrative.py` — Claude prose + code matching.

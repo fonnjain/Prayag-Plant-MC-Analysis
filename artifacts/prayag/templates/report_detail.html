@@ -3,6 +3,7 @@
 
 {% block content %}
 {% from "_macros.html" import info %}
+{% from "_recon_badge.html" import recon_badge %}
 
 <!-- Header -->
 <div class="flex items-center gap-2 mb-4">
@@ -61,6 +62,9 @@
 </div>
 {% endif %}
 {% endif %}
+
+<!-- Standardized reconciliation badge: recomputed (daily-first) vs final sheet -->
+{{ recon_badge(recon) }}
 
 <!-- Narrative (Claude) -->
 {% if narrative %}

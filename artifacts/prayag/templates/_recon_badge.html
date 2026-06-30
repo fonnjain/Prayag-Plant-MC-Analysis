@@ -1,0 +1,63 @@
+{# Standardized reconciliation badge: recomputed (daily-first) vs final sheet. #}
+{% macro recon_badge(recon) %}
+{% if recon %}
+{% set st = recon.status %}
+<div class="rounded-xl p-3 mb-3 border
+  {% if st=='ok' %}bg-green-50 border-green-200
+  {% elif st=='warn' %}bg-amber-50 border-amber-200
+  {% elif st=='fail' %}bg-red-50 border-red-200
+  {% else %}bg-blue-50 border-blue-200{% endif %}">
+  <div class="flex items-start gap-2">
+    <svg width="14" height="14" class="mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2"
+      stroke="{% if st=='ok' %}#15803d{% elif st=='warn' %}#b45309{% elif st=='fail' %}#b91c1c{% else %}#1d4ed8{% endif %}">
+      {% if st=='ok' %}<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+      {% elif st=='fail' or st=='warn' %}<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      {% else %}<path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>{% endif %}
+    </svg>
+    <div class="flex-1 min-w-0">
+      <div class="text-xs font-semibold
+        {% if st=='ok' %}text-green-800{% elif st=='warn' %}text-amber-800{% elif st=='fail' %}text-red-800{% else %}text-blue-800{% endif %}">
+        Daily-first vs summary grid — {{ recon.label }}
+      </div>
+      {% if recon.available %}
+      <div class="text-[11px] text-gray-600 mt-0.5">
+        Recomputed (daily-first): <b>{{ "{:,.0f}".format(recon.recomputed_total) }}{% if recon.unit %} {{ recon.unit }}{% endif %}</b>
+        {% if recon.final_total is not none %}
+          · Summary grid: <b>{{ "{:,.0f}".format(recon.final_total) }}</b>
+          {% if recon.total_delta_pct is not none %} · Δ {{ recon.total_delta_pct }}%{% endif %}
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="text-[11px] text-gray-600 mt-0.5">{{ recon.note }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if recon.flagged %}
+  <details class="mt-2">
+    <summary class="text-[11px] font-medium cursor-pointer text-red-700">
+      {{ recon.n_flagged }} cell(s) differ by more than ±{{ recon.tol_pct|round|int }}%
+    </summary>
+    <div class="table-scroll mt-1">
+      <table class="w-full text-[11px]">
+        <thead><tr class="text-gray-500 text-left">
+          <th class="py-0.5 pr-2">Item</th><th class="pr-2">Recomputed</th>
+          <th class="pr-2">Grid</th><th>Δ%</th>
+        </tr></thead>
+        <tbody>
+        {% for c in recon.rows if c.status=='flag' %}
+          <tr class="border-t border-gray-100">
+            <td class="py-0.5 pr-2 whitespace-nowrap">{{ c.key }}</td>
+            <td class="pr-2">{{ "{:,.0f}".format(c.recomputed) }}</td>
+            <td class="pr-2">{{ "{:,.0f}".format(c.final) if c.final is not none else "—" }}</td>
+            <td class="text-red-600 font-medium">{{ c.delta_pct }}%</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

@@ -43,6 +43,7 @@ from narrative import (
 )
 import manifest as manifest_mod
 import store
+import recon
 import segment_inputs
 import baselines
 import ideal_hours
@@ -2219,9 +2220,93 @@ def report_detail(report_id: str):
         "chart_label": chart_label,
         "sub_overall": sub_dict,
         "sub_validation": sub_validation,
+        "recon": _report_reconciliation(report_id, rows, data),
         "narrative": narrative,
     })
     return render_template("report_detail.html", **ctx)
+
+
+def _report_reconciliation(report_id: str, rows, data: dict):
+    """Standardized reconciliation of a report's recomputed (daily-first) figures
+    against the final summary grid (``get_records`` — the annual M/C summary
+    sheets). Returns a badge dict (see ``recon.reconcile``) or None.
+
+    Authoritative side is always the recompute; the grid is the cross-check. PIPE
+    legitimately exceeds its final summary, so its deltas are flagged as expected,
+    not errors. Where no final grid is wired (PTMT, Tank), the badge degrades to
+    an honest "recomputed only" note — never a fabricated mismatch.
+    """
+    if not rows:
+        return None
+    from metrics import rollup_by_machine
+
+    plants = {r.plant for r in rows}
+    units = {r.unit for r in rows if r.unit}
+    machine_based = report_id in ("extrusion_summary", "injection_summary", "utilisation")
+
+    if len(units) > 1 and not machine_based:
+        return recon.reconcile(None, None, no_final_note=(
+            "Mixed units in this view — figures are recomputed daily-first; open a "
+            "single plant for a one-figure reconciliation against its final sheet."))
+
+    grid_read_error = False
+    try:
+        grid = get_records(data["months"])[0]
+    except SheetReadError:
+        grid = []
+        grid_read_error = True
+    rpt = next((r for r in REPORT_TYPES if r["id"] == report_id), None)
+    if rpt and rpt.get("segments"):
+        grid = _filter_report_segments(grid, rpt["segments"])
+    grid = [g for g in grid if g.plant in plants]
+
+    cell_rows = None
+    if machine_based:
+        rec_by = rollup_by_machine(rows)
+        fin_by = rollup_by_machine(grid) if grid else {}
+        plant_of = {r.machine: r.plant for r in rows}
+        for g in grid:
+            plant_of.setdefault(g.machine, g.plant)
+        cell_rows = []
+        for k in sorted(set(rec_by) | set(fin_by)):
+            if not k:
+                continue
+            rc = rec_by[k].total_count if k in rec_by else 0.0
+            fn = fin_by[k].total_count if k in fin_by else None
+            # The monthly summary grid undercounts for EVERY plant (documented
+            # core invariant — it is why daily-first is authoritative), so a cell
+            # where daily-first >= grid is expected. Only a cell where daily-first
+            # falls SHORT of the grid is a genuine concern (a daily data gap).
+            cell_rows.append((k, rc, fn, True))
+
+    if len(units) <= 1:
+        rec_total = sum(r.total_count for r in rows)
+        fin_total = sum(g.total_count for g in grid) if grid else None
+    else:
+        rec_total = fin_total = None
+
+    no_final_note = None
+    if (fin_total is None or fin_total == 0) and not (
+        cell_rows and any(c[2] is not None for c in cell_rows)
+    ):
+        if grid_read_error:
+            no_final_note = (
+                "The summary grid could not be read right now (transient sheet "
+                "outage) — figures shown are recomputed daily-first; the grid "
+                "cross-check will return once the read recovers.")
+        else:
+            no_final_note = (
+                f"No annual summary grid is wired for {', '.join(sorted(plants))} — "
+                "figures are recomputed daily-first only.")
+
+    return recon.reconcile(
+        rec_total, fin_total, rows=cell_rows,
+        unit=(next(iter(units)) if len(units) == 1 else ""),
+        # The monthly summary grid undercounts for every plant (documented core
+        # invariant), so daily-first exceeding it is expected, not a failure.
+        expect_exceeds=True,
+        no_final_note=no_final_note,
+    )
 
 
 def _build_report_table(report_id: str, rows, data: dict):
