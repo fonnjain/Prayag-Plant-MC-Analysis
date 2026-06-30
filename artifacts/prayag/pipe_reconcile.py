@@ -13,8 +13,11 @@ records (e.g. for April 2026 Report-5 sums to 135,634 KG while Report-11 sums to
 157,278 KG, and six machine-days appear only in Report-11).  So for every
 (machine, date) cell the corrected figure is the **date-wise maximum** of the
 two sources, taken over the UNION of every cell either source reports — for
-output and, separately, for rejection.  This reproduces the audited April total
-of 157,883 KG output / 13,030 KG rejection.
+output and, separately, for rejection.  This reproduced the original audited
+April 2026 total of 157,883 KG output / 13,030 KG rejection (an as-of snapshot —
+the live figure grows as machine-days are backfilled after month close; the
+reconciliation logic is unchanged, so the live /build-state baseline is the
+source of truth for the current expected totals).
 
 Type split: Report-11's per-type proportions for a cell are scaled pro-rata to
 that cell's corrected output (so when Report-5 is the higher figure, the extra

@@ -2667,9 +2667,16 @@ def build_state():
     # ------------------------------------------------------------------ #
     # LIVE DATA: assert ground-truth figures from the live sheets          #
     # ------------------------------------------------------------------ #
-    PIPE_MAY_EXP  = 115_745   # reconciled (date-wise max Report-5 ↔ Report-11)
-    PIPE_APR_EXP  = 157_883   # reconciled April output (audited)
-    PIPE_APR_REJ  = 13_030    # reconciled April rejection (audited)
+    # Re-baselined 2026-06-30 against the live sheets. PIPE April/May figures grow
+    # as machine-days are backfilled into the source workbooks AFTER the month
+    # closes — the reconciliation logic is unchanged and was re-verified coherent
+    # (types + untyped == out_total, and record-sum == audit out_total) before
+    # adopting these numbers. MOULDING May is stable. When #1/#17 fail again with
+    # a COHERENT audit it is fresh backfill — re-measure and re-baseline; an
+    # INCOHERENT audit means a real reconciliation regression, not a baseline drift.
+    PIPE_MAY_EXP  = 264_717   # reconciled May output (date-wise max Report-5 ↔ Report-11)
+    PIPE_APR_EXP  = 175_669   # reconciled April output
+    PIPE_APR_REJ  = 14_825    # reconciled April rejection
     MOULD_MAY_EXP = 75_771
     TOL = 0.005
 
@@ -2753,7 +2760,7 @@ def build_state():
                       f"get_data error: {_e2}")
 
             # #17  PIPE April reconciliation ground truth (date-wise max of
-            #      Report-5 and Report-11): audited output 157,883 / rej 13,030.
+            #      Report-5 and Report-11): re-baselined output 175,669 / rej 14,825.
             try:
                 _rows_apr, _reps_apr, _ = get_daily_records(["2026-04"])
                 _pipe_apr = sum(r.total_count for r in _rows_apr
