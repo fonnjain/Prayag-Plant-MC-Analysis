@@ -16,18 +16,32 @@ is the single authority; `ideal_hours.SRC_*` are the source labels/badge keys.
 the sheets (GARDEN=500, TANK=500, HDPE=550 hrs/machine/month). `sheets._emit_daily`
 stamps it (`ideal_source="app_default"`) only when no higher tier matched, in BOTH
 the HDPE-rate branch (no in-sheet hours) and the final config-baseline else branch.
-**Why the suppression matters:** GARDEN/TANK record OUTPUT only (their daily
-parsers set `actual_hours=0`), so a 500 denominator with 0 run hours would render a
-FAKE 0% utilisation, and in a mixed rollup the 500 would dilute real plants'
-utilisation. **How:** plants in `ideal_hours.PLANTS_WITHOUT_RUNHOURS` get
-`Record.runhours_tracked=False`; `compute_metrics` keeps a SEPARATE `util_ideal`
-denominator that only accumulates ideal hours from rows where `runhours_tracked` is
-True (and shift-log rows), so utilisation is `util_run/util_ideal` and
-`util_available = util_ideal > 0`. `m.ideal_hours` still includes the 500 (it is
-the honest planned-hours total + drives the /input "From sheet" column), but it no
-longer drives the ratio. No regression: pre-change, no-baseline rows had
-ideal_hours=0 so `util_ideal == m.ideal_hours` for all real plants. HDPE logs run
-hours (`runhours_tracked=True`) so util computes against 550 once workbooks fill.
+**Why the suppression matters:** an output-only plant (`actual_hours=0`) with a 500
+denominator would render a FAKE 0% utilisation, and in a mixed rollup the 500 would
+dilute real plants' utilisation. **How:** plants in
+`ideal_hours.PLANTS_WITHOUT_RUNHOURS` get `Record.runhours_tracked=False`;
+`compute_metrics` keeps a SEPARATE `util_ideal` denominator that only accumulates
+ideal hours from rows where `runhours_tracked` is True (and shift-log rows), so
+utilisation is `util_run/util_ideal` and `util_available = util_ideal > 0`.
+`m.ideal_hours` still includes the 500 (the honest planned-hours total + the /input
+"From sheet" column), but it no longer drives the ratio. HDPE logs run hours
+(`runhours_tracked=True`) so util computes against 550 once workbooks fill.
+
+**GARDEN now tracks run hours (only TANK remains output-only):** GARDEN keeps OUTPUT
+from its per-machine block tabs but ALSO joins per-machine per-date RUN HOURS from
+the workbook's "Daily Report" matrix tab (`runhours_tab` in `_emit_blocks`, joined
+by trailing machine-number + date; output is NEVER read from the matrix). So
+`PLANTS_WITHOUT_RUNHOURS={"TANK"}` and GARDEN's utilisation computes against the
+app-default 500. **Day-grain fake-0% trap:** the source logs run hours sparsely (a
+machine may produce output on a day with no run-hour entry). Spreading the 500
+across ALL active/output days would give those no-run-hour days `ideal>0` and a
+displayed 0% utilisation — a fake 0 at the DAY grain. Fix: spread the app default
+ONLY across the days a machine actually logged run hours (`r.actual_hours>0`), so
+Σ ideal per machine == 500 (monthly rollup unchanged) AND no-run-hour days keep
+`ideal_hours=0` → utilisation BLANK. A machine/month with zero run hours (matrix not
+yet filled) gets no denominator → fully suppressed. `_emit_blocks` also distinguishes
+matrix-tab-missing vs parse-failure vs no-hours-yet in its warning text so a silent
+layout drift doesn't masquerade as "no run hours yet".
 `app._IDEAL_SRC_FROM_RECORD` must map `"app_default" → SRC_APP_DEFAULT` or the
 /input badge falls back to "From sheet".
 

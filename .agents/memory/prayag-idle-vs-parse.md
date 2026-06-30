@@ -13,6 +13,12 @@ opening the right tab and returning 0 rows is the EXPECTED idle state, not a def
   "present but no output recorded yet" via `_has_date_header`.
 - **HDPE June 2026** — `Daily Report` matrix is present but early-month with no production
   yet; flagged "present but no production recorded" via `_matrix_has_dates`.
+- **GARDEN early-month run hours** — GARDEN OUTPUT comes from its per-machine block tabs,
+  but RUN HOURS are joined from a separate "Daily Report" matrix tab (`runhours_tab`). An
+  early/in-progress month can have output present but the matrix not yet filled — that is
+  idle for run hours, NOT a parse bug: utilisation is correctly suppressed (no fake 0%),
+  output still shows. `_emit_blocks` warning distinguishes matrix-tab-missing vs
+  parse-failure vs no-hours-yet, so check the warning text before treating it as a defect.
 
 **Why:** The classifier distinguishes parse-failure ("layout not recognised") from
 idle ("present but empty") on purpose. Returning 0 rows after a successful tab read is

@@ -915,11 +915,17 @@ _DAILY_LAYOUTS: dict = {
       },
   ],
   # GARDEN keeps one tab PER MACHINE ("MACHINE 2", ...), each a date×production
-  # block (no run hours); its single "Daily Report" tab is empty, so real output
-  # lives in these per-machine tabs.
+  # block carrying the authoritative KG OUTPUT + rejection. Its "Daily Report"
+  # matrix tab additionally logs per-machine, per-date RUN HOURS (Run Hours /
+  # Output / Rejection groups) — only the RUN HOURS are read from there and
+  # joined onto the block-tab rows by machine number + date (``runhours_tab``);
+  # output is NEVER taken from Daily Report (the per-machine tabs are the output
+  # source of truth). With real run hours, utilisation computes against the
+  # app-default planned hours (GARDEN=500/machine/month).
   "GARDEN": [{
       "emit": "GARDEN", "layout": "blocks",
       "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "GARDEN M/C - ",
+      "runhours_tab": "Daily Report",
   }],
   # HDPE has a populated "Daily Report" matrix (one row per machine, per-date
   # Run Hours / Output / Rejection) — the same family as PTMT Report-5 — so it is
@@ -1103,10 +1109,81 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           source_file=file_id, source_tab=t, machine=machine,
       ))
 
+  # ----- Run hours from a separate per-date matrix tab (GARDEN) --------------
+  # The block tabs are the OUTPUT source of truth; some plants (GARDEN) ALSO
+  # publish per-machine, per-date RUN HOURS in a wide "Daily Report" matrix.
+  # Read ONLY run hours from there (never output) and join onto the block rows
+  # by machine number + date so utilisation can compute. The matrix parser's
+  # per-machine run-hour total reconciles to the sheet's own TOTAL column.
+  rh_tab = spec.get("runhours_tab")
+  rh_tab_found = False
+  rh_parsed = 0
+  runhours_found = False
+  if rh_tab:
+      rh_actual = next(
+          (t for t in list_tabs(file_id, token)
+           if str(t).strip().upper() == rh_tab.upper()), None)
+      if rh_actual is not None:
+          rh_tab_found = True
+          rh_rows = parsers.parse_daily_matrix(
+              read_values(file_id, rh_actual, token),
+              plant=emit, segment=seg, unit=unit, year_month=ym,
+              source_file=file_id, source_tab=rh_actual,
+          )
+          rh_parsed = len(rh_rows)
+          rh_map: dict = {}
+          for rr in rh_rows:
+              if rr.actual_hours and rr.actual_hours > 0:
+                  m = re.search(r"(\d+)", rr.machine)
+                  if m:
+                      rh_map[(m.group(1), rr.date)] = (
+                          rh_map.get((m.group(1), rr.date), 0.0) + rr.actual_hours)
+          for r in raw:
+              m = re.search(r"(\d+)", r.machine)
+              key = (m.group(1), r.date) if m else None
+              if key and key in rh_map:
+                  r.actual_hours = rh_map[key]
+                  runhours_found = True
+
+  # ----- Ideal-hours denominator --------------------------------------------
+  # Lowest-priority app-logic default (GARDEN=500/machine/month). For a
+  # run-hours-tracked plant the monthly default is spread ONLY across the days a
+  # machine actually logged run hours, so (a) a full-month rollup still uses the
+  # whole default (Σ ideal == app_default per machine) and (b) a day with output
+  # but NO run hours keeps ideal=0 → utilisation BLANK, never a fake 0% — true at
+  # the DAY grain too, not just monthly. A machine with no run hours at all this
+  # period gets no denominator → suppressed. Output-only plants
+  # (runhours_tracked=False, e.g. TANK) spread across every active day and rely
+  # on the metrics gate to stay suppressed.
+  app_default = ideal_hours.APP_DEFAULT_IDEAL_HOURS.get(emit)
+  tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
+  rh_days: dict = {}      # machine -> {dates with run hours} (tracked plants)
+  out_days: dict = {}     # machine -> {all active dates} (output-only plants)
   for r in raw:
-      r.ideal_hours = 0.0      # no run hours in this layout → ratio hidden
-      r.ideal_output = 0.0
-      r.ideal_source = "none"
+      out_days.setdefault(r.machine, set()).add(r.date)
+      if r.actual_hours > 0:
+          rh_days.setdefault(r.machine, set()).add(r.date)
+  for r in raw:
+      r.runhours_tracked = tracks_hours
+      r.ideal_output = 0.0     # no in-sheet output rate → efficiency hidden
+      give = False
+      days = 1
+      if app_default and app_default > 0:
+          if tracks_hours:
+              # Only days WITH run hours carry the denominator → no per-day fake 0%.
+              if r.actual_hours > 0:
+                  give = True
+                  days = max(len(rh_days.get(r.machine, ())), 1)
+          else:
+              # Output-only plant: every active day (metrics gate suppresses util).
+              give = True
+              days = max(len(out_days.get(r.machine, ())), 1)
+      if give:
+          r.ideal_hours = app_default / days
+          r.ideal_source = "app_default"
+      else:
+          r.ideal_hours = 0.0
+          r.ideal_source = "none"
 
   report["detail_tabs"] = sorted({r.machine for r in raw})
   report["record_count"] = len(raw)
@@ -1119,6 +1196,28 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           if any_header else
           f"{emit} {ym}: the machine tabs could not be parsed "
           "(date/output layout not recognised)."
+      )
+  elif rh_tab and runhours_found:
+      report["warning"] = (
+          f"{emit} {ym}: output read from the per-machine tabs; run hours joined "
+          f"from the '{rh_tab}' matrix — utilisation is shown."
+      )
+  elif rh_tab and not rh_tab_found:
+      report["warning"] = (
+          f"{emit} {ym}: output read from the per-machine tabs, but the "
+          f"'{rh_tab}' run-hours matrix tab was not found — utilisation "
+          "suppressed (check the workbook layout)."
+      )
+  elif rh_tab and rh_parsed == 0:
+      report["warning"] = (
+          f"{emit} {ym}: output read from the per-machine tabs, but the "
+          f"'{rh_tab}' matrix could not be parsed (layout not recognised) — "
+          "utilisation suppressed."
+      )
+  elif rh_tab:
+      report["warning"] = (
+          f"{emit} {ym}: output read from the per-machine tabs, but the "
+          f"'{rh_tab}' matrix carries no run hours yet — utilisation suppressed."
       )
   else:
       report["warning"] = (
