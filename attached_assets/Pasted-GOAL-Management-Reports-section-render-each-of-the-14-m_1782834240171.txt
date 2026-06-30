@@ -1,0 +1,80 @@
+GOAL — Management Reports section: render each of the 14 management reports with the EXACT
+layout of its existing final reporting sheet, but every number RECOMPUTED from the daily
+source workbooks. The final reporting sheets are used ONLY to (a) mirror format and (b)
+validate. NEVER read a figure out of a final sheet into the output — all numbers are computed.
+
+THE 14 REPORTS (target outputs; names exactly as in the Meetings tab / Sheet Inventory):
+  2026-27 (KH 2026-27):
+    (A) Annual 26-27 Pipe M/C Summary
+    (B) Annual 26-27 Moulding M/C Summary
+    (C) Annual 26-27 Group Of Moulding M/C Summary
+    (D) Annual 26-27 Pipe Moulds Summary
+    Annual 26-27 GARDEN PIPE M/C Summary
+    Annual 26-27 HDPE M/C Summary
+    Annual 26-27 Moulding %age in Efficiency
+    Compound Compilation 2026-27
+  2025-26 (KH 2025-26):
+    Annual 25-26 Segment Wise Labour Cost, Solar Cost & Power Cost
+    Annual 25-26 TANK (KH) Ltr. Summary
+    Annual 25-26 TANK (VN) Ltr. Summary
+    Annual 25-26 TANK (WB) Ltr. Summary
+  2026-27 (PTMT 2026-27):
+    ANNUALY PTMT Moulds Summary 26-27
+    ANNUAL PTMT Moulding %age in Efficiency 26-27
+  Use the final-sheet file IDs already in sources.py / the Sheet Inventory. If the (B)
+  Moulding 26-27 final ID is still unconfirmed, mark that report "format unverified".
+
+CORE RULE — FORMAT vs NUMBERS:
+  1. FORMAT comes from the final sheet: read its header/label block to learn the exact
+     column order, column labels, units (kg / % / Ltr / INR), row/machine order, grouping,
+     and number formatting. Reproduce that structure verbatim in the app output.
+  2. NUMBERS come from the daily sources, recomputed. Stored % cells and stored totals in
+     ANY sheet (daily or final) are never trusted — recompute every ratio from raw cells
+     (efficiency, avg output/hr, utilisation, rejection %, %age-in-efficiency, etc.).
+  3. After computing, RECONCILE each report to its final sheet (value-by-value where aligned):
+     show match % and flag any cell differing by >3%. Where they differ, the recomputed
+     daily-first number is authoritative — flag the delta, do NOT overwrite it to match.
+
+DATA SOURCES & COMPUTATION PER FAMILY (header-based parsing throughout — locate columns by
+header text, handle both FY 2025-26 and FY 2026-27 layouts, resolve machines via the roster):
+  - PIPE (Report A, and the pipe parts of others): production & rejection = date-wise
+    max(Report-5, Report-11) at machine×date grain over the union (the rule already wired in
+    _emit_daily). Type split (CPVC/UPVC/SWR/AGRI) from Report-11 only, pro-rata to the
+    corrected machine total; "untyped pickup" for R5-only machine-dates.
+  - MOULDING (Reports B, C, "Moulding %age in Efficiency"): Report-12 (daily) is
+    authoritative; output kg = "Wt in Kgs", rejection = "Actual Rejection Weight". Report-5
+    moulding rows are a cross-check only. Group-of-moulding (C) = the same machines rolled up
+    by the grouping the final (C) sheet uses.
+  - PIPE MOULDS (D), GARDEN PIPE, HDPE, PTMT (Moulds + %age Efficiency): recompute from each
+    family's daily DATA / date sheets and per-machine/per-mould logs — read the granular tabs,
+    not the SUMMARY roll-up tabs. Mirror each final sheet's column structure.
+  - COMPOUND Compilation: recompute from the daily compound entries (Reports 6/7/8 source),
+    month-wise, in the final sheet's layout.
+  - TANK (KH / VN / WB), in LITRES: recompute from each plant's Tank DATA tabs.
+  - SEGMENT (Labour/Solar/Power): labour cost from the employee CTC / cost-per-hour sheets ×
+    segment hours; power/solar/contractor values come from the segment_manual_inputs table
+    (JVVL units & amount, electricity units, solar generation incl. Unit-2 second source,
+    tariff basics 7.08 & 11.5, contractor headcount & wages). Until a month's manual inputs
+    are entered, show those columns as "awaiting input" — but still compute production,
+    utilisation, efficiency, and payroll labour for that month.
+
+PERIOD & ROLL-UP:
+  - Headline FY = 2026-27; keep 2025-26 as history for year-on-year columns where the final
+    sheet has them.
+  - "Annual" = sum of populated months daily-first. Honour the period selector. Aug-2025:
+    PIPE side empty (flag "awaiting source"); MOULDING real (~75,549 kg) — do not flag moulding.
+
+ACCEPTANCE CHECKS:
+  - Pipe (A), April 2026: corrected output = 157,883 kg, rejection = 13,030 kg.
+  - Moulding (B), every month: recomputed total ties to Report-12 to the kg
+    (e.g. May-26 ≈ 75,771 kg).
+  - For correct families (moulding, garden, HDPE, tank, PTMT, compound) the reconciliation
+    to the final sheet should be ~100%; large deltas there mean a parsing/mapping bug. For
+    pipe, the recomputed total will EXCEED the final/Report-5 sheet — that is expected.
+
+OUTPUT & SAFETY:
+  - Render each report in the Management Reports section in its final-sheet format, plus a
+    small per-report reconciliation badge (recomputed vs final, match %, # flagged cells).
+  - Append-only / non-destructive; all Google Sheets read-only. Claude/AI writes narrative
+    only — never numbers.
+  Do not change the moulding sourcing or the FY26-27 pipe date-wise max logic already wired.
