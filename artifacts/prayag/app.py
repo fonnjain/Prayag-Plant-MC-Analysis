@@ -3013,7 +3013,6 @@ def reports_index():
             locations.append({"id": loc, "name": _LOCATION_NAMES.get(loc, loc), "reports": items})
     return render_template("reports.html",
         locations=locations,
-        seg_input_summary=_seg_input_summary(),
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
     )

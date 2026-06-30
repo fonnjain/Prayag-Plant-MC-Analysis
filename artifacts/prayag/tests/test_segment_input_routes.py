@@ -121,7 +121,10 @@ def test_seg_input_summary_lists_awaiting_months():
     print("ok: _seg_input_summary lists awaiting months, omits captured")
 
 
-def test_reports_banner_shows_awaiting_months():
+def test_reports_page_is_ai_only_no_management_content():
+    # The /reports page is now AI Insights & Analytics only — the power & labour
+    # (segment-input) banner and the "Management Reports" framing were moved off
+    # it. The awaiting-months banner lives on /management-entries instead.
     store.AVAILABLE = True
     store.seg_inputs_for = lambda months: {}
     appmod.get_daily_records = lambda months: ([], [], [])
@@ -129,11 +132,10 @@ def test_reports_banner_shows_awaiting_months():
     resp = client.get("/reports")
     assert resp.status_code == 200, resp.status_code
     body = resp.get_data(as_text=True)
-    assert "awaiting" in body
-    # The first current-FY month's short name appears in the banner month list.
-    short = appmod._month_short(appmod.FY_MONTHS[0])
-    assert short in body, short
-    print("ok: /reports banner surfaces specific awaiting months")
+    assert "AI Insights" in body
+    assert "Management Reports" not in body
+    assert "/segment-input" not in body
+    print("ok: /reports is AI-only, no management-report content")
 
 
 def test_gom_and_tank_have_validation_badge():
