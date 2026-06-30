@@ -61,6 +61,31 @@ keyed (plant, machine, month)), NEVER written back to the sheets. Set/clear via 
 meaningful ("not expected to run" → utilisation suppressed), not "missing". v1 is
 ideal HOURS only — efficiency / PIPE Col I are out of scope.
 
+**Plant-level (empty-machine) overrides:** a plant with no machine identity (TANK,
+logged per item) uses `machine=""`. Three places must NOT require a non-empty
+machine or the override silently never applies: `store.ideal_override_record`
+validation (require plant+month only), the `/input/save` row loop (`if not plant:
+continue`, never `not machine`), and the override match key in `_apply_ideal_overrides`
+(matches on (plant, machine) where machine may be "").
+
+**Run-hour-gated override split (no fake 0%):** `_apply_ideal_overrides` must mirror
+the app-default day-grain rule. For a `runhours_tracked` machine, count the override
+denominator ONLY across days with `actual_hours > 0`, and force a gated-out day's
+`ideal_hours=0` (utilisation BLANK, never 0%) — but still stamp `ideal_source=
+"override"` on every matched row so the UI knows a baseline EXISTS. Output-only plants
+(TANK, `runhours_tracked=False`) take the override on every row; the `util_ideal`
+gate in compute_metrics keeps utilisation suppressed regardless.
+
+## "No baseline" vs "Run hours not recorded" messaging
+`metrics.baseline_set` (rollup field, in `to_dict` + `headline_label`) is True when a
+real `ideal_source` exists OR the plant is in `APP_DEFAULT_IDEAL_HOURS`. **Why:** an
+output-only/empty-run-hour plant (TANK always; GARDEN when the run-hour matrix is
+unfilled) HAS a planned-hours baseline yet utilisation genuinely cannot compute — so
+the honest message is "Run hours not recorded" / "No run hours", NOT "No baseline set"
+(which falsely implies the manager must enter a baseline). **How:** templates branch
+`{% elif o.baseline_set %}` before the `{% else %}` no-baseline path; keep the genuine
+no-baseline copy for `baseline_set=False`.
+
 ## Cache-mutation trap (important)
 **Why:** `_load_daily_cached`'s L1 in-process cache returns the SAME Record objects
 across requests (no copy). Mutating `r.ideal_hours` in place to apply an override

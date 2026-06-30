@@ -1252,7 +1252,13 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
       values, plant=emit, segment=seg, unit="Ltr", year_month=ym,
       source_file=file_id, source_tab=actual,
   )
+  # TANK is output-only (no run hours), so utilisation/efficiency stay suppressed.
+  # Mark runhours_tracked=False so that a manager OVERRIDE may set a planned-hours
+  # baseline without the metrics gate ever fabricating a 0% utilisation, while the
+  # plant still counts as "baseline set" (app-default) for honest UI messaging.
+  tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
   for r in raw:
+      r.runhours_tracked = tracks_hours
       r.ideal_hours = 0.0
       r.ideal_output = 0.0
       r.ideal_source = "none"

@@ -479,8 +479,10 @@ def ideal_override_record(
         raise StoreError(f"Unknown action: {action!r}")
     if not (set_by or "").strip():
         raise StoreError("A name is required.")
-    if not (plant or "").strip() or not (machine or "").strip() or not (month or "").strip():
-        raise StoreError("plant, machine and month are required.")
+    # ``machine`` may be empty: a plant-level override for a plant with no machine
+    # identity (e.g. TANK, logged per item). plant + month are still required.
+    if not (plant or "").strip() or not (month or "").strip():
+        raise StoreError("plant and month are required.")
     h = 0.0
     if action == "set":
         if hours is None:

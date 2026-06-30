@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict
 import math
 
+import ideal_hours
+
 
 @dataclass
 class Record:
@@ -143,6 +145,12 @@ class MetricsResult:
     util_available: bool = False
     eff_available: bool = False
 
+    # True when a planned-hours baseline EXISTS for this rollup (sheet / derived /
+    # config / app-default / manager override) even when the utilisation
+    # denominator is currently gated to 0 for want of reported run hours. Lets the
+    # UI say "run hours not recorded" instead of the misleading "no baseline set".
+    baseline_set: bool = False
+
     # Costs
     labour_cost: float = 0.0
     power_cost: float = 0.0
@@ -205,6 +213,8 @@ class MetricsResult:
             return "Output Efficiency"
         if self.util_available:
             return "Utilisation"
+        if self.baseline_set:
+            return "Run hours not recorded"
         return "No baseline set"
 
     @property
@@ -281,6 +291,7 @@ class MetricsResult:
             "oee_available": self.oee_available,
             "util_available": self.util_available,
             "eff_available": self.eff_available,
+            "baseline_set": self.baseline_set,
             "headline_available": self.headline_available,
             "rejection_pct": self.rejection_pct_display,
             "runner_pct": round(self.runner_pct * 100, 2),
@@ -397,6 +408,13 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     m.output_efficiency = _safe_div(eff_out, m.ideal_output)
     m.util_available = util_ideal > 0
     m.eff_available = m.ideal_output > 0
+    # A planned-hours baseline EXISTS (independent of run-hour gating) when any row
+    # carries a resolved ideal source, OR its plant has an app-default baseline.
+    m.baseline_set = any(
+        (getattr(r, "ideal_source", "") not in ("none", ""))
+        or (getattr(r, "plant", "") in ideal_hours.APP_DEFAULT_IDEAL_HOURS)
+        for r in prod_rows
+    )
     m.rejection_pct = _safe_div(m.reject_count, m.total_count)
     m.runner_pct = _safe_div(m.runner_lumps, m.total_count)
     m.attainment = _safe_div(m.total_count, m.planned_output)

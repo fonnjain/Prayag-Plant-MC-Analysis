@@ -412,13 +412,20 @@ def _apply_ideal_overrides(rows):
                 ov_by_month[m] = ov
     if not ov_by_month:
         return rows
-    # Rows per (plant, machine, month) so the monthly override is split evenly.
+    # Denominator rows per (plant, machine, month). For a run-hours-tracked machine
+    # ONLY the days that actually logged run hours carry the override denominator,
+    # so a no-run-hour day is never charged a baseline (no fabricated 0%); for an
+    # output-only machine (TANK) every row carries it (the metrics gate suppresses
+    # utilisation regardless). Mirrors the app-default gating in sheets._emit_blocks.
     counts: dict = {}
     for r in rows:
         mk = (r.date or r.period or "")[:7]
-        if ov_by_month.get(mk, {}).get((r.plant, r.machine)) is not None:
-            k = (r.plant, r.machine, mk)
-            counts[k] = counts.get(k, 0) + 1
+        if ov_by_month.get(mk, {}).get((r.plant, r.machine)) is None:
+            continue
+        if r.runhours_tracked and r.actual_hours <= 0:
+            continue
+        k = (r.plant, r.machine, mk)
+        counts[k] = counts.get(k, 0) + 1
     out = []
     for r in rows:
         mk = (r.date or r.period or "")[:7]
@@ -427,8 +434,12 @@ def _apply_ideal_overrides(rows):
             out.append(r)
             continue
         monthly = float(ov.get("ideal_hours") or 0.0)
-        n = counts.get((r.plant, r.machine, mk), 1) or 1
-        per_row = (monthly / n) if monthly > 0 else 0.0
+        # A run-hours-tracked day with no run hours gets a 0 denominator (utilisation
+        # stays blank, never a fake 0%) but is still stamped 'override' so the UI
+        # knows a baseline EXISTS — it is simply awaiting run hours.
+        gated_out = r.runhours_tracked and r.actual_hours <= 0
+        n = counts.get((r.plant, r.machine, mk), 0)
+        per_row = (monthly / n) if (monthly > 0 and not gated_out and n > 0) else 0.0
         out.append(dataclasses.replace(r, ideal_hours=per_row, ideal_source="override"))
     return out
 
@@ -2069,7 +2080,8 @@ def ideal_input_save():
     for i in range(n):
         plant = (form.get(f"plant_{i}", "") or "").strip()
         machine = (form.get(f"machine_{i}", "") or "").strip()
-        if not plant or not machine:
+        # ``machine`` may be empty for a plant-level override (e.g. TANK).
+        if not plant:
             continue
         raw = (form.get(f"hours_{i}", "") or "").strip()
         prior = current.get((plant, machine))

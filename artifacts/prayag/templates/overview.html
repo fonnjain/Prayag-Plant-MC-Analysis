@@ -55,6 +55,9 @@
         {% if not o.oee_available %}
         <div class="text-xs text-gray-400 mt-1">Monthly data — OEE (availability × performance × quality) needs daily shift logs</div>
         {% endif %}
+        {% elif o.baseline_set %}
+        <div class="text-2xl font-bold text-gray-400 mt-1">Run hours not recorded</div>
+        <div class="text-xs text-gray-400 mt-1">The planned-hours baseline is set — utilisation appears once run hours are reported.</div>
         {% else %}
         <div class="text-2xl font-bold text-gray-400 mt-1">No baseline set</div>
         <div class="text-xs text-gray-400 mt-1">Run hours &amp; output are shown below; set a planned-hours baseline for utilisation/efficiency.</div>
@@ -96,7 +99,7 @@
     <div class="mb-2">
       <div class="flex justify-between text-xs mb-1">
         <span class="text-gray-600">{{ label }}{{ info(tkey) }}</span>
-        <span class="font-semibold text-gray-800">{% if avail %}{{ val }}%{% else %}<span class="text-gray-400">No baseline</span>{% endif %}</span>
+        <span class="font-semibold text-gray-800">{% if avail %}{{ val }}%{% elif tkey == 'UTIL' and o.baseline_set %}<span class="text-gray-400">No run hours</span>{% else %}<span class="text-gray-400">No baseline</span>{% endif %}</span>
       </div>
       <div class="progress-bar">
         <div class="progress-fill" style="width:{% if avail %}{{ [val, 100]|min }}{% else %}0{% endif %}%;background:{{ color }}"></div>
