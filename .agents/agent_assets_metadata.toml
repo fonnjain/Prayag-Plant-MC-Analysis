@@ -36,3 +36,9 @@ id = "J-KluYhnDXK1UFFPKfBcz"
 uri = "file://exports/Prayag_Architecture.xlsx"
 type = "table"
 title = "Prayag Architecture (Webapp + Database)"
+
+[[outputs]]
+id = "TW-Q6OTWIgK7WHIQV8RYu"
+uri = "file://exports/Prayag_GoogleSheet_File_IDs.xlsx"
+type = "table"
+title = "Prayag — Google Sheet File IDs (40 IDs, 4 sheets)"

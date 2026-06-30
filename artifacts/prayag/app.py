@@ -478,6 +478,19 @@ def get_data(args):
         m for m in months
         if any(m in (cfg.get("files") or {}) for cfg in DAILY_SOURCES.values())
     ]
+    if pinfo["period"] == "last_updated":
+        # The fixed 60-day window above hides a plant that reports infrequently
+        # (TANK, GARDEN, MOULDING): once its latest day ages past the window it
+        # silently vanishes from "Last updated" even though it has data. Add each
+        # plant's two newest available months so every daily-capable plant is
+        # always read and resolves to its OWN freshest real day, however old —
+        # the displayed date communicates any staleness (a plant with genuinely
+        # no daily data still simply doesn't appear; nothing is fabricated).
+        extra_months: set[str] = set()
+        for cfg in DAILY_SOURCES.values():
+            avail = sorted((cfg.get("files") or {}).keys(), reverse=True)
+            extra_months.update(avail[:2])
+        daily_file_months = sorted(set(daily_file_months) | extra_months)
     if daily_file_months:
         try:
             drecs, dreports, dwarn = get_daily_records(daily_file_months)

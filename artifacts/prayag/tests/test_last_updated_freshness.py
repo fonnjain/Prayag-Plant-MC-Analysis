@@ -1,11 +1,12 @@
 """Regression tests for the "Last Updated" period and per-plant data freshness.
 
-"Last Updated" is a period-selection convenience: it resolves to the most recent
-date that actually has daily production data (a single-day snapshot), so the user
-lands on real figures instead of an empty in-progress day. Resolution uses daily
-data ONLY. The completeness panel then shows per-plant freshness ("Pipe to
-04-Jun, PTMT to 12-Jun…") using the overall max as the resolved date, without
-blocking on laggard plants.
+"Last Updated" is a period-selection convenience that resolves PER PLANT: every
+plant lands on its OWN most recent day with real daily production data (skipping
+empty in-progress days), so each active plant shows real figures with its own
+date — a laggard plant is never blocked or hidden behind the overall-max day, and
+a plant with genuinely no daily data simply doesn't appear (nothing fabricated).
+Resolution uses daily data ONLY. The completeness panel echoes the same per-plant
+freshness ("Pipe to 04-Jun, PTMT to 12-Jun…").
 
 Run: cd artifacts/prayag && python3 -m tests.test_last_updated_freshness
 """
@@ -60,9 +61,10 @@ def _restore(saved):
         os.environ["ANTHROPIC_API_KEY"] = saved["key"]
 
 
-def test_last_updated_resolves_to_overall_max_date():
-    """'Last Updated' narrows to the single latest date any plant reported, even
-    when plants log at different latencies — and skips empty trailing days."""
+def test_last_updated_resolves_per_plant_latest_day():
+    """'Last Updated' resolves PER PLANT: each plant keeps its OWN most recent day
+    even when plants log at different latencies, so a laggard plant (PIPE 04-Jun)
+    still shows real figures and is never hidden behind the overall-max day."""
     def daily(months):
         rows = [
             _daily("PTMT", "PTMT 80-1", "2026-06", 12, 50.0),   # freshest: 12-Jun
@@ -74,11 +76,42 @@ def test_last_updated_resolves_to_overall_max_date():
     try:
         d = app.get_data({"period": "last_updated"})
         assert d["daily_used"] is True, d["daily_used"]
-        # Narrowed to the single overall-max day (12-Jun) — only PTMT's row.
-        assert {r.date for r in d["rows"]} == {"2026-06-12"}, [r.date for r in d["rows"]]
-        assert d["period_label"] == "Last updated: 12-06-2026", d["period_label"]
-        print("PASS: Last Updated resolves to the overall max date (12-06-2026)")
+        # Per-plant: PTMT keeps 12-Jun and PIPE keeps its own 04-Jun row.
+        assert {r.date for r in d["rows"]} == {"2026-06-12", "2026-06-04"}, [
+            r.date for r in d["rows"]
+        ]
+        assert d["period_label"] == "Last updated", d["period_label"]
+        print("PASS: Last Updated resolves per-plant (PTMT 12-Jun, PIPE 04-Jun)")
     finally:
+        _restore(saved)
+
+
+def test_last_updated_reads_plants_newest_months_beyond_window():
+    """A plant whose latest real day is OLDER than the fixed recent window must
+    still appear: get_data unions each daily plant's newest TWO available months
+    from DAILY_SOURCES, so a plant resolves to its own freshest real day even when
+    its newest configured month is an empty in-progress template. Without this the
+    plant silently drops off "Last updated" (the original TANK/GARDEN-style bug)."""
+    real_day = "2026-01-20"  # far outside the _today()=14-Jun recent window
+
+    def daily(months):
+        rows = []
+        # Newest configured month (2026-06) is an empty in-progress template;
+        # the real data lives in the second-newest month, beyond the window.
+        if "2026-01" in months:
+            rows.append(_daily("SYN", "SYN M/C - 1", "2026-01", 20, 90.0))
+        return (rows, [{"file_id": "f", "record_count": len(rows), "title": "daily"}], [])
+
+    saved = _install_stubs(daily)
+    saved_ds = app.DAILY_SOURCES
+    app.DAILY_SOURCES = {"SYN": {"files": {"2026-06": "emptyid", "2026-01": "dataid"}}}
+    try:
+        d = app.get_data({"period": "last_updated"})
+        # The fix pulls 2026-01 into the read set, so SYN resolves to its real day.
+        assert {r.date for r in d["rows"]} == {real_day}, [r.date for r in d["rows"]]
+        print("PASS: last_updated reads each plant's newest months beyond the window")
+    finally:
+        app.DAILY_SOURCES = saved_ds
         _restore(saved)
 
 
@@ -122,7 +155,7 @@ def test_freshness_empty_on_daily_read_outage():
 
 
 if __name__ == "__main__":
-    test_last_updated_resolves_to_overall_max_date()
+    test_last_updated_resolves_per_plant_latest_day()
     test_per_plant_freshness_sorted_desc_and_formatted()
     test_freshness_empty_on_daily_read_outage()
     print("\nAll Last-Updated / freshness regression tests passed.")
