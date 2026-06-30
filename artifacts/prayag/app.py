@@ -991,7 +991,13 @@ def overview():
     # Plant overview
     by_plant = rollup_by_plant(data["rows"])
     plant_labels = sorted(by_plant.keys())
-    plant_headline = [round(by_plant[p].headline * 100, 1) for p in plant_labels]
+    # A plant with no baseline-backed KPI (output-only TANK, GARDEN with no logged
+    # run hours) has no real headline — emit None, never a fake 0%, so the chart
+    # shows a gap instead of a misleading zero bar.
+    plant_headline = [
+        (round(by_plant[p].headline * 100, 1) if by_plant[p].headline_available else None)
+        for p in plant_labels
+    ]
     plant_output = [round(by_plant[p].total_count, 0) for p in plant_labels]
     plant_names_disp = [PLANT_NAMES.get(p, p) for p in plant_labels]
 

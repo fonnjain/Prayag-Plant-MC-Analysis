@@ -85,8 +85,37 @@ def test_overview_shows_no_baseline_when_unavailable():
     print("PASS: no-baseline state hides utilisation/efficiency and shows a baseline notice")
 
 
+def test_overview_plant_row_shows_output_not_fake_zero():
+    """A plant with no baseline-backed KPI but real output (output-only TANK /
+    run-hour-suppressed GARDEN) must surface its REAL output in the plant-list
+    row — never a fake red 0%."""
+    ctx = _ctx("pass")
+    tank = dict(ctx["overall_dict"])
+    tank.update({
+        "headline": 0.0, "headline_rating": "red",
+        "headline_label": "Run hours not recorded",
+        "headline_available": False,
+        "output_by_unit": {"Ltr": 1234.0},
+    })
+    ctx["by_plant"] = {"TANK": tank}
+    ctx["plant_names"] = {"TANK": "Tanks (KH)"}
+    ctx["plant_labels"] = ["TANK"]
+    ctx["plant_oee"] = [None]
+    with app.test_request_context("/?period=current_fy"):
+        html = render_template("overview.html", **ctx)
+    assert "1,234 Ltr" in html, "output-only plant row must show its real output"
+    assert "Output ·" in html, "output fallback must be captioned 'Output ·'"
+    # The output branch is an elif of headline_available, so rendering output
+    # proves the fake-0% "{{ headline }}%" branch did NOT fire for this row.
+    # The unavailable plant must also carry the neutral (gray) rating dot, not
+    # a red one.
+    assert "bg-gray-300" in html, "an unavailable plant row must show a neutral dot, not a red one"
+    print("PASS: output-only plant row shows real output, not a fake 0%")
+
+
 if __name__ == "__main__":
     test_overview_blocks_all_headline_figures_on_error()
     test_overview_publishes_figures_when_reconciled()
     test_overview_shows_no_baseline_when_unavailable()
+    test_overview_plant_row_shows_output_not_fake_zero()
     print("\nAll overview gating regression tests passed.")
