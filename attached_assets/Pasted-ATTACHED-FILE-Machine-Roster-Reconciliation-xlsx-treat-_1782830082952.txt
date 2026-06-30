@@ -1,0 +1,49 @@
+ATTACHED FILE: Machine_Roster_Reconciliation.xlsx — treat this as the CANONICAL machine
+master for the Pipe & Fitting plant. Load it, reconcile it against the source workbooks,
+and use it to resolve machine identity everywhere in the pipeline.
+
+1) LOAD THE ROSTER (new module, e.g. roster.py)
+   - Read the file by HEADER TEXT, not fixed columns. Expect at least a machine identifier;
+     also use any of these columns if present: report/section (pipe vs moulding), report
+     source (Report-5 / 11 / 12), type(s) run (CPVC/UPVC/SWR/AGRI), description/SAP, plant.
+   - Build a canonical key per machine:
+       * Pipe: integer N from "Pipe M/C-N" / "PIPE M/C - N"  → key "PIPE-N".
+       * Moulding: the code prefix like A02, C07 from "A02(U-150)" → key "MOULD-A02"
+         (keep the full label e.g. "A02(U-150)" as a display/alias field).
+   - Store aliases so the SAME machine is recognised across all spellings
+     ("M/C-1", "Pipe M/C-1", "PIPE M/C - 1" are one machine).
+
+2) USE THE ROSTER TO NORMALISE PARSING
+   - In the Report-5 / Report-11 / Report-12 parsers, map every machine string to its
+     canonical key via the roster aliases. The date-wise max reconciliation must match
+     Report-5 and Report-11 on this canonical key (not on raw text).
+   - The roster is the authoritative moulding machine list; the pipe list is M/C-1..9.
+
+3) RECONCILE ROSTER vs ACTUAL DATA (add to the verify / manifest step) and emit a report:
+   For each month and each source report, list:
+   a) Roster machines with NO production found in that month/report ("expected but missing").
+   b) Machines found in the data but NOT in the roster ("present but unlisted") — these must
+      be surfaced loudly; they mean the roster is stale or a machine was mislabelled.
+   c) Machines where Report-5 and Report-11 (pipe) — or Report-5 and Report-12 (moulding) —
+      disagree on whether the machine ran that month (one has output, the other doesn't).
+
+4) KNOWN-STATE ACCEPTANCE CHECKS (15 months: Apr-2025 … Jun-2026). The reconciliation report
+   should reproduce these; if it doesn't, parsing or alias-matching is wrong:
+   - PIPE: 9 machines M/C-1..M/C-9. M/C-2/3/4 appear in both Report-5 and Report-11 every
+     populated month. M/C-1, M/C-5, M/C-7, M/C-9 have COVERAGE MISMATCHES (a machine logged
+     in one report but not the other in some months) — flag, don't drop. M/C-8 runs rarely.
+   - MOULDING: 26 codes (A01-A06, B01-B06, C01-C07, D01-D07). Report-5 and Report-12 agree
+     on every machine EXCEPT C03: C03 is in Report-5 for ~5 months but in Report-12 for only
+     ~2 — flag this as a roster/data gap to investigate. A01, D04, C03, B01 are intermittent
+     (not every month) — that is expected, not an error.
+   - Aug-2025: PIPE side is EMPTY (Report-11 and Report-5 pipe rows = 0) — flag as
+     "pipe empty / awaiting source". MOULDING is REAL that month (Report-12 ≈ 75,549 kg) —
+     do NOT flag moulding Aug-2025 as empty.
+
+5) OUTPUT: a "Machine Roster Reconciliation" panel/section in the app (or a generated sheet)
+   showing, per month: roster machines, which reports each was found in, and the three
+   mismatch lists from step 3. Keep it append-only / non-destructive — never edit the
+   source Sheets.
+
+Do not change moulding sourcing (Report-12 stays authoritative) or the FY26-27 pipe
+date-wise max
