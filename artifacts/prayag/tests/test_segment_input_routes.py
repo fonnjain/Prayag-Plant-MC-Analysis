@@ -156,8 +156,9 @@ def test_management_reports_page():
     body = resp.get_data(as_text=True)
     assert "Management Reports" in body
     assert "Reports work without manual entries" in body
-    # Cards deep-link to the existing report detail routes.
-    assert "/reports/extrusion_summary" in body
+    # Cards deep-link to the existing deterministic report detail routes
+    # (AI reports like extrusion_summary live on /reports, not here).
+    assert "/reports/gom_summary" in body
     assert "/management-entries" in body
     print("ok: /management-reports -> 200, catalogue links + entries banner")
 
