@@ -35,7 +35,7 @@ title = "Prayag Analytics — Complete Architecture Document"
 id = "J-KluYhnDXK1UFFPKfBcz"
 uri = "file://exports/Prayag_Architecture.xlsx"
 type = "table"
-title = "Prayag Architecture (Webapp + Database)"
+title = "Prayag Production Analytics — Complete Architecture"
 
 [[outputs]]
 id = "TW-Q6OTWIgK7WHIQV8RYu"
