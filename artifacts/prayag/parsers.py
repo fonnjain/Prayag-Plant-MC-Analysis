@@ -1844,3 +1844,111 @@ def parse_compound_rollup(rows: List[list]) -> dict:
             if j < len(row):
                 out.setdefault(key, {})[field] = num(row[j])
     return out
+
+
+# ---------------------------------------------------------------------------
+# (D) Pipe Moulds Summary — mould-wise working reports (Report-17..20)
+# ---------------------------------------------------------------------------
+# Each of Report-17 (CPVC), Report-18 (UPVC), Report-19 (SWR), Report-20 (AGRI)
+# is a per-MOULD working table living inside the monthly PIPE workbook. Columns
+# are located by header TEXT across the two-row header band (never fixed index),
+# and the stored TOTAL row is IGNORED for the headline — every group total is
+# RECOMPUTED by summing the mould detail rows, then reconciled against that
+# stored TOTAL as a cross-check. The sheet's own month label ("APRIL'26") is a
+# stale template artefact; the production block is the WORKBOOK's month, so the
+# caller stamps the requested period, never this label.
+
+def parse_mould_working(values: List[list], *, group: str) -> Optional[dict]:
+    """Parse one mould-working tab (Report-17..20) into a recomputed summary.
+
+    Returns ``{group, moulds:[...], total_pcs, total_kg, total_util_hrs,
+    n_total, n_run, sheet_total_pcs, sheet_total_kg, sheet_total_util_hrs}`` or
+    ``None`` when the tab has no recognisable header (e.g. an older-FY workbook
+    without this report). ``total_*`` are the RECOMPUTED sums of the detail rows;
+    ``sheet_total_*`` are the sheet's own stored TOTAL row (used only to
+    reconcile, never as the headline).
+    """
+    if not values:
+        return None
+
+    # Header band = the first ~6 rows. The column labels are split across two
+    # rows: the identity row (S.NO / MOULD / CAVITY / ...) and the production row
+    # (PRODUCTION IN PCS / PRODUCTION IN KG / MOULD UTILISATION IN HOURS).
+    band = values[:6]
+
+    def find_col(pred) -> int:
+        for row in band:
+            for c, v in enumerate(row):
+                if pred(str(v).strip().upper()):
+                    return c
+        return -1
+
+    sno_c = find_col(lambda h: "S.NO" in h or h == "SNO")
+    mould_c = find_col(lambda h: h == "MOULD")
+    cavity_c = find_col(lambda h: "CAVITY" in h)
+    pcs_c = find_col(lambda h: "PRODUCTION IN PCS" in h)
+    kg_c = find_col(lambda h: "PRODUCTION IN KG" in h)
+    util_c = find_col(lambda h: "UTILISATION" in h or "UTILIZATION" in h)
+    if mould_c < 0 or kg_c < 0 or pcs_c < 0:
+        return None
+
+    # Locate the TOTAL row (its label sits in the S.NO column) and the first
+    # detail row after it. The detail body begins right after TOTAL.
+    total_idx = -1
+    for i, row in enumerate(values[:8]):
+        cell = str(row[sno_c]).strip().upper() if 0 <= sno_c < len(row) else ""
+        if cell == "TOTAL":
+            total_idx = i
+            break
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    sheet_pcs = sheet_kg = sheet_util = 0.0
+    if total_idx >= 0:
+        trow = values[total_idx]
+        sheet_pcs = num(g(trow, pcs_c))
+        sheet_kg = num(g(trow, kg_c))
+        sheet_util = num(g(trow, util_c)) if util_c >= 0 else 0.0
+
+    start = total_idx + 1 if total_idx >= 0 else 1
+    moulds: List[dict] = []
+    total_pcs = total_kg = total_util = 0.0
+    n_total = n_run = 0
+    for row in values[start:]:
+        code = str(g(row, mould_c)).strip()
+        u = code.upper()
+        if not code or u == "TOTAL" or "GRAND" in u:
+            continue
+        pcs = num(g(row, pcs_c))
+        kg = num(g(row, kg_c))
+        util = num(g(row, util_c)) if util_c >= 0 else 0.0
+        cavity = str(g(row, cavity_c)).strip() if cavity_c >= 0 else ""
+        n_total += 1
+        run = pcs > 0 or kg > 0
+        if run:
+            n_run += 1
+        total_pcs += pcs
+        total_kg += kg
+        total_util += util
+        moulds.append({
+            "mould": code,
+            "cavity": cavity,
+            "pcs": pcs,
+            "kg": kg,
+            "util_hours": util,
+            "run": run,
+        })
+
+    return {
+        "group": group,
+        "moulds": moulds,
+        "total_pcs": total_pcs,
+        "total_kg": total_kg,
+        "total_util_hours": total_util,
+        "n_total": n_total,
+        "n_run": n_run,
+        "sheet_total_pcs": sheet_pcs,
+        "sheet_total_kg": sheet_kg,
+        "sheet_total_util_hours": sheet_util,
+    }

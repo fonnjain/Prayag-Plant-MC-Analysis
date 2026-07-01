@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% from "_recon_badge.html" import recon_badge %}
+{% block title_suffix %} — Pipe Moulds Summary{% endblock %}
+
+{% block content %}
+<div class="mb-3 flex items-center gap-2">
+  <a href="/management-reports" class="text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div>
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">Pipe Moulds Summary</h2>
+    <div class="text-xs text-gray-400">
+      {{ period_label }}{% if month_disp %} · {{ month_disp }} workbook{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if not available %}
+<div class="kpi-card p-6 text-center">
+  <div class="text-gray-400 text-sm">No mould-working reports for this period.</div>
+  <div class="text-xs text-gray-300 mt-1">
+    The Pipe workbook for the selected month has no Report-17&ndash;20 tabs yet
+    &mdash; awaiting source.
+  </div>
+</div>
+{% else %}
+
+<div class="rounded-xl px-3 py-2 mb-3 text-xs flex items-start gap-2"
+     style="background:rgba(31,56,100,0.06);color:var(--navy)">
+  <span class="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+        style="color:#fff;background:var(--navy)">Recomputed</span>
+  <span class="text-gray-600 leading-snug">
+    Every group total is recomputed in Python by summing the per-mould rows of
+    Report-17&ndash;20 &mdash; the sheet&rsquo;s stored TOTAL cell is never trusted,
+    only reconciled against. Output is in kg.
+  </span>
+</div>
+
+{% if incomplete %}
+<div class="rounded-xl px-3 py-2 mb-3 text-xs flex items-start gap-2"
+     style="background:rgba(197,90,17,0.10);color:var(--terra)">
+  <span class="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
+        style="color:#fff;background:var(--terra)">Needs review</span>
+  <span class="leading-snug">
+    Incomplete source &mdash; only {{ groups | length }} of 4 mould groups parsed
+    for this month{% if missing %} (missing {{ missing | join(", ") }}){% endif %}.
+    The totals below cover the parsed groups only and are <b>not</b> the full
+    month &mdash; treat as provisional until the source is complete.
+  </span>
+</div>
+{% endif %}
+
+{{ recon_badge(recon) }}
+
+<!-- Grand total KPI strip -->
+<div class="kpi-card p-3 mb-4 grid grid-cols-2 gap-2 text-center">
+  <div>
+    <div class="text-xs text-gray-500 mb-0.5">Total Output (kg)</div>
+    <div class="font-bold text-base" style="color:var(--navy)">{{ "{:,.0f}".format(grand_kg) }}</div>
+  </div>
+  <div>
+    <div class="text-xs text-gray-500 mb-0.5">Total Output (pcs)</div>
+    <div class="font-bold text-base text-gray-700">{{ "{:,.0f}".format(grand_pcs) }}</div>
+  </div>
+</div>
+
+<!-- Group summary -->
+<div class="kpi-card p-3 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Output by Mould Group</h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-100">
+          <th class="text-left pb-2 font-medium">Group</th>
+          <th class="text-right pb-2 font-medium">Moulds run</th>
+          <th class="text-right pb-2 font-medium">Output (kg)</th>
+          <th class="text-right pb-2 font-medium">Output (pcs)</th>
+          <th class="text-right pb-2 font-medium">Run Hrs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for grp in groups %}
+        <tr class="border-b border-gray-50">
+          <td class="py-2 font-semibold" style="color:var(--navy)">{{ grp.group }}</td>
+          <td class="py-2 text-right text-gray-500">{{ grp.n_run }} / {{ grp.n_total }}</td>
+          <td class="py-2 text-right text-gray-700 font-medium">{{ "{:,.0f}".format(grp.total_kg) }}</td>
+          <td class="py-2 text-right text-gray-500">{{ "{:,.0f}".format(grp.total_pcs) }}</td>
+          <td class="py-2 text-right text-gray-500">{{ "{:,.0f}".format(grp.total_util_hours) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Per-group mould detail -->
+{% for grp in groups %}
+<div class="kpi-card p-3 mb-4">
+  <div class="flex items-center justify-between mb-2">
+    <h3 class="text-sm font-semibold" style="color:var(--navy)">{{ grp.group }} &mdash; Mould-wise Detail</h3>
+    <span class="text-[11px] text-gray-400">{{ grp.n_run }} of {{ grp.n_total }} moulds ran</span>
+  </div>
+  <div class="table-scroll" style="max-height:340px;overflow-y:auto">
+    <table class="w-full text-[11px]">
+      <thead class="sticky top-0 bg-white">
+        <tr class="text-gray-500 border-b border-gray-100">
+          <th class="text-left pb-1.5 font-medium">Mould</th>
+          <th class="text-left pb-1.5 font-medium">Cavity</th>
+          <th class="text-right pb-1.5 font-medium">Pcs</th>
+          <th class="text-right pb-1.5 font-medium">Kg</th>
+          <th class="text-right pb-1.5 font-medium">Run Hrs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in grp.moulds if m.run %}
+        <tr class="border-b border-gray-50">
+          <td class="py-1 font-medium text-gray-700 whitespace-nowrap">{{ m.mould }}</td>
+          <td class="py-1 text-gray-400">{{ m.cavity }}</td>
+          <td class="py-1 text-right text-gray-500">{{ "{:,.0f}".format(m.pcs) }}</td>
+          <td class="py-1 text-right text-gray-700">{{ "{:,.0f}".format(m.kg) }}</td>
+          <td class="py-1 text-right text-gray-500">{{ "{:,.1f}".format(m.util_hours) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="border-t border-gray-200 font-semibold" style="color:var(--navy)">
+          <td class="py-1.5" colspan="2">TOTAL (recomputed)</td>
+          <td class="py-1.5 text-right">{{ "{:,.0f}".format(grp.total_pcs) }}</td>
+          <td class="py-1.5 text-right">{{ "{:,.0f}".format(grp.total_kg) }}</td>
+          <td class="py-1.5 text-right">{{ "{:,.0f}".format(grp.total_util_hours) }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% endif %}
+{% endblock %}

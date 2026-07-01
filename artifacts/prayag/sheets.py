@@ -799,6 +799,91 @@ def load_compound_data(months: List[str]) -> dict:
         return out
 
 
+# ---------------------------------------------------------------------------
+# (D) Pipe Moulds Summary — mould-wise working reports (Report-17..20)
+# ---------------------------------------------------------------------------
+# The four mould-working tables live INSIDE the monthly PIPE workbook, so no new
+# Drive IDs are needed. Read directly (bounded batch_get of 4 tabs) rather than
+# via the full daily pipeline — the cold daily pipeline reads the whole month and
+# would time out for a report that only needs these four tabs.
+_PIPE_MOULD_TABS = {
+    "Report-17": "CPVC",
+    "Report-18": "UPVC",
+    "Report-19": "SWR",
+    "Report-20": "AGRI",
+}
+_pipe_moulds_cache: dict = {}       # ym -> (ts, payload)
+_PIPE_MOULDS_TTL = 900.0
+_pipe_moulds_lock = threading.Lock()
+
+
+def load_pipe_moulds(ym: Optional[str]) -> dict:
+    """Read the (D) mould-wise working reports for one PIPE month.
+
+    Returns ``{available, month, file_id, groups:[summary,...], grand_kg,
+    grand_pcs}`` where each ``summary`` is a ``parsers.parse_mould_working``
+    result (recomputed detail sums + the sheet's own TOTAL row for a
+    cross-check). ``available`` is False when the workbook has no Report-17..20
+    tabs (an older-FY workbook) or the read fails — never a fabricated zero.
+    """
+    if is_demo_mode():
+        return {"available": False, "month": ym, "file_id": "", "groups": [],
+                "grand_kg": 0.0, "grand_pcs": 0.0}
+    file_id = _daily_file_id("PIPE", ym)
+    if not file_id:
+        return {"available": False, "month": ym, "file_id": "", "groups": [],
+                "grand_kg": 0.0, "grand_pcs": 0.0}
+    now = time.time()
+    cached = _pipe_moulds_cache.get(ym)
+    if cached and now - cached[0] < _PIPE_MOULDS_TTL:
+        return cached[1]
+    with _pipe_moulds_lock:
+        now = time.time()
+        cached = _pipe_moulds_cache.get(ym)
+        if cached and now - cached[0] < _PIPE_MOULDS_TTL:
+            return cached[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError(
+                "The Google Sheets connection isn't authorized. "
+                "Reconnect it from the integrations panel and try again."
+            )
+        try:
+            values = batch_get(file_id, list(_PIPE_MOULD_TABS), token)
+        except SheetReadError:
+            raise
+        groups = []
+        grand_kg = grand_pcs = 0.0
+        missing = []
+        for tab, grp in _PIPE_MOULD_TABS.items():
+            s = parsers.parse_mould_working(values.get(tab, []), group=grp)
+            if not s:
+                missing.append(grp)
+                continue
+            groups.append(s)
+            grand_kg += s["total_kg"]
+            grand_pcs += s["total_pcs"]
+        # Completeness gate — NEVER silently publish a partial roster. If some
+        # (but not all) of the four expected mould groups parsed, the workbook or
+        # a tab/header drifted: surface an honest "incomplete source" flag so the
+        # UI can gate the headline "needs review" rather than under-report kg.
+        # (All four missing = an older-FY workbook with no Report-17..20 → simply
+        # unavailable, not incomplete.)
+        incomplete = bool(groups) and bool(missing)
+        out = {
+            "available": bool(groups),
+            "incomplete": incomplete,
+            "missing": missing,
+            "month": ym,
+            "file_id": file_id,
+            "groups": groups,
+            "grand_kg": grand_kg,
+            "grand_pcs": grand_pcs,
+        }
+        _pipe_moulds_cache[ym] = (now, out)
+        return out
+
+
 # Per-key single-flight locks for the daily cache. The monthly path uses one
 # global lock (a single payload), but daily reads are many independent
 # (plant, ym) workbooks — a single lock would serialise them and reintroduce the

@@ -18,7 +18,7 @@ from flask import Flask, render_template, request, jsonify, Response, abort, red
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
-    load_report_records, load_compound_data, index_catalogue,
+    load_report_records, load_compound_data, load_pipe_moulds, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
 )
 from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
@@ -2633,9 +2633,9 @@ def health():
 @app.route("/build-state")
 def build_state():
     """
-    16 build-state assertions: code/config (static, instant) + live data
+    Build-state assertions: code/config (static, instant) + live data
     (uses warm cache or makes fresh sheet reads).  Returns an HTML PASS/FAIL
-    table.  All 16 must PASS before running the Claude sanity check or
+    table.  All must PASS before running the Claude sanity check or
     attempting sign-off.
     """
     import inspect
@@ -2954,6 +2954,39 @@ def build_state():
              + (f"  ({_scan_err})" if _scan_err else ""),
              "parser not finished / no recent data")
 
+        # #18  (D) Pipe Moulds Summary — recomputed group totals (kg) from the
+        # mould-wise detail rows of Report-17..20 must tie to the June reference
+        # AND to each report's own stored TOTAL row (recomputed == sheet total).
+        PM_EXP = {"CPVC": 19_591, "UPVC": 27_796, "SWR": 33_178, "AGRI": 8_586}
+        try:
+            _pm = load_pipe_moulds("2026-06")
+            _by = {g["group"]: g for g in _pm.get("groups", [])}
+            _pm_ok = bool(_by)
+            _acts = []
+            for _grp, _exp in PM_EXP.items():
+                _g = _by.get(_grp)
+                if not _g:
+                    _pm_ok = False
+                    _acts.append(f"{_grp}=∅")
+                    continue
+                _rk = _g["total_kg"]
+                _sk = _g["sheet_total_kg"]
+                _ref_ok = abs(_rk - _exp) / _exp <= TOL
+                _self_ok = _sk > 0 and abs(_rk - _sk) / _sk <= TOL
+                if not (_ref_ok and _self_ok):
+                    _pm_ok = False
+                _acts.append(f"{_grp}={_rk:,.0f}")
+            _chk(18,
+                 "(D) June Pipe Moulds recomputed kg ties reference & sheet TOTAL "
+                 "(CPVC 19,591 / UPVC 27,796 / SWR 33,178 / AGRI 8,586)",
+                 _pm_ok,
+                 "each group ±0.5% & recomputed==sheet TOTAL",
+                 "  ".join(_acts),
+                 "mould parser drift / tab layout changed")
+        except Exception as _e4:
+            _chk(18, "(D) June Pipe Moulds recomputed kg ties reference & sheet TOTAL",
+                 False, "-", f"ERROR: {_e4}", "Report-17..20 read failed")
+
     # ------------------------------------------------------------------ #
     # Render                                                               #
     # ------------------------------------------------------------------ #
@@ -3059,6 +3092,7 @@ _REPORT_CATALOGUE = [
     {"id": "gom_summary",       "title": "Group-of-Moulding",      "location": "KH",      "desc": "Output by tonnage band (150–450 T)"},
     {"id": "mould_summary",     "title": "Mould-wise Summary",     "location": "KH",      "desc": "Per-mould output, run hours, runner %, rejection %"},
     {"id": "mould_efficiency",  "title": "Mould Age-in-Efficiency","location": "KH",      "desc": "Per-mould production, ideal vs actual hours, efficiency %"},
+    {"id": "pipe_moulds",       "title": "Pipe Moulds Summary",    "location": "KH",      "desc": "Mould-wise output (kg/pcs) by group: CPVC / UPVC / SWR / AGRI"},
     {"id": "compound_summary",  "title": "Compound / Material",    "location": "KH",      "desc": "Batch weight, mixer output, weight-loss % by compound"},
     {"id": "compound_compilation", "title": "Compound Compilation", "location": "KH",     "desc": "Pipe compound mass-balance (opening → batch → given → closing) + raw-material breakdown"},
     {"id": "tank_kh",           "title": "Tanks (KH)",             "location": "KH",      "desc": "Per-item daily production and rejection"},
@@ -3173,6 +3207,88 @@ def report_gom_summary():
         period_label=pinfo["label"], period=period_arg,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
+
+
+def _resolve_pipe_mould_month(pinfo: dict) -> Optional[str]:
+    """Pick the single PIPE workbook month for the (D) mould reports.
+
+    The mould-working tables are monthly snapshots, one workbook per month. For a
+    specific-month period we use that month; for a wider window (FY / quarter) we
+    use the LATEST PIPE workbook month that falls inside the requested range, so
+    the page always shows a real month's figures (never a fabricated blend across
+    workbooks). Returns None when no PIPE workbook exists in the range.
+    """
+    files = DAILY_SOURCES.get("PIPE", {}).get("files", {})
+    if not files:
+        return None
+    wanted = [m for m in pinfo.get("months", []) if m in files]
+    if wanted:
+        return sorted(wanted)[-1]
+    return None
+
+
+@app.route("/reports/pipe_moulds")
+def report_pipe_moulds():
+    """(D) Pipe Moulds Summary — mould-wise output for CPVC / UPVC / SWR / AGRI.
+
+    Every group total is RECOMPUTED by summing the per-mould detail rows of
+    Report-17..20; the sheet's own stored TOTAL row is used only as a
+    reconciliation cross-check (never as the headline). Output unit is kg."""
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    ym = _resolve_pipe_mould_month(pinfo)
+    if not ym:
+        return render_template("report_pipe_moulds.html",
+            available=False, groups=[], month_disp=None,
+            grand_kg=0, grand_pcs=0, recon=None,
+            period_label=pinfo["label"], period=period_arg,
+            today_disp=_fmt(_today()), last_synced=_sync_ctx())
+
+    try:
+        data = load_pipe_moulds(ym)
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    groups = []
+    cell_rows = []
+    grand_recomp = grand_sheet = 0.0
+    for s in data["groups"]:
+        # Per-group reconciliation: recomputed detail-sum kg vs the sheet's own
+        # stored TOTAL-row kg. A match validates the figure; a mismatch is a real
+        # concern (the detail rows and the stored total disagree).
+        cell_rows.append((s["group"], s["total_kg"],
+                          s["sheet_total_kg"] if s["sheet_total_kg"] else None))
+        grand_recomp += s["total_kg"]
+        grand_sheet += s["sheet_total_kg"]
+        # Efficiency (%): actual mould-utilisation hours are published, but the
+        # ideal-hour denominator is not filled in the current workbook — leave
+        # efficiency blank ("needs review") rather than show a fake 0%.
+        groups.append({
+            "group": s["group"],
+            "moulds": s["moulds"],
+            "n_total": s["n_total"],
+            "n_run": s["n_run"],
+            "total_pcs": s["total_pcs"],
+            "total_kg": s["total_kg"],
+            "total_util_hours": s["total_util_hours"],
+            "sheet_total_kg": s["sheet_total_kg"],
+            "efficiency_pct": None,
+        })
+
+    recon_result = recon.reconcile(
+        grand_recomp, grand_sheet if grand_sheet else None,
+        rows=cell_rows, unit="kg", expect_exceeds=False,
+    ) if groups else None
+
+    return render_template("report_pipe_moulds.html",
+        available=data["available"], groups=groups,
+        month_disp=_month_disp(ym),
+        grand_kg=data["grand_kg"], grand_pcs=data["grand_pcs"],
+        recon=recon_result,
+        incomplete=data.get("incomplete", False),
+        missing=data.get("missing", []),
+        period_label=pinfo["label"], period=period_arg,
+        today_disp=_fmt(_today()), last_synced=_sync_ctx())
 
 
 @app.route("/compound")
