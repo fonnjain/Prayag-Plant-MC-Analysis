@@ -54,3 +54,27 @@ id = "kKTdwZfNtDRVfWZv8r23t"
 uri = "file://exports/pipe_mc_calculation_2026-06.xlsx"
 type = "table"
 title = "PIPE M/C Output & Rejection — Calculation (Jun 2026)"
+
+[[outputs]]
+id = "Uh-8CLxilQlS7zj6hTQvy"
+uri = "file://exports/HDPE_calculation_2026-05.xlsx"
+type = "table"
+title = "HDPE — M/C Output & Rejection Calculation (May 2026)"
+
+[[outputs]]
+id = "89zGhMq4rkOoafmc1owKQ"
+uri = "file://exports/Injection_Moulding_calculation_2026-06.xlsx"
+type = "table"
+title = "Injection Moulding — M/C Output & Rejection Calculation (Jun 2026)"
+
+[[outputs]]
+id = "FMd62PRgNE6Q2ZjEqc7yP"
+uri = "file://exports/PTMT_calculation_2026-06.xlsx"
+type = "table"
+title = "PTMT — M/C Output & Rejection Calculation (Jun 2026)"
+
+[[outputs]]
+id = "08RFNI9soPXy9WzlfL_Uj"
+uri = "file://exports/Tanks_KH_calculation_2026-06.xlsx"
+type = "table"
+title = "Tanks (KH) — Output & Rejection Calculation (Jun 2026)"
