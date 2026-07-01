@@ -14,7 +14,7 @@ import time
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
-from flask import Flask, render_template, request, jsonify, Response, abort, redirect
+from flask import Flask, render_template, request, jsonify, Response, abort, redirect, make_response
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
@@ -3189,14 +3189,32 @@ def management_reports_index():
     months = [{"ym": m, "disp": rperiod.month_disp(m)}
               for m in rperiod.available_months()]
     locations = rreg.index_view(ym) if ym else []
-    return render_template(
+
+    # If the last ZIP download for THIS month was partial, the download route
+    # left a short-lived cookie naming the reports it could not build. Surface
+    # them once as an informational warning, then clear the cookie so the notice
+    # never lingers on subsequent visits.
+    zip_skipped = []
+    raw = request.cookies.get("mr_zip_skipped", "")
+    if raw and "|" in raw:
+        cookie_ym, _, ids = raw.partition("|")
+        if cookie_ym == ym:
+            for rid in filter(None, ids.split(",")):
+                rd = rreg.get(rid)
+                zip_skipped.append(rd.label if rd else rid)
+
+    resp = make_response(render_template(
         "management_reports.html",
         locations=locations,
         months=months,
         month=ym,
         month_disp=rperiod.month_disp(ym),
         zip_url=f"/management-reports/all.zip?month={ym}" if ym else "#",
-    )
+        zip_skipped=zip_skipped,
+    ))
+    if raw:  # one-shot notice: clear the cookie once it has been read
+        resp.delete_cookie("mr_zip_skipped")
+    return resp
 
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -3250,8 +3268,21 @@ def management_reports_zip():
         return Response("No reports could be built for this month.", status=502,
                         mimetype="text/plain")
     name = f"Prayag_Management_Reports_{rperiod.month_slug(ym)}.zip"
-    return send_file(io.BytesIO(bundle.data), mimetype="application/zip",
+    resp = send_file(io.BytesIO(bundle.data), mimetype="application/zip",
                      as_attachment=True, download_name=name)
+    # A partial bundle (one or more reports failed to build) is served in full,
+    # but the skip is otherwise silent. Stash the skipped ids in a short-lived
+    # cookie so the next /management-reports page load can tell the user exactly
+    # which reports were left out of the archive for this month.
+    if bundle.skipped:
+        resp.set_cookie(
+            "mr_zip_skipped",
+            f"{ym}|{','.join(bundle.skipped)}",
+            max_age=120, samesite="Lax",
+        )
+    else:  # a clean bundle clears any stale warning from a prior partial download
+        resp.set_cookie("mr_zip_skipped", "", max_age=0, samesite="Lax")
+    return resp
 
 
 @app.route("/reports")

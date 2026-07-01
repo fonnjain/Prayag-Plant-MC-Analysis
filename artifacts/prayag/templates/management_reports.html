@@ -29,6 +29,24 @@
     </a>
   </form>
 
+  {% if zip_skipped %}
+  <div class="mb-4 p-3.5 rounded-xl border flex gap-2.5"
+       style="background:rgba(197,90,17,0.08);border-color:rgba(197,90,17,0.35)">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <div class="text-xs leading-snug" style="color:var(--navy)">
+      <div class="font-semibold" style="color:var(--terra)">Your ZIP is missing {{ zip_skipped|length }} report{{ '' if zip_skipped|length == 1 else 's' }}</div>
+      <div class="mt-0.5">These reports could not be built for {{ month_disp }} and were left out of the archive:</div>
+      <ul class="mt-1 list-disc list-inside">
+        {% for label in zip_skipped %}
+        <li>{{ label }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="mb-5 text-xs text-gray-500 leading-snug">
     Figures are the authoritative Python-recomputed values (no live Excel formulas), so every file
     opens with correct numbers. A ratio that cannot be computed is left blank — never a fake 0%.
