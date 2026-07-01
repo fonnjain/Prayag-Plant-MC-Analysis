@@ -42,6 +42,28 @@ TIMEOUT` → the worker is killed → the user sees a bare "Internal Server Erro
 - Config changes to artifact.toml only take effect on the next publish/deploy;
   a dev workflow restart does not exercise the production gunicorn command.
 
+## Don't bound external calls TIGHTER than their real wall-time
+
+Bounding the Claude client is correct, but the cap must exceed the *legitimate*
+generation time or a normal slow response reads as a failure. The four-pillar AI
+report genuinely takes ~25s to write; a 20s SDK `timeout=` made every FRESH
+report (any tier) time out → `generate_ai_report` swallowed it → returned None.
+
+**Symptom that misdirects:** the endpoint then rendered the None as **"No data
+available to analyse"** — a *false* no-data that directly contradicts the real
+figures shown elsewhere on the same page. The bug is a timeout, not empty data.
+
+**Rules:**
+- Size the per-call `timeout=` between the real wall-time and half the worker
+  timeout. Prod worker is 120s, deep→fast fallback does a 2nd `create()`, so
+  ~45s/call (≈90s worst case) is the safe band; 20s was far too tight.
+- A caller that degrades `None` on error MUST distinguish "engine produced no
+  rows" from "rows exist but generation returned None" and never surface the
+  latter as "no data". Thread a `has_rows` flag through and message a retry.
+- Report AI prose is PERFORMANCE/EFFICIENCY analysis only (interprets computed
+  output/utilisation/efficiency/rejection); it must NOT comment on data quality,
+  completeness, or source reconciliation. Cache version bumps on this reframe.
+
 ## Cross-worker cache isolation (cross-page re-fetching)
 
 With `--workers 2`, each gunicorn process has its own in-process cache. A

@@ -85,13 +85,16 @@ def _create_text(model: str, max_tokens: int, prompt: str) -> tuple[str, str]:
     back to) and the exception propagates to the caller's graceful handler.
     """
     import anthropic
-    # Bound the call hard: the narrative is optional (callers degrade to None on
-    # error), so it must never hang a web worker. Without this the SDK default
-    # timeout is ~10 minutes, which blows past the gunicorn worker timeout and
-    # turns a slow Claude response into a 500 for the whole page.
+    # Bound the call, but generously. The narrative is optional (callers degrade
+    # to None on error) so it must never hang a worker for the SDK default of
+    # ~10 minutes — but the four-pillar report legitimately takes ~25s to write,
+    # so a 20s cap made every fresh report time out and surface as a false
+    # "no data". The production worker timeout is 120s (see artifact.toml), and a
+    # deep->fast fallback does a SECOND create(), so keep this comfortably under
+    # half of that: 45s per call → ~90s worst case, still inside 120s.
     client = anthropic.Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
-        timeout=20.0,
+        timeout=45.0,
         max_retries=1,
     )
     try:
@@ -448,27 +451,23 @@ def _ai_report_cache_key(
     table_headers: list,
     table_rows: list,
     model: str,
-    diagnostics: str = "",
 ) -> str:
     """Cache key for a full AI report. Includes the resolved model (a fast-tier
-    report is never reused for a deep-tier request), the full computed table so
-    any change to the underlying figures invalidates the cached prose, and the
-    deterministic diagnostics text (so a newly detected data/quality flag
-    re-generates the analysis instead of serving stale prose).
+    report is never reused for a deep-tier request) and the full computed table
+    so any change to the underlying figures invalidates the cached prose.
 
-    ``v`` is ``ai_report_v2`` — the four-pillar reframe (Analytics / Diagnostics
-    / Red Flags / Recommended Actions) so any ``ai_report`` entry cached under
-    the old Executive-Summary headings is never reused."""
+    ``v`` is ``ai_report_v3`` — the performance/efficiency reframe (the analysis
+    now interprets machine/plant performance and never comments on data quality
+    or reconciliation), so any older cached ``ai_report`` prose is never reused."""
     payload = json.dumps(
         {
-            "v": "ai_report_v2",
+            "v": "ai_report_v3",
             "title": report_title,
             "period": period_key,
             "overall": {k: v for k, v in overall.items()
                         if isinstance(v, (int, float))},
             "headers": list(table_headers),
             "rows": [[str(c) for c in row] for row in table_rows],
-            "diagnostics": diagnostics or "",
             "model": model,
         },
         sort_keys=True,
@@ -486,22 +485,20 @@ def generate_ai_report(
     period_type: Optional[str] = None,
     deep: Optional[bool] = None,
     provenance: Optional[dict] = None,
-    diagnostics: Optional[str] = None,
 ) -> Optional[str]:
-    """Return the four-pillar AI analytical report for one report page.
+    """Return the four-pillar AI PERFORMANCE analysis for one report page.
 
     The report always has exactly four sections, in this order:
-    ``## Analytics`` (what the numbers say), ``## Diagnostics`` (the likely
-    operational reasons behind them), ``## Red Flags`` (concrete concerns that
-    need a manager's attention), and ``## Recommended Actions`` (what to do).
+    ``## Analytics`` (what the performance numbers say), ``## Diagnostics`` (the
+    likely OPERATIONAL reasons behind them), ``## Red Flags`` (concrete
+    machine/plant EFFICIENCY concerns for a manager), and
+    ``## Recommended Actions`` (a concrete efficiency-improvement plan).
 
-    Claude is given ONLY the already-computed KPIs, the already-computed report
-    table (both produced by the deterministic engine), and — for the Diagnostics
-    and Red Flags pillars — the ``diagnostics`` text: the concerns the
-    deterministic validation / reconciliation engine ALREADY detected. Claude
-    must never recalculate or invent a figure, and must never invent a red flag
-    that the engine did not surface. If the engine detected no concerns, the Red
-    Flags section says so plainly rather than manufacturing one.
+    Claude is given ONLY the already-computed KPIs and the already-computed
+    report table (both produced by the deterministic engine) and interprets the
+    PERFORMANCE they show. It must never recalculate or invent a figure, and it
+    must NOT comment on data quality, completeness, or source reconciliation —
+    the numbers are taken as final and the analysis is purely operational.
 
     Returns None if ANTHROPIC_API_KEY is not set or on any error. Model tier
     follows ``period_type`` (deep for monthly/quarterly/FY); ``deep=True``
@@ -511,11 +508,9 @@ def generate_ai_report(
     if not _enabled():
         return None
 
-    diag_text = (diagnostics or "").strip()
     model, max_tokens, _ = select_model(period_type, override=deep)
     ck = _ai_report_cache_key(
         report_title, period_key, overall, table_headers, table_rows, model,
-        diagnostics=diag_text,
     )
     if ck in _cache:
         used = _actual_model.get(ck, model)
@@ -533,16 +528,12 @@ def generate_ai_report(
         body_lines = "\n".join(
             " | ".join(str(c) for c in row) for row in table_rows
         ) or "  (no rows for this period/filter)"
-        diag_block = diag_text or (
-            "  (the deterministic engine detected no data-quality or "
-            "reconciliation concerns for this period)"
-        )
-        prompt = f"""You are a senior manufacturing operations analyst writing an analytical report for a plastics factory management team.
+        prompt = f"""You are a senior manufacturing operations analyst writing a machine-performance analysis for a plastics factory management team.
 
 Report type: {report_title}
 Reporting period: {period_label}
 
-These figures are FINAL and were computed by a deterministic engine. Do NOT recalculate, re-derive, or invent any number. Use only the values below and reference them specifically.
+These figures are FINAL and were computed by a deterministic engine. Do NOT recalculate, re-derive, or invent any number. Use only the values below and reference them specifically — every figure you cite must appear in the data below.
 
 Overall KPIs:
 {kpi_lines}
@@ -550,8 +541,7 @@ Overall KPIs:
 Detailed data table ({header_line}):
 {body_lines}
 
-Concerns already detected by the deterministic validation/reconciliation engine (authoritative — do NOT invent additional data-quality flags beyond these; you MAY note a performance concern that is obvious from the figures above):
-{diag_block}
+Analyse machine and plant PERFORMANCE and EFFICIENCY only. Treat every number above as correct and final: do NOT comment on data quality, missing/incomplete data, or reconciliation/mismatch between sources. Focus entirely on how the machines and plant are performing and how to improve efficiency.
 
 Write the report with EXACTLY these four sections, in this order, each introduced by a heading line beginning with "## ":
 ## Analytics
@@ -560,10 +550,10 @@ Write the report with EXACTLY these four sections, in this order, each introduce
 ## Recommended Actions
 
 What each section must contain:
-- Analytics: what the numbers say. Reference specific machines/moulds/segments and their actual figures; call out the best and worst performers, the spread, and any notable trend.
-- Diagnostics: the likely operational reasons BEHIND those numbers (e.g. a machine idle/under repair, a mould running slow, high rejection on a specific line). Tie each to the specific machine/mould/segment.
-- Red Flags: the concrete concerns a manager must act on. Ground every data-quality/reconciliation flag in the detected-concerns list above; you may also flag an obvious performance risk from the figures. If nothing warrants a flag, write exactly one sentence saying no red flags were detected for this period — never manufacture one.
-- Recommended Actions: 3-5 short, concrete, specific actions the manager can take, each on its own line.
+- Analytics: what the numbers say about performance. Reference specific machines/moulds/segments and their actual figures (output, utilisation, efficiency, rejection); call out the best and worst performers, the spread between them, and any notable trend.
+- Diagnostics: the likely OPERATIONAL reasons behind those performance numbers (e.g. a machine idle or under-utilised, a mould running below its rate, a line with high rejection, low run hours). Tie each reason to the specific machine/mould/segment and its figure.
+- Red Flags: the concrete PLANT/MACHINE EFFICIENCY concerns a manager must act on now — low-utilisation machines, high-rejection lines, and large efficiency or output gaps versus the better performers. Cite the machine and its figure for each. If every machine is performing well, say so in one sentence rather than manufacturing a concern.
+- Recommended Actions: 3-5 short, concrete, specific actions to improve machine/plant efficiency, each on its own line and tied to a specific machine or line wherever possible.
 
 Rules:
 - Keep Analytics, Diagnostics and Red Flags to 2-4 sentences each.

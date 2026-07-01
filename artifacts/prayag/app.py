@@ -2551,13 +2551,6 @@ def _ai_report_payload(report_id: str):
     sub_overall = compute_metrics(rows)
     sub_dict = sub_overall.to_dict()
 
-    # Ground the Diagnostics and Red Flags pillars in what the DETERMINISTIC
-    # engine actually detected, so the AI never manufactures a data-quality flag
-    # the engine did not surface (and re-generates when a new flag appears).
-    sub_validation = full_validate(rows, sub_overall) if rows else None
-    recon_result = _report_reconciliation(report_id, rows, data) if rows else None
-    diagnostics = _ai_diagnostics_text(sub_validation, recon_result)
-
     prov: dict = {}
     text = None
     if data.get("has_claude") and rows:
@@ -2573,35 +2566,8 @@ def _ai_report_payload(report_id: str):
             period_type=data["period_type"],
             deep=data["deep_override"],
             provenance=prov,
-            diagnostics=diagnostics,
         )
-    return rpt, data, headers, table_rows, sub_dict, text, prov
-
-
-def _ai_diagnostics_text(sub_validation, recon_result) -> str:
-    """Compact, deterministic concerns text handed to the AI report so its
-    Diagnostics / Red Flags pillars cite ONLY what the engine actually found.
-
-    Draws from the four-tier validation flags and the standardized
-    reconciliation badge. Returns "" when the engine detected no concerns — the
-    prompt then instructs the model to say so plainly rather than invent one."""
-    lines: list[str] = []
-    if sub_validation:
-        if not sub_validation.get("reconciled", True):
-            lines.append(
-                f"Data reconciliation flag: {sub_validation.get('flag_count', 0)} "
-                "flag(s) — figures gated 'needs review' until resolved.")
-        for w in (sub_validation.get("warnings") or [])[:15]:
-            lines.append(f"Validation flag: {w}")
-    if recon_result and isinstance(recon_result, dict):
-        status = (recon_result.get("status") or "").lower()
-        # Only a genuine SHORT concern is a red flag; an expected undercount of
-        # the summary grid (daily-first exceeding it) is informational, never a
-        # flag (documented core invariant).
-        if status in ("warn", "fail", "concern", "short", "error"):
-            note = recon_result.get("label") or recon_result.get("note") or ""
-            lines.append(f"Reconciliation concern: {note}".strip())
-    return "\n".join(f"  - {ln}" for ln in lines)
+    return rpt, data, headers, table_rows, sub_dict, text, prov, bool(rows)
 
 
 @app.route("/reports/<report_id>/ai-report")
@@ -2611,7 +2577,7 @@ def report_ai(report_id: str):
     built = _ai_report_payload(report_id)
     if built is None:
         abort(404)
-    rpt, data, _headers, _table_rows, _overall, text, prov = built
+    rpt, data, _headers, _table_rows, _overall, text, prov, has_rows = built
 
     if not data.get("has_claude"):
         return jsonify({
@@ -2619,10 +2585,17 @@ def report_ai(report_id: str):
             "error": "AI analysis is unavailable (no API key configured).",
         }), 503
     if not text:
-        return jsonify({
-            "ok": False,
-            "error": "No data available to analyse for this period / filter.",
-        }), 200
+        # Distinguish a genuinely empty period from a generation hiccup: when the
+        # engine DID compute rows but Claude returned nothing (a transient error
+        # or timeout), never claim "no data" — that contradicts the figures shown
+        # elsewhere on the page. Invite a retry instead.
+        msg = (
+            "The AI analysis couldn't be generated just now — tap Regenerate to "
+            "try again."
+            if has_rows
+            else "No data available to analyse for this period / filter."
+        )
+        return jsonify({"ok": False, "error": msg}), 200
 
     sections = parse_ai_report_sections(text)
     model = prov.get("label") or data.get("analysis_label")
@@ -2642,18 +2615,19 @@ def export_ai_pdf(report_id: str):
     built = _ai_report_payload(report_id)
     if built is None:
         abort(404)
-    rpt, data, headers, table_rows, sub_dict, text, prov = built
+    rpt, data, headers, table_rows, sub_dict, text, prov, has_rows = built
 
     # Never hand back an "AI report" PDF with no actual analysis (e.g. a direct
     # URL hit with no API key or no data for the period). The in-app download
     # button only appears after a successful generation, so this guards the
     # direct-link path only.
     if not text:
-        msg = (
-            "AI analysis is unavailable (no API key configured)."
-            if not data.get("has_claude")
-            else "No data available to analyse for this period / filter."
-        )
+        if not data.get("has_claude"):
+            msg = "AI analysis is unavailable (no API key configured)."
+        elif has_rows:
+            msg = "The AI analysis couldn't be generated just now — please try again."
+        else:
+            msg = "No data available to analyse for this period / filter."
         return Response(msg, status=409, mimetype="text/plain")
 
     sections = parse_ai_report_sections(text or "")
