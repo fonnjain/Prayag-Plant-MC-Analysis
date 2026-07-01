@@ -2765,7 +2765,7 @@ def build_state():
     # adopting these numbers. MOULDING May is stable. When #1/#17 fail again with
     # a COHERENT audit it is fresh backfill — re-measure and re-baseline; an
     # INCOHERENT audit means a real reconciliation regression, not a baseline drift.
-    PIPE_MAY_EXP  = 264_717   # reconciled May output (date-wise max Report-5 ↔ Report-11)
+    PIPE_MAY_EXP  = 313_637   # reconciled May output (date-wise max Report-5 ↔ Report-11); re-baselined 2026-07-01 vs the attached May reference report (fresh backfill, audit coherent — #17/#17b PASS)
     PIPE_APR_EXP  = 175_669   # reconciled April output
     PIPE_APR_REJ  = 14_825    # reconciled April rejection
     MOULD_MAY_EXP = 75_771
@@ -2987,6 +2987,60 @@ def build_state():
             _chk(18, "(D) June Pipe Moulds recomputed kg ties reference & sheet TOTAL",
                  False, "-", f"ERROR: {_e4}", "Report-17..20 read failed")
 
+        # #19  Management-report EXPORTS (registry) recompute the reference
+        #      totals for May 2026 — the standalone .xlsx download set matches
+        #      the acceptance oracle. One TOTAL per report is checked.
+        try:
+            from reports import registry as _rreg
+
+            def _total_of(_rid, _key):
+                _m = _rreg.build_report(_rid, "2026-05")
+                for _sh in _m.sheets:
+                    for _sec in _sh.sections:
+                        if _sec.total_row and _key in _sec.total_row:
+                            return _sec.total_row[_key]
+                return None
+
+            _EXP = {
+                "pipe":     ("out", 313_637),
+                "moulding": ("out", 75_771.2),
+                "gom":      ("out", 75_771.2),
+                "garden":   ("out", 53_235),
+                "hdpe":     ("out", 1_370),
+            }
+            _rp_ok = True
+            _rp_acts = []
+            for _rid, (_k, _exp) in _EXP.items():
+                _val = _total_of(_rid, _k)
+                _ok = _val is not None and abs(_val - _exp) / _exp <= TOL
+                if not _ok:
+                    _rp_ok = False
+                _rp_acts.append(f"{_rid}={_val:,.0f}" if _val is not None else f"{_rid}=∅")
+            _chk(19,
+                 "Report exports (registry) recompute May reference totals "
+                 "(Pipe 313,637 / Mould 75,771 / GOM 75,771 / Garden 53,235 / HDPE 1,370)",
+                 _rp_ok, "each TOTAL ±0.5%", "  ".join(_rp_acts),
+                 "generator drift vs reference layout")
+
+            # #19b  Every enabled report renders to a non-trivial .xlsx (the ZIP
+            #       bundle can be built) — guards against a silently-empty export.
+            _n_built = 0
+            _n_rep = len(_rreg.enabled_reports())
+            for _rd in _rreg.enabled_reports():
+                try:
+                    if len(_rreg.report_bytes(_rd.id, "2026-05")) > 512:
+                        _n_built += 1
+                except Exception:
+                    pass
+            _chk("19b",
+                 "All enabled management reports render to a real .xlsx (ZIP-able)",
+                 _n_built == _n_rep, f"{_n_rep}/{_n_rep} built",
+                 f"{_n_built}/{_n_rep} built",
+                 "a generator raised or produced an empty workbook")
+        except Exception as _e5:
+            _chk(19, "Report exports (registry) recompute May reference totals",
+                 False, "-", f"ERROR: {_e5}", "reports registry import/build failed")
+
     # ------------------------------------------------------------------ #
     # Render                                                               #
     # ------------------------------------------------------------------ #
@@ -3122,28 +3176,82 @@ _STANDALONE_REPORT_IDS = {"compound_compilation"}
 
 @app.route("/management-reports")
 def management_reports_index():
-    """Management Reports — a dedicated landing for the annual management report
-    set, kept separate from the operational Reports tab. Report compute is reused
-    from the existing /reports/<id> detail routes; the cards link straight there.
+    """Management Reports — one standalone .xlsx download per report (recomputed
+    VALUES, never live formulas), plus a "Download all (ZIP)" bundle.
 
-    Shows ONLY the purely deterministic reports — no AI-generated output. The
-    AI-powered reports live exclusively on the /reports tab."""
-    from collections import defaultdict
-    by_loc = defaultdict(list)
-    for r in _REPORT_CATALOGUE:
-        if r["id"] in _AI_REPORT_IDS or r["id"] in _STANDALONE_REPORT_IDS:
-            continue
-        by_loc[r["location"]].append(r)
-    locations = []
-    for loc in _LOCATION_ORDER:
-        items = by_loc.get(loc, [])
-        if items:
-            locations.append({
-                "id": loc,
-                "name": _LOCATION_NAMES.get(loc, loc),
-                "reports": items,
-            })
-    return render_template("management_reports.html", locations=locations)
+    The report set, filenames and location grouping all come from the report
+    registry (``reports.registry``) — the single source of truth — so this page
+    and the download routes can never drift apart."""
+    from reports import period as rperiod
+    from reports import registry as rreg
+
+    ym = rperiod.resolve_month(request.args.get("month"))
+    months = [{"ym": m, "disp": rperiod.month_disp(m)}
+              for m in rperiod.available_months()]
+    locations = rreg.index_view(ym) if ym else []
+    return render_template(
+        "management_reports.html",
+        locations=locations,
+        months=months,
+        month=ym,
+        month_disp=rperiod.month_disp(ym),
+        zip_url=f"/management-reports/all.zip?month={ym}" if ym else "#",
+    )
+
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@app.route("/management-reports/<rid>.xlsx")
+def management_report_download(rid):
+    """Download one report as a standalone .xlsx for the requested month."""
+    import io
+
+    from flask import send_file
+
+    from reports import period as rperiod
+    from reports import registry as rreg
+
+    if rreg.get(rid) is None or not rreg.get(rid).enabled:
+        abort(404)
+    ym = rperiod.resolve_month(request.args.get("month"))
+    if not ym:
+        return Response("No months are configured yet.", status=409,
+                        mimetype="text/plain")
+    try:
+        data = rreg.report_bytes(rid, ym)
+    except Exception as exc:  # noqa: BLE001 — surface the failure, never a blank file
+        app.logger.exception("management report %s failed", rid)
+        return Response(f"Could not build this report: {exc}", status=502,
+                        mimetype="text/plain")
+    return send_file(io.BytesIO(data), mimetype=_XLSX_MIME, as_attachment=True,
+                     download_name=rreg.report_filename(rid, ym))
+
+
+@app.route("/management-reports/all.zip")
+def management_reports_zip():
+    """Download every enabled report (optionally one location) as one ZIP."""
+    import io
+
+    from flask import send_file
+
+    from reports import period as rperiod
+    from reports import registry as rreg
+
+    ym = rperiod.resolve_month(request.args.get("month"))
+    if not ym:
+        return Response("No months are configured yet.", status=409,
+                        mimetype="text/plain")
+    plant = request.args.get("plant")
+    bundle = rreg.zip_bundle(ym, plant=plant)
+    if bundle.built == 0:  # never serve a silently-empty archive
+        app.logger.error("management ZIP built 0/%s reports for %s (skipped=%s)",
+                         bundle.total, ym, bundle.skipped)
+        return Response("No reports could be built for this month.", status=502,
+                        mimetype="text/plain")
+    name = f"Prayag_Management_Reports_{rperiod.month_slug(ym)}.zip"
+    return send_file(io.BytesIO(bundle.data), mimetype="application/zip",
+                     as_attachment=True, download_name=name)
 
 
 @app.route("/reports")

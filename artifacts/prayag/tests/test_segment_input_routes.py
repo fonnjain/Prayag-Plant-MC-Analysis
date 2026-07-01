@@ -155,12 +155,21 @@ def test_management_reports_page():
     assert resp.status_code == 200, resp.status_code
     body = resp.get_data(as_text=True)
     assert "Management Reports" in body
-    assert "Reports work without manual entries" in body
-    # Cards deep-link to the existing deterministic report detail routes
-    # (AI reports like extrusion_summary live on /reports, not here).
-    assert "/reports/gom_summary" in body
+    # Page now offers one standalone .xlsx download per report + a ZIP bundle.
+    assert "Download all (ZIP)" in body
+    assert "/management-reports/all.zip" in body
+    assert "/management-reports/gom.xlsx" in body
     assert "/management-entries" in body
-    print("ok: /management-reports -> 200, catalogue links + entries banner")
+    print("ok: /management-reports -> 200, per-report .xlsx + ZIP download UI")
+
+
+def test_management_report_download_unknown_id_404():
+    # An id not in the registry (or a disabled one) must 404 — offline-safe,
+    # the registry lookup short-circuits before any sheet read.
+    client = _client()
+    assert client.get("/management-reports/not_a_report.xlsx").status_code == 404
+    assert client.get("/management-reports/compound.xlsx").status_code == 404  # disabled
+    print("ok: unknown/disabled management report id -> 404")
 
 
 if __name__ == "__main__":
