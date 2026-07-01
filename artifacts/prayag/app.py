@@ -2173,15 +2173,29 @@ def ideal_input_save():
 # ---------------------------------------------------------------------------
 
 REPORT_TYPES = [
-    {"id": "extrusion_summary", "title": "Extrusion M/C Summary", "desc": "Pipe / Garden / HDPE: run hours, output kg, rejection %, utilisation %, labour cost/kg", "segments": ["Pipe", "Garden Pipe", "HDPE"]},
-    {"id": "injection_summary", "title": "Injection Moulding M/C Summary", "desc": "Ideal vs actual hours, output, rejection, runner, utilisation %", "segments": ["PTMT", "CP"]},
-    {"id": "mould_summary", "title": "Mould-wise Summary", "desc": "Per-mould output, run hours, runner %, rejection %, utilisation %", "segments": []},
-    {"id": "mould_efficiency", "title": "Mould Age-in-Efficiency", "desc": "Per mould production pcs, ideal vs actual hours, efficiency %", "segments": []},
-    {"id": "tank_summary", "title": "Tank Litre Summary", "desc": "Production & rejection by capacity (200–5000L) × layer, litres & pieces", "segments": ["Tanks"]},
-    {"id": "compound_summary", "title": "Compound / Material Compilation", "desc": "Batch weight, mixer output, weight-loss %, by compound type", "segments": []},
-    {"id": "segment_cost", "title": "Segment-wise Cost", "desc": "Labour/Power/Solar: headcount, paid hours, wages, per-kg & per-hour cost", "segments": []},
-    {"id": "utilisation", "title": "Utilisation (Machine & Mould)", "desc": "Actual vs ideal hours, utilisation %, 3-month utilisation trend", "segments": []},
+    # Per-plant extrusion reports (Pipe / Garden / HDPE were previously one
+    # combined "Extrusion M/C Summary"; the /reports page is now purely per-plant
+    # so each extrusion plant carries its own AI analysis).
+    {"id": "pipe_summary", "title": "Pipe M/C Summary", "plant": "Pipe", "desc": "Run hours, output kg, rejection %, utilisation %, labour cost/kg", "segments": ["Pipe"]},
+    {"id": "garden_summary", "title": "Garden Pipe M/C Summary", "plant": "Garden", "desc": "Run hours, output kg, rejection %, utilisation %, labour cost/kg", "segments": ["Garden Pipe"]},
+    {"id": "hdpe_summary", "title": "HDPE M/C Summary", "plant": "HDPE", "desc": "Run hours, output kg, rejection %, utilisation %, labour cost/kg", "segments": ["HDPE"]},
+    # Per-plant injection reports (PTMT / CP were previously one combined
+    # "Injection Moulding M/C Summary").
+    {"id": "ptmt_summary", "title": "PTMT Injection M/C Summary", "plant": "PTMT", "desc": "Ideal vs actual hours, output, rejection, runner, utilisation %", "segments": ["PTMT"]},
+    {"id": "cp_summary", "title": "CP Injection M/C Summary", "plant": "CP", "desc": "Ideal vs actual hours, output, rejection, runner, utilisation %", "segments": ["CP"]},
+    {"id": "mould_summary", "title": "Mould-wise Summary", "plant": "Moulding", "desc": "Per-mould output, run hours, runner %, rejection %, utilisation %", "segments": []},
+    {"id": "mould_efficiency", "title": "Mould Age-in-Efficiency", "plant": "Moulding", "desc": "Per mould production pcs, ideal vs actual hours, efficiency %", "segments": []},
+    {"id": "tank_summary", "title": "Tank Litre Summary", "plant": "Tank", "desc": "Production & rejection by capacity (200–5000L) × layer, litres & pieces", "segments": ["Tanks"]},
+    {"id": "compound_summary", "title": "Compound / Material Compilation", "plant": "Compound", "desc": "Batch weight, mixer output, weight-loss %, by compound type", "segments": []},
+    {"id": "segment_cost", "title": "Segment-wise Cost", "plant": "ALL", "desc": "Labour/Power/Solar: headcount, paid hours, wages, per-kg & per-hour cost", "segments": []},
+    {"id": "utilisation", "title": "Utilisation (Machine & Mould)", "plant": "ALL", "desc": "Actual vs ideal hours, utilisation %, 3-month utilisation trend", "segments": []},
 ]
+
+# The two combined extrusion/injection reports were split into per-plant reports
+# above; both families share one machine-based table layout each, so the table
+# builder and reconciliation key off these sets rather than a single id.
+_EXTRUSION_REPORT_IDS = {"pipe_summary", "garden_summary", "hdpe_summary"}
+_INJECTION_REPORT_IDS = {"ptmt_summary", "cp_summary"}
 
 
 def _filter_report_segments(rows, wanted):
@@ -2266,7 +2280,7 @@ def _report_reconciliation(report_id: str, rows, data: dict):
 
     plants = {r.plant for r in rows}
     units = {r.unit for r in rows if r.unit}
-    machine_based = report_id in ("extrusion_summary", "injection_summary", "utilisation")
+    machine_based = report_id in (_EXTRUSION_REPORT_IDS | _INJECTION_REPORT_IDS | {"utilisation"})
 
     if len(units) > 1 and not machine_based:
         return recon.reconcile(None, None, no_final_note=(
@@ -2336,7 +2350,7 @@ def _report_reconciliation(report_id: str, rows, data: dict):
 def _build_report_table(report_id: str, rows, data: dict):
     from metrics import rollup_by_machine, rollup_by_mould, rollup_by_segment
 
-    if report_id == "extrusion_summary":
+    if report_id in _EXTRUSION_REPORT_IDS:
         by_machine = rollup_by_machine(rows)
         headers = ["Machine", "Run Hrs", "Output (kg)", "Reject %", "Utilisation %", "Labour Cost/kg"]
         table_rows = []
@@ -2352,7 +2366,7 @@ def _build_report_table(report_id: str, rows, data: dict):
             chart_values.append(round(m.total_count, 0))
         return headers, table_rows, chart_labels, chart_values, "Output (kg)"
 
-    elif report_id == "injection_summary":
+    elif report_id in _INJECTION_REPORT_IDS:
         by_machine = rollup_by_machine(rows)
         oee_av = any(r.has_oee for r in rows)
         headers = ["Machine", "Ideal Hrs", "Actual Hrs", "Output (kg)", "Reject %", "Runner %", "Utilisation %"]
@@ -3163,30 +3177,22 @@ def build_state():
 
 
 # ---------------------------------------------------------------------------
-# /reports — flat management-report index grouped by Location → Report.
-# Every catalogue entry below maps to a working route.
+# /reports — AI report index grouped purely per plant. Each REPORT_TYPES entry
+# carries a ``plant`` key; the order + display names live here.
 # ---------------------------------------------------------------------------
 
-_REPORT_CATALOGUE = [
-    {"id": "extrusion_summary", "title": "Extrusion M/C Summary",  "location": "KH",      "desc": "Pipe / Garden / HDPE: run hours, output, rejection %, utilisation %"},
-    {"id": "gom_summary",       "title": "Group-of-Moulding",      "location": "KH",      "desc": "Output by tonnage band (150–450 T)"},
-    {"id": "mould_summary",     "title": "Mould-wise Summary",     "location": "KH",      "desc": "Per-mould output, run hours, runner %, rejection %"},
-    {"id": "mould_efficiency",  "title": "Mould Age-in-Efficiency","location": "KH",      "desc": "Per-mould production, ideal vs actual hours, efficiency %"},
-    {"id": "pipe_moulds",       "title": "Pipe Moulds Summary",    "location": "KH",      "desc": "Mould-wise output (kg/pcs) by group: CPVC / UPVC / SWR / AGRI"},
-    {"id": "compound_summary",  "title": "Compound / Material",    "location": "KH",      "desc": "Batch weight, mixer output, weight-loss % by compound"},
-    {"id": "compound_compilation", "title": "Compound Compilation", "location": "KH",     "desc": "Pipe compound mass-balance (opening → batch → given → closing) + raw-material breakdown"},
-    {"id": "tank_kh",           "title": "Tanks (KH)",             "location": "KH",      "desc": "Per-item daily production and rejection"},
-    {"id": "injection_summary", "title": "Injection Moulding M/C", "location": "Bhiwari", "desc": "PTMT / CP: ideal vs actual hours, output, rejection, utilisation %"},
-    {"id": "tank_vn",           "title": "Tanks (VN)",             "location": "VN",      "desc": "Annual summary — production & rejection by item"},
-    {"id": "tank_wb",           "title": "Tanks (WB)",             "location": "WB",      "desc": "Annual summary — production & rejection by item"},
-    {"id": "tank_summary",      "title": "Tank Litre Summary",     "location": "ALL",     "desc": "Production & rejection by capacity (200–5000 L) × layer"},
-    {"id": "segment_labour",    "title": "Segment Labour Cost",    "location": "ALL",     "desc": "Labour, solar & power cost by segment (UNIT-1/2/3)"},
-    {"id": "segment_cost",      "title": "Segment-wise Cost",      "location": "ALL",     "desc": "Labour / Power / Solar: headcount, wages, per-kg & per-hour cost"},
-    {"id": "utilisation",       "title": "Utilisation (M/C & Mould)","location": "ALL",   "desc": "Actual vs ideal hours, utilisation %, 3-month trend"},
-]
-
-_LOCATION_ORDER = ["KH", "Bhiwari", "VN", "WB", "ALL"]
-_LOCATION_NAMES = {"KH": "Kaharani", "Bhiwari": "Bhiwadi (RICO)", "VN": "Varanasi", "WB": "West Bengal", "ALL": "All Locations"}
+_AI_PLANT_ORDER = ["Pipe", "Garden", "HDPE", "Moulding", "PTMT", "CP", "Tank", "Compound", "ALL"]
+_AI_PLANT_NAMES = {
+    "Pipe": "Pipe",
+    "Garden": "Garden Pipe",
+    "HDPE": "HDPE",
+    "Moulding": "Moulding",
+    "PTMT": "PTMT (Injection)",
+    "CP": "CP (Injection)",
+    "Tank": "Tanks",
+    "Compound": "Compound / Material",
+    "ALL": "All Plants",
+}
 
 # AI-powered reports are exactly those served by the generic report_detail route
 # (REPORT_TYPES): they carry the "Generate report by AI" button + cached
@@ -3200,23 +3206,21 @@ _AI_REPORT_IDS = {r["id"] for r in REPORT_TYPES}
 _STANDALONE_REPORT_IDS = {"compound_compilation"}
 
 # Management-report registry id (reports.registry) → AI analytical report id
-# (REPORT_TYPES, served by /reports/<id>). The two are DIFFERENT id spaces: the
-# registry is per-plant/per-location (pipe, garden, hdpe …) while the AI pages
-# are per-analysis (extrusion_summary covers all three extrusion plants). This
-# map lets each downloadable management report deep-link to the AI page that
-# analyses it. Registry reports with no matching AI page (gom, pipe_moulds) are
-# intentionally absent — the template simply omits the link for them.
+# (REPORT_TYPES, served by /reports/<id>). The two are DIFFERENT id spaces, but
+# both are now per-plant: each downloadable management report deep-links to the
+# AI page that analyses the same plant. Registry reports with no matching AI page
+# (gom, pipe_moulds) are intentionally absent — the template omits the link.
 _MR_TO_AI = {
-    "pipe":          "extrusion_summary",
-    "garden":        "extrusion_summary",
-    "hdpe":          "extrusion_summary",
+    "pipe":          "pipe_summary",
+    "garden":        "garden_summary",
+    "hdpe":          "hdpe_summary",
     "moulding":      "mould_summary",
     "mould_eff":     "mould_efficiency",
     "tank_kh":       "tank_summary",
     "tank_vn":       "tank_summary",
     "tank_wb":       "tank_summary",
-    "ptmt_moulds":   "injection_summary",
-    "ptmt_eff":      "injection_summary",
+    "ptmt_moulds":   "ptmt_summary",
+    "ptmt_eff":      "ptmt_summary",
     "segment_labour": "segment_cost",
     "compound":      "compound_summary",
 }
@@ -3345,21 +3349,20 @@ def management_reports_zip():
 
 @app.route("/reports")
 def reports_index():
-    """AI-powered reports only, grouped by Location → Plant. The purely
-    deterministic reports live on the /management-reports tab instead."""
+    """AI-powered reports only, grouped purely per plant (each REPORT_TYPES entry
+    carries a ``plant`` key). The deterministic reports live on the
+    /management-reports tab instead."""
     from collections import defaultdict
-    by_loc = defaultdict(list)
-    for r in _REPORT_CATALOGUE:
-        if r["id"] not in _AI_REPORT_IDS:
-            continue
-        by_loc[r["location"]].append(r)
-    locations = []
-    for loc in _LOCATION_ORDER:
-        items = by_loc.get(loc, [])
+    by_plant = defaultdict(list)
+    for r in REPORT_TYPES:
+        by_plant[r.get("plant", "ALL")].append(r)
+    groups = []
+    for key in _AI_PLANT_ORDER:
+        items = by_plant.get(key, [])
         if items:
-            locations.append({"id": loc, "name": _LOCATION_NAMES.get(loc, loc), "reports": items})
+            groups.append({"id": key, "name": _AI_PLANT_NAMES.get(key, key), "reports": items})
     return render_template("reports.html",
-        locations=locations,
+        locations=groups,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
     )

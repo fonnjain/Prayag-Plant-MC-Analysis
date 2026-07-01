@@ -5,10 +5,11 @@ description: Two distinct report id spaces (registry vs AI) and how the per-repo
 
 # Two report id spaces (do NOT assume they match)
 
-- **Management-report registry** (`reports/registry.py`) ids are per-plant/per-location; the **AI analytical pages** (`REPORT_TYPES` in `app.py`, served by `/reports/<id>`) are per-analysis, so several registry reports collapse onto one AI page (all three extrusion plants → one page; the three tanks → one; both PTMT → one). Some registry reports have no AI page by design.
-- A mapping (`_MR_TO_AI`) deep-links each download to its AI page, gated by membership in the AI id set so an unmapped/disabled report just omits the link instead of 404ing.
+- **Management-report registry** (`reports/registry.py`) ids and the **AI analytical pages** (`REPORT_TYPES` in `app.py`, served by `/reports/<id>`) are BOTH per-plant now, but they are still SEPARATE id spaces with different names (e.g. registry `pipe`/`ptmt_moulds` vs AI `pipe_summary`/`ptmt_summary`). The `/reports` index groups purely by plant via each `REPORT_TYPES` entry's `plant` key + `_AI_PLANT_ORDER`/`_AI_PLANT_NAMES` (no more location grouping / `_REPORT_CATALOGUE`).
+- The two families that share ONE machine-based table layout each are keyed by sets, not single ids: `_EXTRUSION_REPORT_IDS` (pipe/garden/hdpe) and `_INJECTION_REPORT_IDS` (ptmt/cp). `_build_report_table` and `_report_reconciliation` (`machine_based`) branch on set membership — add a new extrusion/injection plant → add its id to the set or its table silently falls through.
+- A mapping (`_MR_TO_AI`) deep-links each download to its per-plant AI page, gated by membership in the AI id set so an unmapped/disabled report just omits the link instead of 404ing.
 
-**Why:** treating the two as one id space silently 404s or mislinks. **How to apply:** when adding/renaming a report on either side, update the mapping and keep the gate.
+**Why:** treating the two as one id space silently 404s or mislinks; a per-plant report whose id is missing from the family set renders no table. **How to apply:** when adding/renaming a report on either side, update `_MR_TO_AI`, the family set if machine-based, and the `plant` key; keep the gate.
 
 # Four-pillar AI analytical pages
 
