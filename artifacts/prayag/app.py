@@ -2899,12 +2899,6 @@ def build_state():
         # HDPE May already in _rows_may above (per-date matrix rows from "Daily
         # Report"). TANK May is empty (no data entered); TANK June has rows — use June.
         _cur_ym = _today().strftime("%Y-%m")
-        _rows_jun: list = []
-        _jun_err: str = ""
-        try:
-            _rows_jun, _, _ = get_daily_records([_cur_ym])
-        except Exception as _e:
-            _jun_err = str(_e)
 
         # #6  HDPE parser — verify using May (confirmed data month). HDPE reads the
         # "Daily Report" matrix and supplies its own in-sheet baseline, so every
@@ -2917,17 +2911,48 @@ def build_state():
              f"rows={_hdpe_may_n} sources={sorted({r.ideal_source for r in _hdpe_may})}",
              "HDPE parser not finished or baseline missing")
 
-        if _jun_err:
-            _chk(7, f"GARDEN {_cur_ym} rows > 0  AND  TANK {_cur_ym} rows > 0",
-                 False, "both > 0", f"ERROR: {_jun_err}", "parser / read failed")
-        else:
-            _garden_n = sum(1 for r in _rows_jun if r.plant == "GARDEN")
-            _tank_jun_n = sum(1 for r in _rows_jun if r.plant == "TANK")
-            _chk(7, f"GARDEN {_cur_ym} rows > 0  AND  TANK {_cur_ym} rows > 0",
-                 _garden_n > 0 and _tank_jun_n > 0,
-                 "both > 0",
-                 f"GARDEN={_garden_n}  TANK={_tank_jun_n}",
-                 "parser not finished")
+        # #7  GARDEN + TANK daily parsers — verify against the most recent COMPLETE
+        # month that carries data, NOT the current in-progress month (which is
+        # legitimately empty at the start of a month, and TANK is only created
+        # mid-month). Mirrors #6, which checks HDPE against its latest data month.
+        # Scan back several complete months so a sparse plant (TANK skips some
+        # months with no entries) is still verified where it genuinely reported.
+        # The loop stops as soon as both plants are found, so a wide cap is cheap.
+        def _recent_months(ym: str, back: int = 6) -> list:
+            _y, _m = int(ym[:4]), int(ym[5:7])
+            _out = []
+            for _ in range(back):
+                _m -= 1
+                if _m == 0:
+                    _y, _m = _y - 1, 12
+                _out.append(f"{_y:04d}-{_m:02d}")
+            return _out
+
+        _g_month = _t_month = None
+        _g_n = _t_n = 0
+        _scan_err = ""
+        for _sym in _recent_months(_cur_ym):
+            try:
+                _rows_s, _, _ = get_daily_records([_sym])
+            except Exception as _e:
+                _scan_err = str(_e)
+                continue
+            if _g_month is None:
+                _n = sum(1 for r in _rows_s if r.plant == "GARDEN")
+                if _n > 0:
+                    _g_month, _g_n = _sym, _n
+            if _t_month is None:
+                _n = sum(1 for r in _rows_s if r.plant == "TANK")
+                if _n > 0:
+                    _t_month, _t_n = _sym, _n
+            if _g_month and _t_month:
+                break
+        _chk(7, "GARDEN & TANK daily rows > 0 in a recent complete data month",
+             _g_month is not None and _t_month is not None,
+             "both > 0 (recent complete month)",
+             f"GARDEN={_g_n}@{_g_month or '—'}  TANK={_t_n}@{_t_month or '—'}"
+             + (f"  ({_scan_err})" if _scan_err else ""),
+             "parser not finished / no recent data")
 
     # ------------------------------------------------------------------ #
     # Render                                                               #

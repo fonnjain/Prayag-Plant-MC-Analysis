@@ -215,6 +215,10 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-04": "1eNUSktOldFHRtM55VYfLiYp5nLDRk3ovOEdYYKfI0hU",
           "2026-05": "17__f7pP28bIoctVXV-iku3WIlffAuonvRhCaViVu-bA",
           "2026-06": "1uwuhCylN3h9HizK5qNUCH-sjktE3GEH74Y_UeNq6eec",
+          # July-2026 is owned by bhawna@ (NOT preeti@). Cross-owner, but still
+          # readable because it was shared with the connected account — discovery
+          # by folder is impossible (drive.file scope), so it is pinned by ID.
+          "2026-07": "1y2HRoJNQmE2BthE0f18YU1w0ly1LMvyqP98f2_4Wero",
           # FY2025-26 (prior year). The header-based Report-5/Report-11/Report-12
           # readers parse the older FY2025-26 layout with no code change, so these
           # feed PIPE (Report-5 ↔ Report-11 reconciliation) AND MOULDING (Report-12)
@@ -242,6 +246,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-04": "16zsh5x4MdY8DX3H5_hw5iaOdkGixlUsPzesDVnwgfYo",
           "2026-05": "1T1M5MT47P3D4wCwi7tX7KcL_sHVtx43NSuXFDP9Oq78",
           "2026-06": "1nEDFjrVu6pnNkzZ9tJhvGvBDMUHjLStcc0RP2uHig4g",
+          "2026-07": "1AjMLfcBkI0rGY8JdYP3MO8Ocn8lO-HIpol1tHgvK9O8",
       },
   },
   "GARDEN": {
@@ -250,6 +255,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-04": "1mbxHLgvvruhI-3_d9zoqevZQxHhjxZY4cN0tIyxkzEo",
           "2026-05": "1qmTMCWZWLsuA4kCzaAFC4fjG46Zf3rGz5VjOknv_Sy0",
           "2026-06": "1fIpsiS5De9xzyK5We0r9_kdIVrwXC09UIQpe4lWmATA",
+          "2026-07": "1e-JqC-_htMWp6jPYze2uJx3qHEJEd_qoAZybwbdmuQg",
       },
   },
   "HDPE": {
@@ -258,6 +264,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-04": "1TTxcpSQyVyleermiOhYlxlcd3RE0Pay0dRHLnXSEohs",
           "2026-05": "1-RCsS2gbtI3toyNG4uec29_coID42qCNsquaYdk-IIQ",
           "2026-06": "1_vKZGOctS_ADPxDD2OypxasHVQ5MgmHjTWcvWKEDyi8",
+          "2026-07": "1M4oXFOmKelpCYpGDatjReTF5scJwcg8saFVPcRRORtA",
       },
   },
   "TANK": {

@@ -1,0 +1,54 @@
+# sources_seed.py — Prayag source workbook IDs verified via Drive (as of 01-Jul-2026)
+# NOTE: only Pipe & Fitting is a COMPLETE month set. For the other families I have the
+# specific months I looked up; the app should DISCOVER the rest by folder (see FOLDERS).
+
+PIPE_FITTING = {
+    # FY 2026-27
+    "2026-04": "1eNUSktOldFHRtM55VYfLiYp5nLDRk3ovOEdYYKfI0hU",
+    "2026-05": "17__f7pP28bIoctVXV-iku3WIlffAuonvRhCaViVu-bA",
+    "2026-06": "1uwuhCylN3h9HizK5qNUCH-sjktE3GEH74Y_UeNq6eec",
+    "2026-07": "1y2HRoJNQmE2BthE0f18YU1w0ly1LMvyqP98f2_4Wero",  # owner: bhawna@ (not preeti)
+    # FY 2025-26
+    "2025-04": "10GHWEV7pY_qcpFLmXqKwwDtmidAjL6FG0MOtAwUJ484",
+    "2025-05": "13cC3moR19el7Q3pYYNq08P5YXXZBh_lbgxGt9yagrRQ",
+    "2025-06": "1xkWuDcyTegPJCOAzOMdIzBl75xzhXUm2MwXO5TZdkgg",
+    "2025-07": "1zE3D83XSgTE-Z4tuLvwP1bQfnPzEjefqrTOJ7vexix8",
+    "2025-08": "1zVCB6taXefFOR6U3tJh5QjokQCtt9wTJBitQxm0-w2w",  # PIPE side EMPTY; moulding real
+    "2025-09": "1ATjAaTkoqf3Bz5BHYXdb8fzgc1ah0RDz5L_07KIGdTI",
+    "2025-10": "1zzaNoN1F9LC7FX3FAI2PKMR5Y35MT94hqSBXPoTcMZw",
+    "2025-11": "1oYDIFrPYJ9BhLS35Ss4RUNFUz1gJW5Dsl76uJL_omX8",
+    "2025-12": "1wyMZVW8q0AxSjOS0JKAPLtf4eV57_K_h47t9VwwlTko",
+    "2026-01": "1vaj-Ex3rgWV6QA4VQlgIhOubMyagWv1XeoHBvTS6bU8",
+    "2026-02": "1cdrzhx5hYwU8dLo0AT65YWy66J8SmtF_vKRgzPK2UAI",
+    "2026-03": "1waJo0TZivjwg-JLPdV_JXaBH4oBiP16CqY_Wme5l0ns",
+}
+
+HDPE   = {"2026-07": "1M4oXFOmKelpCYpGDatjReTF5scJwcg8saFVPcRRORtA"}
+GARDEN = {"2026-07": "1e-JqC-_htMWp6jPYze2uJx3qHEJEd_qoAZybwbdmuQg"}
+PTMT   = {"2026-07": "1AjMLfcBkI0rGY8JdYP3MO8Ocn8lO-HIpol1tHgvK9O8"}
+
+TANK_KH = {  # KH stream only; VN (PRV) and WB (PWB/PDWB) streams still to discover
+    "2026-05": "1Zl8dvEZkQKGAkyWDTgLznC_yISNVznPf3pgUodHttm8",
+    "2026-06": "1xl-k9i4BteCWtHmVcdjEIUXEiZnWzlTpkJuqPPHFLQo",
+    # 2026-07: not yet created
+}
+
+COMPOUND = {  # single annual workbook per FY (month tabs inside), not monthly files
+    "2026-27": "1XV_cMWmVzYAqzPMlcibTpSBdve6S-quX_lnLd-_ZHUc",
+    "2025-26": "1UbnyDTCYD_mZzX2urOhoQOtpf4-QHcFUC-bCXumKK3g",
+}
+
+# Master working sheet + index (context / final-report styling reference)
+WORKING_SHEET  = "1covDNYG2QXAUetDYNy2ihtOFWARCVPMqSGOaOaPZZDY"  # "Preeti - Working Sheet"
+PREETI_INDEX   = "18m-f7XsZ8fowtYwJTYbRzhK7UNKviI3dlChv2xb6AZQ"  # "Preeti Indexing"
+
+# FOLDERS — enumerate these to auto-discover the months/families I don't have IDs for.
+FOLDERS = {
+    "pipe_fy2627":  "1eE1xSVAvi8t4wO_eZnCvbxMjQiqBiRG6",
+    "pipe_fy2526":  "13nmfLI-yXlQs7PEr1vIwSGiLZalbaF5d",
+    "hdpe_fy2627":  "1YaS66Ef7wKOvTVtBHjMD5QFBquCX5r60",
+    "garden_fy2627":"1NbzEo0JdWAQSmT3fGhD9DuFZkBvOvnzT",
+    "ptmt_fy2627":  "1cyRndUCOgirU3PsOgtqAPvJMw7Qx0wR1",
+    "tank_kh_fy2627":"1IsWgq01xLIkX0UZKnSolIL6lOToFefO_",
+    "tank_fy2526":  "1JVa5v8TWCEZKlTnGiE7v6Qnh_q97RVCo",
+}

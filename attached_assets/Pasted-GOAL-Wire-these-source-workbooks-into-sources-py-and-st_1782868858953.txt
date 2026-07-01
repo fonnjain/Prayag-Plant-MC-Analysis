@@ -1,0 +1,42 @@
+GOAL — Wire these source workbooks into sources.py and start reading data from them.
+I'm attaching/pasting sources_seed.py with verified file IDs and folder IDs.
+
+1) SEED + DISCOVER
+   - Load every ID from sources_seed.py as a known source, keyed by (family, YYYY-MM).
+   - Then AUTO-DISCOVER the rest: for each folder in FOLDERS, list all Google Sheets inside
+     and parse (family, month, year) from the title
+     (pattern: "<n>. <FAMILY> ... - <Mon> ' <YYYY>"; also "Tank (PRV|PWB|PDWB) - <Mon>' <YYYY>").
+     Merge discovered files with the seed map; if an ID conflicts, prefer the seed.
+   - CROSS-OWNER: do NOT filter by owner. Files are owned by different people
+     (preeti.chauhan@, bhawna@, DEEPAKJ@). The July-2026 Pipe file is owned by bhawna and was
+     nearly missed for exactly this reason — discover by FOLDER, not owner.
+
+2) READ BY HEADER, NOT FIXED COLUMNS (handles both FY layouts)
+   - Report-11 (pipe daily): header on row 5; production = standalone "Weight" col (after "Pcs",
+     NOT "Ideal Weight"); rejection = "Actual Wt (Kg)"; FC separate; type = FIRST "TYPES" col
+     (ignore the duplicate ~col 22). Aggregate to (machine, date).
+   - Report-5 (pipe): monthly summary in cols 1-14; per-date detail = 3-col groups
+     [Run Hours, Output, Rejection] from col 15, date in row 3 of each group, machines in col 3.
+   - Report-12 (moulding daily): find "Moulding Machine" col M (4 in FY25-26, 5 in FY26-27);
+     output kg = M+5; rejection = "Actual Rejection Weight" col.
+   - Resolve every machine string via the roster (canonical keys PIPE-N / MOULD-A02, with aliases).
+
+3) SANITY-READ EACH NEW FILE (before wiring into reports) and print a one-line manifest per file:
+   family, month, #Report-11 rows, pipe output total (Report-11), moulding output total
+   (Report-12), and any tab that's missing or empty. Flag files that fail to open or have no data.
+
+4) APPLY EXISTING LOGIC (don't re-derive):
+   - Pipe production & rejection = date-wise max(Report-5, Report-11) at machine×date over the union.
+   - Moulding = Report-12 authoritative.
+   - Aug-2025: pipe empty (flag "awaiting source"); moulding real (~75,549 kg) — do NOT flag moulding.
+   - Compound = the single annual workbook per FY (read month tabs inside), not monthly files.
+
+5) KNOWN GAPS to surface in the manifest (expected, not errors — flag as "pending source"):
+   - Tank July-2026 (all 3 plant streams) not yet created.
+   - HDPE / Garden / PTMT: only 2026-07 is seeded; discover Apr–Jun 2026 + FY25-26 from their folders.
+   - Tank VN (PRV) and WB (PWB/PDWB) streams: discover from their folders (not in seed).
+
+6) ACCEPTANCE (must reproduce):
+   - Pipe (A) April 2026: corrected output 157,883 kg, rejection 13,030 kg.
+   - Moulding May 2026 ≈ 75,771 kg (Report-5 = Report-12).
+   Read-only on all Sheets; append-only storage; AI writes narrative only, never numbers.
