@@ -48,3 +48,9 @@ id = "mpSw79jQUXdj2UJqSlFx_"
 uri = "file://exports/Prayag_Daily_Data_Sourcing.xlsx"
 type = "table"
 title = "Prayag — Daily Data Sourcing (spreadsheet → worksheet → columns/rows)"
+
+[[outputs]]
+id = "kKTdwZfNtDRVfWZv8r23t"
+uri = "file://exports/pipe_mc_calculation_2026-06.xlsx"
+type = "table"
+title = "PIPE M/C Output & Rejection — Calculation (Jun 2026)"
