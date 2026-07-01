@@ -32,3 +32,20 @@ change, re-capture `tests/fixtures/daily_2026_05.json` and
 then re-read the oracle TOTAL rows. `gen_pipe` renders TWO sheets (main +
 Type-wise); match each expected key against the first total row that carries it,
 never `rows[-1]`.
+
+**June 2026 second month (`test_report_export_june_oracle.py`, fixtures
+`daily_2026_06.json` + `pipe_report12_2026_06.json`).** Adds a
+structurally-different month: PTMT ships as a SEPARATE workbook and there is a
+STANDALONE (D) Pipe Moulds Summary workbook. Crucial gotcha: the June oracle
+workbooks were frozen MID-MONTH (their Overview sheet admits June was still being
+entered — Report-11 covered 5 of 11 dates), so the live Kaharani source has since
+been backfilled and the oracle OUTPUT cells are STALE (not just the secondary
+columns as in May). So June is a hybrid: `garden`, `ptmt_moulds`, `ptmt_eff` are
+ORACLE-VERIFIED (fixture reconciles ≤0.5%); `pipe` pins the oracle's own
+documented "complete Report-5 daily" grand total (168,738 kg on the Type-wise
+sheet — NOT the A-cell 170,216, which is the stale R5/R11 max); `moulding`, `gom`,
+`mould_eff`, `pipe_moulds` are SNAPSHOT-PINNED to the committed-fixture recompute
+(oracle output drifted >0.5%). `hdpe` has no June production (oracle = "awaiting
+source"), so it is skipped. **Why:** June was never re-baselined the way May was.
+Do NOT "fix" the drifted June tests by pinning the oracle cells — that re-tests
+oracle staleness, not a generator regression.
