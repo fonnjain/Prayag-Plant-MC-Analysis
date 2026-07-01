@@ -184,6 +184,7 @@ def _fmt_age(seconds: int) -> str:
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_YM_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 def _has_production(r) -> bool:
@@ -235,6 +236,21 @@ def parse_period(args) -> dict:
         f = t = yesterday
         label = f"Yesterday ({_fmt(yesterday)})"
         sub_monthly = True
+    elif _YM_RE.match(period):
+        # An exact calendar month (YYYY-MM) — e.g. a deep-link from the
+        # Management Reports list, which selects a specific ?month=. Resolves to
+        # that month in its OWN year (never the current FY's same month).
+        try:
+            y, m = int(period[:4]), int(period[5:7])
+            f = datetime.date(y, m, 1)
+            t = (datetime.date(y, m + 1, 1) - datetime.timedelta(days=1)) if m < 12 \
+                else datetime.date(y, 12, 31)
+            label = f.strftime("%B %Y")
+        except ValueError:
+            year = today.year if today.month >= 4 else today.year - 1
+            f = datetime.date(year, 4, 1)
+            t = datetime.date(year + 1, 3, 31)
+            label = f"FY {year}-{str(year+1)[2:]}"
     elif _ISO_DATE_RE.match(period):
         # A specific single calendar date picked from the "Recent dates" group.
         try:
@@ -329,6 +345,8 @@ def _period_type(period: str) -> str:
     the numbers are computed identically regardless.
     """
     p = (period or "").strip()
+    if _YM_RE.match(p):
+        return "monthly"
     if p in ("yesterday", "last_week", "last_month", "last_updated", "custom") or _ISO_DATE_RE.match(p):
         return "weekly"
     if p in ("current_fy", "prior_fy"):
@@ -2533,6 +2551,13 @@ def _ai_report_payload(report_id: str):
     sub_overall = compute_metrics(rows)
     sub_dict = sub_overall.to_dict()
 
+    # Ground the Diagnostics and Red Flags pillars in what the DETERMINISTIC
+    # engine actually detected, so the AI never manufactures a data-quality flag
+    # the engine did not surface (and re-generates when a new flag appears).
+    sub_validation = full_validate(rows, sub_overall) if rows else None
+    recon_result = _report_reconciliation(report_id, rows, data) if rows else None
+    diagnostics = _ai_diagnostics_text(sub_validation, recon_result)
+
     prov: dict = {}
     text = None
     if data.get("has_claude") and rows:
@@ -2548,8 +2573,35 @@ def _ai_report_payload(report_id: str):
             period_type=data["period_type"],
             deep=data["deep_override"],
             provenance=prov,
+            diagnostics=diagnostics,
         )
     return rpt, data, headers, table_rows, sub_dict, text, prov
+
+
+def _ai_diagnostics_text(sub_validation, recon_result) -> str:
+    """Compact, deterministic concerns text handed to the AI report so its
+    Diagnostics / Red Flags pillars cite ONLY what the engine actually found.
+
+    Draws from the four-tier validation flags and the standardized
+    reconciliation badge. Returns "" when the engine detected no concerns — the
+    prompt then instructs the model to say so plainly rather than invent one."""
+    lines: list[str] = []
+    if sub_validation:
+        if not sub_validation.get("reconciled", True):
+            lines.append(
+                f"Data reconciliation flag: {sub_validation.get('flag_count', 0)} "
+                "flag(s) — figures gated 'needs review' until resolved.")
+        for w in (sub_validation.get("warnings") or [])[:15]:
+            lines.append(f"Validation flag: {w}")
+    if recon_result and isinstance(recon_result, dict):
+        status = (recon_result.get("status") or "").lower()
+        # Only a genuine SHORT concern is a red flag; an expected undercount of
+        # the summary grid (daily-first exceeding it) is informational, never a
+        # flag (documented core invariant).
+        if status in ("warn", "fail", "concern", "short", "error"):
+            note = recon_result.get("label") or recon_result.get("note") or ""
+            lines.append(f"Reconciliation concern: {note}".strip())
+    return "\n".join(f"  - {ln}" for ln in lines)
 
 
 @app.route("/reports/<report_id>/ai-report")
@@ -3173,6 +3225,28 @@ _AI_REPORT_IDS = {r["id"] for r in REPORT_TYPES}
 # they are NOT listed again on the Management Reports index (avoids duplication).
 _STANDALONE_REPORT_IDS = {"compound_compilation"}
 
+# Management-report registry id (reports.registry) → AI analytical report id
+# (REPORT_TYPES, served by /reports/<id>). The two are DIFFERENT id spaces: the
+# registry is per-plant/per-location (pipe, garden, hdpe …) while the AI pages
+# are per-analysis (extrusion_summary covers all three extrusion plants). This
+# map lets each downloadable management report deep-link to the AI page that
+# analyses it. Registry reports with no matching AI page (gom, pipe_moulds) are
+# intentionally absent — the template simply omits the link for them.
+_MR_TO_AI = {
+    "pipe":          "extrusion_summary",
+    "garden":        "extrusion_summary",
+    "hdpe":          "extrusion_summary",
+    "moulding":      "mould_summary",
+    "mould_eff":     "mould_efficiency",
+    "tank_kh":       "tank_summary",
+    "tank_vn":       "tank_summary",
+    "tank_wb":       "tank_summary",
+    "ptmt_moulds":   "injection_summary",
+    "ptmt_eff":      "injection_summary",
+    "segment_labour": "segment_cost",
+    "compound":      "compound_summary",
+}
+
 
 @app.route("/management-reports")
 def management_reports_index():
@@ -3189,6 +3263,16 @@ def management_reports_index():
     months = [{"ym": m, "disp": rperiod.month_disp(m)}
               for m in rperiod.available_months()]
     locations = rreg.index_view(ym) if ym else []
+
+    # Deep-link each downloadable report to the AI analytical page that opens
+    # straight into Analytics / Diagnostics / Red Flags / Recommended Actions,
+    # scoped to the selected month. Reports with no matching AI page get no link.
+    for loc in locations:
+        for rpt in loc.get("reports", []):
+            ai_id = _MR_TO_AI.get(rpt["id"])
+            if ai_id and ai_id in _AI_REPORT_IDS:
+                rpt["ai_id"] = ai_id
+                rpt["ai_url"] = f"/reports/{ai_id}?period={ym}"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface

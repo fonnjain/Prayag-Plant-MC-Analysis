@@ -19,19 +19,41 @@
   </div>
 </div>
 
-<!-- Generate report by AI -->
+<!-- AI analysis: Analytics / Diagnostics / Red Flags / Recommended Actions.
+     Auto-loads on open (leads the page) so the report opens straight into the
+     four pillars; the server render stays instant and the analysis streams in. -->
 {% if has_claude %}
-<button id="aiGenBtn" type="button"
-   data-report-id="{{ report.id }}"
-   class="flex items-center gap-2 justify-center w-full py-2.5 rounded-xl text-sm font-semibold text-white mb-3"
-   style="background:var(--navy)">
-  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
-    <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+<div id="aiReportContainer" data-report-id="{{ report.id }}" class="mb-3"></div>
+
+<!-- Loading skeleton shown until the analysis arrives -->
+<div id="aiReportLoading" class="kpi-card p-4 mb-3 border-l-4" style="border-color:var(--navy)">
+  <div class="flex items-center gap-2 mb-3">
+    <svg class="animate-spin" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.485-6.485l-2.12 2.12M8.635 15.365l-2.12 2.12m0-11.97l2.12 2.12m8.85 8.85l-2.12-2.12"/>
+    </svg>
+    <span class="text-sm font-bold" style="color:var(--navy)">Preparing AI analysis…</span>
+  </div>
+  <div class="space-y-2">
+    <div class="h-3 rounded bg-gray-100 w-1/3"></div>
+    <div class="h-3 rounded bg-gray-100 w-full"></div>
+    <div class="h-3 rounded bg-gray-100 w-5/6"></div>
+    <div class="h-3 rounded bg-gray-100 w-2/3"></div>
+  </div>
+  <div class="text-[11px] text-gray-400 mt-3">Analytics · Diagnostics · Red Flags · Recommended Actions — computed numbers, AI interpretation.</div>
+</div>
+<div id="aiReportError" class="hidden rounded-xl p-2.5 bg-red-50 border border-red-200 mb-3 text-red-800 text-xs font-medium"></div>
+
+<!-- Regenerate (secondary) -->
+<button id="aiRegenBtn" type="button"
+   class="hidden items-center gap-1.5 justify-center w-full py-2 rounded-xl text-xs font-semibold mb-4"
+   style="background:rgba(31,56,100,0.08);color:var(--navy)">
+  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#1F3864" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
   </svg>
-  <span id="aiGenLabel">Generate report by AI</span>
+  <span id="aiRegenLabel">Regenerate analysis</span>
 </button>
-<div id="aiReportContainer" class="mb-4"></div>
-<div id="aiReportError" class="hidden rounded-xl p-2.5 bg-red-50 border border-red-200 mb-4 text-red-800 text-xs font-medium"></div>
+{% else %}
+<div class="kpi-card p-3 mb-4 text-xs text-gray-500">AI analysis is unavailable (no API key configured). All figures below are computed by the deterministic engine.</div>
 {% endif %}
 
 <!-- Export PDF button -->
@@ -201,20 +223,22 @@
 
 {% block scripts %}
 <script>
-// Generate report by AI (on-demand) ---------------------------------------
+// AI analysis — auto-loads on open so the report opens straight into the four
+// pillars (Analytics / Diagnostics / Red Flags / Recommended Actions). The
+// server render stays instant; the analysis fetch runs client-side.
 (function () {
-  const btn = document.getElementById('aiGenBtn');
-  if (!btn) return;
-  const label = document.getElementById('aiGenLabel');
   const container = document.getElementById('aiReportContainer');
+  if (!container) return;  // no API key → section not rendered
+  const loading = document.getElementById('aiReportLoading');
   const errBox = document.getElementById('aiReportError');
-  const reportId = btn.getAttribute('data-report-id');
+  const regenBtn = document.getElementById('aiRegenBtn');
+  const regenLabel = document.getElementById('aiRegenLabel');
+  const reportId = container.getAttribute('data-report-id');
   const qs = window.location.search; // preserve period / plant / segment filters
 
-  btn.addEventListener('click', async function () {
-    btn.disabled = true;
-    btn.style.opacity = '0.7';
-    label.textContent = 'Generating analysis…';
+  async function load() {
+    if (loading) loading.classList.remove('hidden');
+    if (regenBtn) regenBtn.classList.add('hidden');
     errBox.classList.add('hidden');
     errBox.textContent = '';
     container.innerHTML = '';
@@ -225,21 +249,32 @@
       const json = await resp.json();
       if (json.ok) {
         container.innerHTML = json.html;
-        label.textContent = 'Regenerate AI report';
       } else {
-        errBox.textContent = json.error || 'Could not generate the AI report.';
+        errBox.textContent = json.error || 'Could not generate the AI analysis.';
         errBox.classList.remove('hidden');
-        label.textContent = 'Generate report by AI';
       }
     } catch (e) {
-      errBox.textContent = 'Could not generate the AI report. Please try again.';
+      errBox.textContent = 'Could not generate the AI analysis. Please try again.';
       errBox.classList.remove('hidden');
-      label.textContent = 'Generate report by AI';
     } finally {
-      btn.disabled = false;
-      btn.style.opacity = '1';
+      if (loading) loading.classList.add('hidden');
+      if (regenBtn) { regenBtn.classList.remove('hidden'); regenBtn.classList.add('flex'); }
     }
-  });
+  }
+
+  if (regenBtn) {
+    regenBtn.addEventListener('click', async function () {
+      regenBtn.disabled = true;
+      regenBtn.style.opacity = '0.7';
+      if (regenLabel) regenLabel.textContent = 'Regenerating…';
+      await load();
+      regenBtn.disabled = false;
+      regenBtn.style.opacity = '1';
+      if (regenLabel) regenLabel.textContent = 'Regenerate analysis';
+    });
+  }
+
+  load();
 })();
 
 const chartLabels = {{ chart_labels|safe }};
