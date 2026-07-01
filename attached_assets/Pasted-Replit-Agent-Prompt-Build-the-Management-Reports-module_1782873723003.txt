@@ -1,0 +1,97 @@
+Replit Agent Prompt — Build the "Management Reports" module (prayag-web)
+
+
+Paste this into the Replit Agent. The attached reference file (Prayag_Project_Handover.md and, if provided, the (D) Pipe Moulds Summary workbook) holds the full Drive file-ID list, folder IDs, and edge cases — use it for anything not spelled out below.
+
+
+
+
+0. The one non-negotiable rule
+
+Every number in every Management Report is RECOMPUTED from the daily source workbooks. Nothing is ever copied from a final/summary sheet.
+
+
+Stored % cells, stored totals, and pre-rolled summary tabs are never trusted — recompute them.
+The final report sheets (the "(A)…(D)", Garden, HDPE, %age, Tank, PTMT, Compound, Segment-Cost workbooks) are used for two things only: (a) to mirror the output format/column order/labels, and (b) to validate the recomputed numbers. Their values never flow into the report.
+Claude/AI writes narrative text only — never a single number. All figures come from deterministic Python that reads source cells.
+Parse by header text, not fixed column index — source layouts drift between months and fiscal years.
+Be honest about gaps: if a source month is empty or a layout can't be verified, flag it "awaiting source / unverified" and do not publish a fabricated number.
+
+
+Build a management_reports/ module that, for a selected plant + FY + month, produces all 14 reports below, each recomputed, each validated against its final sheet, each rendered to the app UI + a reportlab PDF. Wire the pipe headline through the existing _emit_daily integration point; keep run-hours/utilisation baseline intact; use append-only storage; read the 8 manual power/solar/contractor fields from the segment_manual_inputs table.
+
+
+1. The 14 Management Reports (Meetings tab, Col E) — ALL recomputed
+
+#ReportRecomputed from (daily source)Grain / headlineAPipe M/C SummaryReport-11 + Report-5, date-wise max()machine → month, output & rejection in kgBMoulding M/C SummaryReport-12 (authoritative)machine → month, output kg, rejection, hoursCGroup of Moulding M/C SummaryReport-12, grouped by mould-size tonnage150/200/250/275/350/450 groups + YoY vs 25-26DPipe Moulds SummaryReports 17/18/19/20 (CPVC/UPVC/SWR/AGRI mould-wise)mould → month, pcs + kg; validate vs Report-12—Garden Pipe M/C SummaryGarden workbook, tabs MACHINE 1-4machine → month, kg—HDPE M/C SummaryHDPE workbook, tabs MACHINE 1-6 + DANA MCmachine → month, kg (empty months → flag)—Moulding %age in EfficiencyReport-12-derived efficiency %mould → month, %—Compound CompilationReports 6/7/8 (currently disabled by owner — build the recompute path, leave it off)compound type → month, kg—Segment Wise Labour / Solar / Power CostEmployee-cost workbooks (paid hrs × cost/hr) + manual power/solar inputsunit → segment → month, INR/kg—TANK (KH) Ltr. SummaryTank-KH workbook, DATA tabcapacity × layer, litres & pcs—TANK (VN) Ltr. SummaryTank-VN workbook, DATA tabcapacity × layer, litres & pcs—TANK (WB) Ltr. SummaryTank-WB workbook, DATA tabcapacity × layer, litres & pcs—PTMT Moulds SummaryPTMT workbook, per-mould month sheetmould → month, pcs + kg—PTMT Moulding %age in EfficiencyPTMT workbookmould → month, %
+
+Report a report as "awaiting source" (not zero) when its month has no entered data.
+
+
+2. Source column mappings (match by HEADER TEXT — indices below are hints, verify each run)
+
+Report-11 (pipe daily; item × machine × type): header row 5. Machine = "MACHINE NO." (e.g. PIPE M/C - 1). Type = the first "TYPES" column (ignore the duplicate ~col22). Pcs = "Pcs" (~col9). Production weight = the standalone "Weight" col (~col10) — NOT "Ideal Weight". Rejection = "Actual Wt (Kg)" (~col14). Running hours ~col7. Aggregate to (machine, date).
+
+Report-5 (pipe + moulding summary + daily): machine ~col3. Per-date detail starts ~col15 in 3-col groups [Run Hours, Output, Rejection]; the date sits in ROW 3 of each group's first column. Pipe machines rows ~5-13 (Pipe M/C-N); moulding machines below (codes like A02(U-150)) with output/rejection in their own group.
+
+Report-12 (moulding daily): header row 4. FY26-27 → machine = "Moulding Machine" (~col5), output kg = "Wt in Kgs" (~col10), rejection = "Actual Rejection Weight" (~col26), hours = "Hour Consume for Production" (~col19). FY25-26 is shifted −1 (machine col4, output col9, rejection col25). Detect by locating the "Moulding Machine" header, then output = that column + 5.
+
+Reports 17–20 (D — CPVC/UPVC/SWR/AGRI mould working): row-3 headers MOULD / MOULD CAVITY / CYCLE TIME PER PC / PC WEIGHT / RUNNER WEIGHT; then a production block PRODUCTION IN PCS / PRODUCTION IN KG / Weight of Total Production / MOULD UTILISATION IN HOURS. Each tab has a SINGLE production block = the workbook's current month. ⚠️ The block's row-2 month label can be stale (e.g. reads "APRIL'26" in the June workbook) — ignore the label; the data is the workbook's month. Confirm by the tie-out in §3.
+
+Garden Pipe: tabs MACHINE 1-4, data from row 6. Production kg = "TOTAL" (~col8), pcs = "NOS" (~col5), mtr (~col6). No rejection column.
+
+HDPE: tabs MACHINE 1-6 + DANA MC + "Total Production". Output kg ~col8, rejection ~col7. Empty months read all-zero → flag "awaiting source", don't treat as real zero.
+
+
+3. Reconciliation rules (the analytical backbone — implement exactly)
+
+
+Pipe (A) — date-wise max. Report-5 and Report-11 disagree and each is more complete in different months (R11 led Apr/May'26; R5 led June; R5 became unreliable from Mar'26 and drifts both directions — never use R5 alone). Rule: at (machine × date) grain take max(Report-5, Report-11) over the union of all machine-dates, then sum. Apply the same to rejection. This is the pipe headline for output and rejection.
+Moulding (B/C/%age) — Report-12 is authoritative. Report-5's moulding block equals Report-12 to the kg every month; use Report-12.
+Type split (CPVC/UPVC/SWR/AGRI) exists ONLY in Report-11. Where the max rule picks a Report-5 machine-date (no type info), label that output "untyped pickup" and scale Report-11's type proportions pro-rata to each machine's corrected total. Report the typed % completeness.
+(D) validation tie-out. Sum of Reports 17–20 (kg) must reconcile to the same workbook's Report-12 month total within ~0.1% (per-material splits differ by design — Report-12 tags by item material and carries small PP/PPR/ABS lines; mould reports tag by mould family). If the grand totals don't tie, the block isn't the current month — stop and flag.
+Aug'25 (and any empty month): pipe side may be empty while moulding is real — flag "awaiting source", never roll a false zero into annual figures.
+Layout drift: Report-12 shifts one column between FY25-26 and FY26-27; Report-11 has a duplicate TYPE column. Always resolve columns by header text.
+Roster reconciliation: 9 pipe M/C (M/C-1..9), 26 moulding codes (A01-A06, B01-B06, C01-C07, D01-D07). Some machines appear in one report but not the other in some months (e.g. C03 in Report-5 but missing from Report-12 in ~3 months) — surface these as coverage warnings, don't silently drop.
+
+
+Efficiency caveat: corrected output uses the date-wise max but run-hours stay on Report-5, so output ÷ hours can look inflated on some machines — flag it; hours may later get the same date-wise treatment.
+
+
+4. Sources & Drive discovery
+
+
+Discover source workbooks by FOLDER, not by owner (files are owned by preeti.chauhan@, bhawna@, and DEEPAKJ@). The connector's parentId / createdTime filters are unreliable — search by title contains.
+Folder + file IDs (FY26-27 Pipe & Fitting, Garden, HDPE, PTMT, Tank, Compound, the two employee-cost workbooks, and every final-report sheet for validation) are in the attached reference (Prayag_Project_Handover.md §2). Seed sources.py from it. Prefer native Google Sheet IDs over .xlsx static-export duplicates.
+Download Sheets as .xlsx; large downloads arrive base64-encoded — decode to disk before parsing.
+
+
+
+5. Output & format requirements
+
+
+Mirror the final-report format (column order, labels, grouping) per report — for styling only.
+Brand: navy #1F3864, terracotta #C55A11. Dates dd-mm-yyyy. Moulding & pipe output in kg; cost in INR/kg; tanks in litres.
+Each report: UI view (Jinja2 + Chart.js) + reportlab PDF. Narrative paragraphs generated by Claude; all numbers injected from the recompute layer.
+Show a provenance/validation footer on every report: source workbook(s) used, the reconciliation tie-out result, and any "awaiting source / unverified / coverage warning" flags.
+
+
+
+6. Acceptance / self-check numbers (recompute must reproduce these)
+
+
+Pipe (A) April 2026: output 157,883 kg, rejection 13,030 kg (date-wise max). Sanity: R5-alone = 135,634; R11-alone = 157,278.
+Pipe (A) June 2026: output 170,216 kg, rejection 15,354 kg; type split ~38% complete → ~105,140 kg "untyped pending Report-11".
+Moulding (B) June 2026: 89,100 kg / 896 kg rejection (Report-12, Jun 1–27).
+(D) Pipe Moulds June 2026: total 89,152 kg — CPVC 19,591 / UPVC 27,796 / SWR 33,178 / AGRI 8,586; moulds run 67/85/47/31. Ties to Report-12 (89,100) within 0.06%. ✅
+Garden June 2026: 60,928 kg (M2/M3/M4; M1 idle).
+HDPE June 2026: empty → "awaiting source".
+Moulding history checks: May'25 ≈ 75,771 kg; Apr'25 ≈ 84,552 kg (R5 = R12).
+
+
+If any recomputed figure misses its acceptance target, treat it as a build failure, not a rounding issue — trace the header mapping and the max/union logic before proceeding.
+
+
+7. App integration
+
+Flask + Jinja2, Chart.js, Postgres via psycopg2, Drive + Sheets read-only, Claude for narrative only, reportlab PDFs. Monorepo artifacts/prayag; run PORT=21800 python3 app.py. Pipe headline integrates at _emit_daily. Storage is append-only. The 8 manual power/solar/contractor fields live in segment_manual_inputs. Keep the run-hours / utilisation baseline intact when wiring corrected date-wise-max totals.

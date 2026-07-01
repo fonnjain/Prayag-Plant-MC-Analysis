@@ -1,0 +1,70 @@
+GOAL — Build the "Management Reports" section so it produces ALL of the annual management
+reports, and make ABSOLUTELY EXPLICIT: every number in every report is RECOMPUTED from the
+daily source workbooks. Nothing is ever copied out of a final/summary sheet. The attached
+file (Prayag_June_2026_Management_Reports.xlsx) is the REFERENCE for the target format and
+the expected June figures — match its layout, reproduce its numbers, do not read data from it.
+
+NON-NEGOTIABLE PRINCIPLE (state it in code comments and in the UI of the section):
+- Every figure — output, rejection, hours, utilisation, efficiency, %s, per-kg costs — is
+  computed from raw daily cells. Stored %/total cells in ANY sheet (daily OR final) are never
+  trusted. Final report sheets are used ONLY to (a) mirror format and (b) validate.
+- AI/Claude writes narrative only, never numbers. All Sheets access is read-only. Storage is
+  append-only.
+
+THE REPORTS TO PRODUCE (names exactly as in the Meetings tab / Sheet Inventory):
+  2026-27:
+    (A) Pipe M/C Summary            -> recompute from Report-5 + Report-11 (date-wise max rule)
+    (B) Moulding M/C Summary        -> recompute from Report-12 (authoritative)
+    (C) Group of Moulding M/C Sum.  -> Report-12 rolled up by tonnage group (150T..450T, from code)
+    (D) Pipe Moulds Summary         -> Reports 17/18/19/20 (CPVC/UPVC/SWR/AGRI mould output pcs+kg)
+    Garden Pipe M/C Summary         -> Garden workbook MACHINE tabs (production kg per machine)
+    HDPE M/C Summary                -> HDPE workbook (output + rejection; may be empty a given month)
+    Moulding %age in Efficiency     -> Report-12 efficiency, recomputed
+    Compound Compilation            -> compound annual workbook (recompute month-wise)
+  2025-26 / rolling:
+    Segment Wise Labour/Solar/Power Cost, TANK (KH/VN/WB), PTMT Moulds, PTMT %age Efficiency
+
+COMPUTATION RULES (reuse what's already wired; do not re-derive):
+- PIPE production & rejection = date-wise max(Report-5, Report-11) at (machine × date) over the
+  union of machine-dates. Type split (CPVC/UPVC/SWR/AGRI) from Report-11 only, pro-rata to the
+  corrected machine total; label the Report-5-only remainder "untyped pickup".
+- MOULDING = Report-12 (output "Wt in Kgs", rejection "Actual Rejection Weight", hours "Hour
+  Consume"); Report-5 moulding is a cross-check only.
+- All ratios recomputed: utilisation = actual hrs / ideal M/C hrs; avg/hr = output / hrs;
+  efficiency = (output/hrs) / ideal output-per-hr; rejection % = rej / (output + rej).
+- Parse every source by HEADER TEXT, not fixed column index (FY25-26 and FY26-27 layouts differ;
+  Report-12 shifts one column; Report-11 has a duplicate TYPE column — use the first).
+- Resolve machines via the roster (canonical keys); handle empty months (Aug-2025 pipe empty but
+  moulding real ~75,549 kg; HDPE June empty) as "awaiting source", never as real zero.
+
+FORMAT (mirror the attached reference workbook, one section/sheet per report):
+- Per-machine rows + TOTAL, with the report's own columns and units (kg / % / pcs / Ltr / INR).
+- Reproduce the reference's June figures as the acceptance check (see ACCEPTANCE below).
+- Show a per-report reconciliation badge: recomputed total vs the final sheet, match %, and
+  #cells flagged (>3% delta). For the families that are already correct (moulding, garden, HDPE,
+  tank, PTMT, compound) this should be ~100%; for PIPE the recomputed total will legitimately
+  EXCEED the final/Report-5 sheet — that is expected, flag don't "fix".
+
+LABOUR COST columns on (A) and (B) [Paid Hours, Paid Wages, Per-Hour Cost, Per-kg Labour Cost]:
+- Compute Per-Hour = Wages / Paid Hours and Per-kg = segment Wages / segment Output kg.
+- Source: Employee-Cost workbook (per-person cost/hr + wages) and the Segment report / monthly
+  employee files (segment Paid Hours + hours devoted). These are currently EMPTY for many FY26-27
+  months (e.g. June) — when a month's labour inputs are missing, render the labour columns as
+  "awaiting source" and STILL compute production/utilisation/efficiency. Needs a fixed
+  HR-department -> segment map (cost workbook uses CP/SINK/PTMT/HINGES; segments are Pipe &
+  Fitting / Moulding) — expose this map in config, don't hardcode inline.
+
+PERIOD: month selector + "Annual" = sum of populated months, daily-first, with year-on-year
+columns where the final sheet has them.
+
+ACCEPTANCE (June 2026 — must reproduce the attached reference exactly):
+- Pipe (A): 170,216 kg output / 15,354 kg rejection; April cross-check 157,883 / 13,030.
+- Pipe type split only ~38% typed for June (Report-11 ~40% entered) -> 105,140 kg "untyped";
+  typed CPVC 18,979 / UPVC 14,582 / SWR 25,275 / AGRI 6,240. This must reconcile to 170,216.
+- Moulding (B): 89,100 kg / 896 kg (24 machines); May cross-check ~75,771 kg.
+- (C) Group of Moulding by tonnage sums to 89,100 kg.
+- Garden: 60,928 kg (M2/M3/M4; M1 idle). HDPE June: empty (flag, not zero).
+If any of these don't reproduce, the parsing or mapping is wrong — fix before shipping.
+
+Do not change the existing pipe date-wise-max logic or moulding sourcing already wired in
+_emit_daily. This task is the reporting layer on top of that.
