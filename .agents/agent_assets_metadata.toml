@@ -78,3 +78,9 @@ id = "08RFNI9soPXy9WzlfL_Uj"
 uri = "file://exports/Tanks_KH_calculation_2026-06.xlsx"
 type = "table"
 title = "Tanks (KH) — Output & Rejection Calculation (Jun 2026)"
+
+[[outputs]]
+id = "R0Uzs5ZFQ6oz4ynKuMty8"
+uri = "file://exports/Prayag_Calculation_and_Data_Sources.xlsx"
+type = "table"
+title = "Prayag — Calculation & Data-Sourcing Reference"
