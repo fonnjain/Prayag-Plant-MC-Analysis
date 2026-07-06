@@ -210,6 +210,255 @@ def _get_access_token() -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Google Drive folder auto-discovery
+# ---------------------------------------------------------------------------
+# The daily workbooks live in per-plant Drive folders (``folder_ids`` in
+# sources.DAILY_SOURCES). Rather than hand-pin every new monthly file id, we
+# list each folder at runtime and ADD any month we don't already have pinned.
+# Pinned ids always win (they are hand-verified); discovery only fills gaps, so
+# this can never change an existing month's figures — only surface a brand-new
+# month automatically.
+#
+# Two connectors are in play: the app reads sheet CELLS via ``google-sheet``,
+# but Drive metadata/listing needs a separate ``google-drive`` token. Binding
+# that connection is what makes folder listing work despite the drive.file
+# scope (the folders/files are shared with the connected account).
+_drive_token_cache: dict = {"token": None, "exp": 0.0}
+_discovery_state: dict = {
+    "last_scan_ts": 0.0,   # epoch of the last folder scan (ok or not)
+    "added": {},           # {plant: [ym, ...]} discovered on top of the pins
+    "error": None,         # message of the most recent scan failure, if any
+}
+_DISCOVERY_TTL = 600.0     # re-scan folders at most this often (10 min)
+_discovery_lock = threading.Lock()
+
+# Month-word → month number. Covers 3-letter and common full/variant spellings
+# ("June"/"Jun", "July"/"Jul", "Sept"/"Sep") seen in the real filenames.
+_MONTH_WORDS: dict = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+# Matches a month word directly followed by a 4-digit 20xx year, tolerating the
+# apostrophe/space noise in titles like "... Report - Apr ' 2026" / "June ' 2026".
+_MONTH_YEAR_RE = re.compile(r"([A-Za-z]{3,9})\s*['\u2019]?\s*(20\d{2})")
+
+
+def parse_month_from_title(name: str) -> Optional[str]:
+    """Extract a ``YYYY-MM`` from a workbook filename, or ``None``.
+
+    Deterministic and conservative: requires a recognised month word directly
+    followed by a 20xx year. If nothing matches we return ``None`` and the file
+    is skipped rather than guessed — never fabricate a month for a file we can't
+    confidently place.
+    """
+    if not name:
+        return None
+    for m in _MONTH_YEAR_RE.finditer(name):
+        word = m.group(1).lower().rstrip(".")
+        mon = _MONTH_WORDS.get(word)
+        if mon:
+            return f"{m.group(2)}-{mon:02d}"
+    return None
+
+
+def _fetch_drive_token() -> Tuple[Optional[str], float]:
+    """Fetch a Google **Drive** access token (separate connector from Sheets).
+
+    Mirrors ``_fetch_token`` but asks for the ``google-drive`` connection. Never
+    raises: Drive discovery is best-effort and must never break a page load, so
+    any failure returns ``(None, 0.0)`` and the caller keeps the pinned sources.
+    """
+    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+    repl_identity = os.environ.get("REPL_IDENTITY")
+    web_renewal = os.environ.get("WEB_REPL_RENEWAL")
+    if repl_identity:
+        xtoken = "repl " + repl_identity
+    elif web_renewal:
+        xtoken = "depl " + web_renewal
+    else:
+        return None, 0.0
+    if not host:
+        return None, 0.0
+
+    url = (
+        f"https://{host}/api/v2/connection"
+        "?include_secrets=true&connector_names=google-drive"
+    )
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "X_REPLIT_TOKEN": xtoken}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.load(r)
+    except (urllib.error.URLError, ValueError, OSError):
+        return None, 0.0
+
+    items = data.get("items", [])
+    if not items:
+        return None, 0.0
+    settings = items[0].get("settings", {}) or {}
+    token = settings.get("access_token")
+    expires_at = settings.get("expires_at")
+    if not token:
+        oauth = settings.get("oauth", {}) or {}
+        creds = oauth.get("credentials", {}) if isinstance(oauth, dict) else {}
+        token = creds.get("access_token")
+        expires_at = expires_at or creds.get("expires_at") or creds.get("expiry_date")
+
+    exp_epoch = time.time() + 240.0
+    if isinstance(expires_at, (int, float)):
+        exp_epoch = expires_at / 1000.0 if expires_at > 1e12 else float(expires_at)
+    elif isinstance(expires_at, str):
+        try:
+            exp_epoch = datetime.datetime.fromisoformat(
+                expires_at.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            pass
+    return token, exp_epoch
+
+
+def _get_drive_token() -> Optional[str]:
+    now = time.time()
+    if _drive_token_cache["token"] and now < _drive_token_cache["exp"] - 60:
+        return _drive_token_cache["token"]
+    token, exp = _fetch_drive_token()
+    if token:
+        _drive_token_cache["token"] = token
+        _drive_token_cache["exp"] = exp
+    return token
+
+
+def _list_drive_folder(folder_id: str, token: str) -> List[dict]:
+    """List the Google-Sheet files directly inside a Drive folder.
+
+    Returns ``[{"id", "name", "modifiedTime"}, ...]`` for spreadsheet children
+    only (never trashed). Paginates fully. Uses the shared-drive flags so files
+    living in a Shared Drive are included.
+    """
+    out: List[dict] = []
+    page_token = None
+    for _ in range(20):  # hard page cap — folders hold ~dozen files at most
+        q = urllib.parse.quote(
+            f"'{folder_id}' in parents and trashed=false and "
+            "mimeType='application/vnd.google-apps.spreadsheet'"
+        )
+        url = (
+            f"https://www.googleapis.com/drive/v3/files?q={q}"
+            "&fields=nextPageToken,files(id,name,modifiedTime)"
+            "&pageSize=1000&orderBy=name"
+            "&supportsAllDrives=true&includeItemsFromAllDrives=true"
+        )
+        if page_token:
+            url += "&pageToken=" + urllib.parse.quote(page_token)
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.load(r)
+        out.extend(data.get("files", []) or [])
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return out
+
+
+def ensure_daily_discovery(force: bool = False) -> dict:
+    """List each plant's Drive folder(s) and ADD any newly-found monthly file.
+
+    Additive and idempotent: mutates ``sources.DAILY_SOURCES[plant]["files"]``
+    in place so every existing consumer (app/freshness/confirm/manifest) picks
+    up new months with no rewiring, but NEVER overwrites a pinned month (pins
+    are hand-verified and authoritative). Only plants with a daily layout are
+    touched — a plant we can't parse (e.g. CP) is left alone so we don't create
+    phantom "file exists but no data" states.
+
+    TTL-guarded and lock-serialised; wrapped so any Drive/network failure leaves
+    the existing map intact and records the error in ``_discovery_state`` rather
+    than raising. Returns ``{plant: [ym, ...]}`` of months added across all scans.
+    """
+    now = time.time()
+    if not force and (now - _discovery_state["last_scan_ts"]) < _DISCOVERY_TTL:
+        return _discovery_state["added"]
+    if is_demo_mode():
+        return _discovery_state["added"]
+    with _discovery_lock:
+        now = time.time()
+        if not force and (now - _discovery_state["last_scan_ts"]) < _DISCOVERY_TTL:
+            return _discovery_state["added"]
+        token = _get_drive_token()
+        if not token:
+            _discovery_state["error"] = "google-drive connection unavailable"
+            _discovery_state["last_scan_ts"] = now  # don't hot-loop on missing token
+            return _discovery_state["added"]
+
+        # (plant, ym) -> (file_id, modifiedTime) for months not already pinned.
+        found: dict = {}
+        try:
+            for plant, cfg in sources.DAILY_SOURCES.items():
+                if plant not in _DAILY_LAYOUTS:
+                    continue  # only auto-add plants the daily pipeline can read
+                pinned = cfg.get("files") or {}
+                for fid in (cfg.get("folder_ids") or []):
+                    for f in _list_drive_folder(fid, token):
+                        ym = parse_month_from_title(f.get("name", ""))
+                        if not ym or ym in pinned:
+                            continue  # unparseable, or a pinned month wins
+                        mtime = f.get("modifiedTime", "") or ""
+                        prev = found.get((plant, ym))
+                        # If two discovered files claim the same month, keep the
+                        # most recently modified (don't guess silently past it).
+                        if prev is None or mtime >= prev[1]:
+                            found[(plant, ym)] = (f.get("id", ""), mtime)
+            # Group additions per plant, then swap each plant's ``files`` dict by
+            # reference (copy-on-write) rather than mutating it in place. The
+            # reference reassignment is atomic under the GIL, so a request handler
+            # mid-iteration over the OLD dict (app.py/freshness/confirm all read
+            # DAILY_SOURCES from background-thread-adjacent request paths) finishes
+            # cleanly on its snapshot instead of hitting "dictionary changed size
+            # during iteration"; the next read simply sees the fuller map.
+            adds_by_plant: dict = {}
+            for (plant, ym), (fid, _mt) in found.items():
+                if fid:
+                    adds_by_plant.setdefault(plant, {})[ym] = fid
+            applied: dict = {}
+            for plant, adds in adds_by_plant.items():
+                new_files = dict(sources.DAILY_SOURCES[plant].get("files") or {})
+                for ym, fid in adds.items():
+                    if ym not in new_files:   # never overwrite a pinned id
+                        new_files[ym] = fid
+                        applied.setdefault(plant, []).append(ym)
+                if applied.get(plant):
+                    sources.DAILY_SOURCES[plant]["files"] = new_files
+            for plant in applied:
+                applied[plant].sort()
+            _discovery_state["added"] = applied
+            _discovery_state["error"] = None
+        except Exception as exc:  # noqa: BLE001 — best-effort, never break a page
+            _discovery_state["error"] = str(exc)
+            logger.warning("Drive folder discovery failed: %s", exc)
+        _discovery_state["last_scan_ts"] = time.time()
+        return _discovery_state["added"]
+
+
+def discovery_status() -> dict:
+    """Observability for the Drive auto-discovery layer (for /build-state etc.)."""
+    return {
+        "last_scan_ts": _discovery_state.get("last_scan_ts", 0.0),
+        "added": dict(_discovery_state.get("added") or {}),
+        "error": _discovery_state.get("error"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Generic Sheets REST helpers
 # ---------------------------------------------------------------------------
 _API_MAX_RETRIES = 4    # total attempts on a throttle/transient error
@@ -2256,6 +2505,12 @@ def _refresh_once() -> None:
   ``_daily_key_lock`` for the pop) so a refresh never races a request mid-write.
   """
   errors: list = []
+  # Re-scan Drive folders first so a brand-new monthly workbook is in the
+  # sources map before we pull the recent daily months below.
+  try:
+      ensure_daily_discovery(force=True)
+  except Exception as exc:                       # noqa: BLE001 — best-effort leg
+      errors.append(f"discovery: {exc}")
   try:
       _force_live_payload()
   except Exception as exc:                       # noqa: BLE001 — best-effort leg
@@ -2293,6 +2548,10 @@ def _startup_warmup() -> None:
   _t.sleep(3)                    # let the worker finish booting first
   if is_demo_mode():
       return
+  try:
+      ensure_daily_discovery(force=True)
+  except Exception:              # noqa: BLE001 — best-effort
+      pass
   _refresh_once()
 
 

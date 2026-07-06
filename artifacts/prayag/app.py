@@ -20,6 +20,7 @@ from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
     load_report_records, load_compound_data, load_pipe_moulds, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
+    ensure_daily_discovery,
 )
 from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
 from metrics import (
@@ -981,7 +982,14 @@ def _safe_next(nxt: str) -> str:
 @app.route("/refresh")
 def refresh():
     """Drop the sheet caches so the next page load fetches the latest live data,
-    then return to the page the user came from (defaults to the overview)."""
+    then return to the page the user came from (defaults to the overview).
+
+    Also re-scans the Drive folders (best-effort) so a workbook added since the
+    last scan is picked up on demand rather than waiting for the background loop."""
+    try:
+        ensure_daily_discovery(force=True)
+    except Exception:  # noqa: BLE001 — best-effort, never block a refresh
+        pass
     clear_caches()
     return redirect(_safe_next(request.args.get("next", "/")))
 
