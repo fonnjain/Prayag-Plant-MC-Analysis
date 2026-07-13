@@ -14,7 +14,7 @@ import time
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
-from flask import Flask, render_template, request, jsonify, Response, abort, redirect, make_response
+from flask import Flask, render_template, request, jsonify, Response, abort, redirect, make_response, session, url_for
 
 from sheets import (
     get_records, get_daily_records, detected_sources, months_with_data,
@@ -3901,11 +3901,53 @@ def segment_input_save():
 
 # ---------------------------------------------------------------------------
 # Read-only JSON API (v1) — external apps consume the same pipeline the
-# dashboard uses. Requires the PRAYAG_API_KEY secret (see api.py).
+# dashboard uses. Key managed via /settings/api-key UI (see api.py).
 # ---------------------------------------------------------------------------
 from api import create_api  # noqa: E402  (needs get_data defined above)
 
 app.register_blueprint(create_api(get_data), url_prefix="/data-api/v1")
+
+
+# ---------------------------------------------------------------------------
+# API key management UI
+# ---------------------------------------------------------------------------
+import secrets as _secrets_mod  # noqa: E402
+
+
+@app.route("/settings/api-key")
+def api_key_settings():
+    key_meta = store.get_api_key_meta()
+    new_key = session.pop("new_api_key", None)
+    ctx = {
+        "key_meta": key_meta,
+        "new_key": new_key,
+        "store_ok": store.AVAILABLE,
+        "base_url": request.host_url.rstrip("/"),
+    }
+    return render_template("api_key.html", **ctx)
+
+
+@app.route("/settings/api-key/generate", methods=["POST"])
+def api_key_generate():
+    new_key = "prayag-" + _secrets_mod.token_hex(24)
+    store.set_api_key(new_key)
+    session["new_api_key"] = new_key
+    return redirect(url_for("api_key_settings"))
+
+
+@app.route("/settings/api-key/delete", methods=["POST"])
+def api_key_delete():
+    store.delete_api_key()
+    return redirect(url_for("api_key_settings"))
+
+
+@app.route("/settings/api-key/value")
+def api_key_value():
+    """JSON endpoint used by the copy-to-clipboard button on the settings page."""
+    key = store.get_api_key()
+    if not key:
+        return jsonify({"key": None}), 404
+    return jsonify({"key": key})
 
 
 if __name__ == "__main__":

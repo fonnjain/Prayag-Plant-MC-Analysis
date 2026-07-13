@@ -1250,3 +1250,88 @@ def pg_cache_clear(key: str = "") -> None:
                 cur.execute(f"DELETE FROM {_SC_TABLE}")
     except Exception:
         pass  # degrade silently
+
+
+# ---------------------------------------------------------------------------
+# API key store — single-row table that holds the active API key for the
+# /data-api/v1 endpoints.  Managed from the /settings/api-key UI page.
+# Degrades gracefully (returns None) when Postgres is unavailable.
+# ---------------------------------------------------------------------------
+
+_AK_TABLE = "api_keys"
+
+
+def _init_api_key_table() -> None:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_AK_TABLE} (
+                id         SERIAL PRIMARY KEY,
+                key_value  TEXT NOT NULL,
+                prefix     TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+
+
+def get_api_key() -> Optional[str]:
+    """Return the active API key stored in Postgres, or None."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT key_value FROM {_AK_TABLE} ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        return row["key_value"] if row else None
+    except Exception:
+        return None
+
+
+def get_api_key_meta() -> Optional[Dict]:
+    """Return display metadata (prefix, created_at) for the active key, or None."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT prefix, created_at FROM {_AK_TABLE} ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "prefix": row["prefix"],
+            "created_at": row["created_at"].strftime("%d-%m-%Y %H:%M") if row["created_at"] else "",
+        }
+    except Exception:
+        return None
+
+
+def set_api_key(key: str) -> None:
+    """Replace the stored key with ``key`` (delete old row, insert new)."""
+    if not AVAILABLE:
+        return
+    try:
+        _init_api_key_table()
+        prefix = key[:12] if len(key) >= 12 else key
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {_AK_TABLE}")
+            cur.execute(
+                f"INSERT INTO {_AK_TABLE} (key_value, prefix) VALUES (%s, %s)",
+                (key, prefix),
+            )
+    except Exception:
+        pass
+
+
+def delete_api_key() -> None:
+    """Remove the stored API key (disabling the API until a new one is generated)."""
+    if not AVAILABLE:
+        return
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {_AK_TABLE}")
+    except Exception:
+        pass

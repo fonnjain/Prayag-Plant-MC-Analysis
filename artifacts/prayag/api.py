@@ -51,6 +51,15 @@ _PERIOD_TOKENS = [
 
 
 def _configured_key() -> str:
+    # DB-stored key (managed from /settings/api-key) takes priority over the
+    # environment variable so the key can be rotated from the published app UI.
+    try:
+        import store as _store  # local import to avoid circular import at module load
+        db_key = _store.get_api_key()
+        if db_key:
+            return db_key.strip()
+    except Exception:
+        pass
     return (os.environ.get(API_KEY_ENV) or "").strip()
 
 

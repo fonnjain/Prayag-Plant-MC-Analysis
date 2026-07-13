@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>Prayag Analytics — API Key</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --navy: #1F3864; --terra: #C55A11; }
+    body { background: #f3f4f6; font-family: system-ui, sans-serif; }
+    .bg-navy { background-color: var(--navy); }
+    .bg-terra { background-color: var(--terra); }
+    .text-navy { color: var(--navy); }
+    .text-terra { color: var(--terra); }
+    .kpi-card { background: white; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
+    select, input { font-size: 16px; }
+    .key-font { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="bg-navy shadow-lg">
+  <div class="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+    <a href="/" class="flex items-center gap-2">
+      <div class="w-8 h-8 bg-terra rounded-lg flex items-center justify-center flex-shrink-0">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+          <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="text-white font-bold text-sm leading-none">Prayag Analytics</div>
+        <div class="text-blue-200 text-xs leading-none mt-0.5">Settings</div>
+      </div>
+    </a>
+  </div>
+</header>
+
+<main class="max-w-2xl mx-auto px-4 py-6">
+
+  <div class="mb-5">
+    <a href="/" class="text-xs text-gray-500 flex items-center gap-1 mb-3">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+      </svg>
+      Back to dashboard
+    </a>
+    <h1 class="text-lg font-bold text-navy">API Key</h1>
+    <p class="text-xs text-gray-500 mt-1">Generate a key to let other apps read production data from this dashboard.</p>
+  </div>
+
+  {% if not store_ok %}
+  <!-- No DB — key management unavailable -->
+  <div class="kpi-card p-4 mb-4 border-l-4" style="border-color:#f59e0b">
+    <p class="text-sm font-semibold text-amber-700">Database not connected</p>
+    <p class="text-xs text-gray-500 mt-1">API key management requires a Postgres database. The <code class="bg-gray-100 px-1 rounded">DATABASE_URL</code> environment variable is not set.</p>
+  </div>
+  {% else %}
+
+  <!-- New key banner (shown once immediately after generation) -->
+  {% if new_key %}
+  <div class="kpi-card p-4 mb-4 border-l-4" style="border-color:var(--terra)" id="new-key-banner">
+    <div class="flex items-start justify-between gap-2">
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-bold" style="color:var(--terra)">New API key generated</p>
+        <p class="text-xs text-gray-500 mt-0.5 mb-2">Copy it now — it won't be shown in full again.</p>
+        <div class="bg-gray-50 rounded-lg px-3 py-2 key-font text-xs break-all text-gray-800 select-all" id="new-key-display">{{ new_key }}</div>
+      </div>
+    </div>
+    <button onclick="copyNewKey()" class="mt-3 w-full bg-terra text-white text-sm font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-2" style="background:var(--terra)">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+      </svg>
+      <span id="copy-new-label">Copy API Key</span>
+    </button>
+  </div>
+  {% endif %}
+
+  <!-- Current key status card -->
+  <div class="kpi-card p-4 mb-4">
+    <h2 class="text-sm font-semibold text-navy mb-3">Current Key</h2>
+
+    {% if key_meta %}
+    <!-- Key exists -->
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:#22c55e"></div>
+      <div class="flex-1 min-w-0">
+        <div class="key-font text-sm text-gray-700 truncate">{{ key_meta.prefix }}••••••••••••••••••••••••••••••••••••••</div>
+        <div class="text-xs text-gray-400 mt-0.5">Generated {{ key_meta.created_at }}</div>
+      </div>
+    </div>
+
+    <!-- Copy full key -->
+    <button onclick="copyExistingKey(this)" class="w-full mb-2 border text-sm font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-2 text-navy" style="border-color:var(--navy)">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+      </svg>
+      <span>Copy API Key</span>
+    </button>
+
+    <!-- Regenerate -->
+    <form method="POST" action="/settings/api-key/generate" onsubmit="return confirm('Replace the current key? Any app using the old key will stop working immediately.')">
+      <button type="submit" class="w-full mb-2 bg-navy text-white text-sm font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-2">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Regenerate Key
+      </button>
+    </form>
+
+    <!-- Delete -->
+    <form method="POST" action="/settings/api-key/delete" onsubmit="return confirm('Delete the API key? The API will be disabled until a new key is generated.')">
+      <button type="submit" class="w-full border border-red-300 text-red-600 text-sm font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-2">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+        </svg>
+        Delete Key
+      </button>
+    </form>
+
+    {% else %}
+    <!-- No key yet -->
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-gray-300"></div>
+      <div class="text-sm text-gray-500">No API key configured — the API is currently disabled.</div>
+    </div>
+
+    <form method="POST" action="/settings/api-key/generate">
+      <button type="submit" class="w-full text-white text-sm font-semibold py-2.5 px-4 rounded-lg flex items-center justify-center gap-2" style="background:var(--terra)">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+        </svg>
+        Generate API Key
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  <!-- How to use -->
+  <div class="kpi-card p-4 mb-4">
+    <h2 class="text-sm font-semibold text-navy mb-3">How to Use</h2>
+    <p class="text-xs text-gray-600 mb-3">Send the key as a header with every request to the API:</p>
+
+    <div class="bg-gray-900 rounded-lg p-3 text-xs text-green-300 key-font mb-3 overflow-x-auto">
+      <div class="text-gray-400 mb-1"># HTTP header (recommended)</div>
+      <div>X-API-Key: <span class="text-yellow-300">your-api-key</span></div>
+      <div class="mt-2 text-gray-400"># Or as a query parameter</div>
+      <div>{{ base_url }}/data-api/v1/summary?period=current_fy&api_key=<span class="text-yellow-300">your-api-key</span></div>
+    </div>
+
+    <p class="text-xs text-gray-500 font-semibold mb-1">Available endpoints:</p>
+    <div class="space-y-1">
+      {% set endpoints = [
+        ("GET /data-api/v1/health", "Liveness check — no auth needed"),
+        ("GET /data-api/v1/plants", "All plant names, locations, wired months"),
+        ("GET /data-api/v1/periods", "Valid period tokens + months with data"),
+        ("GET /data-api/v1/summary", "Headline metrics for a period (?period=, ?plant=, ...)"),
+        ("GET /data-api/v1/records", "Raw daily/monthly rows with provenance"),
+      ] %}
+      {% for path, desc in endpoints %}
+      <div class="flex gap-2 text-xs">
+        <code class="key-font text-navy bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap flex-shrink-0">{{ path }}</code>
+        <span class="text-gray-500">{{ desc }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-3 bg-amber-50 rounded-lg p-3 text-xs text-amber-800">
+      <strong>Note:</strong> All figures are recomputed from real production sheets — never fabricated. A ratio without a baseline returns <code class="bg-amber-100 px-0.5 rounded">null</code>, never 0.
+    </div>
+  </div>
+
+  {% endif %}
+</main>
+
+<script>
+async function copyNewKey() {
+  const key = document.getElementById('new-key-display').textContent.trim();
+  await navigator.clipboard.writeText(key);
+  const label = document.getElementById('copy-new-label');
+  label.textContent = 'Copied!';
+  setTimeout(() => { label.textContent = 'Copy API Key'; }, 2000);
+}
+
+async function copyExistingKey(btn) {
+  const span = btn.querySelector('span');
+  try {
+    const r = await fetch('/settings/api-key/value');
+    if (!r.ok) { span.textContent = 'Failed'; return; }
+    const { key } = await r.json();
+    await navigator.clipboard.writeText(key);
+    span.textContent = 'Copied!';
+    setTimeout(() => { span.textContent = 'Copy API Key'; }, 2000);
+  } catch {
+    span.textContent = 'Failed';
+    setTimeout(() => { span.textContent = 'Copy API Key'; }, 2000);
+  }
+}
+</script>
+</body>
+</html>
