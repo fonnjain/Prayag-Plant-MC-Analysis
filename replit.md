@@ -4,7 +4,7 @@ Mobile-first Flask dashboard that reads Prayag's real production Google Sheets (
 
 ## Run & operate
 
-- App (Flask): the `artifacts/prayag-web: web` workflow runs `cd artifacts/prayag && PORT=21800 python3 app.py`.
+- App (Flask): the **`Prayag App`** workflow runs `cd artifacts/prayag && PORT=21800 python3 app.py`. Use `restart_workflow "Prayag App"` after code changes — do NOT use `artifacts/prayag-web: web` (it always fails its external health check due to a Replit proxy warmup race; see `.agents/memory/prayag-workflow-proxy-warmup.md`).
 - **Reloader is OFF** — after editing any `app.py`/module, restart the workflow before testing or you debug stale code.
 - Ad-hoc curl goes through the shared proxy: `localhost:80/...` (never the raw port).
 - `DATABASE_URL` (Postgres) backs the durable manager-review store, ack/sign-off trail, spreadsheet-change fingerprints, and the L2 sheet cache. Everything degrades to a safe no-op without it.
