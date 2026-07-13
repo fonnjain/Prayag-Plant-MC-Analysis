@@ -55,6 +55,32 @@
     <p class="text-sm font-semibold text-amber-700">Database not connected</p>
     <p class="text-xs text-gray-500 mt-1">API key management requires a Postgres database. The <code class="bg-gray-100 px-1 rounded">DATABASE_URL</code> environment variable is not set.</p>
   </div>
+  {% elif pin_configured and not authed %}
+  <!-- PIN lock screen -->
+  <div class="kpi-card p-5 mb-4">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:var(--navy)">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="text-sm font-bold text-navy">Admin PIN required</p>
+        <p class="text-xs text-gray-500 mt-0.5">Enter the <code class="bg-gray-100 px-0.5 rounded">PRAYAG_ADMIN_PIN</code> to manage the API key.</p>
+      </div>
+    </div>
+    {% if pin_error %}
+    <div class="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700 mb-3">Incorrect PIN — try again.</div>
+    {% endif %}
+    <form method="POST" action="/settings/api-key/unlock">
+      <input type="password" name="pin" placeholder="Admin PIN" autofocus
+             class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-navy"
+             style="font-size:16px"/>
+      <button type="submit" class="w-full text-white text-sm font-semibold py-2.5 px-4 rounded-lg" style="background:var(--navy)">
+        Unlock
+      </button>
+    </form>
+  </div>
   {% else %}
 
   <!-- New key banner (shown once immediately after generation) -->

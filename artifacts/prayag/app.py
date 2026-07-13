@@ -11,6 +11,7 @@ import dataclasses
 import json
 import logging
 import time
+import hmac
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
@@ -3913,22 +3914,61 @@ app.register_blueprint(create_api(get_data), url_prefix="/data-api/v1")
 # ---------------------------------------------------------------------------
 import secrets as _secrets_mod  # noqa: E402
 
+_SETTINGS_PIN_ENV = "PRAYAG_ADMIN_PIN"
+_SETTINGS_SESSION_KEY = "settings_auth"
+
+
+def _settings_pin() -> str:
+    """Return the configured admin PIN, or empty string if not set."""
+    return (os.environ.get(_SETTINGS_PIN_ENV) or "").strip()
+
+
+def _settings_authed() -> bool:
+    """Return True when the current session is authorised to perform key operations.
+
+    If PRAYAG_ADMIN_PIN is not configured the page is considered open (consistent
+    with the rest of the unauthenticated dashboard).  When the PIN *is* configured,
+    the session must carry the ``settings_auth`` token that was set on successful
+    PIN entry.
+    """
+    pin = _settings_pin()
+    if not pin:
+        return True  # no PIN configured — open access (same level as the dashboard)
+    return bool(session.get(_SETTINGS_SESSION_KEY))
+
 
 @app.route("/settings/api-key")
 def api_key_settings():
     key_meta = store.get_api_key_meta()
     new_key = session.pop("new_api_key", None)
+    pin_configured = bool(_settings_pin())
     ctx = {
         "key_meta": key_meta,
         "new_key": new_key,
         "store_ok": store.AVAILABLE,
         "base_url": request.host_url.rstrip("/"),
+        "pin_configured": pin_configured,
+        "authed": _settings_authed(),
+        "pin_error": request.args.get("pin_error", ""),
     }
     return render_template("api_key.html", **ctx)
 
 
+@app.route("/settings/api-key/unlock", methods=["POST"])
+def api_key_unlock():
+    """Verify the admin PIN and grant session access to key operations."""
+    submitted = (request.form.get("pin") or "").strip()
+    expected = _settings_pin()
+    if expected and hmac.compare_digest(submitted, expected):
+        session[_SETTINGS_SESSION_KEY] = True
+        return redirect(url_for("api_key_settings"))
+    return redirect(url_for("api_key_settings", pin_error="1"))
+
+
 @app.route("/settings/api-key/generate", methods=["POST"])
 def api_key_generate():
+    if not _settings_authed():
+        return redirect(url_for("api_key_settings")), 403
     new_key = "prayag-" + _secrets_mod.token_hex(24)
     store.set_api_key(new_key)
     session["new_api_key"] = new_key
@@ -3937,6 +3977,8 @@ def api_key_generate():
 
 @app.route("/settings/api-key/delete", methods=["POST"])
 def api_key_delete():
+    if not _settings_authed():
+        return redirect(url_for("api_key_settings")), 403
     store.delete_api_key()
     return redirect(url_for("api_key_settings"))
 
@@ -3944,6 +3986,8 @@ def api_key_delete():
 @app.route("/settings/api-key/value")
 def api_key_value():
     """JSON endpoint used by the copy-to-clipboard button on the settings page."""
+    if not _settings_authed():
+        return jsonify({"error": "unauthorized"}), 403
     key = store.get_api_key()
     if not key:
         return jsonify({"key": None}), 404
