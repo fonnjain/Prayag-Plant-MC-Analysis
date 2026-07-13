@@ -3899,6 +3899,15 @@ def segment_input_save():
     return redirect("/management-entries?input_msg=" + quote(msg))
 
 
+# ---------------------------------------------------------------------------
+# Read-only JSON API (v1) — external apps consume the same pipeline the
+# dashboard uses. Requires the PRAYAG_API_KEY secret (see api.py).
+# ---------------------------------------------------------------------------
+from api import create_api  # noqa: E402  (needs get_data defined above)
+
+app.register_blueprint(create_api(get_data), url_prefix="/data-api/v1")
+
+
 if __name__ == "__main__":
   port = int(os.environ.get("PORT", 5001))
   app.run(host="0.0.0.0", port=port, debug=False)
