@@ -152,12 +152,9 @@ def _fetch_token() -> Tuple[Optional[str], float]:
     if not host:
         return None, 0.0
 
-    url = (
-        f"https://{host}/api/v2/connection"
-        "?include_secrets=true&connector_names=google-sheet"
-    )
+    url = f"https://{host}/api/v2/connection?include_secrets=true"
     req = urllib.request.Request(
-        url, headers={"Accept": "application/json", "X_REPLIT_TOKEN": xtoken}
+        url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -173,9 +170,15 @@ def _fetch_token() -> Tuple[Optional[str], float]:
         ) from e
 
     items = data.get("items", [])
-    if not items:
+    # Pick the google-sheet connection by id prefix; the API has no reliable
+    # connector_names filter (the parameter is ignored server-side).
+    sheet_item = next(
+        (it for it in items if str(it.get("id", "")).startswith("conn_google-sheet_")),
+        items[0] if items else None,
+    )
+    if not sheet_item:
         return None, 0.0
-    settings = items[0].get("settings", {}) or {}
+    settings = sheet_item.get("settings", {}) or {}
     token = settings.get("access_token")
     expires_at = settings.get("expires_at")
     if not token:
@@ -290,12 +293,9 @@ def _fetch_drive_token() -> Tuple[Optional[str], float]:
     if not host:
         return None, 0.0
 
-    url = (
-        f"https://{host}/api/v2/connection"
-        "?include_secrets=true&connector_names=google-drive"
-    )
+    url = f"https://{host}/api/v2/connection?include_secrets=true"
     req = urllib.request.Request(
-        url, headers={"Accept": "application/json", "X_REPLIT_TOKEN": xtoken}
+        url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -304,9 +304,14 @@ def _fetch_drive_token() -> Tuple[Optional[str], float]:
         return None, 0.0
 
     items = data.get("items", [])
-    if not items:
+    # Pick the google-drive connection by id prefix.
+    drive_item = next(
+        (it for it in items if str(it.get("id", "")).startswith("conn_google-drive_")),
+        None,
+    )
+    if not drive_item:
         return None, 0.0
-    settings = items[0].get("settings", {}) or {}
+    settings = drive_item.get("settings", {}) or {}
     token = settings.get("access_token")
     expires_at = settings.get("expires_at")
     if not token:

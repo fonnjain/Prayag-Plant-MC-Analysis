@@ -1,3 +1,4 @@
+- [Replit connector API filter bug](prayag-connector-api-filter.md) — connector_names= filter is silently ignored; fetch all then pick by id prefix; use X-Replit-Token (hyphens) not underscores.
 - [Prayag daily-first figures](prayag-daily-first.md) — monthly/FY headline totals summed from daily tabs, not the summary grid; never reconcile down; daily read must survive per-file 429s.
 - [PIPE Report-5↔Report-11 reconcile](prayag-pipe-reconcile.md) — PIPE headline out/rej = date-wise MAX over union of both sources (not R5-only); header-based readers handle both FY layouts; type split pro-rata + untyped pickup, audit-only.
 - [Prayag daily/monthly grain](prayag-grain-engine.md) — two distinct daily Record types in compute_metrics; matrix rows must carry hours directly or metrics silently zero out.
