@@ -24,12 +24,12 @@ args = "Prayag App"
 name = "Prayag App"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/workspace/artifacts/prayag && PORT=21800 python3 app.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "echo 'standby - artifacts/prayag-web: web is the active workflow'"
 
 [agent]
 stack = "PNPM_WORKSPACE"
