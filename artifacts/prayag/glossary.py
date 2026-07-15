@@ -66,6 +66,12 @@ GLOSSARY = [
     {"key": "OUTPUT_EFF", "term": "Output efficiency",
      "meaning": "Actual vs ideal output (or run-hours).",
      "formula": "Actual output ÷ Ideal output", "unit": "%", "where": "Reports"},
+    {"key": "MC_EFF", "term": "M/C Efficiency",
+     "meaning": "Actual run hours vs ideal machine run hours for the month. "
+                "Values above 100 % are valid — a machine running beyond its "
+                "planned hours legitimately exceeds the ideal.",
+     "formula": "Run Hours ÷ M/C Run Hour in a Month (Report-5 col M)",
+     "unit": "%", "where": "PIPE / Moulding machine cards & (A)/(B) reports"},
     {"key": "MOULD_AGE_EFF", "term": "Mould age-in-efficiency",
      "meaning": "Efficiency % tracked against mould age.",
      "formula": "", "unit": "%", "where": "Mould reports"},

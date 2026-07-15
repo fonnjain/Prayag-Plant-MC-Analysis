@@ -58,6 +58,13 @@ class Record:
                                     # an ideal denominator may exist, but run hours
                                     # are not recorded, so utilisation stays
                                     # suppressed (never a fake 0%) until they are.
+    ideal_month_hours: float = 0.0  # Report-5 col M: full-month ideal machine hours
+                                    # (500 for pipe/moulding, 300 for grinders).
+                                    # Spread across daily rows (÷ nrows) so a
+                                    # monthly rollup reconstructs the exact col-M
+                                    # value. Denominator for M/C Efficiency only —
+                                    # NEVER used for utilisation (which is run-day
+                                    # based: col F ÷ (col D × col E)).
 
     # --- location / geography ---
     location: str = ""            # KH | Bhiwari | VN | WB (empty = legacy / unknown)
@@ -136,6 +143,8 @@ class MetricsResult:
     attainment: float = 0.0
     utilisation: float = 0.0
     output_efficiency: float = 0.0
+    mc_efficiency: float = 0.0    # actual run hours ÷ ideal machine hours (col M).
+                                   # NOT capped at 1.0 — >100% is valid and shown.
 
     oee_available: bool = False
     # Whether a real ideal/planned baseline backs the ratio. False for plants
@@ -144,6 +153,12 @@ class MetricsResult:
     # ratio is suppressed in the UI rather than shown as a misleading 0%.
     util_available: bool = False
     eff_available: bool = False
+    mc_eff_available: bool = False  # True when at least one row has ideal_month_hours > 0
+
+    # Sum of ideal_month_hours across all contributing rows; used by generators
+    # to compute a correct TOTAL row denominator (e.g. 9 × 500 = 4 500 for PIPE)
+    # without relying on the TOTAL row stored in the sheet (which mis-counts).
+    mc_eff_hours_ideal: float = 0.0
 
     # True when a planned-hours baseline EXISTS for this rollup (sheet / derived /
     # config / app-default / manager override) even when the utilisation
@@ -183,6 +198,18 @@ class MetricsResult:
     @property
     def eff_rating(self) -> str:
         return _rate_band(self.output_efficiency)
+
+    @property
+    def mc_efficiency_pct(self) -> float:
+        return round(self.mc_efficiency * 100, 1)
+
+    @property
+    def mc_eff_rating(self) -> str:
+        """Purple when >100% (exceeded ideal — valid and expected for some machines);
+        otherwise the standard green/amber/red band."""
+        if self.mc_efficiency > 1.0:
+            return "purple"
+        return _rate_band(self.mc_efficiency)
 
     @property
     def headline_available(self) -> bool:
@@ -291,6 +318,9 @@ class MetricsResult:
             "oee_available": self.oee_available,
             "util_available": self.util_available,
             "eff_available": self.eff_available,
+            "mc_efficiency": self.mc_efficiency_pct,
+            "mc_eff_available": self.mc_eff_available,
+            "mc_eff_rating": self.mc_eff_rating,
             "baseline_set": self.baseline_set,
             "headline_available": self.headline_available,
             "rejection_pct": self.rejection_pct_display,
@@ -347,6 +377,8 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
                        # app-default denominator on GARDEN/TANK neither fabricates a
                        # 0% nor dilutes a mixed rollup's utilisation.
     eff_out = 0.0
+    mc_eff_run = 0.0   # M/C Efficiency numerator: run hours for rows with an
+    mc_eff_den = 0.0   # ideal_month_hours > 0 (col M present in Report-5).
     for r in prod_rows:
         m.total_count += r.total_count
         m.reject_count += r.reject_count
@@ -393,6 +425,12 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
                 util_ideal += r.ideal_hours
             if r.ideal_output > 0:
                 eff_out += r.total_count
+            # M/C Efficiency: accumulate from rows that have a col-M denominator.
+            # getattr guard: old pickles from L2 cache lack ideal_month_hours.
+            _imh = getattr(r, "ideal_month_hours", 0.0)
+            if _imh > 0:
+                mc_eff_run += r.actual_hours
+                mc_eff_den += _imh
 
     m.good_count = m.total_count - m.reject_count
     m.run_time = m.actual_hours * 60.0
@@ -408,6 +446,12 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     m.output_efficiency = _safe_div(eff_out, m.ideal_output)
     m.util_available = util_ideal > 0
     m.eff_available = m.ideal_output > 0
+    # M/C Efficiency: NOT capped at 1.0 (>100% is valid — e.g. a grinder
+    # running overtime). The denominator comes from col M per machine row,
+    # summed from the per-row spread so the monthly total reconstructs exactly.
+    m.mc_efficiency = _safe_div(mc_eff_run, mc_eff_den)
+    m.mc_eff_available = mc_eff_den > 0
+    m.mc_eff_hours_ideal = mc_eff_den
     # A planned-hours baseline EXISTS (independent of run-hour gating) when any row
     # carries a resolved ideal source, OR its plant has an app-default baseline.
     m.baseline_set = any(

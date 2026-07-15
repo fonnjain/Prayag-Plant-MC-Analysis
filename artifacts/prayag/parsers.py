@@ -823,21 +823,27 @@ def parse_matrix_summary_col(
 
 
 def parse_pipe_run5(values: List[list]) -> dict:
-    """Map ``machine label -> (ideal_run_hour_per_day, run_days, run_hours)`` from
-    PIPE ``Report-5``.
+    """Map ``machine label -> (ideal_run_hour_per_day, run_days, run_hours, ...)``
+    from PIPE ``Report-5``.
 
     Report-5 is a multi-family monthly summary whose header is SPLIT across two
     rows: ``Ideal Run Hour Per Day`` and ``Total Run Days`` sit one row above the
     ``MACHINE`` / ``RUN HOURS`` headers, so the same-row
     :func:`parse_matrix_summary_col` cannot read it. This scans the first few rows
     for each header independently, then reads per machine row a dict of
-    ``{per_day, run_days, run_hours, output, reject, ideal_out}``:
+    ``{per_day, run_days, run_hours, output, reject, ideal_out, ideal_month_hours}``:
 
       * **Col D — Ideal Run Hour Per Day** is per machine TYPE (22 for pipe/moulding
         lines, 12 for grinders/pulverizers); it is read PER ROW, never assumed a
         constant.
       * **Col E — Total Run Days** is the data-driven count of days the machine ran.
       * **Col F — Run Hours** is the machine's actual run hours for the month.
+      * **Col M — M/C Run Hour in a Month** is the ideal machine run hours for the
+        FULL month (500 for standard pipe/moulding lines, 300 for grinders/
+        pulverizers). This is the denominator for M/C Efficiency. Located by header
+        text ("run hour" + "month"), never by fixed index. The stored TOTAL row for
+        this column is WRONG (it sums only a partial machine range); the correct
+        monthly-total denominator is the sum of per-machine values.
 
     Utilisation = Run Hours / (Ideal Run Hour Per Day × Total Run Days) — a RUN-DAY
     basis, not calendar days. ``TOTAL`` / blank rows are skipped (their Col D is a
@@ -850,7 +856,7 @@ def parse_pipe_run5(values: List[list]) -> dict:
     """
     if not values:
         return {}
-    val_c = days_c = hrs_c = mc_c = -1
+    val_c = days_c = hrs_c = mc_c = month_c = -1
     last_hdr = 0
     for i, row in enumerate(values[:8]):
         for c, v in enumerate(row):
@@ -867,6 +873,10 @@ def parse_pipe_run5(values: List[list]) -> dict:
                 hrs_c, last_hdr = c, max(last_hdr, i)
             if mc_c < 0 and s == "machine":
                 mc_c, last_hdr = c, max(last_hdr, i)
+            # Col M: "M/C Run Hour in a Month" — the full-month ideal hours
+            # denominator for M/C Efficiency. Distinct from col D ("per day").
+            if month_c < 0 and "run hour" in s and "month" in s:
+                month_c, last_hdr = c, max(last_hdr, i)
     if val_c < 0 or mc_c < 0:
         return {}
     # OUTPUT (KG), REJ (KG) and Ideal Output Per Hour sit immediately to the right
@@ -894,6 +904,9 @@ def parse_pipe_run5(values: List[list]) -> dict:
             "output": num(row[out_c]) if (0 <= out_c < len(row)) else 0.0,
             "reject": num(row[rej_c]) if (0 <= rej_c < len(row)) else 0.0,
             "ideal_out": num(row[io_c]) if (0 <= io_c < len(row)) else 0.0,
+            # Col M — ideal machine hours for the full month. 0.0 when the header
+            # is absent (older FY layouts) — efficiency is suppressed, not faked.
+            "ideal_month_hours": num(row[month_c]) if (0 <= month_c < len(row)) else 0.0,
         }
     return out
 

@@ -121,19 +121,35 @@ def gen_pipe(rid, label, plant, ym) -> ReportModel:
         Column("rej", "Rejection (KG)", "kg", total=True),
         Column("avg", "Avg Output / Hr", "num"),
         Column("rej_pct", "Rejection %", "pct"),
+        Column("mc_eff", "M/C Efficiency %", "pct"),
     ]
     rows = []
-    t_h = t_o = t_r = 0.0
+    t_h = t_o = t_r = t_mc_eff_den = 0.0
     for mc in sorted(by_mc, key=lambda k: (_mc_num(k) or 0, k)):
-        d = by_mc[mc].to_dict()
+        res = by_mc[mc]
+        d = res.to_dict()
         t_h += d["actual_hours"]; t_o += d["total_count"]; t_r += d["reject_count"]
+        t_mc_eff_den += res.mc_eff_hours_ideal
         rows.append({"mc": mc.replace("Pipe M/C", "M/C"),
                      "hrs": d["actual_hours"] or None, "out": d["total_count"],
                      "rej": d["reject_count"],
                      "avg": _avg(d["total_count"], d["actual_hours"]),
-                     "rej_pct": _pct(d["reject_count"], d["total_count"])})
+                     "rej_pct": _pct(d["reject_count"], d["total_count"]),
+                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None})
+    # TOTAL M/C Efficiency denominator comes from Report-5 directly so that idle
+    # machines (0 run hours, no production records) are still counted.  The stored
+    # TOTAL cell in col M is also wrong (misses M/C-9); reading per-machine values
+    # and summing them is always correct (e.g. 9 × 500 = 4 500 for PIPE).
+    # Fall back to the records-based accumulator when R5 is unavailable.
+    r5_ideal = sum(
+        info.get("ideal_month_hours", 0.0)
+        for lbl, info in sheets.pipe_run5_parsed(ym).items()
+        if _MC_RE.search(lbl)
+    )
+    total_mc_eff_den = r5_ideal if r5_ideal > 0 else t_mc_eff_den
     total = {"mc": "TOTAL", "hrs": t_h or None, "out": t_o, "rej": t_r,
-             "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o)}
+             "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o),
+             "mc_eff": _pct(t_h, total_mc_eff_den) if total_mc_eff_den > 0 else None}
     main = ReportSheet(name="(A) Pipe M-C Summary",
         title=f"(A) Pipe M/C Summary — {month_disp(ym)}",
         subtitle="Kaharani · Pipe extrusion, per real extruder machine "
@@ -192,18 +208,33 @@ def gen_moulding(rid, label, plant, ym) -> ReportModel:
         Column("hrs", "Run Hours", "num", total=True),
         Column("avg", "Avg Output / Hr", "num"),
         Column("rej_pct", "Rejection %", "pct"),
+        Column("mc_eff", "M/C Efficiency %", "pct"),
     ]
     rows = []
-    t_o = t_r = t_h = 0.0
+    t_o = t_r = t_h = t_mc_eff_den = 0.0
     for mc in sorted(by_mc):
-        d = by_mc[mc].to_dict()
+        res = by_mc[mc]
+        d = res.to_dict()
         t_o += d["total_count"]; t_r += d["reject_count"]; t_h += d["actual_hours"]
+        t_mc_eff_den += res.mc_eff_hours_ideal
         rows.append({"mc": mc, "out": d["total_count"], "rej": d["reject_count"],
                      "hrs": d["actual_hours"] or None,
                      "avg": _avg(d["total_count"], d["actual_hours"]),
-                     "rej_pct": _pct(d["reject_count"], d["total_count"])})
+                     "rej_pct": _pct(d["reject_count"], d["total_count"]),
+                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None})
+    # TOTAL denominator from R5 directly so idle moulding machines (0 output,
+    # no Report-12 rows) are still counted.  Moulding machines in Report-5 are
+    # those that are neither extruders (_MC_RE) nor finishing auxiliaries
+    # (_AUX_RE).  Falls back to the records-based accumulator when unavailable.
+    r5_ideal_m = sum(
+        info.get("ideal_month_hours", 0.0)
+        for lbl, info in sheets.pipe_run5_parsed(ym).items()
+        if not _MC_RE.search(lbl) and not _AUX_RE.search(lbl)
+    )
+    total_mc_eff_den_m = r5_ideal_m if r5_ideal_m > 0 else t_mc_eff_den
     total = {"mc": "TOTAL", "out": t_o, "rej": t_r, "hrs": t_h or None,
-             "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o)}
+             "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o),
+             "mc_eff": _pct(t_h, total_mc_eff_den_m) if total_mc_eff_den_m > 0 else None}
     return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
         month_disp=month_disp(ym),
         sheets=[ReportSheet(name="(B) Moulding M-C Summary",

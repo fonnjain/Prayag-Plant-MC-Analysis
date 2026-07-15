@@ -85,9 +85,16 @@
           {% endfor %}
         </div>
         {% else %}
-        <!-- Monthly grain: Utilisation / Output Eff / Reject / Attainment (no A/P/Q) -->
-        <div class="grid grid-cols-4 gap-1 text-center">
-          {% for lbl, val, color, tkey, avail in [('Util.', m.utilisation, '#22c55e', 'UTIL', m.util_available), ('Out.Eff', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF', m.eff_available), ('Rej.', m.rejection_pct, '#ef4444', 'REJECT_PCT', true), ('Att.', m.attainment, '#1F3864', 'ATT', true)] %}
+        <!-- Monthly grain: Util / Out.Eff / M/C Eff / Rej / Att (no A/P/Q) -->
+        {% set _mc_eff_color = '#7c3aed' if m.mc_efficiency > 100 else '#f97316' %}
+        <div class="grid grid-cols-5 gap-1 text-center">
+          {% for lbl, val, color, tkey, avail in [
+            ('Util.', m.utilisation, '#22c55e', 'UTIL', m.util_available),
+            ('Out.Eff', m.output_efficiency, '#3b82f6', 'OUTPUT_EFF', m.eff_available),
+            ('M/C Eff', m.mc_efficiency, _mc_eff_color, 'MC_EFF', m.mc_eff_available),
+            ('Rej.', m.rejection_pct, '#ef4444', 'REJECT_PCT', true),
+            ('Att.', m.attainment, '#1F3864', 'ATT', true)
+          ] %}
           <div class="bg-gray-50 rounded-lg py-1 px-1">
             <div class="text-xs font-bold" style="color:{{ color }}">{% if avail %}{{ val }}%{% else %}<span class="text-gray-400">n/a</span>{% endif %}</div>
             <div class="text-[10px] text-gray-400">{{ lbl }}{{ info(tkey) }}</div>

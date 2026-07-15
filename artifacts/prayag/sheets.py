@@ -1928,6 +1928,11 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           info = _r5_hit(r.machine)
           nrows = max(rowcount.get(r.machine, 0), 1)
           r.ideal_hours = (info["per_day"] * info["run_days"]) / nrows
+          # Col M (ideal machine hours for the full month) is spread across the
+          # machine's daily rows so a monthly rollup reconstructs the col-M value
+          # exactly. getattr guard: older r5_parsed dicts pre-dating this field
+          # return 0.0, leaving mc_eff_available False (never a fake 0%).
+          r.ideal_month_hours = info.get("ideal_month_hours", 0.0) / nrows
           # Run hours: PIPE reads its own per-date run hours from the Report-5
           # matrix (they already sum to col F), so keep them. Only an output-ONLY
           # source flagged ``r5_runhours`` (MOULDING's Report-12, which carries NO
@@ -2014,6 +2019,9 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
               ideal_rate=ideal_rate,
               ideal_output=info["run_hours"] * ideal_rate,
               ideal_source="derived", runhours_tracked=True, is_finishing=fin,
+              # Col M — full-month ideal hours for M/C Efficiency. Month-grain
+              # aux records are not spread (one row per machine), so use as-is.
+              ideal_month_hours=info.get("ideal_month_hours", 0.0),
               source_family=f"{emit} {seg}", source_file=file_id, source_tab=r5_tab,
           ))
           if info["run_days"] > 0 and ideal_rate <= 0:
@@ -2209,6 +2217,28 @@ def _daily_file_id(plant: str, ym: Optional[str]) -> Optional[str]:
   if ym and ym in files:
       return files[ym]
   return files[sorted(files)[-1]]
+
+
+def pipe_run5_parsed(ym: str) -> dict:
+  """Return the parsed Report-5 dict for the PIPE daily workbook for month ``ym``.
+
+  Reads from the L1 in-process cache when the tab was already fetched by
+  ``_load_daily`` in the same request, so no extra network call is made.  The
+  result maps every machine label to its Report-5 info dict (per_day, run_days,
+  run_hours, ideal_month_hours, …).  Returns ``{}`` if the file or token is
+  unavailable or the Report-5 tab cannot be parsed.
+
+  Used by generators that need the **full** set of machines from Report-5
+  (including idle machines with 0 run hours that have no daily production
+  records) when computing a correct TOTAL-row M/C Efficiency denominator.
+  """
+  fid = _daily_file_id("PIPE", ym)
+  if not fid:
+      return {}
+  token = _get_access_token()
+  if not token:
+      return {}
+  return parsers.parse_pipe_run5(read_values(fid, "Report-5", token))
 
 
 def workbook_index(plant: str, ym: Optional[str] = None,
