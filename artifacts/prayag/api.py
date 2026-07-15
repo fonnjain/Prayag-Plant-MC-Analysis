@@ -50,17 +50,21 @@ _PERIOD_TOKENS = [
 ]
 
 
-def _configured_key() -> str:
-    # DB-stored key (managed from /settings/api-key) takes priority over the
-    # environment variable so the key can be rotated from the published app UI.
+def _configured_keys() -> list:
+    """Return all active API keys (DB rows first, then env-var fallback).
+
+    Multiple DB keys are all valid — any one of them authorises a request.
+    The env-var key acts as a fallback for deployments without a database.
+    """
     try:
         import store as _store  # local import to avoid circular import at module load
-        db_key = _store.get_api_key()
-        if db_key:
-            return db_key.strip()
+        db_keys = _store.get_all_api_keys()
+        if db_keys:
+            return [k.strip() for k in db_keys if k and k.strip()]
     except Exception:
         pass
-    return (os.environ.get(API_KEY_ENV) or "").strip()
+    env_key = (os.environ.get(API_KEY_ENV) or "").strip()
+    return [env_key] if env_key else []
 
 
 def _supplied_key() -> str:
@@ -76,17 +80,17 @@ def _supplied_key() -> str:
 def _require_key(fn):
     @wraps(fn)
     def wrapper(*a, **kw):
-        key = _configured_key()
-        if not key:
+        keys = _configured_keys()
+        if not keys:
             return jsonify({
                 "error": "api_disabled",
                 "message": (
-                    f"The API is not enabled: the {API_KEY_ENV} secret is not "
-                    "configured on this deployment."
+                    f"The API is not enabled: no API key has been configured. "
+                    "Generate one from the dashboard Settings → API Key page."
                 ),
             }), 503
         supplied = _supplied_key()
-        if not supplied or not hmac.compare_digest(supplied, key):
+        if not supplied or not any(hmac.compare_digest(supplied, k) for k in keys):
             return jsonify({
                 "error": "unauthorized",
                 "message": "Missing or invalid API key. Send it as an "

@@ -1274,7 +1274,11 @@ def _init_api_key_table() -> None:
 
 
 def get_api_key() -> Optional[str]:
-    """Return the active API key stored in Postgres, or None."""
+    """Return the most-recently created API key, or None.
+
+    Kept for backward compatibility with api.py's env-var fallback path.
+    Prefer ``get_all_api_keys`` for multi-key auth validation.
+    """
     if not AVAILABLE:
         return None
     try:
@@ -1287,8 +1291,22 @@ def get_api_key() -> Optional[str]:
         return None
 
 
+def get_all_api_keys() -> List[str]:
+    """Return every active API key value (all rows).  Used by auth to allow any key."""
+    if not AVAILABLE:
+        return []
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT key_value FROM {_AK_TABLE} ORDER BY id")
+            rows = cur.fetchall()
+        return [r["key_value"] for r in rows]
+    except Exception:
+        return []
+
+
 def get_api_key_meta() -> Optional[Dict]:
-    """Return display metadata (prefix, created_at) for the active key, or None."""
+    """Return display metadata for the most-recently created key (legacy, UI uses list_api_keys_meta)."""
     if not AVAILABLE:
         return None
     try:
@@ -1308,8 +1326,47 @@ def get_api_key_meta() -> Optional[Dict]:
         return None
 
 
+def list_api_keys_meta() -> List[Dict]:
+    """Return display metadata for ALL active keys, newest first."""
+    if not AVAILABLE:
+        return []
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, prefix, created_at FROM {_AK_TABLE} ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": r["id"],
+                "prefix": r["prefix"],
+                "created_at": r["created_at"].strftime("%d-%m-%Y %H:%M") if r["created_at"] else "",
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def add_api_key(key: str) -> None:
+    """Add a new API key without removing existing ones (multi-key support)."""
+    if not AVAILABLE:
+        return
+    try:
+        _init_api_key_table()
+        prefix = key[:12] if len(key) >= 12 else key
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {_AK_TABLE} (key_value, prefix) VALUES (%s, %s)",
+                (key, prefix),
+            )
+    except Exception:
+        pass
+
+
 def set_api_key(key: str) -> None:
-    """Replace the stored key with ``key`` (delete old row, insert new)."""
+    """Replace ALL stored keys with a single new key (legacy regenerate behaviour)."""
     if not AVAILABLE:
         return
     try:
@@ -1325,8 +1382,20 @@ def set_api_key(key: str) -> None:
         pass
 
 
+def delete_api_key_by_id(key_id: int) -> None:
+    """Delete a single API key by its row ID."""
+    if not AVAILABLE:
+        return
+    try:
+        _init_api_key_table()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {_AK_TABLE} WHERE id = %s", (key_id,))
+    except Exception:
+        pass
+
+
 def delete_api_key() -> None:
-    """Remove the stored API key (disabling the API until a new one is generated)."""
+    """Remove ALL stored API keys (disables the API until a new key is generated)."""
     if not AVAILABLE:
         return
     try:

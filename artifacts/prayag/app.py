@@ -3939,12 +3939,14 @@ def _settings_authed() -> bool:
 
 @app.route("/settings/api-key")
 def api_key_settings():
-    key_meta = store.get_api_key_meta()
+    keys = store.list_api_keys_meta()
     new_key = session.pop("new_api_key", None)
+    new_key_id = session.pop("new_api_key_id", None)
     pin_configured = bool(_settings_pin())
     ctx = {
-        "key_meta": key_meta,
+        "keys": keys,
         "new_key": new_key,
+        "new_key_id": new_key_id,
         "store_ok": store.AVAILABLE,
         "base_url": request.host_url.rstrip("/"),
         "pin_configured": pin_configured,
@@ -3970,28 +3972,46 @@ def api_key_generate():
     if not _settings_authed():
         return redirect(url_for("api_key_settings")), 403
     new_key = "prayag-" + _secrets_mod.token_hex(24)
-    store.set_api_key(new_key)
+    store.add_api_key(new_key)
+    # Fetch the id of the key we just inserted (latest row)
+    meta_list = store.list_api_keys_meta()
+    new_key_id = meta_list[0]["id"] if meta_list else None
     session["new_api_key"] = new_key
+    session["new_api_key_id"] = new_key_id
     return redirect(url_for("api_key_settings"))
 
 
-@app.route("/settings/api-key/delete", methods=["POST"])
-def api_key_delete():
+@app.route("/settings/api-key/delete/<int:key_id>", methods=["POST"])
+def api_key_delete(key_id: int):
+    """Delete a single key by its DB id."""
     if not _settings_authed():
         return redirect(url_for("api_key_settings")), 403
-    store.delete_api_key()
+    store.delete_api_key_by_id(key_id)
     return redirect(url_for("api_key_settings"))
 
 
-@app.route("/settings/api-key/value")
-def api_key_value():
-    """JSON endpoint used by the copy-to-clipboard button on the settings page."""
+@app.route("/settings/api-key/value/<int:key_id>")
+def api_key_value(key_id: int):
+    """JSON endpoint used by the copy-to-clipboard button — returns one key's value."""
     if not _settings_authed():
         return jsonify({"error": "unauthorized"}), 403
-    key = store.get_api_key()
-    if not key:
+    # Pull from the full list and match by id
+    all_keys = store.list_api_keys_meta()
+    matched_id = key_id if any(k["id"] == key_id for k in all_keys) else None
+    if matched_id is None:
         return jsonify({"key": None}), 404
-    return jsonify({"key": key})
+    # Fetch the actual key value for this id
+    try:
+        import psycopg2.extras as _pge
+        with store._conn() as conn, conn.cursor(cursor_factory=_pge.RealDictCursor) as cur:
+            cur.execute("SELECT key_value FROM api_keys WHERE id = %s", (key_id,))
+            row = cur.fetchone()
+        key_val = row["key_value"] if row else None
+    except Exception:
+        key_val = None
+    if not key_val:
+        return jsonify({"key": None}), 404
+    return jsonify({"key": key_val})
 
 
 if __name__ == "__main__":
