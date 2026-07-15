@@ -9,6 +9,33 @@ Each plant's production figure carries its OWN unit, read from that plant's shee
 never a single global unit. PIPE/GARDEN/HDPE/MOULDING/PTMT = kg; TANK = Ltr (primary),
 with pcs/kg kept as display-only secondary measures of the SAME output.
 
+## Tank multi-unit model (all three streams: KH, VN, WB)
+
+All three Tank streams use the same `parse_tank_prod` parser with header-based column
+detection. Column letters differ per stream — NEVER hardcode indices. Headers differ too
+(`PRODUCTION IN PCS` vs `PRODUCTION IN PCS.` with trailing period — normalise before matching).
+
+**DAILY_SOURCES now covers all three streams:**
+- `TANK` (KH) — already had Apr-Jun 2026
+- `TANK_VN` — Jun & Jul 2026 wired
+- `TANK_WB` — Jul 2026 wired
+`_DAILY_LAYOUTS` has matching entries; `gen_tank_vn` / `gen_tank_wb` prefer daily records and fall back to annual summary.
+
+**Rejection model is compound, kg-basis, stream-specific:**
+- VN: `REJECTION MOUTH LID IN KG` only (column detected as `rej_mouth_kg`, before plain `rej_kg`)
+- WB: `REJECTION MOUTH LID IN KG` + `REJECTION IN KG` — both summed
+- KH: `REJECTION IN PCS` only (pcs basis, no kg %)
+- `secondary_counts["rej_kg"]` = mouth_lid + base_kg; `secondary_counts["rej_pcs"]` = pcs rej
+- Rejection % always = `rej_kg / prod_kg` (even when Ltr is primary output unit)
+
+**Column detection guard (parsers.py):** `MOUTH` check must come BEFORE plain `KG` check
+inside the `REJECT` branch — both match `KG in u`, so order matters to avoid misfiling mouth-lid as plain rejection.
+
+**Acceptance (verified against live sheets, 15-Jul-2026):**
+- KH Jun'26: 1,419,500 L / 1,781 pcs / 30,490.5 kg / 90 pcs rej
+- VN Jul'26: 222,000 L / 336 pcs / 5,960.8 kg / 129.7 kg → 2.18%
+- WB Jul'26: 786,500 L / 961 pcs / 19,251.5 kg / 935.5 kg → 4.86%
+
 **Rule:** never sum or compare output/reject across units. A blended rejection % over
 kg+Ltr is meaningless.
 

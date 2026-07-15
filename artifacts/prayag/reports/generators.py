@@ -535,36 +535,82 @@ def gen_tank_kh(rid, label, plant, ym) -> ReportModel:
 
 
 def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
-    by_item = defaultdict(lambda: {"count": 0.0, "rej": 0.0, "unit": ""})
+    """Multi-unit Tank report: headline Litres, secondary Pcs + KG (material).
+
+    Rejection is always on a KG basis per spec (total_rej_kg / prod_kg).
+    Where a stream carries only pcs rejection (KH), the pcs count is shown and
+    no kg-basis % is computed.  Litres leads when available.
+    """
+    by_item: dict = defaultdict(lambda: {
+        "ltr": 0.0, "pcs": 0.0, "kg": 0.0,
+        "rej_kg": 0.0, "rej_pcs": 0.0,
+    })
     for r in recs:
-        k = r.mould or r.product or "—"
-        by_item[k]["count"] += r.total_count
-        by_item[k]["rej"] += r.reject_count
-        by_item[k]["unit"] = r.unit
-    cols = [Column("item", "Item", "text", width=24),
-            Column("unit", "Unit", "text"),
-            Column("count", "Production", "num", total=True),
-            Column("rej", "Rejection", "num", total=True),
-            Column("rej_pct", "Rejection %", "pct")]
+        k = r.mould or getattr(r, "product", None) or "—"
+        sc = r.secondary_counts or {}
+        if r.unit == "Ltr":
+            by_item[k]["ltr"] += r.total_count
+            by_item[k]["pcs"] += sc.get("pcs", 0.0)
+            by_item[k]["kg"]  += sc.get("kg",  0.0)
+        elif r.unit == "pcs":
+            by_item[k]["pcs"] += r.total_count
+            by_item[k]["ltr"] += sc.get("Ltr", 0.0)
+            by_item[k]["kg"]  += sc.get("kg",  0.0)
+        else:  # kg primary (fallback)
+            by_item[k]["kg"]  += r.total_count
+            by_item[k]["ltr"] += sc.get("Ltr", 0.0)
+            by_item[k]["pcs"] += sc.get("pcs", 0.0)
+        # KG-basis rejection (mouth-lid + plain) stored in secondary_counts["rej_kg"]
+        by_item[k]["rej_kg"]  += sc.get("rej_kg",  0.0)
+        by_item[k]["rej_pcs"] += sc.get("rej_pcs", 0.0)
+
+    cols = [
+        Column("item",    "Item",          "text", width=24),
+        Column("pcs",     "Pcs",           "num",  total=True),
+        Column("ltr",     "Litres",        "num",  total=True),
+        Column("kg",      "KG (material)", "num",  total=True),
+        Column("rej",     "Rejection",     "num",  total=True),
+        Column("rej_pct", "Rejection %",   "pct"),
+    ]
     rows = []
-    t_c = t_r = 0.0
+    t_ltr = t_pcs = t_kg = t_rej_kg = t_rej_pcs = 0.0
     for k in sorted(by_item):
         v = by_item[k]
-        t_c += v["count"]; t_r += v["rej"]
-        rows.append({"item": k, "unit": v["unit"], "count": v["count"],
-                     "rej": v["rej"], "rej_pct": _pct(v["rej"], v["count"])})
-    total = {"item": "TOTAL", "unit": "", "count": t_c, "rej": t_r,
-             "rej_pct": _pct(t_r, t_c)}
+        t_ltr     += v["ltr"];     t_pcs     += v["pcs"];     t_kg     += v["kg"]
+        t_rej_kg  += v["rej_kg"];  t_rej_pcs += v["rej_pcs"]
+        # Rejection display: prefer KG basis; fall back to pcs count (KH).
+        rej_val   = v["rej_kg"]   if v["rej_kg"]   > 0 else v["rej_pcs"]
+        rej_denom = v["kg"]       if v["rej_kg"]   > 0 else v["pcs"]
+        rows.append({
+            "item":    k,
+            "pcs":     v["pcs"]  or None,
+            "ltr":     v["ltr"]  or None,
+            "kg":      v["kg"]   or None,
+            "rej":     rej_val   or None,
+            "rej_pct": _pct(rej_val, rej_denom) if rej_denom > 0 else None,
+        })
+    t_rej_val   = t_rej_kg  if t_rej_kg  > 0 else t_rej_pcs
+    t_rej_denom = t_kg      if t_rej_kg  > 0 else t_pcs
+    total = {
+        "item":    "TOTAL",
+        "pcs":     t_pcs    or None,
+        "ltr":     t_ltr    or None,
+        "kg":      t_kg     or None,
+        "rej":     t_rej_val or None,
+        "rej_pct": _pct(t_rej_val, t_rej_denom) if t_rej_denom > 0 else None,
+    }
+    headline = f"{t_ltr:,.0f} L" if t_ltr > 0 else f"{t_pcs:,.0f} tanks"
     return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
         month_disp=month_disp(ym),
         sheets=[ReportSheet(name=f"Tanks {plant}",
             title=f"Tanks ({loc}) — {month_disp(ym)}",
-            subtitle=f"{loc} · {note}",
+            subtitle=f"{loc} · Litres headline · Rejection % on KG basis · {note}",
             sections=[Section(cols, rows, total)])],
-        headline=f"{t_c:,.0f} produced")
+        headline=headline)
 
 
 def _tank_location(rid, label, plant, ym, family, rec_plant, loc) -> ReportModel:
+    """Annual-summary fallback for months with no daily workbook."""
     try:
         recs = [r for r in sheets.load_report_records(family)
                 if r.plant == rec_plant and r.period == ym]
@@ -575,15 +621,25 @@ def _tank_location(rid, label, plant, ym, family, rec_plant, loc) -> ReportModel
                          f"No {loc} annual-summary rows for this month.")
     return _tank_model(rid, label, plant, ym, recs, loc,
                        "Production & rejection by item, read from the annual "
-                       "summary sheet (no daily workbook to cross-check).")
+                       "summary sheet (no daily workbook wired for this month).")
 
 
 def gen_tank_vn(rid, label, plant, ym) -> ReportModel:
+    """Tank VN (Vasna/PRV) — prefers daily workbook, falls back to annual summary."""
+    recs = _plant_recs(ym, "TANK_VN")
+    if recs:
+        return _tank_model(rid, label, plant, ym, recs, "Varanasi",
+                           "Per-item production & rejection (daily workbook).")
     return _tank_location(rid, label, plant, ym, "tank_vn", "TANK_VN", "Varanasi")
 
 
 def gen_tank_wb(rid, label, plant, ym) -> ReportModel:
-    return _tank_location(rid, label, plant, ym, "tank_wb", "TANK_WB", "West Bengal")
+    """Tank WB (Wambori/PDWB) — prefers daily workbook, falls back to annual summary."""
+    recs = _plant_recs(ym, "TANK_WB")
+    if recs:
+        return _tank_model(rid, label, plant, ym, recs, "Wambori",
+                           "Per-item production & rejection (daily workbook).")
+    return _tank_location(rid, label, plant, ym, "tank_wb", "TANK_WB", "Wambori")
 
 
 # ---------------------------------------------------------------------------

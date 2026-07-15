@@ -79,6 +79,7 @@ def _client(get_data=None):
 def test_closed_without_key(monkeypatch):
     monkeypatch.delenv(apimod.API_KEY_ENV, raising=False)
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
     c = _client()
     # Open endpoints still answer.
     assert c.get("/data-api/v1/").status_code == 200
@@ -96,6 +97,7 @@ def test_closed_without_key(monkeypatch):
 def test_auth_required_and_accepted(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
     c = _client()
     assert c.get("/data-api/v1/summary").status_code == 401
     assert c.get("/data-api/v1/summary",
@@ -111,6 +113,7 @@ def test_auth_required_and_accepted(monkeypatch):
 def test_no_fake_zero_ratios(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
     c = _client()
     body = c.get("/data-api/v1/summary",
                  headers={"X-API-Key": "sekret-123"}).get_json()
@@ -130,6 +133,7 @@ def test_no_fake_zero_ratios(monkeypatch):
 def test_figures_gated_flag(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
     hdr = {"X-API-Key": "sekret-123"}
 
     gated = _client(lambda a: _fake_data(status="error", released=False))
@@ -151,6 +155,7 @@ def test_figures_gated_flag(monkeypatch):
 def test_records_serialization(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
     c = _client()
     body = c.get("/data-api/v1/records",
                  headers={"X-API-Key": "sekret-123"}).get_json()

@@ -229,7 +229,7 @@ def create_api(get_data) -> Blueprint:
 
     @bp.get("/health")
     def health():
-        return jsonify({"ok": True, "api_enabled": bool(_configured_key())})
+        return jsonify({"ok": True, "api_enabled": bool(_configured_keys())})
 
     # ---- data endpoints (auth) ------------------------------------------
     @bp.get("/plants")

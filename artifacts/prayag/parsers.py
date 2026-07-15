@@ -685,6 +685,9 @@ def parse_tank_prod(
                         cols["rej_ltr"] = c
                     elif "PC" in u and "rej_pcs" not in cols:
                         cols["rej_pcs"] = c
+                    elif "MOUTH" in u and "KG" in u and "rej_mouth_kg" not in cols:
+                        # "REJECTION MOUTH LID IN KG" — distinct from plain rejection
+                        cols["rej_mouth_kg"] = c
                     elif "KG" in u and "rej_kg" not in cols:
                         cols["rej_kg"] = c
                 elif "LTR" in u and "ltr" not in cols:
@@ -720,10 +723,17 @@ def parse_tank_prod(
     if out_c is None:
         return []     # no unit column carries production — genuinely empty
 
-    # Reject in the SAME unit as the primary output (never a cross-unit reject %).
+    # Primary-unit reject column (same unit as output — used for primary reject_count).
     rej_c = cols.get(f"rej_{prim_key}", -1)
     if rej_c < 0:
         rej_c = cols.get("rej_ltr", cols.get("rej_pcs", cols.get("rej_kg", -1)))
+    # KG-basis rejection columns (mouth-lid + plain rejection in KG).
+    # Per spec: rejection % is ALWAYS computed as total_kg_rejection / production_kg,
+    # even when litres is the primary output unit.
+    rej_mouth_c = cols.get("rej_mouth_kg", -1)
+    rej_kg_c    = cols.get("rej_kg", -1)
+    rej_pcs_c   = cols.get("rej_pcs", -1)
+    rej_ltr_c   = cols.get("rej_ltr", -1)
     item_c = cols.get("item", -1)
     size_c = cols.get("size", -1)
     color_c = cols.get("color", -1)
@@ -743,20 +753,40 @@ def parse_tank_prod(
         a = agg.get(key)
         if a is None:
             a = {"out": 0.0, "rej": 0.0, "size": size, "color": color,
-                 "sec": {u: 0.0 for u in sec_cols}}
+                 "sec": {u: 0.0 for u in sec_cols},
+                 "rej_mouth_kg": 0.0, "rej_base_kg": 0.0,
+                 "rej_pcs": 0.0, "rej_ltr": 0.0}
             agg[key] = a
         a["out"] += num(g(row, out_c))
         a["rej"] += num(g(row, rej_c)) if rej_c >= 0 else 0.0
+        # Accumulate all rejection channels separately so the generator can
+        # compute kg-basis rejection % regardless of the primary output unit.
+        if rej_mouth_c >= 0:
+            a["rej_mouth_kg"] += num(g(row, rej_mouth_c))
+        if rej_kg_c >= 0:
+            a["rej_base_kg"]  += num(g(row, rej_kg_c))
+        if rej_pcs_c >= 0:
+            a["rej_pcs"]      += num(g(row, rej_pcs_c))
+        if rej_ltr_c >= 0:
+            a["rej_ltr"]      += num(g(row, rej_ltr_c))
         for u, c in sec_cols.items():
             a["sec"][u] += num(g(row, c))
 
-    # Display labels for the secondary units (pcs → "pcs", kg → "kg").
+    # Display labels for the secondary production units (pcs → "pcs", kg → "kg").
     _sec_label = {"pcs": "pcs", "kg": "kg", "ltr": "Ltr"}
     recs: List[Record] = []
     for (day, label), a in sorted(agg.items()):
         if a["out"] <= 0 and a["rej"] <= 0:
             continue  # nothing produced — don't fabricate
         secondary = {_sec_label[u]: v for u, v in a["sec"].items() if v}
+        # Total KG rejection = mouth-lid + plain rejection in KG.
+        total_rej_kg = a["rej_mouth_kg"] + a["rej_base_kg"]
+        if total_rej_kg > 0:
+            secondary["rej_kg"] = total_rej_kg
+        if a["rej_pcs"] > 0:
+            secondary["rej_pcs"] = a["rej_pcs"]
+        if a["rej_ltr"] > 0:
+            secondary["rej_ltr"] = a["rej_ltr"]
         recs.append(Record(
             grain="daily",
             period=year_month,

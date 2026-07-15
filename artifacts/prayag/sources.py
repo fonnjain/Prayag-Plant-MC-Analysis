@@ -278,6 +278,21 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-06": "1xl-k9i4BteCWtHmVcdjEIUXEiZnWzlTpkJuqPPHFLQo",
       },
   },
+  # Tank VN — Vasna stream (Tank (PRV) workbooks, one per month).
+  "TANK_VN": {
+      "folder_ids": ["1kI-g46eR-GBEr0-8sUGPV_ZEngFlC_Tt"],
+      "files": {
+          "2026-06": "1Vsba-WDcYwSstEZsX37ntm_N05yPn0T5DzSkls9zRUw",
+          "2026-07": "1lUSTSM_m2yywxGeeE7oemRbBMNsyM37ICv1lKBClGtQ",
+      },
+  },
+  # Tank WB — Wambori stream (Tank (PDWB) workbooks, one per month).
+  "TANK_WB": {
+      "folder_ids": ["14Wp1OGomlm6FeOLs0AcCFeIMxQ_zmjLx"],
+      "files": {
+          "2026-07": "1-JVeDFTnFfoMjDMhvkOV5BE1rKjjO00chRKtUpO5iqQ",
+      },
+  },
   # CP runs on a different cycle; no Apr-26+ daily file yet (flagged at load).
   "CP": {
       "folder_ids": ["17thg66c3u0DMqy8bXjt6JSYp6sKqQISE"],

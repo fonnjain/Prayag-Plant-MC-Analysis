@@ -1286,7 +1286,11 @@ _DAILY_LAYOUTS: dict = {
       "ideal_col": ("contains", "IDEAL HOUR"),
   }],
   # TANK records per-ITEM production (no machine dimension) on "PROD. REPORT".
-  "TANK": [{"emit": "TANK", "tab": "PROD. REPORT", "layout": "tank"}],
+  # All three streams share the same tab name and parser; columns differ per
+  # workbook but are resolved by header text, not by index.
+  "TANK":    [{"emit": "TANK",    "tab": "PROD. REPORT", "layout": "tank"}],
+  "TANK_VN": [{"emit": "TANK_VN", "tab": "PROD. REPORT", "layout": "tank"}],
+  "TANK_WB": [{"emit": "TANK_WB", "tab": "PROD. REPORT", "layout": "tank"}],
 }
 
 # PTMT runs several distinct processes that should be compared within their own
