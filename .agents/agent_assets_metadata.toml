@@ -84,3 +84,9 @@ id = "R0Uzs5ZFQ6oz4ynKuMty8"
 uri = "file://exports/Prayag_Calculation_and_Data_Sources.xlsx"
 type = "table"
 title = "Prayag — Calculation & Data-Sourcing Reference"
+
+[[outputs]]
+id = "wMeZEdLFOksXJE6dRmfcL"
+uri = "file://artifacts/prayag/static/api-docs.md"
+type = "text"
+title = "Prayag Production Analytics — API Reference"
