@@ -41,14 +41,24 @@
       <div class="font-bold text-base" style="color:var(--navy)">{{ "{:,.0f}".format(overall.total_count) }}</div>
     </div>
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Total Rejection{% if overall.unit %} ({{ overall.unit }}){% endif %}</div>
-      <div class="font-bold text-base text-red-500">{{ "{:,.0f}".format(overall.reject_count) }}</div>
+      <div class="text-xs text-gray-500 mb-0.5">Total Rejection ({{ overall.reject_unit or overall.unit or 'kg' }})</div>
+      <div class="font-bold text-base text-red-500">{{ "{:,.1f}".format(overall.reject_count) }}</div>
+      {% set sc = overall.secondary_counts %}
+      {% if sc.get('rej_pcs', 0) > 0 or sc.get('rej_ltr', 0) > 0 %}
+      <div class="text-xs text-gray-400 mt-0.5">
+        {% if sc.get('rej_pcs', 0) > 0 %}{{ "{:,.0f}".format(sc.get('rej_pcs', 0)) }} pcs{% endif %}
+        {% if sc.get('rej_ltr', 0) > 0 %}{% if sc.get('rej_pcs', 0) > 0 %} · {% endif %}{{ "{:,.0f}".format(sc.get('rej_ltr', 0)) }} Ltr{% endif %}
+      </div>
+      {% endif %}
     </div>
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Rejection %</div>
+      <div class="text-xs text-gray-500 mb-0.5">Rejection %
+        <span class="text-gray-400" title="Rejection % is always on a kilogram basis: kg rejected ÷ kg produced">ⓘ</span>
+      </div>
       <div class="font-bold text-base {% if overall.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">
         {{ overall.rejection_pct }}%
       </div>
+      <div class="text-xs text-gray-400 mt-0.5">kg basis</div>
     </div>
   </div>
   {% endif %}

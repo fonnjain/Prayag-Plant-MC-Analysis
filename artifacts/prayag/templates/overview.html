@@ -144,7 +144,7 @@
     <div class="text-xl font-bold {% if o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
       {{ o.rejection_pct }}%
     </div>
-    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} {{ o.unit or 'rejected' }}</div>
+    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} {{ o.reject_unit or o.unit or 'rejected' }}</div>
     {% endif %}
   </div>
 

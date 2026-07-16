@@ -43,6 +43,8 @@ class Record:
     # --- production ---
     total_count: float = 0.0      # actual output (kg / pcs / ltr)
     reject_count: float = 0.0
+    reject_unit: str = ""          # if set, reject_count is in this unit (not ``unit``)
+    reject_denominator: float = 0.0  # denominator for rejection_pct when reject_unit ≠ unit
     runner_lumps: float = 0.0
     planned_output: float = 0.0
     ideal_output: float = 0.0     # monthly: ideal output for the period
@@ -182,6 +184,7 @@ class MetricsResult:
     # is NEVER summed across units. ``secondary_counts`` are alt-unit views of the
     # same production (TANK pcs/kg), display-only.
     unit: str = ""
+    reject_unit: str = ""  # unit of reject_count ("kg" for Tank, same as unit otherwise)
     output_by_unit: Dict[str, float] = field(default_factory=dict)
     reject_by_unit: Dict[str, float] = field(default_factory=dict)
     secondary_counts: Dict[str, float] = field(default_factory=dict)
@@ -299,6 +302,7 @@ class MetricsResult:
             "ideal_output": round(self.ideal_output, 2),
             "total_count": round(self.total_count, 2),
             "unit": self.unit,
+            "reject_unit": self.reject_unit,
             "output_by_unit": {k: round(v, 2) for k, v in self.output_by_unit.items()},
             "reject_by_unit": {k: round(v, 2) for k, v in self.reject_by_unit.items()},
             "rejection_pct_by_unit": {
@@ -372,6 +376,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     # TOTALS below, but must NOT pollute the ratio — otherwise its run hours land
     # in the numerator with a zero denominator and silently inflate the figure.
     util_run = 0.0
+    _reject_denom_sum: float = 0.0  # summed reject_denominator (non-zero for Tank)
     util_ideal = 0.0   # utilisation denominator: only hours from rows that ACTUALLY
                        # track run time (excludes output-only plants), so an
                        # app-default denominator on GARDEN/TANK neither fabricates a
@@ -382,6 +387,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     for r in prod_rows:
         m.total_count += r.total_count
         m.reject_count += r.reject_count
+        _reject_denom_sum += getattr(r, "reject_denominator", 0.0)
         m.runner_lumps += r.runner_lumps
         m.planned_output += r.planned_output
         m.labour_cost += r.labour_cost
@@ -397,7 +403,10 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
         _u = (getattr(r, "unit", "") or "").strip()
         if _u:
             m.output_by_unit[_u] = m.output_by_unit.get(_u, 0.0) + r.total_count
-            m.reject_by_unit[_u] = m.reject_by_unit.get(_u, 0.0) + r.reject_count
+            # Key rejection by its OWN unit (reject_unit when set, else production unit).
+            # This prevents Tank kg rejection from landing under the "Ltr" key.
+            _rj_key = getattr(r, "reject_unit", "") or _u
+            m.reject_by_unit[_rj_key] = m.reject_by_unit.get(_rj_key, 0.0) + r.reject_count
         for _su, _sv in (getattr(r, "secondary_counts", None) or {}).items():
             m.secondary_counts[_su] = m.secondary_counts.get(_su, 0.0) + _sv
 
@@ -459,7 +468,13 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
         or (getattr(r, "plant", "") in ideal_hours.APP_DEFAULT_IDEAL_HOURS)
         for r in prod_rows
     )
-    m.rejection_pct = _safe_div(m.reject_count, m.total_count)
+    # Rejection %: use the kg-production denominator for Tank (where reject_unit="kg"
+    # but production unit is "Ltr"); fall back to total_count for all other plants.
+    _rej_denom = _reject_denom_sum if _reject_denom_sum > 0 else m.total_count
+    m.rejection_pct = _safe_div(m.reject_count, _rej_denom)
+    # Derive a single reject_unit for the rollup (set when all rows agree on one unit).
+    _rej_units = [u for u, v in m.reject_by_unit.items() if v > 0]
+    m.reject_unit = _rej_units[0] if len(_rej_units) == 1 else ""
     m.runner_pct = _safe_div(m.runner_lumps, m.total_count)
     m.attainment = _safe_div(m.total_count, m.planned_output)
 
