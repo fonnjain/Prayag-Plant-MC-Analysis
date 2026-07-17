@@ -227,6 +227,92 @@ def month_trend(by_compound: Dict[str, List[dict]], months: List[str]) -> dict:
     return {"months": months_out, "total": total, "compounds": list(series.values())}
 
 
+def biggest_mover(trend: dict) -> Optional[dict]:
+    """Deterministic "biggest mover" callout from the per-compound month series.
+
+    Given the :func:`month_trend` output, find the single compound with the
+    largest *latest* month-over-month change (the last month vs the month before
+    it) in BOTH:
+    - ``given`` (kg) — ranked by RELATIVE % change (so a small compound that
+      doubled outranks a large one that nudged up a few percent), and
+    - ``loss_pct`` (weight-loss %) — ranked by PERCENTAGE-POINT change (a
+      percentage's natural "change" is points, not a percent of a percent).
+
+    Returns a template-ready dict ``{prev_month, cur_month, given, loss}`` where
+    each of ``given``/``loss`` is either ``None`` or a small dict naming the
+    mover with ``prev``/``cur`` figures, the delta and its direction
+    (``"up"``/``"down"``). Returns ``None`` when there are <2 months of data
+    (nothing to compare) or no compound has a comparable, non-flat change.
+
+    Pure: reads only the already-computed series — no sheet reads.
+    """
+    months = trend.get("months") or []
+    if len(months) < 2:
+        return None
+    compounds = trend.get("compounds") or []
+
+    def _best_given() -> Optional[dict]:
+        best = None
+        for c in compounds:
+            s = c.get("given") or []
+            if len(s) < 2:
+                continue
+            prev, cur = s[-2], s[-1]
+            if prev is None or cur is None or prev <= 0:
+                continue
+            delta_pct = (cur - prev) / prev * 100.0
+            if abs(delta_pct) < 0.05:
+                continue
+            cand = {
+                "key": c["key"], "label": c["label"],
+                "prev": prev, "cur": cur,
+                "delta_pct": round(delta_pct, 0),
+                "direction": "up" if delta_pct > 0 else "down",
+                "_abs": abs(delta_pct),
+            }
+            if best is None or cand["_abs"] > best["_abs"]:
+                best = cand
+        if best:
+            best.pop("_abs", None)
+        return best
+
+    def _best_loss() -> Optional[dict]:
+        best = None
+        for c in compounds:
+            s = c.get("loss_pct") or []
+            if len(s) < 2:
+                continue
+            prev, cur = s[-2], s[-1]
+            if prev is None or cur is None:
+                continue
+            delta_pp = cur - prev
+            if abs(delta_pp) < 0.05:
+                continue
+            cand = {
+                "key": c["key"], "label": c["label"],
+                "prev": prev, "cur": cur,
+                "delta_pp": round(delta_pp, 1),
+                "direction": "up" if delta_pp > 0 else "down",
+                "_abs": abs(delta_pp),
+            }
+            if best is None or cand["_abs"] > best["_abs"]:
+                best = cand
+        if best:
+            best.pop("_abs", None)
+        return best
+
+    given = _best_given()
+    loss = _best_loss()
+    if not given and not loss:
+        return None
+    return {
+        "prev_month": months[-2],
+        "cur_month": months[-1],
+        "given": given,
+        "loss": loss,
+    }
+
+
 def stale_rollup_alerts(by_compound: Dict[str, List[dict]],
                         rollup: Dict[str, dict],
                         months: List[str]) -> List[dict]:

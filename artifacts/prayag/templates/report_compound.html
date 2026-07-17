@@ -132,6 +132,42 @@
 <div class="text-xs text-gray-400 mb-4 -mt-2 px-1">Pipe output is net-of-rejection, so a conversion below 100% is expected.</div>
 {% endif %}
 
+<!-- Biggest mover callout -->
+{% if mover %}
+{% macro arrow(dir) -%}
+{%- if dir == 'up' -%}▲{%- else -%}▼{%- endif -%}
+{%- endmacro %}
+<div class="kpi-card p-3 mb-4" style="border-left:4px solid var(--terra)">
+  <div class="text-xs font-semibold mb-2" style="color:var(--terra)">Biggest mover <span class="font-normal text-gray-400">— vs {{ mover.prev_disp }}</span></div>
+  <div class="space-y-2">
+    {% if mover.given %}
+    <div class="flex items-baseline justify-between gap-2">
+      <div class="text-xs text-gray-500">
+        <span class="font-bold text-sm" style="color:var(--navy)">{{ mover.given.label }}</span>
+        <span class="text-gray-400"> · compound given</span>
+      </div>
+      <div class="text-right whitespace-nowrap">
+        <span class="font-bold text-sm" style="color:{% if mover.given.direction == 'up' %}var(--terra){% else %}#1F3864{% endif %}">{{ arrow(mover.given.direction) }} {{ '%+d'|format(mover.given.delta_pct|int) }}%</span>
+        <div class="text-xs text-gray-400">{{ kg(mover.given.prev) }} → {{ kg(mover.given.cur) }} kg</div>
+      </div>
+    </div>
+    {% endif %}
+    {% if mover.loss %}
+    <div class="flex items-baseline justify-between gap-2">
+      <div class="text-xs text-gray-500">
+        <span class="font-bold text-sm" style="color:var(--navy)">{{ mover.loss.label }}</span>
+        <span class="text-gray-400"> · weight-loss %</span>
+      </div>
+      <div class="text-right whitespace-nowrap">
+        <span class="font-bold text-sm" style="color:{% if mover.loss.direction == 'up' %}var(--terra){% else %}#1F3864{% endif %}">{{ arrow(mover.loss.direction) }} {{ '%+.1f'|format(mover.loss.delta_pp) }} pp</span>
+        <div class="text-xs text-gray-400">{{ "%.2f"|format(mover.loss.prev) }}% → {{ "%.2f"|format(mover.loss.cur) }}%</div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <!-- Month-over-month trend -->
 {% if trend_labels != '[]' %}
 <div class="kpi-card p-3 mb-4">

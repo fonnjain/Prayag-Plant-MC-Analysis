@@ -3549,6 +3549,7 @@ def report_compound_compilation():
     # breakdown (so managers can see WHICH compound is drifting, not just the
     # total). Suppressed in a sub-monthly flow window (no monthly balance to
     # chart).
+    mover = None
     if window:
         trend_labels = trend_given = trend_loss = trend_compounds = []
     else:
@@ -3557,9 +3558,15 @@ def report_compound_compilation():
         trend_given = [t["given"] for t in trend["total"]]
         trend_loss = [t["loss_pct"] for t in trend["total"]]
         trend_compounds = trend["compounds"]
+        # Deterministic "biggest mover" callout — names the compound with the
+        # largest latest month-over-month change, computed from the same series.
+        mover = compound_mod.biggest_mover(trend)
+        if mover:
+            mover["prev_disp"] = _month_disp(mover["prev_month"])
+            mover["cur_disp"] = _month_disp(mover["cur_month"])
 
     return render_template("report_compound.html",
-        comp=comp, validation=validation,
+        comp=comp, validation=validation, mover=mover,
         pipe_output=pipe_output, yield_pct=yield_pct,
         trend_labels=_safe_json(trend_labels),
         trend_given=_safe_json(trend_given),

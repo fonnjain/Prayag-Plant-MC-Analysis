@@ -242,6 +242,71 @@ def test_month_trend_skips_empty_months():
     print("ok test_month_trend_skips_empty_months")
 
 
+def test_biggest_mover_given_and_loss():
+    # AGRI given jumps +100% Apr->May (the biggest relative given mover); SWR's
+    # weight-loss % climbs the most in percentage points.
+    by = {
+        "AGRI": [
+            {**_mixer_month(0.0, [_day(1000.0, 990.0, 600.0, 10.0)]), "ym": "2026-04"},
+            {**_mixer_month(0.0, [_day(2000.0, 1980.0, 1200.0, 20.0)]), "ym": "2026-05"},
+        ],
+        "CPVC": [
+            # +20% given only -> outranked by AGRI on given.
+            {**_mixer_month(0.0, [_day(1000.0, 990.0, 1000.0, 10.0)]), "ym": "2026-04"},
+            {**_mixer_month(0.0, [_day(1200.0, 1180.0, 1200.0, 12.0)]), "ym": "2026-05"},
+        ],
+        "SWR": [
+            # loss% 1.0% -> 5.0% = +4.0pp, the biggest weight-loss mover.
+            {**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-04"},
+            {**_mixer_month(0.0, [_day(1000.0, 950.0, 900.0, 50.0)]), "ym": "2026-05"},
+        ],
+    }
+    trend = compound.month_trend(by, ["2026-04", "2026-05"])
+    mv = compound.biggest_mover(trend)
+    assert mv is not None
+    assert mv["prev_month"] == "2026-04" and mv["cur_month"] == "2026-05"
+    # Given mover: AGRI +100%.
+    assert mv["given"]["key"] == "AGRI"
+    assert mv["given"]["delta_pct"] == 100.0
+    assert mv["given"]["direction"] == "up"
+    assert mv["given"]["prev"] == 600.0 and mv["given"]["cur"] == 1200.0
+    # Loss mover: SWR +4.0pp (1.0% -> 5.0%).
+    assert mv["loss"]["key"] == "SWR"
+    assert abs(mv["loss"]["delta_pp"] - 4.0) < 1e-9
+    assert mv["loss"]["direction"] == "up"
+    print("ok test_biggest_mover_given_and_loss")
+
+
+def test_biggest_mover_needs_two_months():
+    # <2 months of data -> nothing to compare -> None (mirrors the chart being
+    # suppressed in a single-month / sub-monthly window).
+    by = {"CPVC": [{**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-06"}]}
+    one = compound.month_trend(by, ["2026-06"])
+    assert compound.biggest_mover(one) is None
+    assert compound.biggest_mover({"months": [], "compounds": []}) is None
+    print("ok test_biggest_mover_needs_two_months")
+
+
+def test_biggest_mover_direction_and_flat():
+    # A drop reads "down"; a perfectly flat set of series yields no mover.
+    drop = {"CPVC": [
+        {**_mixer_month(0.0, [_day(2000.0, 1980.0, 1000.0, 20.0)]), "ym": "2026-04"},
+        {**_mixer_month(0.0, [_day(1000.0, 990.0, 250.0, 10.0)]), "ym": "2026-05"},
+    ]}
+    mv = compound.biggest_mover(compound.month_trend(drop, ["2026-04", "2026-05"]))
+    assert mv["given"]["key"] == "CPVC"
+    assert mv["given"]["delta_pct"] == -75.0
+    assert mv["given"]["direction"] == "down"
+
+    # Identical months -> every delta is 0 -> no mover at all.
+    flat = {"CPVC": [
+        {**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-04"},
+        {**_mixer_month(0.0, [_day(1000.0, 990.0, 950.0, 10.0)]), "ym": "2026-05"},
+    ]}
+    assert compound.biggest_mover(compound.month_trend(flat, ["2026-04", "2026-05"])) is None
+    print("ok test_biggest_mover_direction_and_flat")
+
+
 def test_validate_no_rollup_is_na():
     by = {"CPVC": [_mixer_month(0.0, [_day(100.0, 99.0, 95.0, 1.0)])]}
     comp = compound.build_compilation(by, ["2026-06"])
@@ -394,6 +459,9 @@ if __name__ == "__main__":
     test_flow_window_suppresses_balance_and_isolates_days()
     test_month_trend_per_compound_breakdown()
     test_month_trend_skips_empty_months()
+    test_biggest_mover_given_and_loss()
+    test_biggest_mover_needs_two_months()
+    test_biggest_mover_direction_and_flat()
     test_validate_no_rollup_is_na()
     test_month_trend_ties_to_aggregate_total()
     test_month_trend_single_month_and_window()
