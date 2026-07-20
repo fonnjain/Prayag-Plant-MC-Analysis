@@ -435,6 +435,17 @@ PLANNING_SOURCES: dict = {
             {"tab": "Report-3", "category": "BOP",  "parser": "material_stock"},  # 31 items (Buffer Stock in Days)
             {"tab": "Report-4", "category": "PACK", "parser": "material_stock"},  # 15 items
         ],
+        # Phase 2C — maintenance master (Report-16) + manpower per machine per date (Report-22).
+        # Header row 3 (1-indexed); 73 PIPE machines.
+        "maintenance_tabs": [
+            {"tab": "Report-16", "parser": "maintenance"},          # 73 machines
+        ],
+        # Report-22 (A) and (B) share the same layout; each covers a portion of the month.
+        # True header spans rows 2-3 (1-indexed): dates in row 2, TOTAL MANPOWER/TOTAL HOURS in row 3.
+        "manpower_tabs": [
+            {"tab": "Report-22 (A)", "parser": "pipe_manpower", "shift": "all"},
+            {"tab": "Report-22 (B)", "parser": "pipe_manpower", "shift": "all"},
+        ],
     },
     "PTMT": {
         "tabs": [
@@ -452,6 +463,19 @@ PLANNING_SOURCES: dict = {
             {"tab": "Report-2", "category": "BOP",  "parser": "material_stock"},  # 53 items
             {"tab": "Report-3", "category": "PACK", "parser": "material_stock"},  # 32 items
             {"tab": "Report-4", "category": "RM",   "parser": "material_stock"},  # 21 items
+        ],
+        # Phase 2C — maintenance master (Report-8) + manpower per shift (Report-6 A/B/C).
+        # Header row 3 (1-indexed); 60 PTMT machines.
+        "maintenance_tabs": [
+            {"tab": "Report-8", "parser": "maintenance"},           # 60 machines
+        ],
+        # Report-6 (A/B/C) = 1st/2nd/3rd shift; header row 3 (1-indexed) = dates.
+        # Row 4 = sub-headers (shift label + P/C type per date). Data from row 5.
+        # CRITICAL: These are manpower/shift rosters — NEVER read as production output.
+        "manpower_tabs": [
+            {"tab": "Report-6 (A)", "parser": "ptmt_manpower", "shift": "1st"},
+            {"tab": "Report-6 (B)", "parser": "ptmt_manpower", "shift": "2nd"},
+            {"tab": "Report-6 (C)", "parser": "ptmt_manpower", "shift": "3rd"},
         ],
     },
 }
