@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Labour{% endblock %}
+
+{% block content %}
+<div class="mb-3 flex items-center gap-2">
+  <div class="flex-1">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">Labour</h2>
+    <div class="text-xs text-gray-400">{{ period_label }}</div>
+  </div>
+  <a href="/segment-input?period={{ period }}"
+     class="text-xs font-semibold px-3 py-1.5 rounded-lg text-white whitespace-nowrap"
+     style="background:var(--terra)">Enter costs</a>
+</div>
+
+{# ── Awaiting-source notice ── #}
+<div class="rounded-xl p-3 mb-4 flex items-start gap-2"
+     style="background:rgba(197,90,17,0.07);border:1px solid rgba(197,90,17,0.18)">
+  <svg width="16" height="16" class="flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24"
+       stroke="#C55A11" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round"
+          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+  <div class="text-xs" style="color:var(--terra)">
+    <span class="font-semibold">Wage data awaiting HR source sheet.</span>
+    Paid hours, wages and per-unit cost columns will populate automatically once the
+    HR department's payroll sheet is linked. Run hours below come from the production
+    sheets and are available now.
+  </div>
+</div>
+
+{# ── Section 1: Run hours + awaiting wage columns ── #}
+<div class="mb-5">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-5 rounded-full flex-shrink-0" style="background:var(--terra)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">Machine run hours by plant</h3>
+  </div>
+
+  {% if plants %}
+  <div class="kpi-card p-0 overflow-hidden">
+    <div class="table-scroll">
+      <table class="w-full text-xs">
+        <thead>
+          <tr style="background:rgba(31,56,100,0.04);border-bottom:1px solid rgba(31,56,100,0.10)">
+            <th class="text-left px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">Plant</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">Run hrs</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">Output</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">Paid hrs</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">Wages (₹)</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">₹/hr</th>
+            <th class="text-right px-3 py-2 font-semibold whitespace-nowrap" style="color:var(--navy)">₹/kg</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in plants %}
+          <tr class="border-b" style="border-color:rgba(31,56,100,0.06)">
+            <td class="px-3 py-2 font-medium" style="color:var(--navy)">{{ p.name }}</td>
+            <td class="px-3 py-2 text-right tabular-nums text-gray-700">
+              {% if p.run_hrs %}{{ "{:,.0f}".format(p.run_hrs) }}
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right tabular-nums text-gray-500">
+              {% if p.output %}{{ "{:,.0f}".format(p.output) }} {{ p.unit }}
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Wage columns: all awaiting HR source #}
+            {% for _ in range(4) %}
+            <td class="px-3 py-2 text-right">
+              <span class="text-[10px] italic" style="color:var(--terra)">awaiting</span>
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          <tr style="background:rgba(31,56,100,0.04);border-top:2px solid rgba(31,56,100,0.12)">
+            <td class="px-3 py-2 font-bold text-xs" style="color:var(--navy)">TOTAL</td>
+            <td class="px-3 py-2 text-right tabular-nums font-semibold text-xs" style="color:var(--navy)">
+              {% if total_hrs %}{{ "{:,.0f}".format(total_hrs) }}{% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right text-xs text-gray-400">—</td>
+            {% for _ in range(4) %}
+            <td class="px-3 py-2 text-right"><span class="text-gray-300 text-xs">—</span></td>
+            {% endfor %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="kpi-card p-6 text-center">
+    <div class="text-gray-400 text-sm">No production data for this period.</div>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Section 2: Contractor / Power / Solar (manual monthly inputs) ── #}
+<div class="mb-5">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-5 rounded-full flex-shrink-0" style="background:var(--terra)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">Contractor &amp; utility costs</h3>
+  </div>
+
+  {% if manual and manual.rows %}
+  <div class="text-xs text-gray-400 mb-2">
+    Captured monthly via the
+    <a href="/segment-input?period={{ period }}" class="underline" style="color:var(--terra)">inputs page</a>.
+    {% if manual.n_awaiting > 0 %}
+    <span class="font-medium" style="color:var(--terra)">{{ manual.n_awaiting }} field(s) still awaiting input.</span>
+    {% else %}
+    <span class="text-green-600 font-medium">All captured for this period.</span>
+    {% endif %}
+  </div>
+  {% for unit in manual.by_unit %}
+  <div class="kpi-card p-3 mb-3">
+    <div class="text-xs font-semibold mb-2" style="color:var(--navy)">{{ unit.label }}</div>
+    <div class="table-scroll">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-gray-500 border-b border-gray-100">
+            <th class="text-left pb-2 pr-2 font-medium whitespace-nowrap">Month</th>
+            {% for f in unit.fields %}
+            <th class="text-right pb-2 px-1 font-medium whitespace-nowrap">
+              {{ f.label }}<div class="text-[10px] text-gray-300 font-normal">{{ f.unit }}</div>
+            </th>
+            {% endfor %}
+            <th class="text-right pb-2 pl-1 font-medium whitespace-nowrap">
+              ₹/kg power<div class="text-[10px] text-gray-300 font-normal">computed</div>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in unit.rows %}
+          <tr class="border-b border-gray-50">
+            <td class="py-1.5 pr-2 text-gray-600 whitespace-nowrap">{{ manual.month_disps.get(r.month, r.month) }}</td>
+            {% for f in unit.fields %}
+            {% set cell = r.cells.get(f.key) %}
+            <td class="py-1.5 px-1 text-right">
+              {% if cell and not cell.awaiting %}
+                <span class="text-gray-700">{% if cell.money %}₹{% endif %}{{ "{:,.0f}".format(cell.value) }}</span>
+              {% else %}
+                <span class="text-[10px] italic" style="color:var(--terra)">awaiting</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+            <td class="py-1.5 pl-1 text-right">
+              {% if r.per_kg_power is not none %}
+                <span class="font-semibold" style="color:var(--navy)">₹{{ "%.2f"|format(r.per_kg_power) }}</span>
+              {% else %}
+                <span class="text-gray-300">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="kpi-card p-4 text-center text-xs text-gray-400">
+    No contractor or utility cost inputs for this period.
+    <a href="/segment-input?period={{ period }}" class="block mt-1 underline" style="color:var(--terra)">
+      Enter them here →
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Provenance ── #}
+<div class="text-[10px] text-gray-300 mt-4 mb-2">
+  Run hours from daily production sheets &middot;
+  Wages: awaiting HR department source sheet &middot;
+  Contractor/power: manual monthly inputs via
+  <a href="/segment-input" class="underline">inputs page</a> &middot;
+  Updated {{ today_disp }}
+</div>
+{% endblock %}

@@ -3856,6 +3856,68 @@ def report_segment_labour():
 
 
 # ---------------------------------------------------------------------------
+# Labour — dedicated page: run hours from production + awaiting HR wages +
+# contractor/power/solar costs from manual monthly inputs
+# ---------------------------------------------------------------------------
+@app.route("/labour")
+def labour_view():
+    """Labour summary page.
+
+    Section A: per-plant run hours from daily production records (available now);
+    wage columns (paid hours, wages, ₹/hr, ₹/kg) are shown as awaiting-source
+    until the HR department's payroll sheet is linked.
+
+    Section B: contractor and utility costs captured via /segment-input.
+    """
+    period_arg = request.args.get("period", "current_fy")
+    pinfo = parse_period({"period": period_arg})
+    months = pinfo["months"]
+
+    # --- Section A: production run hours per plant ---
+    rows, _, _ = get_daily_records(months)
+    by_plant = rollup_by_plant(rows)
+
+    _PLANT_ORDER = ["PIPE", "MOULDING", "PTMT", "HDPE", "GARDEN", "TANK",
+                    "CP", "GARDEN_WB", "HDPE_WB"]
+    _UNIT = {
+        "PIPE": "kg", "MOULDING": "kg", "PTMT": "kg",
+        "HDPE": "kg", "GARDEN": "kg", "TANK": "Ltr",
+        "CP": "pcs", "GARDEN_WB": "kg", "HDPE_WB": "kg",
+    }
+    plants = []
+    total_hrs = 0.0
+    # Show plants in order, then any remaining alphabetically.
+    ordered = [p for p in _PLANT_ORDER if p in by_plant]
+    ordered += sorted(k for k in by_plant if k not in _PLANT_ORDER)
+    for pname in ordered:
+        res = by_plant[pname]
+        d = res.to_dict()
+        hrs = d.get("actual_hours") or 0.0
+        out = d.get("total_count") or 0.0
+        plants.append({
+            "name": pname.replace("_", " ").title(),
+            "run_hrs": hrs if hrs > 0 else None,
+            "output": out if out > 0 else None,
+            "unit": _UNIT.get(pname, "units"),
+        })
+        total_hrs += hrs
+
+    # --- Section B: manual monthly inputs (contractor / power / solar) ---
+    seg_months = sorted(set(months))
+    manual = _build_segment_inputs_view(seg_months)
+
+    return render_template("labour.html",
+        plants=plants,
+        total_hrs=total_hrs if total_hrs > 0 else None,
+        manual=manual,
+        period=period_arg,
+        period_label=pinfo["label"],
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Group B — Segment Labour / Solar / Power manual monthly inputs
 # ---------------------------------------------------------------------------
 _SEG_PLANT_TO_UNIT = {
