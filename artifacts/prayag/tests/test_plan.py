@@ -10,8 +10,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 from plan import (
     GateStatus, RunQueueItem, MachinePlan, GATE_PRIORITY,
+    _PIPE_PRODUCTION_MACHINES,
     _norm, _partial_match, _lookup, _lookup_list,
-    _find_worst_rm, _build_run_queue, _evaluate_gates, build_plan,
+    _classify_ptmt_item, _find_worst_rm, _build_run_queue, _evaluate_gates, build_plan,
 )
 
 
@@ -23,12 +24,12 @@ def _gate(name, status, reason="", provenance=""):
     return GateStatus(name=name, status=status, reason=reason, provenance=provenance)
 
 
-def _qi(item_code, net_req, days_cover, rate=None):
+def _qi(item_code, net_req, days_cover, rate=None, family="TEST"):
     est = round(net_req / rate, 2) if rate else None
     return RunQueueItem(
         item_code=item_code,
         item_name=f"Item {item_code}",
-        family="TEST",
+        family=family,
         net_requirement=net_req,
         days_of_cover=days_cover,
         theoretical_rate=rate,
@@ -94,13 +95,14 @@ def test_lookup_list_miss_returns_empty():
 
 class _FakeMat:
     def __init__(self, category, reorder_flag, days_of_cover, lead_time_days,
-                 item_name="Item", as_of_date="Jun-30"):
+                 item_name="Item", as_of_date="Jun-30", item_type=""):
         self.category = category
         self.reorder_flag = reorder_flag
         self.days_of_cover = days_of_cover
         self.lead_time_days = lead_time_days
         self.item_name = item_name
         self.as_of_date = as_of_date
+        self.item_type = item_type  # e.g. "PIPE", "CPVC", ""
 
 
 def test_find_worst_rm_returns_none_when_no_reorder():
@@ -126,15 +128,48 @@ def test_find_worst_rm_ignores_non_rm():
     assert _find_worst_rm(mats) is None
 
 
+def test_find_worst_rm_item_type_filter_excludes_unrelated():
+    """RM with a non-matching item_type is excluded when item_types filter is set."""
+    mats = [
+        _FakeMat("RM", True, 1.0, 5.0, item_name="CPVC Resin", item_type="CPVC"),
+        _FakeMat("RM", True, 0.5, 5.0, item_name="UPVC Resin", item_type="UPVC"),
+    ]
+    # Only check CPVC
+    result = _find_worst_rm(mats, item_types={"CPVC"})
+    assert result is not None
+    name, cover, _, _ = result
+    assert name == "CPVC Resin"  # UPVC excluded
+
+
+def test_find_worst_rm_empty_item_type_always_included():
+    """RM records with empty item_type are always included (generic/unclassified)."""
+    mats = [
+        _FakeMat("RM", True, 1.0, 5.0, item_name="Generic Resin", item_type=""),
+    ]
+    result = _find_worst_rm(mats, item_types={"CPVC"})
+    assert result is not None  # empty item_type → included regardless
+
+
+def test_find_worst_rm_plant_type_included():
+    """RM with item_type='PIPE' is included when 'PIPE' is in item_types."""
+    mats = [
+        _FakeMat("RM", True, 2.0, 5.0, item_name="PIPE Resin", item_type="PIPE"),
+    ]
+    result = _find_worst_rm(mats, item_types={"CPVC", "PIPE"})
+    assert result is not None
+
+
 # ---------------------------------------------------------------------------
 # _build_run_queue — PTMT path
 # ---------------------------------------------------------------------------
 
 class _FakeMouldStd:
-    def __init__(self, item_code, machine_name, theoretical_pcs_hr):
+    def __init__(self, item_code, machine_name, theoretical_pcs_hr,
+                 item_name="FAUCET BODY"):
         self.item_code = item_code
         self.machine_name = machine_name
         self.theoretical_pcs_hr = theoretical_pcs_hr
+        self.item_name = item_name  # used by _classify_ptmt_item → family
 
 
 class _FakePlanRecord:
@@ -148,68 +183,133 @@ class _FakePlanRecord:
         self.per_hour_output = per_hour_output
 
 
+# ---------------------------------------------------------------------------
+# _classify_ptmt_item — family keyword mapping
+# ---------------------------------------------------------------------------
+
+def test_classify_cistern_keywords():
+    assert _classify_ptmt_item("CISTERN BODY") == "cistern"
+    assert _classify_ptmt_item("W/C 31 MM F/T") == "cistern"
+    assert _classify_ptmt_item("BALL COCK FLOAT") == "cistern"
+    assert _classify_ptmt_item("FLUSH VALVE") == "cistern"
+
+
+def test_classify_seatcover_keyword():
+    assert _classify_ptmt_item("SEAT COVER 30MM") == "seatcover"
+    assert _classify_ptmt_item("TOILET SEAT HINGE") == "seatcover"
+
+
+def test_classify_faucet_default():
+    assert _classify_ptmt_item("FAUCET BODY 15MM") == "faucet"
+    assert _classify_ptmt_item("HANDLE-O") == "faucet"
+    assert _classify_ptmt_item("NOZZLE BODY 15MM") == "faucet"
+    assert _classify_ptmt_item("BIB COCK SPINDLE") == "faucet"
+    assert _classify_ptmt_item("ANGLE VALVE KNOB") == "faucet"
+
+
+# ---------------------------------------------------------------------------
+# _build_run_queue — PTMT path (family-based join)
+# 4th arg is now ptmt_plan_by_family: Dict[family, List[PlanRecord]]
+# Rate comes from plan_r.per_hour_output (NOT MouldStd.theoretical_pcs_hr)
+# ---------------------------------------------------------------------------
+
 def test_run_queue_ptmt_ranks_by_net_req_desc():
     norm_m = _norm("Injection M/C 7")
-    stds = {
-        norm_m: [
-            _FakeMouldStd("ITEM_A", "Injection M/C 7", 100.0),
-            _FakeMouldStd("ITEM_B", "Injection M/C 7", 200.0),
+    # MouldStd item_name "CISTERN BODY" → classified as "cistern"
+    stds = {norm_m: [_FakeMouldStd("PSF-100", "Injection M/C 7", 100.0, "CISTERN BODY")]}
+    plan_by_fam = {
+        "cistern": [
+            _FakePlanRecord("ITEM_A", "Cistern A", "cistern", 500.0, 10.0),
+            _FakePlanRecord("ITEM_B", "Cistern B", "cistern", 1200.0, 5.0),
         ]
     }
-    plan = {
-        "ITEM_A": _FakePlanRecord("ITEM_A", "Cistern A", "cistern", 500.0, 10.0),
-        "ITEM_B": _FakePlanRecord("ITEM_B", "Cistern B", "cistern", 1200.0, 5.0),
-    }
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert len(queue) == 2
-    # Higher net_requirement first
-    assert queue[0].item_code == "ITEM_B"
+    assert queue[0].item_code == "ITEM_B"   # higher net_req first
     assert queue[1].item_code == "ITEM_A"
 
 
 def test_run_queue_ptmt_tiebreak_by_days_cover_asc():
     norm_m = _norm("M/C 3")
-    stds = {
-        norm_m: [
-            _FakeMouldStd("ITEM_X", "M/C 3", 100.0),
-            _FakeMouldStd("ITEM_Y", "M/C 3", 100.0),
+    stds = {norm_m: [_FakeMouldStd("PSF-1", "M/C 3", 100.0, "FAUCET BODY")]}
+    plan_by_fam = {
+        "faucet": [
+            _FakePlanRecord("ITEM_X", "Faucet X", "faucet", 500.0, 12.0),
+            _FakePlanRecord("ITEM_Y", "Faucet Y", "faucet", 500.0, 3.0),
         ]
     }
-    plan = {
-        "ITEM_X": _FakePlanRecord("ITEM_X", "Faucet X", "faucet", 500.0, 12.0),
-        "ITEM_Y": _FakePlanRecord("ITEM_Y", "Faucet Y", "faucet", 500.0, 3.0),  # lower cover
-    }
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert len(queue) == 2
-    # Same net_req → lower days_cover first (most urgent)
-    assert queue[0].item_code == "ITEM_Y"
+    assert queue[0].item_code == "ITEM_Y"   # lower days_cover → more urgent
 
 
 def test_run_queue_ptmt_skips_zero_net_req():
     norm_m = _norm("M/C 1")
-    stds = {norm_m: [_FakeMouldStd("ITEM_Z", "M/C 1", 100.0)]}
-    plan = {"ITEM_Z": _FakePlanRecord("ITEM_Z", "Zero Item", "cistern", 0.0, 5.0)}
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    stds = {norm_m: [_FakeMouldStd("PSF-2", "M/C 1", 100.0, "CISTERN BODY")]}
+    plan_by_fam = {
+        "cistern": [_FakePlanRecord("ITEM_Z", "Zero Item", "cistern", 0.0, 5.0)]
+    }
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert queue == []
 
 
 def test_run_queue_ptmt_estimated_run_time():
+    """Rate comes from plan_r.per_hour_output, not MouldStd.theoretical_pcs_hr."""
     norm_m = _norm("M/C 5")
-    stds = {norm_m: [_FakeMouldStd("ITEM_A", "M/C 5", 500.0)]}
-    plan = {"ITEM_A": _FakePlanRecord("ITEM_A", "A", "faucet", 2500.0, 8.0)}
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    stds = {norm_m: [_FakeMouldStd("PSF-3", "M/C 5", 999.0, "FAUCET BODY")]}
+    plan_by_fam = {
+        "faucet": [_FakePlanRecord("ITEM_A", "A", "faucet", 2500.0, 8.0,
+                                   per_hour_output=500.0)]
+    }
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert len(queue) == 1
     assert queue[0].estimated_run_time_hrs == pytest.approx(5.0)
+    assert queue[0].theoretical_rate == pytest.approx(500.0)
 
 
 def test_run_queue_ptmt_no_rate_gives_none_estimate():
+    """per_hour_output=0 → no rate → estimated_run_time_hrs is None."""
     norm_m = _norm("M/C 5")
-    stds = {norm_m: [_FakeMouldStd("ITEM_A", "M/C 5", 0.0)]}  # 0 rate
-    plan = {"ITEM_A": _FakePlanRecord("ITEM_A", "A", "faucet", 500.0, 8.0)}
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    stds = {norm_m: [_FakeMouldStd("PSF-4", "M/C 5", 100.0, "FAUCET BODY")]}
+    plan_by_fam = {
+        "faucet": [_FakePlanRecord("ITEM_A", "A", "faucet", 500.0, 8.0,
+                                   per_hour_output=0.0)]
+    }
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert len(queue) == 1
     assert queue[0].estimated_run_time_hrs is None
     assert queue[0].theoretical_rate is None
+
+
+def test_run_queue_ptmt_multi_family_machine():
+    """A machine with moulds from two families gets items from both families."""
+    norm_m = _norm("M/C 6")
+    # Two stds: one cistern mould, one faucet mould
+    stds = {norm_m: [
+        _FakeMouldStd("PSF-10", "M/C 6", 100.0, "CISTERN BODY"),
+        _FakeMouldStd("PSF-11", "M/C 6", 100.0, "FAUCET BODY"),
+    ]}
+    plan_by_fam = {
+        "cistern": [_FakePlanRecord("CIS-1", "Cistern A", "cistern", 300.0, 5.0)],
+        "faucet":  [_FakePlanRecord("FAU-1", "Faucet A", "faucet", 600.0, 8.0)],
+    }
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
+    codes = {qi.item_code for qi in queue}
+    assert "CIS-1" in codes
+    assert "FAU-1" in codes
+
+
+def test_run_queue_ptmt_no_stds_shows_all_families():
+    """Machine not in ptmt_machine_stds gets items from all three families."""
+    norm_m = _norm("UNKNOWN M/C")
+    plan_by_fam = {
+        "cistern":   [_FakePlanRecord("CIS-1", "Cistern A", "cistern", 100.0, 5.0)],
+        "faucet":    [_FakePlanRecord("FAU-1", "Faucet A", "faucet", 200.0, 3.0)],
+        "seatcover": [_FakePlanRecord("SEAT-1", "Seat A", "seatcover", 50.0, 10.0)],
+    }
+    queue = _build_run_queue("PTMT", norm_m, {}, plan_by_fam, {}, {})
+    codes = {qi.item_code for qi in queue}
+    assert codes == {"CIS-1", "FAU-1", "SEAT-1"}
 
 
 def test_run_queue_pipe_family_match():
@@ -226,21 +326,41 @@ def test_run_queue_pipe_family_match():
     assert queue[0].estimated_run_time_hrs == pytest.approx(6.0)
 
 
+def test_run_queue_pipe_idle_machine_gets_all_jobs():
+    """An idle PIPE machine (not in pipe_machine_materials) gets ALL open plan_recs."""
+    norm_m = _norm("PIPE Pipe M/C 8")  # not in pipe_mat → idle
+    pipe_mat: dict = {}  # no production history for this machine
+    pipe_plan: dict = {}
+    all_recs = [
+        _FakePlanRecord("P001", "CPVC 20mm", "CPVC", 300.0, 5.0, per_hour_output=50.0),
+        _FakePlanRecord("P002", "UPVC 25mm", "UPVC", 500.0, 3.0, per_hour_output=40.0),
+    ]
+    queue = _build_run_queue("PIPE", norm_m, {}, {}, pipe_mat, pipe_plan,
+                             pipe_all_plan_recs=all_recs)
+    assert len(queue) == 2  # gets both open jobs
+    # Ranked by net_requirement DESC: P002 first
+    assert queue[0].item_code == "P002"
+
+
 def test_run_queue_deduplicates_item_codes():
+    """Same item_code appearing twice in a family list → only one queue item."""
     norm_m = _norm("M/C 2")
-    stds = {
-        norm_m: [
-            _FakeMouldStd("ITEM_A", "M/C 2", 100.0),
-            _FakeMouldStd("ITEM_A", "M/C 2", 100.0),  # duplicate
+    stds = {norm_m: [_FakeMouldStd("PSF-5", "M/C 2", 100.0, "CISTERN BODY")]}
+    # Duplicate item_code in the cistern plan list (data error)
+    plan_by_fam = {
+        "cistern": [
+            _FakePlanRecord("ITEM_A", "Cistern A", "cistern", 200.0, 5.0),
+            _FakePlanRecord("ITEM_A", "Cistern A", "cistern", 200.0, 5.0),  # duplicate
         ]
     }
-    plan = {"ITEM_A": _FakePlanRecord("ITEM_A", "A", "cistern", 200.0, 5.0)}
-    queue = _build_run_queue("PTMT", norm_m, stds, plan, {}, {})
+    queue = _build_run_queue("PTMT", norm_m, stds, plan_by_fam, {}, {})
     assert len(queue) == 1
 
 
 # ---------------------------------------------------------------------------
 # _evaluate_gates — bottleneck priority
+# New signature: (norm_m, plant, run_queue, mat_recs, maint_idx, mp_idx,
+#                 m_result, actual_h, ideal_h, month)
 # ---------------------------------------------------------------------------
 
 class _FakeMetricsResult:
@@ -256,21 +376,20 @@ class _FakeMetricsResult:
         self.output_by_unit = output_by_unit or {}
 
 
-def _make_rm_at_reorder():
-    return _FakeMat("RM", True, 2.0, 5.0, "Resin K-67", "Jun-30")
+def _make_rm_at_reorder(item_type=""):
+    return _FakeMat("RM", True, 2.0, 5.0, "Resin K-67", "Jun-30", item_type=item_type)
 
 
 def test_bottleneck_material_beats_capacity():
     """When material is RED and capacity is RED, material wins (higher priority)."""
-    # rm_worst present -> material RED
-    rm_worst = ("Resin K-67", 2.0, 5.0, "Jun-30")
-    # No manpower, no maint → grey; capacity RED (fully loaded)
+    run_queue = [_qi("ITEM_A", 500.0, 10.0, family="TEST")]
     m_result = _FakeMetricsResult(actual_hours=500.0, ideal_hours=500.0)
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 1"), rm_worst,
-        {}, {},  # maint_idx, mp_idx (both empty → grey)
-        m_result, 500.0, 500.0,
-        [_make_rm_at_reorder()], "2026-06",
+        _norm("M C 1"), "TEST",
+        run_queue,
+        [_make_rm_at_reorder(item_type="")],  # empty item_type → always included
+        {}, {},
+        m_result, 500.0, 500.0, "2026-06",
     )
     assert bottleneck == "Material"
     assert "Resin K-67" in reason
@@ -278,29 +397,32 @@ def test_bottleneck_material_beats_capacity():
 
 def test_bottleneck_capacity_when_only_red():
     """With no material issue and all others grey, capacity RED is bottleneck."""
+    # Empty mat_recs → Material=GREY; empty queue still gets GREY too (no job)
+    # Use a non-empty queue so Material checks RM (returns GREY = no RM data)
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 2"), None,
+        _norm("M C 2"), "PTMT",
+        [_qi("X", 100.0, 5.0)],
+        [],  # no RM records → Material=GREY (no RM data)
         {}, {},
         _FakeMetricsResult(actual_hours=500.0, ideal_hours=500.0),
-        500.0, 500.0,
-        [], "2026-06",
+        500.0, 500.0, "2026-06",
     )
     assert bottleneck == "Capacity"
     assert "Fully loaded" in reason
 
 
 def test_grey_gate_never_bottleneck():
-    """Tooling and Feed are always grey → never bottleneck even when all others are grey."""
+    """Tooling and Feed are always grey → never bottleneck even when all others grey."""
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 3"), None,
-        {}, {},  # maint grey, manpower grey
+        _norm("M C 3"), "PTMT",
+        [],   # empty queue → Material GREY
+        [], {}, {},
         None, 0.0, 0.0,  # capacity grey (no prod data)
-        [], "2026-06",
+        "2026-06",
     )
     for g in gates:
         if g.name in ("Tooling", "Feed"):
             assert g.status == "grey", f"{g.name} must always be grey"
-    # No RED gates → no bottleneck
     assert bottleneck is None
 
 
@@ -319,11 +441,11 @@ def test_manpower_red_when_actual_below_required():
             self.date = "2026-06-15"
     mp_idx = {_norm("M C 4"): [_FakeMp()]}
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 4"), None,
-        {}, mp_idx,
+        _norm("M C 4"), "PTMT",
+        [],  # empty queue → Material GREY
+        [], {}, mp_idx,
         _FakeMetricsResult(actual_hours=100.0, ideal_hours=200.0),
-        100.0, 200.0,
-        [], "2026-06",
+        100.0, 200.0, "2026-06",
     )
     mp_gate = next(g for g in gates if g.name == "Manpower")
     assert mp_gate.status == "red"
@@ -338,11 +460,10 @@ def test_manpower_green_when_actual_meets_required():
             self.date = "2026-06-15"
     mp_idx = {_norm("M C 5"): [_FakeMp()]}
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 5"), None,
-        {}, mp_idx,
+        _norm("M C 5"), "PTMT",
+        [], [], {}, mp_idx,
         _FakeMetricsResult(actual_hours=100.0, ideal_hours=200.0),
-        100.0, 200.0,
-        [], "2026-06",
+        100.0, 200.0, "2026-06",
     )
     mp_gate = next(g for g in gates if g.name == "Manpower")
     assert mp_gate.status == "green"
@@ -350,10 +471,10 @@ def test_manpower_green_when_actual_meets_required():
 
 def test_capacity_green_when_idle():
     gates, bottleneck, _ = _evaluate_gates(
-        _norm("M C 6"), None, {}, {},
+        _norm("M C 6"), "PTMT",
+        [], [], {}, {},
         _FakeMetricsResult(actual_hours=100.0, ideal_hours=300.0),
-        100.0, 300.0,
-        [], "2026-06",
+        100.0, 300.0, "2026-06",
     )
     cap = next(g for g in gates if g.name == "Capacity")
     assert cap.status == "green"
@@ -362,10 +483,10 @@ def test_capacity_green_when_idle():
 
 def test_capacity_red_when_fully_loaded():
     gates, bottleneck, reason = _evaluate_gates(
-        _norm("M C 7"), None, {}, {},
+        _norm("M C 7"), "PTMT",
+        [], [], {}, {},
         _FakeMetricsResult(actual_hours=500.0, ideal_hours=500.0),
-        500.0, 500.0,
-        [], "2026-06",
+        500.0, 500.0, "2026-06",
     )
     cap = next(g for g in gates if g.name == "Capacity")
     assert cap.status == "red"
@@ -374,9 +495,9 @@ def test_capacity_red_when_fully_loaded():
 
 def test_capacity_grey_when_no_prod_data():
     gates, bottleneck, _ = _evaluate_gates(
-        _norm("M C 8"), None, {}, {},
-        None, 0.0, 0.0,
-        [], "2026-06",
+        _norm("M C 8"), "PTMT",
+        [], [], {}, {},
+        None, 0.0, 0.0, "2026-06",
     )
     cap = next(g for g in gates if g.name == "Capacity")
     assert cap.status == "grey"
@@ -390,9 +511,9 @@ def test_machine_health_green_when_in_register():
             self.machine_age_years = 3.5
     maint_idx = {_norm("M/C 9"): _FakeMaint()}
     gates, _, _ = _evaluate_gates(
-        _norm("M/C 9"), None, maint_idx, {},
-        _FakeMetricsResult(), 100.0, 200.0,
-        [], "2026-06",
+        _norm("M/C 9"), "PTMT",
+        [], [], maint_idx, {},
+        _FakeMetricsResult(), 100.0, 200.0, "2026-06",
     )
     mh = next(g for g in gates if g.name == "Machine health")
     assert mh.status == "green"
@@ -401,9 +522,9 @@ def test_machine_health_green_when_in_register():
 
 def test_machine_health_grey_when_missing():
     gates, _, _ = _evaluate_gates(
-        _norm("UNKNOWN MC"), None, {}, {},
-        _FakeMetricsResult(), 100.0, 200.0,
-        [], "2026-06",
+        _norm("UNKNOWN MC"), "PTMT",
+        [], [], {}, {},
+        _FakeMetricsResult(), 100.0, 200.0, "2026-06",
     )
     mh = next(g for g in gates if g.name == "Machine health")
     assert mh.status == "grey"
@@ -415,7 +536,6 @@ def test_machine_health_grey_when_missing():
 
 def test_actionable_flag_requires_all_three():
     """actionable = idle > 0 AND queue non-empty AND no red gate."""
-    # With RED capacity gate → not actionable
     mp = MachinePlan(
         plant="PTMT", machine="M/C 1", month="2026-06",
         run_queue=[_qi("A", 100.0, 5.0)],
@@ -429,12 +549,11 @@ def test_actionable_flag_requires_all_three():
 
 
 def test_six_gates_always_present():
-    """build_plan should always emit exactly 6 gates per machine."""
-    from plan import _evaluate_gates
+    """_evaluate_gates always emits exactly 6 gates."""
     gates, _, _ = _evaluate_gates(
-        _norm("M C 10"), None, {}, {},
-        None, 0.0, 0.0,
-        [], "2026-06",
+        _norm("M C 10"), "PTMT",
+        [], [], {}, {},
+        None, 0.0, 0.0, "2026-06",
     )
     assert len(gates) == 6
     names = [g.name for g in gates]
@@ -445,11 +564,115 @@ def test_six_gates_always_present():
 def test_tooling_and_feed_always_grey():
     """Tooling and Feed are unconditionally grey (Phase 2D not built)."""
     gates, _, _ = _evaluate_gates(
-        _norm("M C 11"), None, {}, {},
-        _FakeMetricsResult(), 100.0, 200.0,
-        [], "2026-06",
+        _norm("M C 11"), "PTMT",
+        [], [], {}, {},
+        _FakeMetricsResult(), 100.0, 200.0, "2026-06",
     )
     for g in gates:
         if g.name in ("Tooling", "Feed"):
             assert g.status == "grey"
             assert "Phase 2D" in g.reason
+
+
+# ---------------------------------------------------------------------------
+# Material gate — per-machine logic
+# ---------------------------------------------------------------------------
+
+def test_material_grey_when_queue_empty():
+    """Empty run queue → Material=GREY regardless of mat_recs."""
+    mats = [_make_rm_at_reorder()]  # has a reorder item, but queue is empty
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 12"), "PTMT",
+        [],   # empty queue
+        mats, {}, {},
+        None, 0.0, 0.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    assert mat_gate.status == "grey"
+    assert "no job" in mat_gate.reason.lower()
+
+
+def test_material_green_when_rm_healthy():
+    """Non-empty queue + all RM above lead time → Material=GREEN."""
+    healthy_rm = _FakeMat("RM", False, 30.0, 5.0, "Healthy Resin", item_type="")
+    run_queue = [_qi("ITEM_A", 100.0, 5.0)]
+    gates, bottleneck, _ = _evaluate_gates(
+        _norm("M C 13"), "PTMT",
+        run_queue,
+        [healthy_rm], {}, {},
+        _FakeMetricsResult(actual_hours=100.0, ideal_hours=300.0),
+        100.0, 300.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    assert mat_gate.status == "green"
+    assert bottleneck is None  # no RED gates → ready
+
+
+def test_material_grey_when_no_rm_data():
+    """Non-empty queue + no mat_recs → Material=GREY (no RM data for type)."""
+    run_queue = [_qi("ITEM_A", 100.0, 5.0)]
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 14"), "PTMT",
+        run_queue,
+        [],   # no material records at all
+        {}, {},
+        None, 0.0, 0.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    assert mat_gate.status == "grey"
+
+
+def test_material_red_only_for_matching_type():
+    """RM reorder on a non-matching type does NOT make gate RED for this machine."""
+    mats = [
+        _FakeMat("RM", True, 1.0, 5.0, "UPVC Resin", item_type="UPVC"),   # reorder!
+        _FakeMat("RM", False, 30.0, 5.0, "CPVC Resin", item_type="CPVC"),  # healthy
+    ]
+    # Machine runs CPVC — only CPVC + "PIPE" (plant) type RM relevant
+    run_queue = [_qi("P001", 300.0, 5.0, family="CPVC")]
+    gates, bottleneck, _ = _evaluate_gates(
+        _norm("CPVC EXTRUDER"), "PIPE",
+        run_queue, mats, {}, {},
+        _FakeMetricsResult(actual_hours=100.0, ideal_hours=300.0),
+        100.0, 300.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    # UPVC resin is excluded (not relevant to this CPVC machine)
+    # CPVC resin is healthy → green
+    assert mat_gate.status == "green"
+    assert bottleneck is None
+
+
+# ---------------------------------------------------------------------------
+# Roster correctness — _PIPE_PRODUCTION_MACHINES constant
+# ---------------------------------------------------------------------------
+
+def test_pipe_production_machines_count():
+    """Canonical PIPE roster must have exactly 9 machines."""
+    assert len(_PIPE_PRODUCTION_MACHINES) == 9
+
+
+def test_pipe_production_machines_format():
+    """All PIPE roster entries follow 'PIPE Pipe M/C-N' format."""
+    for m in _PIPE_PRODUCTION_MACHINES:
+        assert m.startswith("PIPE Pipe M/C-"), f"Unexpected format: {m}"
+
+
+def test_pipe_roster_excludes_maintenance_assets():
+    """Maintenance-only assets must NOT appear in the PIPE production roster."""
+    bad_assets = ["ANALYTICAL BALANCE", "C150-A", "C200-A", "COOLING TOWER",
+                  "CHILLER", "COMPRESSOR", "PRINTING ROLLER"]
+    roster_upper = {m.upper() for m in _PIPE_PRODUCTION_MACHINES}
+    for asset in bad_assets:
+        assert asset.upper() not in roster_upper, (
+            f"Maintenance asset '{asset}' must not be in PIPE production roster"
+        )
+
+
+def test_pipe_roster_includes_mc_1_through_9():
+    """Every Pipe M/C-1 .. Pipe M/C-9 must be in the PIPE production roster."""
+    for i in range(1, 10):
+        expected = f"PIPE Pipe M/C-{i}"
+        assert expected in _PIPE_PRODUCTION_MACHINES, (
+            f"'{expected}' missing from PIPE production roster"
+        )

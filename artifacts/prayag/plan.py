@@ -10,12 +10,18 @@ INVARIANTS
   * Recomputes every gate; trusts no stored flag.
   * Feed + Tooling gates are GREY until Phase 2D lands.
   * Grey gates NEVER become the bottleneck.
+  * Machine roster = PRODUCTION sources only (daily prod_recs + PIPE fixed list).
+    Maintenance records (Report-16/8) are a LEFT JOIN — NEVER added to the roster.
+    MouldStd names are a lookup index for PTMT — NEVER added to the roster.
+  * Material gate is PER-MACHINE, filtered to the machine's run-queue types.
+    A machine with an empty queue gets Material=GREY ("no mapped demand").
+    Generic plant-level RM (item_type == plant name) is always included.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +31,13 @@ from typing import Dict, List, Optional, Tuple
 #: Priority order used to pick the bottleneck (first RED wins; Grey is skipped).
 GATE_PRIORITY: List[str] = [
     "Material", "Tooling", "Feed", "Machine health", "Manpower", "Capacity"
+]
+
+#: Canonical PIPE production machine roster — Report-5 machine column format.
+#: Matches the "PIPE Pipe M/C-N" naming stored by the daily Record parser.
+#: Seeded into the roster so idle machines (no prod_recs this month) still appear.
+_PIPE_PRODUCTION_MACHINES: List[str] = [
+    f"PIPE Pipe M/C-{i}" for i in range(1, 10)
 ]
 
 
@@ -117,15 +130,44 @@ def _lookup_list(idx: Dict[str, list], norm_key: str) -> list:
     return []
 
 
-def _find_worst_rm(mat_recs: list):
+def _classify_ptmt_item(item_name: str) -> str:
+    """Map a MouldStd item_name to a PlanRecord family ('cistern'|'seatcover'|'faucet').
+
+    Keywords are matched against the uppercased item_name.  The three families
+    correspond to the finished-product planning families in PTMT Report-1.
+    Moulds that don't contain cistern- or seatcover-specific keywords are
+    classified as 'faucet' (the dominant PTMT product line).
+    """
+    nm = item_name.strip().upper()
+    cistern_kw = ("CISTERN", "W/C", "BALL COCK", "FLOAT BALL", "FLUSH", "BALLCOCK",
+                  "SIDE INLET", "BALL VALVE CISTERN")
+    seat_kw = ("SEAT ", "SEAT-", " SEAT", "TOILET SEAT", "COVER SEAT")
+    for kw in cistern_kw:
+        if kw in nm:
+            return "cistern"
+    for kw in seat_kw:
+        if kw in nm:
+            return "seatcover"
+    return "faucet"
+
+
+def _find_worst_rm(mat_recs: list, item_types: Optional[Set[str]] = None):
     """Return (item_name, cover_days, lead_days, as_of) for the RM item
     with the lowest days_of_cover that is at or below reorder level.
-    Returns None when all RM stock is healthy or no RM records are loaded."""
+
+    If item_types is provided, only RM records whose item_type (uppercased)
+    is in item_types, or whose item_type is empty/unknown, are considered.
+    Returns None when all RM stock is healthy or no matching RM records exist.
+    """
     worst = None
     worst_cover = float("inf")
     for r in mat_recs:
         if r.category != "RM":
             continue
+        if item_types is not None:
+            rt = (getattr(r, "item_type", "") or "").strip().upper()
+            if rt and rt not in item_types:
+                continue
         if r.reorder_flag and r.days_of_cover is not None:
             if r.days_of_cover < worst_cover:
                 worst_cover = r.days_of_cover
@@ -138,14 +180,21 @@ def _build_run_queue(
     plant: str,
     norm_m: str,
     ptmt_machine_stds: Dict[str, list],
-    plan_by_code: Dict,
+    ptmt_plan_by_family: Dict[str, list],
     pipe_machine_materials: Dict[str, set],
     pipe_plan_by_family: Dict[str, list],
+    pipe_all_plan_recs: list = (),
 ) -> List[RunQueueItem]:
     """Build ranked run queue for one machine.
 
-    PTMT  — MouldStd.machine_name → item_code → PlanRecord
-    PIPE  — production Record.material → PlanRecord.family
+    PTMT  — MouldStd.machine_name → classify item_name → family
+             → PlanRecord for that family (finished-product demand).
+             MouldStd item_codes are mould part numbers (PSF-xxx) which are
+             a different code system from the product item codes in PlanRecord
+             — they MUST NOT be used as a join key.
+    PIPE  — production Record.material → PlanRecord.family;
+             falls back to ALL open pipe plan records for idle machines
+             (machines with no prod_recs this month).
     Others — no PlanRecord data available → empty queue
     """
     items: List[RunQueueItem] = []
@@ -153,35 +202,65 @@ def _build_run_queue(
 
     if plant == "PTMT":
         stds = _lookup_list(ptmt_machine_stds, norm_m)
-        for std in stds:
-            code = (std.item_code or "").strip().upper()
-            plan_r = plan_by_code.get(code)
-            if plan_r is None or plan_r.net_requirement <= 0:
-                continue
-            if code in seen_codes:
-                continue
-            seen_codes.add(code)
-            rate = std.theoretical_pcs_hr if std.theoretical_pcs_hr > 0 else None
-            est_h = round(plan_r.net_requirement / rate, 2) if rate else None
-            items.append(RunQueueItem(
-                item_code=plan_r.item_code,
-                item_name=plan_r.item_name,
-                family=plan_r.family,
-                net_requirement=plan_r.net_requirement,
-                days_of_cover=plan_r.days_of_cover,
-                theoretical_rate=round(rate, 1) if rate else None,
-                estimated_run_time_hrs=est_h,
-                unit="pcs",
-            ))
+        # Determine which finished-product families this machine's moulds serve.
+        # If no mould stds are registered, assume the machine can run all families.
+        machine_fams: Set[str] = {_classify_ptmt_item(s.item_name) for s in stds}
+        if not machine_fams:
+            machine_fams = {"faucet", "cistern", "seatcover"}
+        for fam in sorted(machine_fams):  # sorted for determinism
+            for plan_r in (ptmt_plan_by_family or {}).get(fam, []):
+                if plan_r.net_requirement <= 0:
+                    continue
+                code = (plan_r.item_code or "").strip().upper()
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                rate = plan_r.per_hour_output if plan_r.per_hour_output > 0 else None
+                est_h = round(plan_r.net_requirement / rate, 2) if rate else None
+                items.append(RunQueueItem(
+                    item_code=plan_r.item_code,
+                    item_name=plan_r.item_name,
+                    family=fam,
+                    net_requirement=plan_r.net_requirement,
+                    days_of_cover=plan_r.days_of_cover,
+                    theoretical_rate=round(rate, 1) if rate else None,
+                    estimated_run_time_hrs=est_h,
+                    unit="pcs",
+                ))
 
     elif plant in ("PIPE", "CP"):
-        # Convert the set-valued dict to a plain list dict for _lookup_list
+        # Convert set-valued dict to list dict for _lookup_list
         mat_set_idx: Dict[str, list] = {
             k: list(v) for k, v in pipe_machine_materials.items()
         }
         materials = _lookup_list(mat_set_idx, norm_m)
-        for mat in materials:
-            for plan_r in pipe_plan_by_family.get(mat, []):
+
+        if materials:
+            # Machine ran in this period — use its material history
+            for mat in materials:
+                for plan_r in pipe_plan_by_family.get(mat, []):
+                    if plan_r.net_requirement <= 0:
+                        continue
+                    code = (plan_r.item_code or "").strip().upper()
+                    if code in seen_codes:
+                        continue
+                    seen_codes.add(code)
+                    rate = plan_r.per_hour_output if plan_r.per_hour_output > 0 else None
+                    est_h = round(plan_r.net_requirement / rate, 2) if rate else None
+                    items.append(RunQueueItem(
+                        item_code=plan_r.item_code,
+                        item_name=plan_r.item_name,
+                        family=plan_r.family,
+                        net_requirement=plan_r.net_requirement,
+                        days_of_cover=plan_r.days_of_cover,
+                        theoretical_rate=round(rate, 1) if rate else None,
+                        estimated_run_time_hrs=est_h,
+                        unit="pcs",
+                    ))
+        else:
+            # Idle machine (no production this month) — offer ALL open pipe jobs
+            # Any pipe machine can run any product type when set up for it.
+            for plan_r in pipe_all_plan_recs:
                 if plan_r.net_requirement <= 0:
                     continue
                 code = (plan_r.item_code or "").strip().upper()
@@ -211,40 +290,67 @@ def _build_run_queue(
 
 def _evaluate_gates(
     norm_m: str,
-    rm_worst,
+    plant: str,
+    run_queue: List[RunQueueItem],
+    mat_recs: list,
     maint_idx: Dict,
     mp_idx: Dict,
     m_result,
     actual_h: float,
     ideal_h: float,
-    mat_recs: list,
     month: str,
 ) -> Tuple[List[GateStatus], Optional[str], str]:
-    """Evaluate all six readiness gates; return (gates, bottleneck_name, reason)."""
+    """Evaluate all six readiness gates; return (gates, bottleneck_name, reason).
+
+    Material gate is PER-MACHINE — filtered to the types in this machine's run queue.
+    A machine with an empty queue gets Material=GREY (no mapped demand).
+    Generic plant-level RM (item_type == plant name) is always included.
+    Grey gates NEVER become the bottleneck.
+    """
     gates: List[GateStatus] = []
 
-    # ── 1. Material (plant-level RM reorder check) ─────────────────────
-    rm_recs = [r for r in mat_recs if r.category == "RM"]
-    mat_as_of = rm_recs[0].as_of_date if rm_recs else ""
-    if rm_worst:
-        name, cover, lead, as_of = rm_worst
-        gates.append(GateStatus(
-            name="Material", status="red",
-            reason=f"{name} cover {cover:.0f}d < lead {lead:.0f}d",
-            provenance=f"Report-2/3/4 as of {as_of or month}",
-        ))
-    elif rm_recs:
-        gates.append(GateStatus(
-            name="Material", status="green",
-            reason="All RM stock above lead time",
-            provenance=f"Report-2/3/4 as of {mat_as_of or month}",
-        ))
-    else:
+    # ── 1. Material (per-machine RM check) ─────────────────────────────
+    if not run_queue:
         gates.append(GateStatus(
             name="Material", status="grey",
-            reason="No material data loaded",
+            reason="No mapped demand — no job assigned",
             provenance="",
         ))
+    else:
+        # item_types: queue families + plant name (covers generic plant-level RM)
+        item_types: Set[str] = {qi.family.strip().upper() for qi in run_queue if qi.family}
+        if plant:
+            item_types.add(plant.strip().upper())
+
+        rm_worst = _find_worst_rm(mat_recs, item_types=item_types)
+        rm_recs = [
+            r for r in mat_recs if r.category == "RM" and (
+                not item_types
+                or not (getattr(r, "item_type", "") or "").strip().upper()
+                or (getattr(r, "item_type", "") or "").strip().upper() in item_types
+            )
+        ]
+        mat_as_of = rm_recs[0].as_of_date if rm_recs else ""
+
+        if rm_worst:
+            name, cover, lead, as_of = rm_worst
+            gates.append(GateStatus(
+                name="Material", status="red",
+                reason=f"{name} cover {cover:.0f}d < lead {lead:.0f}d",
+                provenance=f"Report-2/3/4 as of {as_of or month}",
+            ))
+        elif rm_recs:
+            gates.append(GateStatus(
+                name="Material", status="green",
+                reason="All RM stock above lead time",
+                provenance=f"Report-2/3/4 as of {mat_as_of or month}",
+            ))
+        else:
+            gates.append(GateStatus(
+                name="Material", status="grey",
+                reason="No RM data for this machine type",
+                provenance="",
+            ))
 
     # ── 2. Tooling (always GREY — Phase 2D not yet built) ──────────────
     gates.append(GateStatus(
@@ -283,7 +389,7 @@ def _evaluate_gates(
         pipe_recs = [r for r in mp_list if r.required_manpower > 0]
         if pipe_recs:
             avg_actual = sum(r.actual_manpower for r in pipe_recs) / len(pipe_recs)
-            avg_req = pipe_recs[0].required_manpower  # static "REQUIREMENT" col
+            avg_req = pipe_recs[0].required_manpower
             last_date = max(
                 (r.date for r in pipe_recs if r.date), default=month
             )
@@ -296,11 +402,11 @@ def _evaluate_gates(
             else:
                 gates.append(GateStatus(
                     name="Manpower", status="green",
-                    reason=f"Avg actual {avg_actual:.1f} ≥ required {avg_req:.0f}",
+                    reason=f"Avg actual {avg_actual:.1f} \u2265 required {avg_req:.0f}",
                     provenance=f"Report-22 as of {last_date}",
                 ))
         else:
-            # PTMT — no required_manpower col; just confirm any was logged
+            # PTMT — no required_manpower col; confirm any was logged
             logged = sum(1 for r in mp_list if r.actual_manpower > 0)
             last_date = max((r.date for r in mp_list if r.date), default=month)
             if logged > 0:
@@ -365,7 +471,7 @@ def _evaluate_gates(
 def build_plan(plant: str, month: str) -> List[MachinePlan]:
     """Build MachinePlan list for all machines in plant for the given month.
 
-    Joins existing on-demand loaders (no new sheet reads).
+    Machine roster = production sources only; maintenance is a LEFT JOIN.
     MUST NOT be called from the "/" critical path.
     """
     import sheets
@@ -406,6 +512,7 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
         prod_recs = []
 
     # ── 2. Build indexes ─────────────────────────────────────────────────
+    # Maintenance is a LEFT JOIN index — never used to build the roster.
     maint_idx: Dict[str, object] = {_norm(r.machine): r for r in maint_recs}
 
     mp_idx: Dict[str, list] = {}
@@ -416,15 +523,21 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
     if prod_recs:
         mach_metrics = _met.rollup_by_machine(prod_recs)
 
-    rm_worst = _find_worst_rm(mat_recs)
-
+    # PTMT MASTER: lookup index for run-queue joins; NOT added to the roster.
     ptmt_machine_stds: Dict[str, list] = {}
     for std in mould_stds:
         ptmt_machine_stds.setdefault(_norm(std.machine_name), []).append(std)
 
-    plan_by_code: Dict[str, object] = {
-        (r.item_code or "").strip().upper(): r for r in plan_recs
-    }
+    # PTMT: plan records keyed by family (faucet/cistern/seatcover).
+    # NOTE: MouldStd item_codes are mould part numbers (PSF-xxx), NOT product
+    # item codes — the two code systems never overlap, so a code-based join is
+    # impossible.  Family-based join is the correct approach.
+    ptmt_plan_by_family: Dict[str, list] = {}
+    if plant == "PTMT":
+        for r in plan_recs:
+            fam = (r.family or "").strip().lower()
+            if fam:
+                ptmt_plan_by_family.setdefault(fam, []).append(r)
 
     pipe_machine_materials: Dict[str, set] = {}
     for r in prod_recs:
@@ -437,20 +550,24 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
     for r in plan_recs:
         pipe_plan_by_family.setdefault(r.family.upper().strip(), []).append(r)
 
-    # ── 3. Collect machine names from all sources ────────────────────────
+    # ── 3. Collect machine names from PRODUCTION sources only ────────────
+    #    maint_recs → LEFT JOIN, never roster source.
+    #    mould_stds → run-queue lookup only, never roster source.
+    #    mp_recs    → lookup index only, never roster source.
     machines: set = set()
+
+    # PIPE: seed with canonical 9-machine list so idle machines still appear.
+    if plant in ("PIPE", "CP"):
+        for m in _PIPE_PRODUCTION_MACHINES:
+            machines.add(m)
+
+    # Add any machine that actually appeared in daily production this month.
     for r in prod_recs:
         if r.machine and not r.is_finishing:
             machines.add(r.machine)
-    for r in mp_recs:
-        if r.machine:
-            machines.add(r.machine)
-    for r in maint_recs:
-        if r.machine:
-            machines.add(r.machine)
-    for std in mould_stds:
-        if std.machine_name:
-            machines.add(std.machine_name)
+
+    # PTMT: prod_recs carries authoritative names (with "PTMT " prefix).
+    # mould_stds names lack the prefix and cause duplicates — excluded.
 
     if not machines:
         return []
@@ -462,7 +579,7 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
     for machine in sorted(machines):
         norm_m = _norm(machine)
 
-        # Production context — try exact name then normalised fallback
+        # Production context — exact name then normalised fallback
         m_result = mach_metrics.get(machine)
         if m_result is None:
             for k, v in mach_metrics.items():
@@ -487,13 +604,22 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
 
         run_queue = _build_run_queue(
             plant, norm_m,
-            ptmt_machine_stds, plan_by_code,
+            ptmt_machine_stds, ptmt_plan_by_family,
             pipe_machine_materials, pipe_plan_by_family,
+            pipe_all_plan_recs=plan_recs,
         )
 
         gates, bottleneck, bn_reason = _evaluate_gates(
-            norm_m, rm_worst, maint_idx, mp_idx,
-            m_result, actual_h, ideal_h, mat_recs, month,
+            norm_m=norm_m,
+            plant=plant,
+            run_queue=run_queue,
+            mat_recs=mat_recs,
+            maint_idx=maint_idx,
+            mp_idx=mp_idx,
+            m_result=m_result,
+            actual_h=actual_h,
+            ideal_h=ideal_h,
+            month=month,
         )
 
         actionable = (

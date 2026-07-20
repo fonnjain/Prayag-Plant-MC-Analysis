@@ -37,3 +37,4 @@
 - [API key DB-managed](prayag-api-key-db.md) — API key lives in Postgres api_keys table (store.py); _configured_key() checks DB first then PRAYAG_API_KEY env var; tests must monkeypatch store.get_api_key → None or DB key shadows env var.
 - [Prayag workflow proxy warmup](prayag-workflow-proxy-warmup.md) — artifact-managed workflow always fails health check (502 during 2-3s proxy warmup); fix: console-type "Prayag App" workflow with no waitForPort; restart via "Prayag App" not the artifact one.
 - [Jinja2 macro definition order](jinja2-macro-order.md) — macros must be defined BEFORE any call site in the same template; Jinja2 does not hoist macros; placing {% macro %} at bottom causes UndefinedError at render.
+- [Phase 3 plan.py join correctness](prayag-plan-phase3-joins.md) — PIPE roster from _PIPE_PRODUCTION_MACHINES only; PTMT queue is family-join (PSF codes ≠ product codes, zero overlap); Material gate per-machine with plant name in item_types.
