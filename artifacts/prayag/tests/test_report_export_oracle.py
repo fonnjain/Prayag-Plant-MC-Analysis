@@ -62,8 +62,10 @@ _REF = {
     "moulding":    {"out": 75_771.1, "rej": 752.24},
     # (C) Group of Moulding — TOTAL row (ties to the (B) output)
     "gom":         {"out": 75_771.1},
-    # (D) Pipe Moulds Summary — TOTAL MOULDING row (kg ties to (B); pcs)
-    "pipe_moulds": {"kg": 75_771.1, "pcs": 1_163_032},
+    # (D) Pipe Moulds Summary — ORACLE-VERIFIED from Reports 17-20 (always
+    # authoritative).  The May 17-20 workbook returns 89,151.74 kg / 1,340,117
+    # pcs; Report-12 (75,771.1 kg) is a cross-check reference only.
+    "pipe_moulds": {"kg": 89_151.74, "pcs": 1_340_117},
     # Moulding %age Efficiency — TOTAL / AVG row (output ties to (B))
     "mould_eff":   {"out": 75_771.1},
     # Garden Pipe Summary — TOTAL row (headline output)
@@ -90,7 +92,8 @@ def _install_fixtures():
         "gdr": sheets.get_daily_records,
         "dfi": sheets._daily_file_id,
         "tok": sheets._get_access_token,
-        "rv": sheets.read_values,
+        "rv":  sheets.read_values,
+        "lpm": sheets.load_pipe_moulds,
     }
     sheets.get_daily_records = lambda months, *a, **k: (
         [r for r in recs if r.period in months], [], [])
@@ -98,14 +101,32 @@ def _install_fixtures():
     sheets._get_access_token = lambda *a, **k: "FIXTURE"
     sheets.read_values = lambda fid, tab, tok, *a, **k: (
         report12 if tab == "Report-12" else [])
+
+    # Stub load_pipe_moulds with the May 2026 live figures from Reports 17-20
+    # (authoritative source; captured 2026-07-20).  Report-12 (75,771.1 kg)
+    # diverges by ~18% and is retained as a cross-check note only.
+    def _may_moulds_data(ym):
+        return {
+            "available": True, "incomplete": False, "missing": [],
+            "month": ym, "file_id": "FIXTURE",
+            "grand_kg": 89_151.74, "grand_pcs": 1_340_117,
+            "groups": [
+                {"group": "CPVC", "total_kg": 19_591.32, "total_pcs": 716_595, "n_run": 5, "n_total": 6},
+                {"group": "UPVC", "total_kg": 27_796.29, "total_pcs": 454_396, "n_run": 8, "n_total": 9},
+                {"group": "SWR",  "total_kg": 33_177.94, "total_pcs": 129_531, "n_run": 4, "n_total": 5},
+                {"group": "AGRI", "total_kg":  8_586.19, "total_pcs":  39_595, "n_run": 2, "n_total": 2},
+            ],
+        }
+    sheets.load_pipe_moulds = _may_moulds_data
     return saved
 
 
 def _restore(saved):
     sheets.get_daily_records = saved["gdr"]
-    sheets._daily_file_id = saved["dfi"]
+    sheets._daily_file_id    = saved["dfi"]
     sheets._get_access_token = saved["tok"]
-    sheets.read_values = saved["rv"]
+    sheets.read_values       = saved["rv"]
+    sheets.load_pipe_moulds  = saved["lpm"]
 
 
 def _totals(rid):
