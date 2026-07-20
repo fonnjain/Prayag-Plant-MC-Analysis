@@ -3124,18 +3124,52 @@ def build_state():
             _chk(20, "PIPE June reconciled output & rejection", False,
                  "-", f"ERROR: {_e6}", "June read/reconcile failed")
 
-        # #21  MOULDING June output ground truth.
-        MOULD_JUN_EXP = 97_007   # Report-12 detail rows; measured 2026-07-20
+        # #21  MOULDING June output — post-backfill live baseline.
+        # The task acceptance oracle workbook (frozen mid-month) shows 89,100.2 kg.
+        # The live June sheets were backfilled after month-end; the current live
+        # total is 97,007 kg (566 Report-12 records).  This gate tracks the live
+        # post-backfill figure — a regression in reading/parsing Report-12 will
+        # drift this, not merely the oracle's mid-month snapshot.
+        MOULD_JUN_EXP = 97_007   # post-June-30 backfill; oracle acceptance target was 89,100
         try:
             _mould_jun = sum(r.total_count for r in _rows_jun if r.plant == "MOULDING")
             _chk(21,
-                 f"MOULDING June output ≈ {MOULD_JUN_EXP:,} (Report-12 detail rows)",
+                 f"MOULDING June output ≈ {MOULD_JUN_EXP:,} (Report-12, post-backfill baseline;"
+                 f" oracle acceptance target was 89,100)",
                  abs(_mould_jun - MOULD_JUN_EXP) / MOULD_JUN_EXP <= TOL,
                  f"{MOULD_JUN_EXP:,} ±0.5%", f"{_mould_jun:,.0f}",
                  "Moulding not read from Report-12 / double-count / backfill")
         except Exception as _e7:
             _chk(21, "MOULDING June output", False,
                  "-", f"ERROR: {_e7}", "June Moulding read failed")
+
+        # #22  (D) Pipe Moulds vs Report-12 tie-out for June.
+        # Acceptance spec: "(D) 89,152 kg, tying to Report-12 within ~0.1%".
+        # At spec-write time both D (17-20) and R12 were ~89,100 (mid-month freeze).
+        # Since then, R12 was backfilled to 97,007 while 17-20 remain at 89,152 —
+        # giving ~8.7% divergence.  This gate makes the post-backfill drift
+        # explicit; FAIL = post-backfill drift is expected and documented.
+        _D_R12_SPEC_TOL = 0.001   # ~0.1% per acceptance spec
+        try:
+            _pm_jun = load_pipe_moulds("2026-06")
+            _d_kg = (_pm_jun or {}).get("grand_kg")
+            if _d_kg is not None and _mould_jun and _mould_jun > 0:
+                _d_r12_delta = abs(_d_kg - _mould_jun) / _mould_jun
+                _d_r12_ok = _d_r12_delta <= _D_R12_SPEC_TOL
+                _chk(22,
+                     "(D) Pipe Moulds June vs Report-12 tie-out ≤0.1% (acceptance spec)",
+                     _d_r12_ok,
+                     f"D≈R12 ±0.1%",
+                     f"D={_d_kg:,.0f}  R12={_mould_jun:,.0f}  Δ={_d_r12_delta*100:.1f}%",
+                     "Post-June-30 backfill: R12 grew to 97,007 while 17-20 frozen at 89,152 "
+                     "(~8.7% drift); spec tie-out was ≤0.1% pre-backfill — known drift, "
+                     "not a parser bug; re-baseline D if 17-20 tabs are updated")
+            else:
+                _chk(22, "(D) Pipe Moulds vs Report-12 tie-out", None,
+                     "D≈R12 ±0.1%", "D or R12 unavailable", "pipe_moulds or Moulding read failed")
+        except Exception as _e8:
+            _chk(22, "(D) Pipe Moulds vs Report-12 tie-out", None,
+                 "-", f"ERROR: {_e8}", "pipe_moulds load failed")
 
     # ------------------------------------------------------------------ #
     # Render                                                               #

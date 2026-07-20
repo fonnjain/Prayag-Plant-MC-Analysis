@@ -40,11 +40,15 @@ value below is therefore tagged:
   ``ptmt_moulds``, ``ptmt_eff``, and — for ``pipe`` — the oracle's own documented
   "complete Report-5 daily" grand total (168,738 kg on the Type-wise sheet; the
   A-summary cell 170,216 is the stale R5/R11 date-wise max).
-- SNAPSHOT-PINNED — the June oracle output has drifted past ±0.5% due to the
-  mid-month freeze, so the value is pinned to the recomputed figure from the
-  committed June fixture. This still guards the generator against parser / layout
-  / generator regressions on a structurally-different second month: ``moulding``,
-  ``gom``, ``mould_eff``, ``pipe_moulds``.
+- SNAPSHOT-PINNED — the June fixture was itself captured **post-June-30 backfill**
+  so the fixture's output total drifts from the June oracle acceptance workbook by
+  more than ±0.5%.  The pinned value matches what the committed fixture produces,
+  guarding the generator against parser/layout/regression on this month's distinct
+  structure.  The acceptance oracle workbook figure is noted in the comment for
+  reference.  Affected reports: ``moulding`` (fixture 97,006.92 kg vs oracle
+  89,100.2 kg), ``gom`` (ties to moulding), ``mould_eff`` (ties to moulding),
+  ``pipe_moulds`` (17-20 source mid-month frozen at 89,151.74 kg; R12
+  cross-check drifted to 97,006.92 due to backfill).
 
 ``hdpe`` has NO June production entered (the oracle reports it as "awaiting
 source / no production"), so there is no output to pin — it is skipped.
@@ -77,16 +81,24 @@ _REF = {
     # complete Report-5 daily grand total (168,738 kg). The A-cell 170,216 is the
     # stale R5/R11 date-wise max and is intentionally NOT pinned.
     "pipe":        {"out": 168_738},
-    # (B) Moulding M/C Summary — ORACLE-VERIFIED (oracle 89,100.2 was a mid-month
-    # freeze; June 30 backfill completes Report-12 to 97,006.92 kg / 566 records).
+    # (B) Moulding M/C Summary — SNAPSHOT-PINNED.
+    # Acceptance oracle workbook: 89,100.2 kg (mid-month freeze, June 30 not yet
+    # entered).  The committed June fixture was re-captured post-June-30 backfill
+    # and contains 97,006.92 kg / 566 records.  The pin guards generator/parser
+    # logic against regression on the June fixture structure; it does NOT verify
+    # the acceptance oracle (which pre-dates the backfill).
     "moulding":    {"out": 97_006.92},
-    # (C) Group of Moulding — ORACLE-VERIFIED (ties to (B) output).
+    # (C) Group of Moulding — SNAPSHOT-PINNED (output ties to (B)).
+    # Oracle: 89,100.2 kg; fixture post-backfill: 97,006.92 kg.
     "gom":         {"out": 97_006.92},
-    # (D) Pipe Moulds Summary — ORACLE-VERIFIED from Reports 17-20 (always authoritative).
-    # 17-20 shows 89,151.74 kg / 1,340,117 pcs (mid-month freeze of June); Report-12
-    # shows 97,006.92 kg (post June-30 backfill) but is now a cross-check only.
+    # (D) Pipe Moulds Summary — SNAPSHOT-PINNED from Reports 17-20 (always
+    # authoritative).  17-20 shows 89,151.74 kg / 1,340,117 pcs (mid-month freeze
+    # of June; not backfilled).  Report-12 shows 97,006.92 kg after June-30
+    # backfill, giving a ~8.7% D/R12 divergence — see build-state #22 for the
+    # explicit tie-out gate.
     "pipe_moulds": {"kg": 89_151.74, "pcs": 1_340_117},
-    # Moulding %age Efficiency — ORACLE-VERIFIED (output ties to (B)).
+    # Moulding %age Efficiency — SNAPSHOT-PINNED (output ties to (B)).
+    # Oracle: 89,100.2 kg; fixture post-backfill: 97,006.92 kg.
     "mould_eff":   {"out": 97_006.92},
     # Garden Pipe Summary — ORACLE-VERIFIED headline output (60,928 kg).
     "garden":      {"out": 60_928},
