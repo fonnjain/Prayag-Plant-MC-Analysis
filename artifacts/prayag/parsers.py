@@ -2442,3 +2442,146 @@ def parse_report12_capacity(values: list) -> dict:
             "theoretical_pcs_hr": round(th_rate, 0),
         }
     return result
+
+
+def parse_material_stock(values: list, plant: str, category: str) -> list:
+    """Parse a PIPE or PTMT material stock tab (Report-2 / 3 / 4).
+
+    PIPE header at sheet row 4 (0-indexed 3); PTMT Report-2/3 at row 3
+    (0-indexed 2); PTMT Report-4 at row 4 (0-indexed 3).  Header location
+    is detected dynamically — scanner stops at the first row (within the
+    first 10) that contains both 'ITEM NAME' and ('ITEM CODE' or 'CODE').
+
+    PIPE-specific quirks:
+      - 'Stock Days' column is pre-computed by the sheet; stored as
+        stock_days_sheet (cross-check only); days_of_cover is always
+        recomputed from closing_stock / (avg_consumption_month / 30).
+      - Report-3 (BOP) uses 'Buffer Stock (in Days)' for ideal qty; the
+        value is converted: buffer_days × avg_consumption / 30 = units.
+      - Opening Stock column is present.
+
+    PTMT-specific quirks:
+      - No 'Stock Days' column; stock_days_sheet = None.
+      - Report-4 uses 'CODE' instead of 'ITEM CODE'.
+      - No Opening Stock column.
+
+    Returns a list of MaterialRecord with days_of_cover / reorder metrics
+    computed by compute_material_metrics().
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # ---- Locate header row -------------------------------------------------
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        if "ITEM NAME" in up and ("ITEM CODE" in up or "CODE" in up):
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    # ---- Column indices (header-text based — never by position) ------------
+    code_c      = fc(lambda h: h in ("ITEM CODE", "CODE"))
+    name_c      = fc(lambda h: h == "ITEM NAME")
+    types_c     = fc(lambda h: h in ("TYPES", "TYPE"))
+    price_c     = fc(lambda h: "PURCHASE PRICE" in h)
+    cons_c      = fc(lambda h: "CONSUMPTION OF LAST" in h)
+    ideal_qty_c = fc(lambda h: "SET IDEAL QTY" in h)            # PIPE R2/R4 (units)
+    buffer_c    = fc(lambda h: "BUFFER STOCK" in h and "DAYS" in h)  # PIPE R3 BOP (days)
+    ideal30_c   = fc(lambda h: "SET IDEAL STOCK" in h)          # PTMT (30-day qty)
+    batch_c     = fc(lambda h: "MIN" in h and "BATCH" in h)
+    lead_c      = fc(lambda h: "LEAD TIME" in h)
+    open_c      = fc(lambda h: "OPENING STOCK" in h)
+    stock_days_c = fc(lambda h: h == "STOCK DAYS")              # PIPE pre-computed
+    ptill_c     = fc(lambda h: "PURCHASE TILL" in h)
+    ctill_c     = fc(lambda h: "CONSUMPTION TILL" in h)
+    close_c     = fc(lambda h: "CLOSING STOCK" in h or h == "CLOSING STOCK")
+
+    # ---- as_of_date: scan pre-header rows for a date / month label ---------
+    as_of_date = ""
+    for i in range(min(header_idx, 5)):
+        for v in values[i]:
+            s = str(v).strip()
+            if not s:
+                continue
+            if (re.search(r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}', s) or
+                    re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+                              r'\w*[\s\-]+\d{2,4}', s, re.IGNORECASE)):
+                as_of_date = s
+                break
+        if as_of_date:
+            break
+
+    # ---- Data rows ---------------------------------------------------------
+    recs = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        code = str(g(row, code_c)).strip()
+        if not code or "TOTAL" in code.upper() or len(code) < 2:
+            continue
+        # Skip spacer / sub-header rows with fewer than 4 populated cells
+        if sum(1 for v in row if str(v).strip()) < 4:
+            continue
+
+        avg_consumption = num(g(row, cons_c))
+        closing         = num(g(row, close_c))
+
+        # Resolve ideal stock to units
+        if ideal_qty_c >= 0:
+            ideal_raw = num(g(row, ideal_qty_c))
+        elif ideal30_c >= 0:
+            ideal_raw = num(g(row, ideal30_c))
+        else:
+            ideal_raw = 0.0
+
+        if ideal_raw > 0:
+            ideal_stock = ideal_raw
+        elif buffer_c >= 0:
+            buf_days = num(g(row, buffer_c))
+            ideal_stock = (buf_days * avg_consumption / 30.0
+                           if buf_days > 0 and avg_consumption > 0 else 0.0)
+        else:
+            ideal_stock = 0.0
+
+        # Sheet-computed stock days (PIPE only — used as a cross-check)
+        if stock_days_c >= 0:
+            sds = num(g(row, stock_days_c))
+            stock_days_sheet: Optional[float] = sds if sds > 0 else None
+        else:
+            stock_days_sheet = None
+
+        r = _pl.MaterialRecord(
+            plant=plant,
+            category=category,
+            item_code=code,
+            item_name=str(g(row, name_c)).strip(),
+            item_type=str(g(row, types_c)).strip() if types_c >= 0 else "",
+            avg_price=num(g(row, price_c)),
+            avg_consumption_month=avg_consumption,
+            ideal_stock=ideal_stock,
+            min_batch=num(g(row, batch_c)),
+            lead_time_days=num(g(row, lead_c)),
+            opening_stock=num(g(row, open_c)) if open_c >= 0 else 0.0,
+            closing_stock=closing,
+            purchase_till=num(g(row, ptill_c)) if ptill_c >= 0 else 0.0,
+            consumption_till=num(g(row, ctill_c)) if ctill_c >= 0 else 0.0,
+            stock_days_sheet=stock_days_sheet,
+            days_of_cover=None,
+            as_of_date=as_of_date,
+        )
+        _pl.compute_material_metrics(r)
+        recs.append(r)
+
+    return recs

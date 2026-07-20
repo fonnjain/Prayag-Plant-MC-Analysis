@@ -23,6 +23,7 @@ from sheets import (
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
+    load_material_records,
 )
 from sources import (
     PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526,
@@ -1561,6 +1562,7 @@ def sources_view():
         "reports": reports,
         "annual_sources": ANNUAL_SOURCES,
         "daily_sources": DAILY_SOURCES,
+        "planning_sources": PLANNING_SOURCES,
         "freshness": _build_freshness(),
         "index_catalogue": _build_index_catalogue(),
     })
@@ -3706,6 +3708,80 @@ def ptmt_capacity_view():
     return render_template("ptmt_capacity.html",
         error=None, pieces=pieces, master_items=master_items,
         months=ptmt_months, month=month, **_ctx)
+
+
+# ---------------------------------------------------------------------------
+# Material Readiness — /materials (Phase 2B)
+# On-demand parallel domain: NEVER loaded on "/" or any production-metrics path.
+# Reads Report-2/3/4 from the same PIPE / PTMT workbooks (no new Drive sharing).
+# ---------------------------------------------------------------------------
+
+_MATERIAL_CATEGORY_ORDER = ["RM", "BOP", "PACK"]
+_MATERIAL_CATEGORY_LABELS = {
+    "RM":   "Raw Material",
+    "BOP":  "BOP — Bought-Out Parts",
+    "PACK": "Packaging",
+}
+
+
+@app.route("/materials")
+def materials_view():
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+    plant = request.args.get("plant", "PIPE")
+
+    plants = list(PLANNING_SOURCES.keys())
+    if plant not in plants:
+        plant = plants[0] if plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_material_records(plant, month)
+    except SheetReadError as e:
+        return render_template("materials.html",
+            error=str(e), groups=[], total_items=0, total_reorder=0,
+            months=all_months, month=month, plant=plant, plants=plants,
+            as_of_date="", **_ctx)
+
+    # Group by category, sort each group by risk (lowest days_of_cover first;
+    # None (unknown cover) sorted last so genuine zeroes appear at the top).
+    from collections import defaultdict as _dd
+    bucket: dict = _dd(list)
+    for r in recs:
+        bucket[r.category].append(r)
+
+    groups = []
+    for cat in _MATERIAL_CATEGORY_ORDER:
+        items = bucket.get(cat, [])
+        if not items:
+            continue
+        items.sort(key=lambda r: (r.days_of_cover is None, r.days_of_cover or 0.0))
+        reorder_count = sum(1 for r in items if r.reorder_flag)
+        amber_count   = sum(1 for r in items
+                            if not r.reorder_flag
+                            and r.days_of_cover is not None
+                            and r.lead_time_days > 0
+                            and r.days_of_cover <= 1.5 * r.lead_time_days)
+        groups.append({
+            "category":     cat,
+            "label":        _MATERIAL_CATEGORY_LABELS.get(cat, cat),
+            "rows":          items,
+            "reorder_count": reorder_count,
+            "amber_count":  amber_count,
+            "total":        len(items),
+        })
+
+    as_of_date   = recs[0].as_of_date if recs else ""
+    total_items  = sum(g["total"]        for g in groups)
+    total_reorder = sum(g["reorder_count"] for g in groups)
+
+    return render_template("materials.html",
+        error=None, groups=groups,
+        total_items=total_items, total_reorder=total_reorder,
+        months=all_months, month=month, plant=plant, plants=plants,
+        as_of_date=as_of_date, **_ctx)
 
 
 @app.route("/compound")

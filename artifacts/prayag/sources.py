@@ -427,6 +427,14 @@ PLANNING_SOURCES: dict = {
             {"tab": "Report-1 (B)", "family": "AGRI", "parser": "pipe_report1"},
             {"tab": "Report-1 (C)", "family": "SWR",  "parser": "pipe_report1"},
         ],
+        # Phase 2B — material / BOP / packaging stock readiness (weekly snapshot).
+        # 'Stock Days' in PIPE is a pre-computed sheet cell; the parser stores it
+        # as stock_days_sheet for cross-check and always recomputes days_of_cover.
+        "material_tabs": [
+            {"tab": "Report-2", "category": "RM",   "parser": "material_stock"},  # 42 items
+            {"tab": "Report-3", "category": "BOP",  "parser": "material_stock"},  # 31 items (Buffer Stock in Days)
+            {"tab": "Report-4", "category": "PACK", "parser": "material_stock"},  # 15 items
+        ],
     },
     "PTMT": {
         "tabs": [
@@ -436,6 +444,15 @@ PLANNING_SOURCES: dict = {
         ],
         "report7_tab": "Report-7",
         "master_tab":  "MASTER",
+        # Phase 2B — PTMT material stock readiness.
+        # R2/R3 header at sheet row 3; R4 header at row 4 (auto-detected).
+        # No 'Stock Days' column — days_of_cover computed only.
+        # Report-4 uses 'CODE' instead of 'ITEM CODE' for the item-code header.
+        "material_tabs": [
+            {"tab": "Report-2", "category": "BOP",  "parser": "material_stock"},  # 53 items
+            {"tab": "Report-3", "category": "PACK", "parser": "material_stock"},  # 32 items
+            {"tab": "Report-4", "category": "RM",   "parser": "material_stock"},  # 21 items
+        ],
     },
 }
 

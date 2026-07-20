@@ -66,3 +66,53 @@ def compute_mould_std(std: MouldStd) -> MouldStd:
     if std.cycle_time_per_pcs > 0:
         std.theoretical_pcs_hr = 3600.0 / std.cycle_time_per_pcs
     return std
+
+
+@dataclass
+class MaterialRecord:
+    """One item from a PIPE/PTMT Report-2/3/4 material-stock snapshot.
+
+    days_of_cover and reorder metrics are recomputed by
+    compute_material_metrics(); never trust the sheet-supplied 'Stock Days'
+    as the headline (stored as stock_days_sheet for cross-check only).
+    """
+    plant: str                          # "PIPE" | "PTMT"
+    category: str                       # "RM" | "BOP" | "PACK"
+    item_code: str
+    item_name: str
+    item_type: str                      # TYPES column (may be empty)
+    avg_price: float                    # Av. Purchase Price of Last N Days
+    avg_consumption_month: float        # Consumption / Avg Consumption of Last month
+    ideal_stock: float                  # SET IDEAL QTY or equivalent (units)
+    min_batch: float                    # Min. Batch Size
+    lead_time_days: float               # LEAD TIME (days; stripped of any text suffix)
+    opening_stock: float                # Opening Stock (PIPE only; 0 for PTMT)
+    closing_stock: float                # Closing Stock
+    purchase_till: float                # Purchase Till (cumulative purchases this month)
+    consumption_till: float             # Consumption till Date (cumulative this month)
+    stock_days_sheet: Optional[float]   # Pre-computed "Stock Days" from PIPE sheet; None for PTMT
+    days_of_cover: Optional[float]      # Recomputed: closing / (avg_consumption / 30)
+    as_of_date: str                     # Snapshot date label from sheet header
+    reorder_flag: bool = False          # cover <= lead_time_days
+    suggested_purchase: float = 0.0    # max(ideal_stock − closing, min_batch) when reorder
+
+
+def compute_material_metrics(rec: "MaterialRecord") -> "MaterialRecord":
+    """Compute days_of_cover, reorder_flag, and suggested_purchase in-place."""
+    daily = rec.avg_consumption_month / 30.0 if rec.avg_consumption_month > 0 else 0.0
+    if daily > 0 and rec.closing_stock >= 0:
+        rec.days_of_cover = rec.closing_stock / daily
+    else:
+        rec.days_of_cover = None
+
+    rec.reorder_flag = bool(
+        rec.days_of_cover is not None
+        and rec.lead_time_days > 0
+        and rec.days_of_cover <= rec.lead_time_days
+    )
+    if rec.reorder_flag and (rec.ideal_stock > 0 or rec.min_batch > 0):
+        shortfall = rec.ideal_stock - rec.closing_stock
+        rec.suggested_purchase = max(shortfall, rec.min_batch)
+    else:
+        rec.suggested_purchase = 0.0
+    return rec

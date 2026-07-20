@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Material Readiness{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <div>
+    <h2 class="text-lg font-bold" style="color:var(--navy)">Material Readiness</h2>
+    <div class="text-xs text-gray-400 mt-0.5">
+      Raw material / BOP / packaging stock — recomputed from Report-2/3/4 tabs
+    </div>
+  </div>
+  <a href="/planning?month={{ month }}&plant={{ plant }}"
+     class="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border"
+     style="color:var(--navy);border-color:rgba(31,56,100,0.3)">
+    ← Demand Planning
+  </a>
+</div>
+
+<!-- Weekly snapshot notice -->
+<div class="mb-4 rounded-xl border px-4 py-2.5 text-xs flex items-start gap-2"
+     style="background:#fffbeb;border-color:#fde68a;color:#92400e">
+  <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24"
+       stroke="currentColor" stroke-width="1.8">
+    <path stroke-linecap="round" stroke-linejoin="round"
+          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+  <span>
+    <strong>Weekly snapshot</strong> — Report-2/3/4 are updated once per week, not daily.
+    {% if as_of_date %}As of <strong>{{ as_of_date }}</strong>.{% endif %}
+    Figures are recomputed from raw cells; the sheet-supplied "Stock Days" is used
+    only as a cross-check (PIPE only).
+  </span>
+</div>
+
+<!-- Month + Plant selector -->
+<form method="get" action="/materials"
+      class="mb-4 p-3.5 rounded-xl border flex flex-wrap items-center gap-3"
+      style="background:rgba(31,56,100,0.05);border-color:rgba(31,56,100,0.20)">
+  <label class="text-xs font-semibold" style="color:var(--navy)">Month</label>
+  <select name="month" onchange="this.form.submit()"
+          class="text-sm rounded-lg border px-2.5 py-1.5 bg-white"
+          style="border-color:rgba(31,56,100,0.25);color:var(--navy)">
+    {% for m in months %}
+    <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+    {% endfor %}
+  </select>
+  <label class="text-xs font-semibold" style="color:var(--navy)">Plant</label>
+  <select name="plant" onchange="this.form.submit()"
+          class="text-sm rounded-lg border px-2.5 py-1.5 bg-white"
+          style="border-color:rgba(31,56,100,0.25);color:var(--navy)">
+    {% for p in plants %}
+    <option value="{{ p }}" {% if p == plant %}selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+{% if error %}
+<div class="rounded-xl border p-4 mb-4 text-sm"
+     style="background:#fff7f5;border-color:rgba(197,90,17,0.3);color:var(--terra)">
+  {{ error }}
+</div>
+
+{% elif not groups %}
+<div class="rounded-xl border p-4 text-sm text-gray-500"
+     style="border-color:rgba(31,56,100,0.15)">
+  No material stock data for {{ plant }} {{ month }}.
+  The material tabs (Report-2/3/4) live inside the same workbook as daily data —
+  check that the workbook for this month is wired in DAILY_SOURCES.
+</div>
+
+{% else %}
+
+<!-- Summary strip -->
+<div class="grid grid-cols-3 gap-3 mb-4">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold" style="color:var(--navy)">{{ total_items }}</div>
+    <div class="text-[11px] text-gray-500 mt-0.5">Total items</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold {% if total_reorder > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+      {{ total_reorder }}
+    </div>
+    <div class="text-[11px] text-gray-500 mt-0.5">Reorder now</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold" style="color:var(--terra)">
+      {{ groups | length }}
+    </div>
+    <div class="text-[11px] text-gray-500 mt-0.5">Categories</div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="flex flex-wrap gap-3 mb-4 text-xs">
+  <span class="flex items-center gap-1">
+    <span class="inline-block w-3 h-3 rounded-full bg-red-500"></span> Cover ≤ Lead time (reorder)
+  </span>
+  <span class="flex items-center gap-1">
+    <span class="inline-block w-3 h-3 rounded-full bg-amber-400"></span> Cover ≤ 1.5× Lead time (watch)
+  </span>
+  <span class="flex items-center gap-1">
+    <span class="inline-block w-3 h-3 rounded-full bg-green-500"></span> Adequate cover
+  </span>
+</div>
+
+<!-- Category groups -->
+{% for grp in groups %}
+<div class="kpi-card mb-4 overflow-hidden">
+  <!-- Group header -->
+  <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+    <div>
+      <span class="text-sm font-bold" style="color:var(--navy)">{{ grp.label }}</span>
+      <span class="text-xs text-gray-400 ml-2">{{ grp.total }} items</span>
+    </div>
+    <div class="flex gap-2">
+      {% if grp.reorder_count > 0 %}
+      <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full rating-red">
+        {{ grp.reorder_count }} reorder
+      </span>
+      {% endif %}
+      {% if grp.amber_count > 0 %}
+      <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full rating-amber">
+        {{ grp.amber_count }} watch
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Items table — horizontal scroll on mobile -->
+  <div class="table-scroll">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-left border-b border-gray-100" style="background:rgba(31,56,100,0.04)">
+          <th class="px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Item</th>
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Ideal<br>Stock</th>
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Min<br>Batch</th>
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Lead<br>Time (d)</th>
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Closing<br>Stock</th>
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Cover<br>(days)</th>
+          {% if grp.reorder_count > 0 %}
+          <th class="px-3 py-2 font-semibold text-gray-600 text-right whitespace-nowrap">Suggested<br>Purchase</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in grp.rows %}
+        {# Determine risk level #}
+        {% if r.reorder_flag %}
+          {% set risk = "red" %}
+        {% elif r.days_of_cover is not none and r.lead_time_days > 0
+                and r.days_of_cover <= 1.5 * r.lead_time_days %}
+          {% set risk = "amber" %}
+        {% else %}
+          {% set risk = "green" %}
+        {% endif %}
+        <tr class="border-b border-gray-50 hover:bg-gray-50
+          {% if risk == 'red' %}bg-red-50{% elif risk == 'amber' %}bg-amber-50{% endif %}">
+          <td class="px-3 py-2">
+            <div class="flex items-start gap-1.5">
+              <span class="mt-1 flex-shrink-0 w-2 h-2 rounded-full
+                {% if risk == 'red' %}bg-red-500
+                {% elif risk == 'amber' %}bg-amber-400
+                {% else %}bg-green-500{% endif %}"></span>
+              <div>
+                <div class="font-semibold text-gray-800 leading-tight">{{ r.item_code }}</div>
+                <div class="text-gray-500 leading-tight">{{ r.item_name }}</div>
+                {% if r.item_type %}
+                <div class="text-gray-400 text-[10px]">{{ r.item_type }}</div>
+                {% endif %}
+              </div>
+            </div>
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums text-gray-700">
+            {% if r.ideal_stock > 0 %}{{ "{:,.0f}".format(r.ideal_stock) }}{% else %}&mdash;{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums text-gray-700">
+            {% if r.min_batch > 0 %}{{ "{:,.0f}".format(r.min_batch) }}{% else %}&mdash;{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums text-gray-700">
+            {% if r.lead_time_days > 0 %}{{ "{:.0f}".format(r.lead_time_days) }}{% else %}&mdash;{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums font-semibold text-gray-800">
+            {{ "{:,.0f}".format(r.closing_stock) }}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums">
+            {% if r.days_of_cover is not none %}
+            <span class="font-bold
+              {% if risk == 'red' %}text-red-600
+              {% elif risk == 'amber' %}text-amber-700
+              {% else %}text-green-700{% endif %}">
+              {{ "{:.1f}".format(r.days_of_cover) }}
+            </span>
+            {% if r.stock_days_sheet is not none %}
+            <span class="text-gray-400 ml-0.5"
+                  title="Sheet pre-computed: {{ '{:.1f}'.format(r.stock_days_sheet) }} days">⊛</span>
+            {% endif %}
+            {% else %}
+            <span class="text-gray-400">&mdash;</span>
+            {% endif %}
+          </td>
+          {% if grp.reorder_count > 0 %}
+          <td class="px-3 py-2 text-right tabular-nums">
+            {% if r.reorder_flag and r.suggested_purchase > 0 %}
+            <span class="font-semibold text-red-700">{{ "{:,.0f}".format(r.suggested_purchase) }}</span>
+            {% else %}
+            <span class="text-gray-300">&mdash;</span>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Sheet Stock Days cross-check note (PIPE only) -->
+  {% set has_sheet_days = grp.rows | selectattr("stock_days_sheet") | list %}
+  {% if has_sheet_days %}
+  <div class="px-4 py-2 text-[10px] text-gray-400 border-t border-gray-50">
+    ⊛ = sheet pre-computed "Stock Days" value available for cross-check.
+    Dashboard always uses the recomputed figure (closing ÷ daily consumption).
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<!-- Metric definitions -->
+<div class="kpi-card p-4 mt-2">
+  <h3 class="text-xs font-bold mb-2" style="color:var(--navy)">How figures are computed</h3>
+  <dl class="space-y-1.5 text-xs text-gray-600">
+    <div><dt class="inline font-semibold">Days of Cover</dt>
+    <dd class="inline"> = Closing Stock ÷ (Avg Consumption Last Month ÷ 30).
+    Recomputed from raw cells — stored "Stock Days" (PIPE only) is a cross-check, not the headline.</dd></div>
+    <div><dt class="inline font-semibold">Reorder flag</dt>
+    <dd class="inline"> = Cover ≤ Lead time in days. Stock-out likely before replenishment arrives.</dd></div>
+    <div><dt class="inline font-semibold">Suggested Purchase</dt>
+    <dd class="inline"> = max(Ideal Stock − Closing Stock, Min Batch) when reorder flag is set.</dd></div>
+    <div><dt class="inline font-semibold">Ideal Stock (BOP/Report-3, PIPE)</dt>
+    <dd class="inline"> Derived from Buffer Stock (days) × daily consumption when no unit qty is given.</dd></div>
+  </dl>
+</div>
+
+{% endif %}
+{% endblock %}

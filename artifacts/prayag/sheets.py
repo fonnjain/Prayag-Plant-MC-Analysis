@@ -109,6 +109,7 @@ def clear_caches() -> None:
     _ptmt_pieces_cache.clear()
     _ptmt_master_cache.clear()
     _mould_cap_cache.clear()
+    _material_cache.clear()
     try:
         _store.pg_cache_clear()
     except Exception:
@@ -2649,11 +2650,13 @@ _planning_cache: dict = {}
 _ptmt_pieces_cache: dict = {}
 _ptmt_master_cache: dict = {}
 _mould_cap_cache: dict = {}
+_material_cache: dict = {}
 _PLANNING_TTL = 900.0
 _planning_lock   = threading.Lock()
 _ptmt_pc_lock    = threading.Lock()
 _ptmt_ms_lock    = threading.Lock()
 _mould_cap_lock  = threading.Lock()
+_material_lock   = threading.Lock()
 
 
 def load_planning(plant: str, ym: str) -> List:
@@ -2785,3 +2788,39 @@ def load_moulding_capacity(ym: str) -> dict:
                 pass
         _mould_cap_cache[ym] = (now, result)
         return result
+
+
+def load_material_records(plant: str, ym: str) -> List:
+    """Load MaterialRecord list for *plant* + *ym* from material_tabs.
+
+    Reads Report-2/3/4 from the same workbook as DAILY_SOURCES — no new
+    Drive sharing needed. Cached 15 min. NEVER called from "/" or any
+    production-metrics path; only called from /materials on demand.
+
+    Returns [] on any error so the /materials route degrades gracefully.
+    """
+    import parsers as _par
+    key = (plant, ym)
+    now = time.time()
+    c = _material_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _material_lock:
+        c = _material_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            material_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("material_tabs", [])
+            for tc in material_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_material_stock(vals, plant, tc["category"]))
+                except Exception:
+                    continue
+        _material_cache[key] = (now, recs)
+        return recs
