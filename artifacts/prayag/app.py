@@ -3699,6 +3699,39 @@ def _seg_input_months() -> list:
     return list(FY_MONTHS_2526) + list(FY_MONTHS)
 
 
+def _seg_input_summary() -> list:
+    """Return a list of FY-level summaries of manual-input capture status.
+
+    Each entry has ``awaiting_months``: the months in that FY that are NOT yet
+    fully captured (i.e. at least one unit×field combination is missing).
+    Current FY is returned first.
+    """
+    import segment_inputs as si
+
+    months_all = _seg_input_months()
+    inputs = store.seg_inputs_for(months_all)
+
+    def _is_captured(month: str) -> bool:
+        for uk in si.UNIT_KEYS:
+            row = inputs.get((month, uk), {})
+            for f in si.fields_for_unit(uk):
+                if not row.get(f["key"]):
+                    return False
+        return True
+
+    def _awaiting(months_seq) -> list:
+        return [
+            {"month": m, "disp": _month_short(m)}
+            for m in months_seq
+            if not _is_captured(m)
+        ]
+
+    return [
+        {"fy": "current", "awaiting_months": _awaiting(FY_MONTHS)},
+        {"fy": "prior",   "awaiting_months": _awaiting(FY_MONTHS_2526)},
+    ]
+
+
 def _unit_prod(months: list) -> dict:
     """Recompute per-(month, unit) production bucketed by unit-of-measure.
 
