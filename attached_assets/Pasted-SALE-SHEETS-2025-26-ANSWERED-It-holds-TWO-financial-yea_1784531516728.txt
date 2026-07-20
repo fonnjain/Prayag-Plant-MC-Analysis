@@ -1,0 +1,93 @@
+SALE_SHEETS["2025-26"] - ANSWERED. It holds TWO financial years.
+
+"State Head Sale 2025-26" (1RuXHIXfusOT-VDdDqeuB-Nx-pxyVkmrJsqr21BB-NUA)
+contains BOTH FY2024-25 and FY2025-26. I verified this from Drive at the start
+of this project: the file OPENS with FY-2024-25 rows dated 1-Apr-2024, and its
+FY YEAR column carries both years.
+
+The arithmetic is conclusive:
+
+    FY2024-25   341.14
+    FY2025-26   361.14
+    total       702.28   <- exactly your readAndAggregate figure
+
+So readAndAggregate is summing both years because nothing filters on the FY
+column. The ratio of 1.94 is not a data problem. It is two years added together.
+
+FIX: every read of a State Head Sale workbook must filter on the FY YEAR column.
+And note the format - values are "FY-2025-26" WITH the prefix, not "2025-26".
+A bare-year comparison matches nothing and returns empty silently. Print the
+distinct FY YEAR values verbatim before filtering.
+
+This applies to the whole family. Each State Head Sale file opens with the
+PREVIOUS year, so:
+    State Head Sale 2024-25  holds FY2023-24 + FY2024-25
+    State Head Sale 2025-26  holds FY2024-25 + FY2025-26
+    State Head Sale 2026-27  holds FY2025-26 + FY2026-27
+FY2025-26 therefore appears in two workbooks. Reading both without an FY filter
+double-counts it.
+
+AND THIS RESOLVES AN OPEN ITEM FROM THE START OF THE PROJECT.
+
+The sheet says FY2024-25 = Rs.341.14 Cr. The Overview tile shows Rs.341.73 Cr.
+That Rs.0.59 Cr gap is the very first discrepancy I raised in this project and
+it has been open ever since.
+
+So the DATABASE is Rs.0.59 Cr HIGHER than the sheet, not lower. Likely cause:
+FY2024-25 exists in both State Head Sale 2024-25 and State Head Sale 2025-26,
+and the two disagree - or rows were loaded from both.
+
+Report: sale_line FY2024-25 total and row count, and the FY2024-25 total from
+EACH of the two workbooks that contain it, filtered properly on FY YEAR. Three
+numbers. That tells us which source the extra Rs.0.59 Cr came from.
+
+BOOKING VS SALE - USE sale_line, NOT SALE_SHEETS
+
+Your instinct is right. Build the comparison against the DATABASE:
+
+  - booking from ORDER_BOOKING_SHEET_IDS (Rs.342.03 Cr FY2025-26,
+    Rs.333.81 Cr FY2024-25, Rs.377.39 Cr FY2023-24)
+  - territory and institutional dispatch from sale_line, which already carries
+    the is_territory flag
+
+Report per year: booking, total sale, territory sale, institutional sale,
+booking/total, and booking/territory.
+
+The hypothesis to test: if booking/territory lands near 1.0 while booking/total
+sits at 0.95, then institutional business is dispatched but never booked - and
+pending has been computed against the wrong denominator all along.
+
+Also wire ORDER_BOOKING_SHEET_IDS into the booking-vs-sale route so all four
+years work, not just FY2026-27.
+
+THREE SMALLER ITEMS
+
+SEGMENT INDEX tab - do NOT add it to SKIP_TAB_RE. Classify it as lookup, the
+same as INDEX and WT. Silencing an unreadable tab is how a real one gets missed
+later. It contributes zero rows, so leave it visible and correctly labelled.
+
+ntBooking Rs.6.55 Cr - yes, log the distinct head values that hit
+NON_TERRITORY_RE. Phase 0 reported the order book as 100% Retail, so either
+that was wrong or the regex is catching heads it should not. Worth knowing
+which before the booking/territory ratio is trusted.
+
+FY2023-24 litre rows - 1,095 Ltr rows appear in February and March ONLY, with
+Apr through Jan entirely "Nos". Either water tanks launched late that year, or
+the Unit column was only populated from February. Check whether tank ITEM CODES
+appear in the earlier months carrying "Nos" - if they do, the unit is wrong for
+those rows and tank quantities are being read as pieces.
+
+CONFIRMED AND ACCEPTED
+
+Self-test delta zero at Rs.86.96 Cr on both paths - that is the result that
+matters, and finding the cause (the ANUJ SHARMA per-head correction missing
+from the dry-run path) rather than adjusting a threshold was the right call.
+
+FY2023-24 at Rs.377.39 Cr across 12 monthly tabs, with combined and LAST MONTH
+ORDER confirmed as subsets.
+
+Unit column resolved: values ["Ltr.", "Nos"], 1,095 litre rows against 137,855
+piece rows, nothing summed across the two.
+
+Constraints unchanged: Drive read-only, no DELETE from register tables,
+secondary untouched, dry run and report before any commit.
