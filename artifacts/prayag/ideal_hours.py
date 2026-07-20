@@ -61,7 +61,7 @@ APP_DEFAULT_IDEAL_HOURS: dict = {
 # still supplies their utilisation denominator, but utilisation must stay
 # suppressed (not a fake 0%) until run hours are actually recorded — enforced via
 # ``Record.runhours_tracked=False`` and the gate in ``metrics.compute_metrics``.
-PLANTS_WITHOUT_RUNHOURS = frozenset({"TANK"})
+PLANTS_WITHOUT_RUNHOURS = frozenset({"TANK", "TANK_VN", "TANK_WB"})
 
 # Source labels (also used as CSS/badge keys on the page).
 SRC_OVERRIDE = "override"

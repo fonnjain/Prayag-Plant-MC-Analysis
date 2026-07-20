@@ -1183,6 +1183,15 @@ def _load_daily_cached(plant: str, ym: str, token: str):
               return pg_hit
       except Exception:
           pass
+      # L2b: known-empty months (24 h TTL, longer than pg_cache).
+      # A plant-month confirmed empty in the last 24 h skips the L3 Sheets
+      # read entirely — saving quota for months that never have production.
+      try:
+          if _store.is_known_empty(plant, ym):
+              _daily_cache[key] = (time.time(), [])
+              return []
+      except Exception:
+          pass
       # L3: live Sheets read.
       results = _load_daily(plant, ym, token)
       _daily_cache[key] = (time.time(), results)
@@ -1190,6 +1199,14 @@ def _load_daily_cached(plant: str, ym: str, token: str):
       # Populate Postgres so sibling workers skip the Sheets trip.
       try:
           _store.pg_cache_write(pg_key, results)
+      except Exception:
+          pass
+      # Mark genuinely empty (plant, ym) pairs so future cold starts avoid L3.
+      # "Empty" means _load_daily returned no (record, report) tuples at all,
+      # not an EMPTY_SOURCES short-circuit (those never reach here).
+      try:
+          if not results:
+              _store.mark_empty_month(plant, ym)
       except Exception:
           pass
       return results

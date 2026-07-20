@@ -362,11 +362,81 @@ def _read_report12(ym: str):
 
 
 def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
+    """(D) Pipe Moulds Summary — prefers Reports 17-20 (mould-working tabs) and
+    cross-checks against Report-12.  Falls back to Report-12 when the 17-20 tabs
+    are unavailable or diverge from Report-12 by more than 1% (stale snapshot).
+    """
+    # --- Report-12 baseline (always fetched; used as cross-check and fallback) ---
+    items = []
+    r12_err = None
     try:
         items = _read_report12(ym)
     except sheets.SheetReadError as e:
-        return _awaiting(rid, label, plant, ym, str(e))
+        r12_err = str(e)
+    r12_kg = sum(it["kg"] for it in items) if items else 0.0
+
+    # --- Reports 17-20 via load_pipe_moulds ---
+    moulds_data = None
+    try:
+        moulds_data = sheets.load_pipe_moulds(ym)
+    except Exception:
+        pass
+
+    stale_mould_tabs = False
+    use_1720 = False
+    if moulds_data and moulds_data.get("available") and not moulds_data.get("incomplete"):
+        r1720_kg = moulds_data.get("grand_kg", 0.0)
+        if r12_kg > 0:
+            divergence = abs(r1720_kg - r12_kg) / r12_kg
+            if divergence <= 0.01:
+                use_1720 = True
+            else:
+                stale_mould_tabs = True
+        elif r1720_kg > 0:
+            use_1720 = True
+
+    # ---- Path A: use Reports 17-20 ----------------------------------------
+    if use_1720:
+        groups_list = moulds_data["groups"]
+        grand_kg  = moulds_data["grand_kg"]
+        grand_pcs = moulds_data["grand_pcs"]
+        pipe_kg = sum(g["total_kg"] for g in groups_list
+                      if g["group"] in _PIPE_MATERIALS)
+        cols = [Column("mat",   "Material",          "text", width=22),
+                Column("n",     "Active Moulds",      "text"),
+                Column("pcs",   "Production (Pcs)",   "int",  total=True),
+                Column("kg",    "Production (KG)",    "kg",   total=True),
+                Column("share", "Share of KG %",      "pct")]
+        rows = []
+        for g in groups_list:
+            rows.append({"mat": g["group"], "n": str(g.get("n_run", 0)),
+                         "pcs": g["total_pcs"], "kg": g["total_kg"],
+                         "share": _pct(g["total_kg"], grand_kg)})
+        total = {"mat": "TOTAL MOULDING", "n": "", "pcs": grand_pcs, "kg": grand_kg,
+                 "share": 100.0 if grand_kg else None}
+        xref = (f"Cross-checked against Report-12: {r12_kg:,.0f} kg "
+                f"(divergence <1% — Reports 17–20 are authoritative)."
+                if items else "Report-12 not available for cross-check.")
+        return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
+            month_disp=month_disp(ym),
+            sheets=[ReportSheet(name="(D) Pipe Moulds Summary",
+                title=f"(D) Pipe Moulds Summary — {month_disp(ym)}",
+                subtitle="Kaharani · Mould output grouped by material (CPVC/UPVC/SWR/AGRI), "
+                         "recomputed from Reports 17–20 (mould-working tabs), "
+                         "cross-checked ±1% against Report-12.",
+                sections=[Section(cols, rows, total)],
+                provenance=[
+                    f"Grand total {grand_kg:,.0f} kg / {grand_pcs:,.0f} pcs "
+                    f"recomputed from Reports 17–20. {xref}",
+                    "Source: Pipe & Fitting daily workbook, Reports 17–20 tabs, "
+                    "one tab per material group (CPVC/UPVC/SWR/AGRI).",
+                ])],
+            headline=f"{grand_kg:,.0f} kg (ties to Moulding)")
+
+    # ---- Path B: fall back to Report-12 (17-20 unavailable or stale) --------
     if not items:
+        if r12_err:
+            return _awaiting(rid, label, plant, ym, r12_err)
         return _awaiting(rid, label, plant, ym, "No Moulding (Report-12) data for this month.")
 
     groups = defaultdict(lambda: {"moulds": set(), "pcs": 0.0, "kg": 0.0})
@@ -376,40 +446,48 @@ def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
         groups[g]["moulds"].add(key)
         groups[g]["pcs"] += it["pcs"]; groups[g]["kg"] += it["kg"]
 
-    grand_kg = sum(g["kg"] for g in groups.values())
+    grand_kg  = sum(g["kg"]  for g in groups.values())
     grand_pcs = sum(g["pcs"] for g in groups.values())
-    pipe_kg = sum(groups[m]["kg"] for m in _PIPE_MATERIALS if m in groups)
+    pipe_kg   = sum(groups[m]["kg"] for m in _PIPE_MATERIALS if m in groups)
 
-    cols = [Column("mat", "Material", "text", width=22),
-            Column("n", "Moulds / Items", "text"),
-            Column("pcs", "Production (Pcs)", "int", total=True),
-            Column("kg", "Production (KG)", "kg", total=True),
-            Column("share", "Share of KG %", "pct")]
+    cols = [Column("mat",   "Material",          "text", width=22),
+            Column("n",     "Moulds / Items",     "text"),
+            Column("pcs",   "Production (Pcs)",   "int",  total=True),
+            Column("kg",    "Production (KG)",    "kg",   total=True),
+            Column("share", "Share of KG %",      "pct")]
     rows = []
     for m in list(_PIPE_MATERIALS) + [_NON_PIPE]:
         if m not in groups:
             continue
         g = groups[m]
-        # Non-pipe moulds count is not meaningful for the pipe view -> "-".
         n = "-" if m == _NON_PIPE else str(len(g["moulds"]))
         rows.append({"mat": m, "n": n, "pcs": g["pcs"], "kg": g["kg"],
                      "share": _pct(g["kg"], grand_kg)})
     total = {"mat": "TOTAL MOULDING", "n": "", "pcs": grand_pcs, "kg": grand_kg,
              "share": 100.0 if grand_kg else None}
+
+    stale_note = (" ⚠ Reports 17–20 diverge from Report-12 by >1% (stale snapshot) "
+                  "— Report-12 used instead." if stale_mould_tabs else "")
+    prov = [
+        f"Pipe-mould output (CPVC+UPVC+SWR+AGRI) {pipe_kg:,.0f} kg + "
+        f"non-pipe residual = Report-12 month total {grand_kg:,.0f} kg — full reconciliation.",
+        "Source: Pipe & Fitting daily workbook, Report-12, grouped by its own MATERIAL column.",
+    ]
+    if stale_mould_tabs and moulds_data:
+        prov.append(
+            f"Reports 17–20 total {moulds_data.get('grand_kg', 0.0):,.0f} kg diverged "
+            f"from Report-12 {grand_kg:,.0f} kg (>{1:.0%} tolerance) — "
+            "17–20 tabs not updated since last backfill; Report-12 is authoritative."
+        )
     return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
         month_disp=month_disp(ym),
         sheets=[ReportSheet(name="(D) Pipe Moulds Summary",
             title=f"(D) Pipe Moulds Summary — {month_disp(ym)}",
-            subtitle="Kaharani · Mould/item output grouped by material, REBUILT "
-                     "from Report-12 (the Report-17..20 tabs are a stale snapshot "
-                     "and are not used). Pipe = CPVC/UPVC/SWR/AGRI; the rest is "
-                     "Non-pipe. Grain = item code within material.",
+            subtitle=("Kaharani · Mould/item output grouped by material, rebuilt "
+                      "from Report-12. Pipe = CPVC/UPVC/SWR/AGRI; the rest is "
+                      "Non-pipe." + stale_note),
             sections=[Section(cols, rows, total)],
-            provenance=[f"Pipe-mould output (CPVC+UPVC+SWR+AGRI) {pipe_kg:,.0f} kg + "
-                        f"non-pipe residual = Report-12 month total {grand_kg:,.0f} "
-                        "kg — full reconciliation.",
-                        "Source: Pipe & Fitting daily workbook, Report-12, grouped "
-                        "by its own MATERIAL column."])],
+            provenance=prov)],
         headline=f"{grand_kg:,.0f} kg (ties to Moulding)")
 
 
@@ -560,8 +638,9 @@ def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
             by_item[k]["kg"]  += r.total_count
             by_item[k]["ltr"] += sc.get("Ltr", 0.0)
             by_item[k]["pcs"] += sc.get("pcs", 0.0)
-        # KG-basis rejection (mouth-lid + plain) stored in secondary_counts["rej_kg"]
-        by_item[k]["rej_kg"]  += sc.get("rej_kg",  0.0)
+        # KG-basis rejection: stored in r.reject_count (not secondary_counts).
+        # secondary_counts only carries rej_pcs / rej_ltr — never rej_kg.
+        by_item[k]["rej_kg"]  += r.reject_count
         by_item[k]["rej_pcs"] += sc.get("rej_pcs", 0.0)
 
     cols = [

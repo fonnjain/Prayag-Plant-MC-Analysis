@@ -19,6 +19,24 @@ description: Durable layout traps in the daily parsers (parse_daily_long / parse
 
 **How to apply:** If a block-tab plant suddenly reports a tiny or empty output, the column picker has latched onto a decoy KG column or a static header offset.
 
+## _long_date_day requires recognisable date strings in synthetic test fixtures
+
+**Rule:** When writing offline tests that call ``parse_tank_prod`` (or any daily parser), supply real date strings in the DATE column — e.g. ``"01-Jun-2026"`` — not bare integers like ``1``.
+
+**Why:** ``_long_date_day(1)`` returns ``None``; the parser silently discards every data row and returns ``[]``.  The test then fails with "no records returned" rather than an assertion on the actual field.
+
+**How to apply:** If an offline parse test returns an unexpectedly empty record list, check the DATE column in the synthetic fixture first.
+
+
+## _tank_model rej_kg must read from r.reject_count, not secondary_counts
+
+**Rule:** In ``reports/generators.py:_tank_model``, accumulate KG rejection as ``r.reject_count``, not ``sc.get("rej_kg", 0.0)``.
+
+**Why:** ``parse_tank_prod`` stores the combined mouth-lid + base KG rejection in ``Record.reject_count`` and never puts it in ``secondary_counts``.  Reading from ``secondary_counts["rej_kg"]`` always returns 0.0, so the generator falls through to the pcs-basis % for ALL streams — including VN/WB which have real KG rejection columns.
+
+**How to apply:** If VN or WB tank reports show 0% rejection (or rejection jumps to pcs-basis incorrectly), recheck that ``_tank_model`` accumulates from ``r.reject_count``.
+
+
 ## Matrix machine-column must be selected the SAME way by both readers (parse_daily_matrix)
 
 **Rule:** A matrix tab's machine-id column is read by TWO independent code paths — `parse_daily_matrix` (the per-date Records) and `parse_matrix_summary_col` (the in-sheet ideal-rate/hours summary). They MUST select the same column. When a layout has an alias column beside the canonical "MACHINE" column (HDPE "Daily Report"), pass the layout's `summary_mc_header` (e.g. `("eq","MACHINE")`) into BOTH; otherwise the generic heuristic ("MACHINE" or "M/C NO") can latch onto the alias in one reader only.

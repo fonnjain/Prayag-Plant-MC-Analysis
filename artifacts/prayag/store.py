@@ -1404,3 +1404,98 @@ def delete_api_key() -> None:
             cur.execute(f"DELETE FROM {_AK_TABLE}")
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Known-empty months cache
+#
+# Cold gunicorn workers skip the L2 Postgres sheet_cache when it expires
+# (_DATA_TTL, typically 30 min).  For plant-months that have NO production
+# data (e.g. a future month, a site that shut down) the L3 Google Sheets
+# read always returns zero records — wasting quota and adding latency on
+# every cache miss.  ``known_empty_months`` provides a longer-lived (24 h)
+# signal that a (plant, ym) pair is genuinely empty, letting cold workers
+# skip the L3 read entirely until the TTL expires and a fresh check is made.
+#
+# The TTL is intentionally finite so that a month that was empty yesterday
+# but starts receiving data today is detected within 24 hours.
+#
+# NOTE on source_fingerprints: if the fingerprint formula ever changes,
+# run ``TRUNCATE source_fingerprints`` in Postgres to re-baseline all
+# timestamps — otherwise every page load will false-flag a "sheet changed"
+# event against the old formula's fingerprints.
+# ---------------------------------------------------------------------------
+_EM_TABLE = "known_empty_months"
+_em_initialised = False
+
+
+def _init_em_table() -> None:
+    global _em_initialised
+    if _em_initialised or not AVAILABLE:
+        return
+    ddl = f"""
+    CREATE TABLE IF NOT EXISTS {_EM_TABLE} (
+        id          BIGSERIAL PRIMARY KEY,
+        plant       TEXT      NOT NULL,
+        ym          TEXT      NOT NULL,
+        recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS {_EM_TABLE}_plant_ym
+        ON {_EM_TABLE} (plant, ym, recorded_at DESC);
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(ddl)
+        _em_initialised = True
+    except Exception:
+        pass
+
+
+def mark_empty_month(plant: str, ym: str) -> None:
+    """Record that (plant, ym) returned zero records from Google Sheets.
+
+    Idempotent — multiple writes for the same (plant, ym) are harmless;
+    ``is_known_empty`` selects the most recent row, so a fresh re-check
+    simply inserts a new row and resets the TTL.
+    """
+    if not AVAILABLE:
+        return
+    try:
+        _init_em_table()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {_EM_TABLE} (plant, ym) VALUES (%s, %s)",
+                (plant, ym),
+            )
+    except Exception:
+        pass
+
+
+def is_known_empty(plant: str, ym: str, ttl_seconds: float = 86_400.0) -> bool:
+    """Return True if (plant, ym) was confirmed empty within ``ttl_seconds``.
+
+    A True result lets the caller skip the live L3 Google Sheets read.
+    Returns False when Postgres is unavailable, so the caller falls through
+    to the normal read path (safe default).
+    """
+    if not AVAILABLE:
+        return False
+    try:
+        _init_em_table()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT recorded_at FROM {_EM_TABLE}
+                WHERE plant = %s AND ym = %s
+                ORDER BY recorded_at DESC LIMIT 1
+                """,
+                (plant, ym),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return False
+        import datetime
+        age = (datetime.datetime.now(tz=datetime.timezone.utc) - row[0]).total_seconds()
+        return age <= ttl_seconds
+    except Exception:
+        return False

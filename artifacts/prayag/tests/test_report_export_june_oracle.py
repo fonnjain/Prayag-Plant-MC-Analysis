@@ -110,7 +110,8 @@ def _install_fixtures():
         "gdr": sheets.get_daily_records,
         "dfi": sheets._daily_file_id,
         "tok": sheets._get_access_token,
-        "rv": sheets.read_values,
+        "rv":  sheets.read_values,
+        "lpm": sheets.load_pipe_moulds,
     }
     sheets.get_daily_records = lambda months, *a, **k: (
         [r for r in recs if r.period in months], [], [])
@@ -118,14 +119,35 @@ def _install_fixtures():
     sheets._get_access_token = lambda *a, **k: "FIXTURE"
     sheets.read_values = lambda fid, tab, tok, *a, **k: (
         report12 if tab == "Report-12" else [])
+
+    # Simulate the mid-month-frozen Reports 17-20 state (89,152 kg) that diverges
+    # from the backfilled Report-12 figure (93,123 kg) by 4.3% > 1%.  This causes
+    # gen_pipe_moulds to flag stale_mould_tabs=True and fall back to Report-12, so
+    # the oracle pin ("pipe_moulds": 93,122.89 kg) remains valid and the fallback
+    # path is exercised in CI.
+    def _stale_moulds_data(ym):
+        return {
+            "available": True, "incomplete": False, "missing": [],
+            "month": ym, "file_id": "FIXTURE",
+            "grand_kg": 89_151.74, "grand_pcs": 1_340_117,
+            "groups": [
+                {"group": "CPVC", "total_kg": 22_000.0, "total_pcs": 330_000, "n_run": 5, "n_total": 6},
+                {"group": "UPVC", "total_kg": 42_000.0, "total_pcs": 620_000, "n_run": 8, "n_total": 9},
+                {"group": "SWR",  "total_kg": 18_000.0, "total_pcs": 270_000, "n_run": 4, "n_total": 5},
+                {"group": "AGRI", "total_kg":  7_151.74, "total_pcs": 120_117, "n_run": 2, "n_total": 2},
+            ],
+        }
+
+    sheets.load_pipe_moulds = _stale_moulds_data
     return saved
 
 
 def _restore(saved):
-    sheets.get_daily_records = saved["gdr"]
-    sheets._daily_file_id = saved["dfi"]
-    sheets._get_access_token = saved["tok"]
-    sheets.read_values = saved["rv"]
+    sheets.get_daily_records  = saved["gdr"]
+    sheets._daily_file_id     = saved["dfi"]
+    sheets._get_access_token  = saved["tok"]
+    sheets.read_values        = saved["rv"]
+    sheets.load_pipe_moulds   = saved["lpm"]
 
 
 def _totals(rid):
