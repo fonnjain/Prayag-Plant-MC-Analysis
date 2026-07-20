@@ -429,16 +429,39 @@ def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
                          "share": _pct(g["total_kg"], grand_kg)})
         total = {"mat": "TOTAL MOULDING", "n": "", "pcs": grand_pcs, "kg": grand_kg,
                  "share": 100.0 if grand_kg else None}
-        xref = (f"Cross-checked against Report-12: {r12_kg:,.0f} kg "
-                f"(divergence <1% — Reports 17–20 are authoritative)."
-                if items else "Report-12 not available for cross-check.")
+        # Build the cross-check note from actual divergence — never hard-code the %
+        if items and r12_kg > 0:
+            _div_pct = abs(r1720_kg - r12_kg) / r12_kg * 100
+            if stale_mould_tabs:   # divergence > 1%
+                xref = (
+                    f"Cross-checked against Report-12: {r12_kg:,.0f} kg "
+                    f"({_div_pct:.1f}% divergence — Reports 17–20 remain authoritative; "
+                    f"Report-12 may reflect a later data backfill that has not yet "
+                    f"been updated in Reports 17–20 tabs)."
+                )
+            else:
+                xref = (
+                    f"Cross-checked against Report-12: {r12_kg:,.0f} kg "
+                    f"({_div_pct:.1f}% divergence ≤1% — Reports 17–20 are authoritative)."
+                )
+        elif items:
+            xref = "Report-12 loaded but has zero total — cross-check skipped."
+        else:
+            xref = "Report-12 not available for cross-check."
+
+        # Headline: only claim "ties to Moulding" when divergence is within spec
+        if stale_mould_tabs:
+            _headline = f"{grand_kg:,.0f} kg (17–20 authoritative; R12 divergence noted)"
+        else:
+            _headline = f"{grand_kg:,.0f} kg (ties to Moulding)"
+
         return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
             month_disp=month_disp(ym),
             sheets=[ReportSheet(name="(D) Pipe Moulds Summary",
                 title=f"(D) Pipe Moulds Summary — {month_disp(ym)}",
                 subtitle="Kaharani · Mould output grouped by material (CPVC/UPVC/SWR/AGRI), "
                          "recomputed from Reports 17–20 (mould-working tabs), "
-                         "cross-checked ±1% against Report-12.",
+                         "cross-checked against Report-12.",
                 sections=[Section(cols, rows, total)],
                 provenance=[
                     f"Grand total {grand_kg:,.0f} kg / {grand_pcs:,.0f} pcs "
@@ -446,7 +469,7 @@ def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
                     "Source: Pipe & Fitting daily workbook, Reports 17–20 tabs, "
                     "one tab per material group (CPVC/UPVC/SWR/AGRI).",
                 ])],
-            headline=f"{grand_kg:,.0f} kg (ties to Moulding)")
+            headline=_headline)
 
     # ---- Path B: 17-20 unavailable → awaiting source (R12 is NOT authoritative) ---
     # Report-12 stays as a cross-check reference only; it is never served as the
