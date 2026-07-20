@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Plan Detail – {{ machine }} {{ month }}{% endblock %}
+{% block content %}
+
+<div class="px-4 pt-4 pb-2">
+  <div class="flex items-center gap-2 mb-3">
+    <a href="/plan?plant={{ plant }}&month={{ month }}"
+       class="text-xs font-semibold px-2 py-1 rounded-lg border"
+       style="color:var(--navy);border-color:rgba(31,56,100,0.3)">← Board</a>
+    <div>
+      <div class="text-base font-bold leading-tight" style="color:var(--navy)">
+        {{ mp.machine if mp else machine }}
+      </div>
+      <div class="text-[10px] text-gray-400">{{ plant }} · {{ month }}</div>
+    </div>
+  </div>
+</div>
+
+{% if error %}
+<div class="mx-4 rounded-lg p-3 mb-3 text-xs text-red-700 bg-red-50 border border-red-200">
+  {{ error }}
+</div>
+{% endif %}
+
+{% if not mp and not error %}
+<div class="px-4 py-8 text-center text-sm text-gray-400">
+  Machine "{{ machine }}" not found for {{ plant }} {{ month }}.
+</div>
+{% endif %}
+
+{% if mp %}
+
+<!-- ── Readiness Checklist ── -->
+<div class="px-4 mb-4">
+  <h2 class="text-xs font-bold uppercase tracking-wide mb-2" style="color:var(--navy)">
+    Readiness Checklist
+  </h2>
+
+  <!-- Bottleneck headline -->
+  <div class="kpi-card p-3 mb-3 {% if mp.bottleneck %}border-l-4 border-red-400{% else %}border-l-4 border-green-500{% endif %}">
+    {% if mp.bottleneck %}
+    <div class="text-sm font-bold text-red-600">
+      Blocked: {{ mp.bottleneck }}
+    </div>
+    <div class="text-xs text-red-500 mt-0.5">{{ mp.bottleneck_reason }}</div>
+    {% else %}
+    <div class="text-sm font-bold text-green-700">Ready</div>
+    {% if mp.idle_hours > 0 %}
+    <div class="text-xs text-green-600 mt-0.5">
+      {{ "%.1f"|format(mp.idle_hours) }}h idle capacity available
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <!-- Gate table -->
+  <div class="kpi-card overflow-hidden mb-2">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="border-b" style="border-color:rgba(31,56,100,0.08)">
+          <th class="px-3 py-2 text-left font-semibold text-gray-500 w-6"></th>
+          <th class="px-3 py-2 text-left font-semibold text-gray-500">Gate</th>
+          <th class="px-3 py-2 text-left font-semibold text-gray-500">Status</th>
+          <th class="px-3 py-2 text-left font-semibold text-gray-500">Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in mp.gates %}
+        <tr class="border-b border-gray-50">
+          <td class="px-3 py-2 text-center">
+            <span class="text-sm
+              {% if g.status == 'green' %}text-green-600
+              {% elif g.status == 'red' %}text-red-600
+              {% else %}text-gray-300{% endif %}">
+              {% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% else %}○{% endif %}
+            </span>
+          </td>
+          <td class="px-3 py-2 font-semibold text-gray-700">{{ g.name }}</td>
+          <td class="px-3 py-2
+            {% if g.status == 'green' %}text-green-700
+            {% elif g.status == 'red' %}text-red-600 font-semibold
+            {% else %}text-gray-400 italic{% endif %}">
+            {{ g.reason }}
+          </td>
+          <td class="px-3 py-2 text-gray-400">
+            {% if g.provenance %}{{ g.provenance }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Data snapshot note -->
+  {% if mp.as_of_date %}
+  <div class="text-[10px] text-gray-400">
+    Planning snapshot: {{ mp.as_of_date }}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Production context ── -->
+<div class="px-4 mb-4">
+  <h2 class="text-xs font-bold uppercase tracking-wide mb-2" style="color:var(--navy)">
+    Production Context
+  </h2>
+  <div class="grid grid-cols-3 gap-2">
+    <div class="kpi-card p-3 text-center">
+      <div class="text-base font-bold" style="color:var(--terra)">
+        {% if mp.utilisation_pct is not none %}
+        {{ "%.1f"|format(mp.utilisation_pct) }}%
+        {% else %}—{% endif %}
+      </div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Utilisation</div>
+    </div>
+    <div class="kpi-card p-3 text-center">
+      <div class="text-base font-bold" style="color:var(--navy)">
+        {% if mp.idle_hours > 0 %}{{ "%.1f"|format(mp.idle_hours) }}h{% else %}—{% endif %}
+      </div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Idle hrs</div>
+    </div>
+    <div class="kpi-card p-3 text-center">
+      <div class="text-base font-bold text-gray-600">
+        {% if mp.total_output > 0 %}
+        {{ "{:,.0f}".format(mp.total_output) }}
+        {% else %}—{% endif %}
+      </div>
+      <div class="text-[10px] text-gray-500 mt-0.5">
+        Output {% if mp.output_unit %}({{ mp.output_unit }}){% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Run Queue ── -->
+<div class="px-4 mb-4">
+  <h2 class="text-xs font-bold uppercase tracking-wide mb-2" style="color:var(--navy)">
+    Ranked Run Queue
+  </h2>
+  {% if mp.run_queue %}
+  <div class="kpi-card overflow-hidden">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="border-b" style="border-color:rgba(31,56,100,0.08)">
+          <th class="px-3 py-2 text-left font-semibold text-gray-500">#</th>
+          <th class="px-3 py-2 text-left font-semibold text-gray-500">Item</th>
+          <th class="px-3 py-2 text-right font-semibold text-gray-500">Net req</th>
+          <th class="px-3 py-2 text-right font-semibold text-gray-500">Cover</th>
+          <th class="px-3 py-2 text-right font-semibold text-gray-500">Rate/hr</th>
+          <th class="px-3 py-2 text-right font-semibold text-gray-500">Est hrs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for qi in mp.run_queue %}
+        <tr class="border-b border-gray-50 {% if loop.index == 1 %}bg-orange-50{% endif %}">
+          <td class="px-3 py-1.5 text-gray-400">{{ loop.index }}</td>
+          <td class="px-3 py-1.5">
+            <div class="font-semibold text-gray-700">{{ qi.item_name }}</div>
+            <div class="text-[10px] text-gray-400">
+              {{ qi.item_code }} · {{ qi.family }}
+            </div>
+          </td>
+          <td class="px-3 py-1.5 text-right font-semibold" style="color:var(--terra)">
+            {{ "{:,.0f}".format(qi.net_requirement) }}
+            <span class="text-gray-400 font-normal">{{ qi.unit }}</span>
+          </td>
+          <td class="px-3 py-1.5 text-right {% if qi.days_of_cover is not none and qi.days_of_cover < 7 %}text-red-600 font-semibold{% else %}text-gray-600{% endif %}">
+            {% if qi.days_of_cover is not none %}
+            {{ "%.0f"|format(qi.days_of_cover) }}d
+            {% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-1.5 text-right text-gray-500">
+            {% if qi.theoretical_rate is not none %}
+            {{ "{:,.0f}".format(qi.theoretical_rate) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-1.5 text-right text-gray-600">
+            {% if qi.estimated_run_time_hrs is not none %}
+            {{ "%.1f"|format(qi.estimated_run_time_hrs) }}h
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-[10px] text-gray-400 mt-1 px-1">
+    Sorted by net requirement (desc) then days of cover (asc).
+    Rate = MASTER cavities/cycle (PTMT) or Report-1 per-hour output (PIPE).
+  </div>
+  {% else %}
+  <div class="kpi-card p-4 text-center text-xs text-gray-400">
+    No demand queue available for this machine.
+    {% if plant not in ('PTMT', 'PIPE') %}
+    (Demand planning data not loaded for {{ plant }}.)
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endif %}{# end if mp #}
+
+{% endblock %}

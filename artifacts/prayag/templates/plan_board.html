@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Plan Board – {{ plant }} {{ month }}{% endblock %}
+{% block content %}
+
+{# ── Machine-card macro must be defined FIRST in this block ──────────── #}
+{% macro machine_card(mp) %}
+<a href="/plan/detail?plant={{ plant }}&month={{ month }}&machine={{ mp.machine | urlencode }}"
+   class="block mx-4 mb-3 kpi-card p-3 hover:shadow-md transition-shadow">
+
+  {# Header row #}
+  <div class="flex items-start justify-between mb-2">
+    <div>
+      <div class="text-sm font-bold" style="color:var(--navy)">{{ mp.machine }}</div>
+      <div class="text-[10px] text-gray-400">{{ plant }} · {{ month }}</div>
+    </div>
+    {# Headline KPI #}
+    <div class="text-right">
+      {% if mp.utilisation_pct is not none %}
+      <div class="text-sm font-bold" style="color:var(--terra)">
+        {{ "%.1f"|format(mp.utilisation_pct) }}%
+      </div>
+      <div class="text-[10px] text-gray-400">utilisation</div>
+      {% elif mp.total_output > 0 %}
+      <div class="text-sm font-bold" style="color:var(--navy)">
+        {{ "{:,.0f}".format(mp.total_output) }} {{ mp.output_unit }}
+      </div>
+      <div class="text-[10px] text-gray-400">output</div>
+      {% else %}
+      <div class="text-xs text-gray-300">—</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Top run-queue item #}
+  {% if mp.run_queue %}
+  {% set top = mp.run_queue[0] %}
+  <div class="rounded-md px-2 py-1.5 mb-2 text-xs"
+       style="background:rgba(197,90,17,0.06)">
+    <span class="font-semibold" style="color:var(--terra)">{{ top.item_name }}</span>
+    <span class="text-gray-500 ml-1">
+      {{ "{:,.0f}".format(top.net_requirement) }} {{ top.unit }} needed
+      {% if top.days_of_cover is not none %}
+        · {{ "%.0f"|format(top.days_of_cover) }}d cover
+      {% endif %}
+    </span>
+    {% if mp.run_queue|length > 1 %}
+    <span class="text-gray-400 ml-1">+{{ mp.run_queue|length - 1 }} more</span>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="text-[10px] text-gray-300 mb-2">No demand queue available</div>
+  {% endif %}
+
+  {# 6-gate dot row #}
+  <div class="flex items-center gap-1.5 flex-wrap mb-2">
+    {% for g in mp.gates %}
+    <span title="{{ g.name }}: {{ g.reason }}"
+          class="inline-flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5
+          {% if g.status == 'green' %}bg-green-50 text-green-700
+          {% elif g.status == 'red' %}bg-red-50 text-red-700
+          {% else %}bg-gray-100 text-gray-400{% endif %}">
+      <span class="text-[8px]">{% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% else %}○{% endif %}</span>
+      {{ g.name }}
+    </span>
+    {% endfor %}
+  </div>
+
+  {# Bottleneck line #}
+  <div class="text-xs
+    {% if mp.bottleneck %}text-red-600 font-semibold{% else %}text-green-700 font-semibold{% endif %}">
+    {% if mp.bottleneck %}
+    Blocked: {{ mp.bottleneck }} — {{ mp.bottleneck_reason }}
+    {% else %}
+    Ready{% if mp.idle_hours > 0 %} · {{ "%.1f"|format(mp.idle_hours) }}h idle{% endif %}
+    {% endif %}
+  </div>
+
+</a>
+{% endmacro %}
+
+{# ── Page content ─────────────────────────────────────────────────────── #}
+
+<div class="px-4 pt-4 pb-2">
+  <div class="flex items-center justify-between mb-1">
+    <h1 class="text-base font-bold" style="color:var(--navy)">Plan Board</h1>
+    <span class="text-xs text-gray-400">{{ today_disp }}</span>
+  </div>
+
+  {# Plant / Month selectors #}
+  <form method="get" class="flex gap-2 mb-3 flex-wrap">
+    <select name="plant" onchange="this.form.submit()"
+            class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white">
+      {% for p in plants %}
+      <option value="{{ p }}" {% if p == plant %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+    <select name="month" onchange="this.form.submit()"
+            class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white">
+      {% for m in months %}
+      <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </form>
+
+  {% if error %}
+  <div class="rounded-lg p-3 mb-3 text-xs text-red-700 bg-red-50 border border-red-200">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  {# Summary bar #}
+  {% if plans %}
+  <div class="grid grid-cols-3 gap-2 mb-4">
+    <div class="kpi-card p-3 text-center">
+      <div class="text-lg font-bold" style="color:var(--terra)">{{ actionable|length }}</div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Actionable</div>
+    </div>
+    <div class="kpi-card p-3 text-center">
+      <div class="text-lg font-bold" style="color:var(--navy)">
+        {{ plans|selectattr("bottleneck")|list|length }}
+      </div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Blocked</div>
+    </div>
+    <div class="kpi-card p-3 text-center">
+      <div class="text-lg font-bold text-gray-500">{{ plans|length }}</div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Machines</div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if not plans and not error %}
+<div class="px-4 py-8 text-center text-sm text-gray-400">
+  No data available for {{ plant }} {{ month }}. Check that planning and production
+  data are loaded for this period.
+</div>
+{% endif %}
+
+{# ── Actionable machines ── #}
+{% if actionable %}
+<div class="px-4 mb-1">
+  <h2 class="text-xs font-bold uppercase tracking-wide" style="color:var(--terra)">
+    ▶ Actionable — idle capacity + ready job
+  </h2>
+</div>
+{% for mp in actionable %}
+{{ machine_card(mp) }}
+{% endfor %}
+{% endif %}
+
+{# ── Blocked / unknown machines ── #}
+{% if blocked %}
+<div class="px-4 mt-4 mb-1">
+  <h2 class="text-xs font-bold uppercase tracking-wide text-gray-400">
+    Blocked / waiting
+  </h2>
+</div>
+{% for mp in blocked %}
+{{ machine_card(mp) }}
+{% endfor %}
+{% endif %}
+
+{% endblock %}

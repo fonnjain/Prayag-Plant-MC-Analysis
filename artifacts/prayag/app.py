@@ -27,6 +27,7 @@ from sheets import (
     load_yield_records, load_mixer_records, load_toolroom_records,
     load_wastage_records,
 )
+from plan import build_plan
 from sources import (
     PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526,
     PLANNING_SOURCES, PLANNING_FAMILY_LABELS, planning_months,
@@ -3601,6 +3602,89 @@ def _planning_months_union() -> list[str]:
     pipe_ms = set(planning_months("PIPE"))
     ptmt_ms = set(planning_months("PTMT"))
     return sorted(pipe_ms | ptmt_ms, reverse=True)
+
+
+@app.route("/plan")
+def plan_board():
+    """Phase 3 — per-machine planning board.  NEVER called on '/'."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+    plant = request.args.get("plant", "PTMT")
+    if plant not in PLANNING_SOURCES:
+        plant = "PTMT"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        plans = build_plan(plant, month)
+    except Exception as exc:
+        plans = []
+        _ctx["error"] = str(exc)
+
+    actionable = [p for p in plans if p.actionable]
+    blocked    = [p for p in plans if not p.actionable]
+
+    return render_template(
+        "plan_board.html",
+        plans=plans,
+        actionable=actionable,
+        blocked=blocked,
+        month=month,
+        plant=plant,
+        plants=list(PLANNING_SOURCES.keys()),
+        months=all_months,
+        error=_ctx.pop("error", None),
+        **_ctx,
+    )
+
+
+@app.route("/plan/detail")
+def plan_detail():
+    """Phase 3 — per-machine planning detail.  NEVER called on '/'."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month  = request.args.get("month", default_month)
+    plant  = request.args.get("plant", "PTMT")
+    machine = request.args.get("machine", "")
+    if plant not in PLANNING_SOURCES:
+        plant = "PTMT"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    if not machine:
+        return redirect(f"/plan?plant={plant}&month={month}")
+
+    try:
+        plans = build_plan(plant, month)
+    except Exception as exc:
+        return render_template(
+            "plan_detail.html",
+            mp=None, error=str(exc),
+            machine=machine, month=month, plant=plant,
+            plants=list(PLANNING_SOURCES.keys()),
+            months=all_months,
+            **_ctx,
+        )
+
+    # Find the matching plan (exact first, then partial)
+    mp = next((p for p in plans if p.machine == machine), None)
+    if mp is None:
+        from plan import _norm, _partial_match
+        norm_target = _norm(machine)
+        mp = next(
+            (p for p in plans if _partial_match(_norm(p.machine), norm_target)),
+            None,
+        )
+
+    return render_template(
+        "plan_detail.html",
+        mp=mp, error=None,
+        machine=machine, month=month, plant=plant,
+        plants=list(PLANNING_SOURCES.keys()),
+        months=all_months,
+        **_ctx,
+    )
 
 
 @app.route("/planning")

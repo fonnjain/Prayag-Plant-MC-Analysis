@@ -266,4 +266,23 @@
 </div>
 {% endif %}
 
+<!-- Phase 3 — Derived view -->
+{% if planning_sources %}
+<div class="kpi-card p-4 mt-4 mb-2 mx-0">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="text-sm font-bold" style="color:var(--navy)">Derived Views (Phase 3)</h2>
+    <a href="/plan" class="text-xs font-semibold px-2 py-1 rounded-lg border"
+       style="color:var(--terra);border-color:rgba(197,90,17,0.3)">/plan →</a>
+  </div>
+  <p class="text-xs text-gray-500 leading-relaxed">
+    <strong>/plan</strong> — unified per-machine planning board. Joins Phase 2A–2C
+    on-demand loaders (planning, materials, maintenance, manpower) with existing
+    production/metrics. No new sheet reads — reuses cached data only. Never
+    loaded on <code class="bg-gray-100 rounded px-1">/</code>.
+    Feed &amp; Tooling gates show <span class="text-gray-400">grey</span> until
+    Phase 2D lands.
+  </p>
+</div>
+{% endif %}
+
 {% endblock %}
