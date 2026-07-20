@@ -115,13 +115,17 @@ def gen_pipe(rid, label, plant, ym) -> ReportModel:
     extruders = [r for r in recs if _mc_num(r.machine) is not None]
     by_mc = rollup_by_machine(extruders)
     cols = [
-        Column("mc", "Machine", "text", width=16),
-        Column("hrs", "Run Hours", "num", total=True),
-        Column("out", "Output (KG)", "kg", total=True),
-        Column("rej", "Rejection (KG)", "kg", total=True),
-        Column("avg", "Avg Output / Hr", "num"),
-        Column("rej_pct", "Rejection %", "pct"),
-        Column("mc_eff", "M/C Efficiency %", "pct"),
+        Column("mc",       "Machine",          "text", width=16),
+        Column("hrs",      "Run Hours",         "num",  total=True),
+        Column("out",      "Output (KG)",       "kg",   total=True),
+        Column("rej",      "Rejection (KG)",    "kg",   total=True),
+        Column("avg",      "Avg Output / Hr",   "num"),
+        Column("rej_pct",  "Rejection %",       "pct"),
+        Column("mc_eff",   "M/C Efficiency %",  "pct"),
+        Column("paid_hrs", "Paid Hours",        "num"),
+        Column("wages",    "Wages (₹)",         "num"),
+        Column("per_hr",   "Per Hr (₹)",        "num"),
+        Column("per_kg",   "Per KG (₹)",        "num"),
     ]
     rows = []
     t_h = t_o = t_r = t_mc_eff_den = 0.0
@@ -135,7 +139,8 @@ def gen_pipe(rid, label, plant, ym) -> ReportModel:
                      "rej": d["reject_count"],
                      "avg": _avg(d["total_count"], d["actual_hours"]),
                      "rej_pct": _pct(d["reject_count"], d["total_count"]),
-                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None})
+                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None,
+                     "paid_hrs": None, "wages": None, "per_hr": None, "per_kg": None})
     # TOTAL M/C Efficiency denominator comes from Report-5 directly so that idle
     # machines (0 run hours, no production records) are still counted.  The stored
     # TOTAL cell in col M is also wrong (misses M/C-9); reading per-machine values
@@ -149,7 +154,8 @@ def gen_pipe(rid, label, plant, ym) -> ReportModel:
     total_mc_eff_den = r5_ideal if r5_ideal > 0 else t_mc_eff_den
     total = {"mc": "TOTAL", "hrs": t_h or None, "out": t_o, "rej": t_r,
              "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o),
-             "mc_eff": _pct(t_h, total_mc_eff_den) if total_mc_eff_den > 0 else None}
+             "mc_eff": _pct(t_h, total_mc_eff_den) if total_mc_eff_den > 0 else None,
+             "paid_hrs": None, "wages": None, "per_hr": None, "per_kg": None}
     main = ReportSheet(name="(A) Pipe M-C Summary",
         title=f"(A) Pipe M/C Summary — {month_disp(ym)}",
         subtitle="Kaharani · Pipe extrusion, per real extruder machine "
@@ -157,7 +163,8 @@ def gen_pipe(rid, label, plant, ym) -> ReportModel:
                  "reconciliation of Report-5 & Report-11; every ratio recomputed.",
         sections=[Section(cols, rows, total)],
         provenance=[f"Recomputed total output {t_o:,.0f} kg · rejection {t_r:,.0f} kg "
-                    f"· run hours {t_h:,.0f}."])
+                    f"· run hours {t_h:,.0f}.",
+                    "Paid hours / wages: awaiting HR department source sheet."])
 
     # Pipe Type-wise (audit; the untyped pickup keeps the headline whole).
     by_mat = defaultdict(float)
@@ -202,13 +209,17 @@ def gen_moulding(rid, label, plant, ym) -> ReportModel:
         return _awaiting(rid, label, plant, ym, "No Moulding (Report-12) data for this month.")
     by_mc = rollup_by_machine(recs)
     cols = [
-        Column("mc", "Machine", "text", width=16),
-        Column("out", "Output (KG)", "kg", total=True),
-        Column("rej", "Rejection (KG)", "kg", total=True),
-        Column("hrs", "Run Hours", "num", total=True),
-        Column("avg", "Avg Output / Hr", "num"),
-        Column("rej_pct", "Rejection %", "pct"),
-        Column("mc_eff", "M/C Efficiency %", "pct"),
+        Column("mc",       "Machine",          "text", width=16),
+        Column("out",      "Output (KG)",       "kg",   total=True),
+        Column("rej",      "Rejection (KG)",    "kg",   total=True),
+        Column("hrs",      "Run Hours",         "num",  total=True),
+        Column("avg",      "Avg Output / Hr",   "num"),
+        Column("rej_pct",  "Rejection %",       "pct"),
+        Column("mc_eff",   "M/C Efficiency %",  "pct"),
+        Column("paid_hrs", "Paid Hours",        "num"),
+        Column("wages",    "Wages (₹)",         "num"),
+        Column("per_hr",   "Per Hr (₹)",        "num"),
+        Column("per_kg",   "Per KG (₹)",        "num"),
     ]
     rows = []
     t_o = t_r = t_h = t_mc_eff_den = 0.0
@@ -221,7 +232,8 @@ def gen_moulding(rid, label, plant, ym) -> ReportModel:
                      "hrs": d["actual_hours"] or None,
                      "avg": _avg(d["total_count"], d["actual_hours"]),
                      "rej_pct": _pct(d["reject_count"], d["total_count"]),
-                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None})
+                     "mc_eff": d["mc_efficiency"] if d["mc_eff_available"] else None,
+                     "paid_hrs": None, "wages": None, "per_hr": None, "per_kg": None})
     # TOTAL denominator from R5 directly so idle moulding machines (0 output,
     # no Report-12 rows) are still counted.  Moulding machines in Report-5 are
     # those that are neither extruders (_MC_RE) nor finishing auxiliaries
@@ -234,7 +246,8 @@ def gen_moulding(rid, label, plant, ym) -> ReportModel:
     total_mc_eff_den_m = r5_ideal_m if r5_ideal_m > 0 else t_mc_eff_den
     total = {"mc": "TOTAL", "out": t_o, "rej": t_r, "hrs": t_h or None,
              "avg": _avg(t_o, t_h), "rej_pct": _pct(t_r, t_o),
-             "mc_eff": _pct(t_h, total_mc_eff_den_m) if total_mc_eff_den_m > 0 else None}
+             "mc_eff": _pct(t_h, total_mc_eff_den_m) if total_mc_eff_den_m > 0 else None,
+             "paid_hrs": None, "wages": None, "per_hr": None, "per_kg": None}
     return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
         month_disp=month_disp(ym),
         sheets=[ReportSheet(name="(B) Moulding M-C Summary",
@@ -243,7 +256,8 @@ def gen_moulding(rid, label, plant, ym) -> ReportModel:
                      "(Report-12 'Wt in Kgs'); run hours joined from Report-5.",
             sections=[Section(cols, rows, total)],
             provenance=[f"Recomputed total output {t_o:,.0f} kg · rejection "
-                        f"{t_r:,.1f} kg · run hours {t_h:,.0f}."])],
+                        f"{t_r:,.1f} kg · run hours {t_h:,.0f}.",
+                        "Paid hours / wages: awaiting HR department source sheet."])],
         headline=f"{t_o:,.0f} kg output")
 
 
@@ -362,11 +376,13 @@ def _read_report12(ym: str):
 
 
 def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
-    """(D) Pipe Moulds Summary — prefers Reports 17-20 (mould-working tabs) and
-    cross-checks against Report-12.  Falls back to Report-12 when the 17-20 tabs
-    are unavailable or diverge from Report-12 by more than 1% (stale snapshot).
+    """(D) Pipe Moulds Summary — always sourced from Reports 17-20 (mould-working
+    tabs) when available, regardless of agreement with Report-12.  Report-12 is
+    used as a cross-check / reconciliation note ONLY; it never overrides 17-20
+    as the authoritative source.  Only falls back to 'awaiting source' when 17-20
+    tabs are genuinely unavailable (incomplete parse or load error).
     """
-    # --- Report-12 baseline (always fetched; used as cross-check and fallback) ---
+    # --- Report-12 for cross-check ONLY (never authoritative) ---
     items = []
     r12_err = None
     try:
@@ -375,25 +391,24 @@ def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
         r12_err = str(e)
     r12_kg = sum(it["kg"] for it in items) if items else 0.0
 
-    # --- Reports 17-20 via load_pipe_moulds ---
+    # --- Reports 17-20 via load_pipe_moulds (always the authoritative source) ---
     moulds_data = None
     try:
         moulds_data = sheets.load_pipe_moulds(ym)
     except Exception:
         pass
 
+    # 17-20 is usable when: data loaded, available, and parse not incomplete.
+    # Divergence from R12 is shown as an alert but NEVER changes the source.
     stale_mould_tabs = False
     use_1720 = False
     if moulds_data and moulds_data.get("available") and not moulds_data.get("incomplete"):
         r1720_kg = moulds_data.get("grand_kg", 0.0)
-        if r12_kg > 0:
-            divergence = abs(r1720_kg - r12_kg) / r12_kg
-            if divergence <= 0.01:
-                use_1720 = True
-            else:
-                stale_mould_tabs = True
-        elif r1720_kg > 0:
+        if r1720_kg > 0:
             use_1720 = True
+            if r12_kg > 0:
+                divergence = abs(r1720_kg - r12_kg) / r12_kg
+                stale_mould_tabs = divergence > 0.01  # alert only; 17-20 still used
 
     # ---- Path A: use Reports 17-20 ----------------------------------------
     if use_1720:
@@ -433,62 +448,18 @@ def gen_pipe_moulds(rid, label, plant, ym) -> ReportModel:
                 ])],
             headline=f"{grand_kg:,.0f} kg (ties to Moulding)")
 
-    # ---- Path B: fall back to Report-12 (17-20 unavailable or stale) --------
-    if not items:
-        if r12_err:
-            return _awaiting(rid, label, plant, ym, r12_err)
-        return _awaiting(rid, label, plant, ym, "No Moulding (Report-12) data for this month.")
-
-    groups = defaultdict(lambda: {"moulds": set(), "pcs": 0.0, "kg": 0.0})
-    for it in items:
-        g = it["material"] if it["material"] in _PIPE_MATERIALS else _NON_PIPE
-        key = it["item"] or it["machine"] or "—"
-        groups[g]["moulds"].add(key)
-        groups[g]["pcs"] += it["pcs"]; groups[g]["kg"] += it["kg"]
-
-    grand_kg  = sum(g["kg"]  for g in groups.values())
-    grand_pcs = sum(g["pcs"] for g in groups.values())
-    pipe_kg   = sum(groups[m]["kg"] for m in _PIPE_MATERIALS if m in groups)
-
-    cols = [Column("mat",   "Material",          "text", width=22),
-            Column("n",     "Moulds / Items",     "text"),
-            Column("pcs",   "Production (Pcs)",   "int",  total=True),
-            Column("kg",    "Production (KG)",    "kg",   total=True),
-            Column("share", "Share of KG %",      "pct")]
-    rows = []
-    for m in list(_PIPE_MATERIALS) + [_NON_PIPE]:
-        if m not in groups:
-            continue
-        g = groups[m]
-        n = "-" if m == _NON_PIPE else str(len(g["moulds"]))
-        rows.append({"mat": m, "n": n, "pcs": g["pcs"], "kg": g["kg"],
-                     "share": _pct(g["kg"], grand_kg)})
-    total = {"mat": "TOTAL MOULDING", "n": "", "pcs": grand_pcs, "kg": grand_kg,
-             "share": 100.0 if grand_kg else None}
-
-    stale_note = (" ⚠ Reports 17–20 diverge from Report-12 by >1% (stale snapshot) "
-                  "— Report-12 used instead." if stale_mould_tabs else "")
-    prov = [
-        f"Pipe-mould output (CPVC+UPVC+SWR+AGRI) {pipe_kg:,.0f} kg + "
-        f"non-pipe residual = Report-12 month total {grand_kg:,.0f} kg — full reconciliation.",
-        "Source: Pipe & Fitting daily workbook, Report-12, grouped by its own MATERIAL column.",
-    ]
-    if stale_mould_tabs and moulds_data:
-        prov.append(
-            f"Reports 17–20 total {moulds_data.get('grand_kg', 0.0):,.0f} kg diverged "
-            f"from Report-12 {grand_kg:,.0f} kg (>{1:.0%} tolerance) — "
-            "17–20 tabs not updated since last backfill; Report-12 is authoritative."
-        )
-    return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
-        month_disp=month_disp(ym),
-        sheets=[ReportSheet(name="(D) Pipe Moulds Summary",
-            title=f"(D) Pipe Moulds Summary — {month_disp(ym)}",
-            subtitle=("Kaharani · Mould/item output grouped by material, rebuilt "
-                      "from Report-12. Pipe = CPVC/UPVC/SWR/AGRI; the rest is "
-                      "Non-pipe." + stale_note),
-            sections=[Section(cols, rows, total)],
-            provenance=prov)],
-        headline=f"{grand_kg:,.0f} kg (ties to Moulding)")
+    # ---- Path B: 17-20 unavailable → awaiting source (R12 is NOT authoritative) ---
+    # Report-12 stays as a cross-check reference only; it is never served as the
+    # management-report headline.  A missing / incomplete 17-20 parse is shown as
+    # "awaiting source" so analysts know to fix the source, not see fabricated data.
+    note = ("Reports 17–20 not yet available for this month." if not moulds_data
+            else "Reports 17–20 parse is incomplete for this month — awaiting full data.")
+    if r12_err:
+        note += f" (Report-12 also failed: {r12_err})"
+    elif r12_kg:
+        note += (f" Report-12 shows {r12_kg:,.0f} kg as a reference; "
+                 "it is not used here as the authoritative source.")
+    return _awaiting(rid, label, plant, ym, note)
 
 
 # ---------------------------------------------------------------------------
@@ -849,6 +820,120 @@ def gen_ptmt_moulds(rid, label, plant, ym) -> ReportModel:
             provenance=[f"Recomputed PTMT output (excl. grinding) {g_kg:,.0f} kg.",
                         "Source: PTMT daily workbook, Report-5 (per-machine matrix)."])],
         headline=f"{g_kg:,.0f} kg output")
+
+
+# ---------------------------------------------------------------------------
+# Compound / Material Balance — 14th management report
+# ---------------------------------------------------------------------------
+def gen_compound(rid, label, plant, ym) -> ReportModel:
+    """Compound mass-balance summary — recomputed from Pipe & Fitting daily
+    mixer-logbook tabs (Reports 6–10, CG 122).  One row per compound; columns
+    are Opening, Batch, Given, Closing, Loss (kg) and Loss %.  A second sheet
+    shows the raw-material chemical breakdown across all compounds.
+
+    This is the same data that drives the /compound web page; the generator
+    formats it as an exportable management-report .xlsx.
+    """
+    import compound as _cmpd
+    try:
+        data = sheets.load_compound_data([ym])
+    except sheets.SheetReadError as e:
+        return _awaiting(rid, label, plant, ym, str(e))
+
+    comp = _cmpd.build_compilation(data["by_compound"], data["months"])
+    if not comp.get("has_data"):
+        return _awaiting(rid, label, plant, ym,
+                         "No compound data found for this month.")
+
+    # --- Sheet 1: per-compound balance summary ---
+    bal_cols = [
+        Column("cmp",      "Compound",      "text", width=16),
+        Column("opening",  "Opening (kg)",  "num"),
+        Column("batch",    "Batch (kg)",     "num",  total=True),
+        Column("given",    "Given (kg)",     "num",  total=True),
+        Column("closing",  "Closing (kg)",  "num"),
+        Column("loss_kg",  "Loss (kg)",      "num",  total=True),
+        Column("loss_pct", "Loss %",         "pct"),
+    ]
+    bal_rows = []
+    for c in comp["cols"]:
+        if not c.get("has_data"):
+            continue
+        loss_kg = c.get("batch", 0.0) - c.get("given", 0.0)
+        bal_rows.append({
+            "cmp":      c["label"],
+            "opening":  c.get("opening") or None,
+            "batch":    c.get("batch") or None,
+            "given":    c.get("given") or None,
+            "closing":  c.get("closing") or None,
+            "loss_kg":  loss_kg if (c.get("batch") and c.get("given")) else None,
+            "loss_pct": c.get("loss_pct") or None,
+        })
+    tot = comp["total"]
+    t_batch = tot.get("batch", 0.0) or 0.0
+    t_given = tot.get("given", 0.0) or 0.0
+    bal_total = {
+        "cmp":      "GRAND TOTAL",
+        "opening":  None,
+        "batch":    t_batch or None,
+        "given":    t_given or None,
+        "closing":  None,
+        "loss_kg":  (t_batch - t_given) if (t_batch and t_given) else None,
+        "loss_pct": tot.get("loss_pct") or None,
+    }
+    bal_sheet = ReportSheet(
+        name="Compound Balance",
+        title=f"Compound / Material Balance — {month_disp(ym)}",
+        subtitle="Kaharani · Pipe & Fitting mixer-logbook mass-balance, recomputed "
+                 "from daily tabs (Reports 6–10, CG 122). Closing = Opening + Batch "
+                 "− Given; Loss % = Loss / Batch.",
+        sections=[Section(bal_cols, bal_rows, bal_total)],
+        provenance=[
+            f"Grand batch {t_batch:,.0f} kg · given {t_given:,.0f} kg "
+            f"· loss {(t_batch - t_given):,.0f} kg ({(tot.get('loss_pct') or 0)*100:.2f}%).",
+            "Source: Pipe & Fitting daily workbook, mixer-logbook tabs.",
+        ],
+    )
+
+    # --- Sheet 2: raw-material chemical breakdown ---
+    mat_items = comp.get("materials", [])
+    cmp_keys  = [c["key"] for c in comp["cols"] if c.get("has_data")]
+    cmp_lbls  = {c["key"]: c["label"] for c in comp["cols"]}
+    mat_cols  = [Column("mat", "Material / Chemical", "text", width=24)]
+    for k in cmp_keys:
+        mat_cols.append(Column(k, cmp_lbls.get(k, k), "num", total=True))
+    mat_cols.append(Column("_tot", "Total (kg)", "num", total=True))
+
+    mat_rows = []
+    m_grand: dict = {k: 0.0 for k in cmp_keys}
+    m_grand["_tot"] = 0.0
+    for item in mat_items:
+        row: dict = {"mat": item["name"]}
+        row_tot = 0.0
+        for k in cmp_keys:
+            v = item["by"].get(k, 0.0)
+            row[k] = v or None
+            row_tot += v
+            m_grand[k] += v
+        row["_tot"] = row_tot or None
+        m_grand["_tot"] += row_tot
+        mat_rows.append(row)
+    mat_total = {k: (m_grand[k] or None) for k in cmp_keys}
+    mat_total["mat"] = "TOTAL"
+    mat_total["_tot"] = m_grand["_tot"] or None
+
+    mat_sheet = ReportSheet(
+        name="Raw Materials",
+        title=f"Raw Material Breakdown — {month_disp(ym)}",
+        subtitle="Chemical / raw-material usage across compounds. "
+                 "Sourced from the same mixer-logbook tabs as the balance sheet.",
+        sections=[Section(mat_cols, mat_rows, mat_total)],
+    )
+
+    return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
+        month_disp=month_disp(ym),
+        sheets=[bal_sheet, mat_sheet],
+        headline=f"{t_batch:,.0f} kg batch")
 
 
 def gen_ptmt_eff(rid, label, plant, ym) -> ReportModel:

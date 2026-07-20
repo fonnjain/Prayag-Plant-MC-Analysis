@@ -3094,6 +3094,43 @@ def build_state():
             _chk(19, "Report exports (registry) recompute May reference totals",
                  False, "-", f"ERROR: {_e5}", "reports registry import/build failed")
 
+        # #20  PIPE June reconciled output and rejection ground truth.
+        PIPE_JUN_EXP     = 170_216   # date-wise max Report-5 ↔ Report-11; measured 2026-07-20
+        PIPE_JUN_REJ_EXP = 15_354
+        try:
+            _rows_jun, _, _ = get_daily_records(["2026-06"])
+            _pipe_jun     = sum(r.total_count  for r in _rows_jun
+                                if r.plant == "PIPE" and not r.is_finishing)
+            _pipe_jun_rej = sum(r.reject_count for r in _rows_jun
+                                if r.plant == "PIPE" and not r.is_finishing)
+            _jun_ok = (
+                abs(_pipe_jun     - PIPE_JUN_EXP)     / PIPE_JUN_EXP     <= TOL
+                and abs(_pipe_jun_rej - PIPE_JUN_REJ_EXP) / PIPE_JUN_REJ_EXP <= TOL
+            )
+            _chk(20,
+                 f"PIPE June reconciled output ≈ {PIPE_JUN_EXP:,} & rejection ≈ "
+                 f"{PIPE_JUN_REJ_EXP:,} (date-wise max Report-5 ↔ Report-11)",
+                 _jun_ok,
+                 f"out≈{PIPE_JUN_EXP:,} rej≈{PIPE_JUN_REJ_EXP:,} ±0.5%",
+                 f"out={_pipe_jun:,.0f} rej={_pipe_jun_rej:,.0f}",
+                 "reconciliation drift or fresh backfill — re-baseline if coherent")
+        except Exception as _e6:
+            _chk(20, "PIPE June reconciled output & rejection", False,
+                 "-", f"ERROR: {_e6}", "June read/reconcile failed")
+
+        # #21  MOULDING June output ground truth.
+        MOULD_JUN_EXP = 97_007   # Report-12 detail rows; measured 2026-07-20
+        try:
+            _mould_jun = sum(r.total_count for r in _rows_jun if r.plant == "MOULDING")
+            _chk(21,
+                 f"MOULDING June output ≈ {MOULD_JUN_EXP:,} (Report-12 detail rows)",
+                 abs(_mould_jun - MOULD_JUN_EXP) / MOULD_JUN_EXP <= TOL,
+                 f"{MOULD_JUN_EXP:,} ±0.5%", f"{_mould_jun:,.0f}",
+                 "Moulding not read from Report-12 / double-count / backfill")
+        except Exception as _e7:
+            _chk(21, "MOULDING June output", False,
+                 "-", f"ERROR: {_e7}", "June Moulding read failed")
+
     # ------------------------------------------------------------------ #
     # Render                                                               #
     # ------------------------------------------------------------------ #

@@ -82,9 +82,10 @@ _REF = {
     "moulding":    {"out": 97_006.92},
     # (C) Group of Moulding — ORACLE-VERIFIED (ties to (B) output).
     "gom":         {"out": 97_006.92},
-    # (D) Pipe Moulds Summary — ORACLE-VERIFIED (D-oracle 89,151.74 kg / 1,340,117
-    # pcs was a mid-month freeze; Report-12 with June 30 → 97,006.92 kg / 1,382,048 pcs).
-    "pipe_moulds": {"kg": 97_006.92, "pcs": 1_382_048},
+    # (D) Pipe Moulds Summary — ORACLE-VERIFIED from Reports 17-20 (always authoritative).
+    # 17-20 shows 89,151.74 kg / 1,340,117 pcs (mid-month freeze of June); Report-12
+    # shows 97,006.92 kg (post June-30 backfill) but is now a cross-check only.
+    "pipe_moulds": {"kg": 89_151.74, "pcs": 1_340_117},
     # Moulding %age Efficiency — ORACLE-VERIFIED (output ties to (B)).
     "mould_eff":   {"out": 97_006.92},
     # Garden Pipe Summary — ORACLE-VERIFIED headline output (60,928 kg).
@@ -121,10 +122,10 @@ def _install_fixtures():
         report12 if tab == "Report-12" else [])
 
     # Simulate the mid-month-frozen Reports 17-20 state (89,152 kg) that diverges
-    # from the backfilled Report-12 figure (93,123 kg) by 4.3% > 1%.  This causes
-    # gen_pipe_moulds to flag stale_mould_tabs=True and fall back to Report-12, so
-    # the oracle pin ("pipe_moulds": 93,122.89 kg) remains valid and the fallback
-    # path is exercised in CI.
+    # from the backfilled Report-12 figure by 4.3% > 1%.  gen_pipe_moulds flags
+    # stale_mould_tabs=True (alert) but still uses 17-20 as the authoritative source
+    # (never falls back to R12).  The oracle pin (89,151.74 kg) reflects the 17-20
+    # figure, and the stale-tab alert path is exercised in CI.
     def _stale_moulds_data(ym):
         return {
             "available": True, "incomplete": False, "missing": [],

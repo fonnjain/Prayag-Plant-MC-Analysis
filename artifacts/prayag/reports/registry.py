@@ -45,9 +45,9 @@ REPORTS: List[ReportDef] = [
     ReportDef("tank_vn",        "Tanks (Varanasi)",            "VN",      gen.gen_tank_vn),
     ReportDef("tank_wb",        "Tanks (West Bengal)",         "WB",      gen.gen_tank_wb),
     ReportDef("segment_labour", "Segment Labour / Power / Solar", "ALL",  gen.gen_segment_labour),
-    # Compound / Material is intentionally OFF (spec): its mass-balance lives on
-    # the dedicated /compound page and is not part of the per-report export set.
-    ReportDef("compound",       "Compound / Material",         "KH",      None, enabled=False),
+    # Compound / Material: mass-balance from mixer-logbook tabs (Reports 6–10,
+    # CG 122). Also available as an interactive page at /compound.
+    ReportDef("compound",       "Compound / Material",         "KH",      gen.gen_compound),
 ]
 
 _BY_ID = {r.id: r for r in REPORTS}
