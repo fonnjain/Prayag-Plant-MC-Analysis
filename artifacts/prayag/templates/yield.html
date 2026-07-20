@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Yield & Production Pivot — {{ plant }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Yield &amp; Production Pivot</h1>
+  <p class="sub">{{ plant }} · {{ month }} · Report-15 (kg) / Report-13/14 (pcs)</p>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% else %}
+
+{# ---------- Controls ---------- #}
+<form method="get" class="filter-bar">
+  <select name="plant" onchange="this.form.submit()">
+    {% for p in plants %}<option value="{{ p }}"{% if p == plant %} selected{% endif %}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="month" onchange="this.form.submit()">
+    {% for m in months %}<option value="{{ m }}"{% if m == month %} selected{% endif %}>{{ m }}</option>{% endfor %}
+  </select>
+</form>
+
+{# ---------- Kg-basis summary (Report-15) ---------- #}
+{% if kg_by_type %}
+<h2 class="section-title">Yield Summary — kg basis (Report-15)</h2>
+<div class="table-wrapper">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th class="num">Production (kg)</th>
+      <th class="num">Wastage (kg)</th>
+      <th class="num">Pulverizer (kg)</th>
+      <th class="num">Yield %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t, bkt in kg_by_type.items() | sort %}
+    <tr>
+      <td>{{ t }}</td>
+      <td class="num">{{ "{:,.2f}".format(bkt.prod_kg) }}</td>
+      <td class="num">{{ "{:,.2f}".format(bkt.waste_kg) }}</td>
+      <td class="num">{{ "{:,.2f}".format(bkt.pulv_kg) }}</td>
+      <td class="num{% if bkt.yield_pct is not none and bkt.yield_pct < 90 %} text-warn{% endif %}">
+        {% if bkt.yield_pct is not none %}{{ "{:.2f}".format(bkt.yield_pct) }}%{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">Report-15 data not available for {{ plant }} {{ month }}.</p>
+{% endif %}
+
+{# ---------- Pcs-basis summary (Report-13 / 14) ---------- #}
+{% if pcs_by_type %}
+<h2 class="section-title">Daily Pcs Pivot — Report-13 / 14</h2>
+<div class="table-wrapper">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th class="num">Production (pcs)</th>
+      <th class="num">Target (pcs)</th>
+      <th class="num">Attainment %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t, bkt in pcs_by_type.items() | sort %}
+    <tr>
+      <td>{{ t }}</td>
+      <td class="num">{{ "{:,.0f}".format(bkt.prod_pcs) }}</td>
+      <td class="num">{% if bkt.target_pcs %}{{ "{:,.0f}".format(bkt.target_pcs) }}{% else %}—{% endif %}</td>
+      <td class="num">
+        {% if bkt.target_pcs and bkt.target_pcs > 0 %}
+          {{ "{:.1f}".format(bkt.prod_pcs / bkt.target_pcs * 100) }}%
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{# ---------- Daily detail (R15 kg rows) ---------- #}
+{% if recs %}
+<h2 class="section-title">Daily Detail — kg basis</h2>
+<div class="table-wrapper">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Type</th>
+      <th class="num">Prod (kg)</th>
+      <th class="num">Wastage (kg)</th>
+      <th class="num">Pulverizer (kg)</th>
+      <th class="num">Yield %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in recs %}
+    <tr>
+      <td>{{ r.date[8:10] }}-{{ r.date[5:7] }}-{{ r.date[0:4] }}</td>
+      <td>{{ r.type }}</td>
+      <td class="num">{{ "{:,.2f}".format(r.production_kg) }}</td>
+      <td class="num">{{ "{:,.2f}".format(r.wastage_kg) }}</td>
+      <td class="num">{{ "{:,.2f}".format(r.pulverizer_consumed_kg) }}</td>
+      <td class="num{% if r.yield_pct is not none and r.yield_pct < 90 %} text-warn{% endif %}">
+        {% if r.yield_pct is not none %}{{ "{:.2f}".format(r.yield_pct) }}%{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No yield records found for {{ plant }} {{ month }}.</p>
+{% endif %}
+
+{% endif %}{# end error #}
+{% endblock %}

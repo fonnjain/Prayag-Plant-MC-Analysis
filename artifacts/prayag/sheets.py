@@ -112,6 +112,10 @@ def clear_caches() -> None:
     _material_cache.clear()
     _maintenance_cache.clear()
     _manpower_cache.clear()
+    _yield_cache.clear()
+    _mixer_cache.clear()
+    _toolroom_cache.clear()
+    _wastage_cache.clear()
     try:
         _store.pg_cache_clear()
     except Exception:
@@ -2655,6 +2659,10 @@ _mould_cap_cache: dict = {}
 _material_cache     : dict = {}
 _maintenance_cache  : dict = {}
 _manpower_cache     : dict = {}
+_yield_cache        : dict = {}
+_mixer_cache        : dict = {}
+_toolroom_cache     : dict = {}
+_wastage_cache      : dict = {}
 _PLANNING_TTL = 900.0
 _planning_lock      = threading.Lock()
 _ptmt_pc_lock       = threading.Lock()
@@ -2663,6 +2671,10 @@ _mould_cap_lock     = threading.Lock()
 _material_lock      = threading.Lock()
 _maintenance_lock   = threading.Lock()
 _manpower_lock      = threading.Lock()
+_yield_lock         = threading.Lock()
+_mixer_lock         = threading.Lock()
+_toolroom_lock      = threading.Lock()
+_wastage_lock       = threading.Lock()
 
 
 def load_planning(plant: str, ym: str) -> List:
@@ -2899,4 +2911,150 @@ def load_manpower_records(plant: str, ym: str) -> list:
                 except Exception:
                     continue
         _manpower_cache[key] = (now, recs)
+        return recs
+
+
+def load_yield_records(plant: str, ym: str) -> list:
+    """Load YieldRecord list from Report-15/13/14 for *plant* + *ym*.
+    Phase 2D — on-demand only, NEVER called on '/'.
+    Cached 15 min.  Returns [] on any error.
+    """
+    import planning as _pl
+    import parsers as _par
+
+    key = f"yield:{plant}:{ym}"
+    now = time.time()
+    c = _yield_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _yield_lock:
+        c = _yield_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            y_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("yield_tabs", [])
+            for tc in y_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    parser = tc["parser"]
+                    if parser == "yield_report15":
+                        recs.extend(_par.parse_yield_report15(vals, plant, ym))
+                    elif parser == "yield_report13":
+                        recs.extend(_par.parse_yield_report13(vals, plant, ym))
+                    elif parser == "yield_report14":
+                        recs.extend(_par.parse_yield_report14(vals, plant, ym))
+                except Exception:
+                    continue
+        _yield_cache[key] = (now, recs)
+        return recs
+
+
+def load_mixer_records(plant: str, ym: str) -> list:
+    """Load CompoundBatchRecord list from Report-5(A/B/C/D) for *plant* + *ym*.
+    Phase 2D — on-demand only, NEVER called on '/'.
+    DISTINCT from compound.py CP-fittings mass-balance.
+    Cached 15 min.  Returns [] on any error.
+    """
+    import planning as _pl
+    import parsers as _par
+
+    key = f"mixer:{plant}:{ym}"
+    now = time.time()
+    c = _mixer_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _mixer_lock:
+        c = _mixer_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            m_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("mixer_tabs", [])
+            for tc in m_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_mixer_batch(
+                        vals, plant,
+                        mixer_id=tc.get("mixer_id", ""),
+                        ym=ym,
+                    ))
+                except Exception:
+                    continue
+        _mixer_cache[key] = (now, recs)
+        return recs
+
+
+def load_toolroom_records(plant: str, ym: str) -> list:
+    """Load ToolroomRecord list from Report-21 for *plant* + *ym*.
+    Phase 2D — on-demand only, NEVER called on '/'.
+    Cached 15 min.  Returns [] on any error.
+    """
+    import parsers as _par
+
+    key = f"toolroom:{plant}:{ym}"
+    now = time.time()
+    c = _toolroom_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _toolroom_lock:
+        c = _toolroom_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            t_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("toolroom_tabs", [])
+            for tc in t_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_toolroom(vals, plant, ym))
+                except Exception:
+                    continue
+        _toolroom_cache[key] = (now, recs)
+        return recs
+
+
+def load_wastage_records(plant: str, ym: str) -> list:
+    """Load WastageRecord list from Report-10 for *plant* (PTMT).
+    Phase 2D — on-demand only, NEVER called on '/'.
+    Wastage master is static (not date-filtered); *ym* is used only for file-ID lookup.
+    Cached 15 min.  Returns [] on any error.
+    """
+    import parsers as _par
+
+    key = f"wastage:{plant}:{ym}"
+    now = time.time()
+    c = _wastage_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _wastage_lock:
+        c = _wastage_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            w_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("wastage_tabs", [])
+            for tc in w_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_wastage(vals, plant))
+                except Exception:
+                    continue
+        _wastage_cache[key] = (now, recs)
         return recs

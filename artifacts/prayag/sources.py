@@ -446,6 +446,27 @@ PLANNING_SOURCES: dict = {
             {"tab": "Report-22 (A)", "parser": "pipe_manpower", "shift": "all"},
             {"tab": "Report-22 (B)", "parser": "pipe_manpower", "shift": "all"},
         ],
+        # Phase 2D — daily production pivot (kg) with wastage + pulverizer per type (Report-15);
+        # daily pcs by pipe type (Report-13) and fittings type (Report-14).
+        # Header auto-detected; NEVER loaded on "/".
+        "yield_tabs": [
+            {"tab": "Report-15", "parser": "yield_report15"},   # kg: prod+wastage+pulverizer per type
+            {"tab": "Report-13", "parser": "yield_report13"},   # pcs: CPVC/UPVC/SWR/AGRI daily
+            {"tab": "Report-14", "parser": "yield_report14"},   # pcs: fittings daily
+        ],
+        # Phase 2D — compound mixer batch logs (Report-5(A/B/C/D)).
+        # DISTINCT from /compound CP-fittings mass-balance (compound.py).
+        # mixer_availability = running_hours / (running_hours + breakdown_hours).
+        "mixer_tabs": [
+            {"tab": "Report-5(A)", "parser": "mixer_batch", "mixer_id": "A"},
+            {"tab": "Report-5(B)", "parser": "mixer_batch", "mixer_id": "B"},
+            {"tab": "Report-5(C)", "parser": "mixer_batch", "mixer_id": "C"},
+            {"tab": "Report-5(D)", "parser": "mixer_batch", "mixer_id": "D"},
+        ],
+        # Phase 2D — toolroom job log (Report-21); ~24 job rows per month.
+        "toolroom_tabs": [
+            {"tab": "Report-21", "parser": "toolroom"},
+        ],
     },
     "PTMT": {
         "tabs": [
@@ -476,6 +497,11 @@ PLANNING_SOURCES: dict = {
             {"tab": "Report-6 (A)", "parser": "ptmt_manpower", "shift": "1st"},
             {"tab": "Report-6 (B)", "parser": "ptmt_manpower", "shift": "2nd"},
             {"tab": "Report-6 (C)", "parser": "ptmt_manpower", "shift": "3rd"},
+        ],
+        # Phase 2D — scrap/wastage recovery master (Report-10); ~33 rows.
+        # Unit varies (KG/PCS/LTR) — NEVER sum across units.
+        "wastage_tabs": [
+            {"tab": "Report-10", "parser": "wastage"},
         ],
     },
 }

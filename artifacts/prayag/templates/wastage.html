@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Wastage Recovery — {{ plant }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Scrap &amp; Wastage Recovery</h1>
+  <p class="sub">{{ plant }} · Report-10 <span class="badge-note">Units vary — never summed across KG / PCS / LTR</span></p>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% else %}
+
+<form method="get" class="filter-bar">
+  <select name="plant" onchange="this.form.submit()">
+    {% for p in plants %}<option value="{{ p }}"{% if p == plant %} selected{% endif %}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="month" onchange="this.form.submit()">
+    {% for m in months %}<option value="{{ m }}"{% if m == month %} selected{% endif %}>{{ m }}</option>{% endfor %}
+  </select>
+</form>
+
+{% if by_unit %}
+<h2 class="section-title">Unit Breakdown</h2>
+<div class="kpi-row">
+  {% for u, bkt in by_unit.items() | sort %}
+  <div class="kpi-card">
+    <span class="kpi-val">{{ bkt.count }}</span>
+    <span class="kpi-label">Items ({{ u }})</span>
+    <span class="kpi-sub">{{ "{:,.1f}".format(bkt.total_per_week) }} {{ u }}/wk total</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if by_dept %}
+  {% for dept, dept_recs in by_dept.items() | sort %}
+  <h2 class="section-title">{{ dept }}</h2>
+  <div class="table-wrapper">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Waste Item</th>
+        <th>Unit</th>
+        <th class="num">Avg / Week</th>
+        <th>Dispose Cycle</th>
+        <th>Responsible Person</th>
+        <th class="num">Approx Sale Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in dept_recs %}
+      <tr>
+        <td>{{ r.waste_item }}</td>
+        <td><span class="badge badge-unit">{{ r.unit or "—" }}</span></td>
+        <td class="num">{{ "{:,.1f}".format(r.avg_waste_per_week) if r.avg_waste_per_week else "—" }}</td>
+        <td>{{ r.dispose_cycle or "—" }}</td>
+        <td>{{ r.responsible_person or "—" }}</td>
+        <td class="num">{% if r.approx_sale_value %}₹{{ "{:,.0f}".format(r.approx_sale_value) }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endfor %}
+{% else %}
+<p class="muted">No wastage records found for {{ plant }}.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}

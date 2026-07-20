@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Toolroom Log — {{ plant }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Toolroom Job Log</h1>
+  <p class="sub">{{ plant }} · {{ month }} · Report-21</p>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% else %}
+
+<form method="get" class="filter-bar">
+  <select name="plant" onchange="this.form.submit()">
+    {% for p in plants %}<option value="{{ p }}"{% if p == plant %} selected{% endif %}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="month" onchange="this.form.submit()">
+    {% for m in months %}<option value="{{ m }}"{% if m == month %} selected{% endif %}>{{ m }}</option>{% endfor %}
+  </select>
+</form>
+
+{% if summary.total_jobs %}
+<div class="kpi-row">
+  <div class="kpi-card">
+    <span class="kpi-val">{{ summary.total_jobs }}</span>
+    <span class="kpi-label">Jobs</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-val">{{ summary.machines }}</span>
+    <span class="kpi-label">Machines</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-val">{{ "{:,.1f}".format(summary.total_hours) }}</span>
+    <span class="kpi-label">Working Hours</span>
+  </div>
+  <div class="kpi-card">
+    <span class="kpi-val">{{ "{:,.0f}".format(summary.total_manpower) }}</span>
+    <span class="kpi-label">Manpower Days</span>
+  </div>
+</div>
+{% endif %}
+
+{% if recs %}
+<h2 class="section-title">Job List</h2>
+<div class="table-wrapper">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Machine</th>
+      <th>Item</th>
+      <th>Work Detail</th>
+      <th class="num">Manpower</th>
+      <th class="num">Hours</th>
+      <th>Remarks</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in recs %}
+    <tr>
+      <td>{% if r.date %}{{ r.date[8:10] }}-{{ r.date[5:7] }}-{{ r.date[0:4] }}{% else %}—{% endif %}</td>
+      <td>{{ r.machine or "—" }}</td>
+      <td>{{ r.item or "—" }}</td>
+      <td>{{ r.work_detail or "—" }}</td>
+      <td class="num">{{ r.manpower if r.manpower else "—" }}</td>
+      <td class="num">{{ "{:,.1f}".format(r.working_hours) if r.working_hours else "—" }}</td>
+      <td>{{ r.remarks or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No toolroom records found for {{ plant }} {{ month }}.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}

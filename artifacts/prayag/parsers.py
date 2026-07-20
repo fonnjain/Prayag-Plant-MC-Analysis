@@ -2880,3 +2880,476 @@ def parse_manpower(values: list, plant: str, shift: str, ym: str = "") -> list:
                 ))
 
     return recs
+
+
+# ===========================================================================
+# Phase 2D — Yield / daily production pivot parsers
+# ===========================================================================
+
+_YIELD_SKIP = frozenset([
+    "DATE", "PER DAY", "ACCUMULATED PROD", "LEFT PRODUCTION",
+    "AVERAGE PER DAY", "ACCUMULATED", "LEFT", "AVERAGE", "AVG",
+    "TARGET", "TOTAL", "SR.", "SR", "S.NO", "REMARK", "REMARKS",
+])
+
+_YIELD_SKIP_SUB = ("PER DAY", "PER ", "ACCUM", "LEFT PROD", "AVERAGE",
+                   "AVG ", "TARGET", "TOTAL ", "DATE")
+
+
+def _yield_skip_header(h: str) -> bool:
+    """True if a column header should be skipped when detecting type columns."""
+    if not h:
+        return True
+    if h in _YIELD_SKIP:
+        return True
+    for sub in _YIELD_SKIP_SUB:
+        if sub in h:
+            return True
+    return False
+
+
+def parse_yield_report15(values: list, plant: str, ym: str = "") -> list:
+    """Parse PIPE Report-15 — per-type (CPVC/UPVC/SWR/AGRI/…) daily kg:
+    production, wastage, pulverizer consumed.  Yield% computed.
+
+    Phase 2D — header auto-detected (scan rows 0-7 for 'Production'+'Wastage').
+    Returns list[YieldRecord].
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # Find header row: must contain both 'PRODUCTION' and 'WASTAGE'
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        up = [str(v).strip().upper() for v in row]
+        if (any("PRODUCTION" in c for c in up)
+                and any("WASTAGE" in c for c in up)):
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    hrow = values[header_idx]
+
+    # Build type column map: type_key -> (prod_c, waste_c, pulv_c)
+    type_cols: dict = {}
+    for c, v in enumerate(hrow):
+        cell = str(v).strip().upper()
+        if not cell.startswith("PRODUCTION "):
+            continue
+        raw_type = cell[len("PRODUCTION "):].strip()
+        type_key = raw_type.replace(" ", "_")
+        waste_c = pulv_c = -1
+        for c2 in range(c + 1, min(c + 6, len(hrow))):
+            h2 = str(hrow[c2]).strip().upper()
+            if "WASTAGE" in h2 and waste_c < 0:
+                waste_c = c2
+            elif "PULVERIZER" in h2 and pulv_c < 0:
+                pulv_c = c2
+                break
+        type_cols[type_key] = (c, waste_c, pulv_c)
+
+    if not type_cols:
+        return []
+
+    # Date column = first col whose header contains 'DATE' or col 0
+    date_c = 0
+    for c, v in enumerate(hrow):
+        if "DATE" in str(v).strip().upper():
+            date_c = c
+            break
+
+    recs = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        date_val = row[date_c] if date_c < len(row) else ""
+        date_str = _parse_date_cell_manpower(date_val)
+        if not date_str:
+            continue
+        if ym and not date_str.startswith(ym):
+            continue
+
+        for type_key, (prod_c, waste_c, pulv_c) in type_cols.items():
+            prod_kg  = num(row[prod_c]  if prod_c  < len(row) else "")
+            waste_kg = num(row[waste_c] if waste_c >= 0 and waste_c < len(row) else "")
+            pulv_kg  = num(row[pulv_c]  if pulv_c  >= 0 and pulv_c  < len(row) else "")
+            if prod_kg == 0 and waste_kg == 0 and pulv_kg == 0:
+                continue
+            r = _pl.YieldRecord(
+                plant=plant,
+                date=date_str,
+                type=type_key,
+                production_kg=prod_kg,
+                wastage_kg=waste_kg,
+                pulverizer_consumed_kg=pulv_kg,
+                source="R15_kg",
+            )
+            _pl.compute_yield_metrics(r)
+            recs.append(r)
+
+    return recs
+
+
+def _parse_yield_daily_pcs_generic(
+        values: list, plant: str, ym: str, source_tag: str) -> list:
+    """Shared parser for Report-13 (pipe pcs) and Report-14 (fittings pcs).
+
+    Header detection: scan rows 0-9 for row with 'DATE' + ≥2 non-summary
+    type-like columns (e.g. CPVC/UPVC/SWR/AGRI or UPVC F/SWR F).
+    Target values are read from the row immediately above the header.
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # Find header row
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        has_date = any("DATE" in c for c in up)
+        type_like = [c for c in up
+                     if c and "DATE" not in c and not _yield_skip_header(c)
+                     and len(c) <= 20]
+        if has_date and len(type_like) >= 2:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    hrow = values[header_idx]
+
+    # Find date column
+    date_c = -1
+    for c, v in enumerate(hrow):
+        if "DATE" in str(v).strip().upper():
+            date_c = c
+            break
+    if date_c < 0:
+        return []
+
+    # Build type column map (skip date col + summary cols)
+    type_map: dict = {}   # type_key -> col
+    for c, v in enumerate(hrow):
+        if c == date_c:
+            continue
+        h = str(v).strip().upper()
+        if _yield_skip_header(h):
+            continue
+        if len(h) > 20:
+            continue
+        type_key = h.replace(" ", "_").rstrip(".")
+        if type_key:
+            type_map[type_key] = c
+
+    if not type_map:
+        return []
+
+    # Extract targets from the row immediately before the header
+    targets: dict = {}
+    if header_idx > 0:
+        t_row = values[header_idx - 1]
+        for tk, col in type_map.items():
+            if col < len(t_row):
+                tv = num(t_row[col])
+                if tv > 0:
+                    targets[tk] = tv
+
+    recs = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        date_val = row[date_c] if date_c < len(row) else ""
+        date_str = _parse_date_cell_manpower(date_val)
+        if not date_str:
+            continue
+        if ym and not date_str.startswith(ym):
+            continue
+
+        for tk, col in type_map.items():
+            pcs = num(row[col] if col < len(row) else "")
+            if pcs == 0:
+                continue
+            recs.append(_pl.YieldRecord(
+                plant=plant,
+                date=date_str,
+                type=tk,
+                production_pcs=pcs,
+                target_pcs=targets.get(tk, 0.0),
+                source=source_tag,
+            ))
+
+    return recs
+
+
+def parse_yield_report13(values: list, plant: str, ym: str = "") -> list:
+    """Parse PIPE Report-13 — daily pipe pcs by type (CPVC/UPVC/SWR/AGRI).
+    Phase 2D.  Returns list[YieldRecord].
+    """
+    return _parse_yield_daily_pcs_generic(values, plant, ym, "R13_pcs")
+
+
+def parse_yield_report14(values: list, plant: str, ym: str = "") -> list:
+    """Parse PIPE Report-14 — daily fittings pcs by type (UPVC F/SWR F/…).
+    Phase 2D.  Returns list[YieldRecord].
+    """
+    return _parse_yield_daily_pcs_generic(values, plant, ym, "R14_pcs")
+
+
+# ===========================================================================
+# Phase 2D — Compound / mixer batch log (PIPE Report-5(A/B/C/D))
+# ===========================================================================
+
+def parse_mixer_batch(values: list, plant: str,
+                      mixer_id: str = "", ym: str = "") -> list:
+    """Parse PIPE Report-5(A/B/C/D) mixer batch log.
+
+    Phase 2D — loaded on-demand from /mixer, NEVER on '/'.
+    DISTINCT from compound.py CP-fittings mass-balance.
+
+    Returns list[CompoundBatchRecord].
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # Find header row: DATE + (BATCH or RUNNING)
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        up = [str(v).strip().upper() for v in row]
+        if (any("DATE" in c for c in up)
+                and any("BATCH" in c or "RUNNING" in c for c in up)):
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    date_c       = fc(lambda h: "DATE" in h)
+    batch_type_c = fc(lambda h: "BATCH TYPE" in h or h == "TYPE")
+    batch_size_c = fc(lambda h: "BATCH SIZE" in h or h == "SIZE" or "BATCH SZ" in h)
+    num_batch_c  = fc(lambda h: "NO" in h and "BATCH" in h)
+    shift_c      = fc(lambda h: h == "SHIFT" or "SHIFT" in h)
+    total_c      = fc(lambda h: "TOTAL COMPOUND" in h or ("TOTAL" in h and "COMPOUND" in h))
+    run_c        = fc(lambda h: "RUNNING" in h and ("HOUR" in h or "HRS" in h or h == "RUNNING"))
+    break_c      = fc(lambda h: "BREAKDOWN" in h and ("HOUR" in h or "HRS" in h or h == "BREAKDOWN"))
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    recs = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        date_val = g(row, date_c)
+        date_str = _parse_date_cell_manpower(date_val)
+        if not date_str:
+            continue
+        if ym and not date_str.startswith(ym):
+            continue
+
+        total = num(g(row, total_c))
+        run_h = num(g(row, run_c))
+        # Skip completely empty rows
+        if total == 0 and run_h == 0 and not str(g(row, batch_type_c)).strip():
+            continue
+
+        r = _pl.CompoundBatchRecord(
+            plant=plant,
+            date=date_str,
+            mixer_id=mixer_id,
+            batch_type=str(g(row, batch_type_c)).strip(),
+            batch_size=num(g(row, batch_size_c)),
+            num_batches=num(g(row, num_batch_c)),
+            total_compound_kg=total,
+            running_hours=run_h,
+            breakdown_hours=num(g(row, break_c)),
+            shift=str(g(row, shift_c)).strip(),
+        )
+        _pl.compute_mixer_metrics(r)
+        recs.append(r)
+
+    return recs
+
+
+# ===========================================================================
+# Phase 2D — Toolroom job log (PIPE Report-21)
+# ===========================================================================
+
+def parse_toolroom(values: list, plant: str, ym: str = "") -> list:
+    """Parse PIPE Report-21 toolroom job log (~24 rows).
+
+    Phase 2D — loaded on-demand from /toolroom, NEVER on '/'.
+    Returns list[ToolroomRecord].
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # Find header row: DATE + MACHINE
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        if any("DATE" in c for c in up) and any("MACHINE" in c for c in up):
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    date_c    = fc(lambda h: "DATE" in h)
+    machine_c = fc(lambda h: "MACHINE NAME" in h or (h == "MACHINE"))
+    item_c    = fc(lambda h: "ITEM NAME" in h or (h == "ITEM"))
+    work_c    = fc(lambda h: "WORK DETAIL" in h or (h == "WORK"))
+    remarks_c = fc(lambda h: "REMARK" in h)
+    manp_c    = fc(lambda h: "MANPOWER" in h)
+    hours_c   = fc(lambda h: "WORKING HOURS" in h or "WORKING HRS" in h
+                   or ("HOUR" in h and "WORK" in h))
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    recs = []
+    _last_date = ""
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        if sum(1 for v in row if str(v).strip()) < 2:
+            continue
+
+        machine = str(g(row, machine_c)).strip()
+        up_m = machine.upper()
+        if not machine or len(machine) < 2:
+            continue
+        if any(s in up_m for s in ("MACHINE NAME", "TOTAL", "GRAND TOTAL",
+                                    "SR. NO", "S.NO")):
+            continue
+
+        date_val = g(row, date_c)
+        date_str = _parse_date_cell_manpower(date_val)
+        if date_str:
+            _last_date = date_str
+        else:
+            date_str = _last_date      # carry-forward for multi-row jobs
+
+        if ym and date_str and not date_str.startswith(ym):
+            continue
+
+        recs.append(_pl.ToolroomRecord(
+            plant=plant,
+            date=date_str,
+            machine=machine,
+            item=str(g(row, item_c)).strip(),
+            work_detail=str(g(row, work_c)).strip(),
+            remarks=str(g(row, remarks_c)).strip(),
+            manpower=num(g(row, manp_c)),
+            working_hours=num(g(row, hours_c)),
+        ))
+
+    return recs
+
+
+# ===========================================================================
+# Phase 2D — Scrap / wastage master (PTMT Report-10)
+# ===========================================================================
+
+def parse_wastage(values: list, plant: str) -> list:
+    """Parse PTMT Report-10 scrap/wastage master (~33 rows).
+
+    Phase 2D — loaded on-demand from /wastage, NEVER on '/'.
+    INVARIANT: units vary (KG/PCS/LTR) — NEVER sum across units.
+    Returns list[WastageRecord].
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # Find header row: DEPARTMENT + WASTE ITEM
+    header_idx = -1
+    for i, row in enumerate(values[:6]):
+        up = [str(v).strip().upper() for v in row]
+        if (any("DEPARTMENT" in c for c in up)
+                and any("WASTE ITEM" in c for c in up)):
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    dept_c     = fc(lambda h: "DEPARTMENT" in h)
+    item_c     = fc(lambda h: "WASTE ITEM" in h)
+    unit_c     = fc(lambda h: "UNIT" in h)
+    qty_c      = fc(lambda h: ("AV." in h or "AVG" in h or "AVERAGE" in h
+                               or "WASTE CREATE" in h or "WASTE IN A WEEK" in h))
+    cycle_c    = fc(lambda h: "CYCLE" in h and "DISPOSE" in h)
+    dispose_c  = fc(lambda h: "RESPONSIBLE" in h and "DISPOSE" in h)
+    resp_c     = fc(lambda h: "RESPONSIBLE" in h and "MANAG" in h)
+    sale_val_c = fc(lambda h: "SALE VALUE" in h or "APROX" in h or "APPROX" in h)
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    recs = []
+    _last_dept = ""
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        item = str(g(row, item_c)).strip()
+        if not item or len(item) < 2:
+            continue
+        up_i = item.upper()
+        if up_i in ("WASTE ITEM", "TOTAL", "GRAND TOTAL") or up_i.startswith("TOTAL "):
+            continue
+        if sum(1 for v in row if str(v).strip()) < 2:
+            continue
+
+        dept = str(g(row, dept_c)).strip()
+        if dept:
+            _last_dept = dept
+        else:
+            dept = _last_dept          # carry-forward for multi-row depts
+
+        unit = str(g(row, unit_c)).strip().upper()
+        # normalise unit abbreviations
+        if unit in ("KGS", "KG.", "KILO"):
+            unit = "KG"
+        elif unit in ("PCS.", "PC", "PIECES"):
+            unit = "PCS"
+        elif unit in ("LTR.", "LITRE", "LITRES", "LITER"):
+            unit = "LTR"
+
+        # Prefer DISPOSE responsible person; fall back to MANAGEMENT
+        responsible = str(g(row, dispose_c)).strip()
+        if not responsible:
+            responsible = str(g(row, resp_c)).strip()
+
+        recs.append(_pl.WastageRecord(
+            plant=plant,
+            department=dept,
+            waste_item=item,
+            unit=unit,
+            avg_waste_per_week=num(g(row, qty_c)),
+            dispose_cycle=str(g(row, cycle_c)).strip(),
+            responsible_person=responsible,
+            approx_sale_value=num(g(row, sale_val_c)),
+        ))
+
+    return recs

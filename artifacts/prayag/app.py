@@ -24,6 +24,8 @@ from sheets import (
     ensure_daily_discovery,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
     load_material_records, load_maintenance_records, load_manpower_records,
+    load_yield_records, load_mixer_records, load_toolroom_records,
+    load_wastage_records,
 )
 from sources import (
     PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526,
@@ -3879,6 +3881,209 @@ def manpower_view():
     return render_template("manpower.html",
         error=None, machines=machines, summary=summary,
         month=month, months=all_months, plant=plant, plants=all_plants, **_ctx)
+
+
+@app.route("/yield")
+def yield_view():
+    """Phase 2D: PIPE daily production pivot — per-type kg (R-15) and pcs (R-13/14)."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    all_plants = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("yield_tabs")]
+    plant      = request.args.get("plant", all_plants[0] if all_plants else "PIPE")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_yield_records(plant, month)
+    except SheetReadError as e:
+        return render_template("yield.html", error=str(e), recs=[],
+                               kg_by_type={}, pcs_by_type={},
+                               month=month, months=all_months,
+                               plant=plant, plants=all_plants, **_ctx)
+
+    # ---------- group by source then type ----------
+    from collections import defaultdict
+
+    kg_rows   = [r for r in recs if r.source == "R15_kg"]
+    r13_rows  = [r for r in recs if r.source == "R13_pcs"]
+    r14_rows  = [r for r in recs if r.source == "R14_pcs"]
+
+    # Monthly rollup per type (kg)
+    kg_by_type: dict = {}
+    for r in kg_rows:
+        t = r.type
+        if t not in kg_by_type:
+            kg_by_type[t] = {"prod_kg": 0.0, "waste_kg": 0.0, "pulv_kg": 0.0, "yield_pct": None}
+            bucket = kg_by_type[t]
+            bucket["prod_kg"]  += r.production_kg
+            bucket["waste_kg"] += r.wastage_kg
+            bucket["pulv_kg"]  += r.pulverizer_consumed_kg
+        else:
+            bucket = kg_by_type[t]
+            bucket["prod_kg"]  += r.production_kg
+            bucket["waste_kg"] += r.wastage_kg
+            bucket["pulv_kg"]  += r.pulverizer_consumed_kg
+    for t, bucket in kg_by_type.items():
+        total = bucket["prod_kg"] + bucket["waste_kg"]
+        if total > 0:
+            bucket["yield_pct"] = round(bucket["prod_kg"] / total * 100.0, 2)
+
+    # Monthly rollup per type (pcs): merge R13 + R14
+    pcs_by_type: dict = {}
+    for r in (r13_rows + r14_rows):
+        t = r.type
+        if t not in pcs_by_type:
+            pcs_by_type[t] = {"prod_pcs": 0.0, "target_pcs": r.target_pcs}
+        pcs_by_type[t]["prod_pcs"] += r.production_pcs
+        if r.target_pcs and not pcs_by_type[t]["target_pcs"]:
+            pcs_by_type[t]["target_pcs"] = r.target_pcs
+
+    # Daily detail rows for the table (R15 kg)
+    kg_rows_sorted = sorted(kg_rows, key=lambda r: (r.date, r.type))
+
+    return render_template("yield.html",
+        error=None, recs=kg_rows_sorted,
+        kg_by_type=kg_by_type, pcs_by_type=pcs_by_type,
+        month=month, months=all_months,
+        plant=plant, plants=all_plants, **_ctx)
+
+
+@app.route("/mixer")
+def mixer_view():
+    """Phase 2D: PIPE compound mixer batch logs (Report-5 A/B/C/D)."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    all_plants = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("mixer_tabs")]
+    plant      = request.args.get("plant", all_plants[0] if all_plants else "PIPE")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_mixer_records(plant, month)
+    except SheetReadError as e:
+        return render_template("mixer.html", error=str(e), recs=[],
+                               by_mixer={}, summary={},
+                               month=month, months=all_months,
+                               plant=plant, plants=all_plants, **_ctx)
+
+    # Group by mixer_id for summary
+    by_mixer: dict = {}
+    for r in recs:
+        mid = r.mixer_id
+        if mid not in by_mixer:
+            by_mixer[mid] = {"total_compound_kg": 0.0, "running_hours": 0.0,
+                              "breakdown_hours": 0.0, "batches": 0, "availability": None}
+        bkt = by_mixer[mid]
+        bkt["total_compound_kg"] += r.total_compound_kg
+        bkt["running_hours"]     += r.running_hours
+        bkt["breakdown_hours"]   += r.breakdown_hours
+        bkt["batches"]           += int(r.num_batches) if r.num_batches else 1
+    for mid, bkt in by_mixer.items():
+        total_h = bkt["running_hours"] + bkt["breakdown_hours"]
+        if total_h > 0:
+            bkt["availability"] = round(bkt["running_hours"] / total_h * 100.0, 1)
+
+    summary = dict(
+        total_compound_kg=sum(r.total_compound_kg for r in recs),
+        total_running_h=sum(r.running_hours for r in recs),
+        total_breakdown_h=sum(r.breakdown_hours for r in recs),
+        total_batches=len(recs),
+    )
+
+    recs_sorted = sorted(recs, key=lambda r: (r.date, r.mixer_id))
+    return render_template("mixer.html",
+        error=None, recs=recs_sorted, by_mixer=by_mixer, summary=summary,
+        month=month, months=all_months,
+        plant=plant, plants=all_plants, **_ctx)
+
+
+@app.route("/toolroom")
+def toolroom_view():
+    """Phase 2D: PIPE toolroom job log (Report-21)."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    all_plants = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("toolroom_tabs")]
+    plant      = request.args.get("plant", all_plants[0] if all_plants else "PIPE")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_toolroom_records(plant, month)
+    except SheetReadError as e:
+        return render_template("toolroom.html", error=str(e), recs=[],
+                               summary={},
+                               month=month, months=all_months,
+                               plant=plant, plants=all_plants, **_ctx)
+
+    summary = dict(
+        total_jobs=len(recs),
+        total_hours=round(sum(r.working_hours for r in recs), 2),
+        total_manpower=round(sum(r.manpower for r in recs), 0),
+        machines=len({r.machine for r in recs if r.machine}),
+    )
+
+    recs_sorted = sorted(recs, key=lambda r: (r.date or "", r.machine))
+    return render_template("toolroom.html",
+        error=None, recs=recs_sorted, summary=summary,
+        month=month, months=all_months,
+        plant=plant, plants=all_plants, **_ctx)
+
+
+@app.route("/wastage")
+def wastage_view():
+    """Phase 2D: PTMT scrap/wastage recovery master (Report-10)."""
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    all_plants = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("wastage_tabs")]
+    plant      = request.args.get("plant", all_plants[0] if all_plants else "PTMT")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PTMT"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_wastage_records(plant, month)
+    except SheetReadError as e:
+        return render_template("wastage.html", error=str(e), recs=[],
+                               by_dept={}, by_unit={},
+                               month=month, months=all_months,
+                               plant=plant, plants=all_plants, **_ctx)
+
+    # Group by department
+    by_dept: dict = {}
+    for r in recs:
+        dept = r.department or "Other"
+        if dept not in by_dept:
+            by_dept[dept] = []
+        by_dept[dept].append(r)
+
+    # Group by unit for the summary block — NEVER sum across units
+    by_unit: dict = {}
+    for r in recs:
+        u = r.unit or "—"
+        if u not in by_unit:
+            by_unit[u] = {"count": 0, "total_per_week": 0.0}
+        by_unit[u]["count"]         += 1
+        by_unit[u]["total_per_week"] += r.avg_waste_per_week
+
+    return render_template("wastage.html",
+        error=None, recs=recs, by_dept=by_dept, by_unit=by_unit,
+        month=month, months=all_months,
+        plant=plant, plants=all_plants, **_ctx)
 
 
 @app.route("/compound")

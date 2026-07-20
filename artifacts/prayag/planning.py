@@ -190,3 +190,119 @@ class ManpowerRecord:
     actual_manpower: float     # per-date TOTAL MANPOWER (PIPE) or shift count (PTMT)
     man_hours: float           # per-date TOTAL HOURS (PIPE); 0.0 for PTMT
     type_flag: str             # "" (PIPE) | "P"/"C" (PTMT shift-roster type flag)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D — Yield / daily production pivot (PIPE Report-15 / 13 / 14)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class YieldRecord:
+    """One type × date production/wastage row from PIPE yield reports.
+
+    Phase 2D — loaded on-demand from /yield, NEVER on '/'.
+
+    source="R15_kg"  → production_kg / wastage_kg / pulverizer_consumed_kg populated
+                       from Report-15 (weight-based).
+    source="R13_pcs" → production_pcs / target_pcs populated from Report-13 (pipe daily pcs).
+    source="R14_pcs" → production_pcs / target_pcs populated from Report-14 (fittings daily pcs).
+
+    yield_pct is computed only for R15_kg rows (production_kg / (production_kg + wastage_kg) × 100).
+    """
+    plant: str
+    date: str                       # ISO "2026-06-01"
+    type: str                       # "CPVC" | "UPVC" | "SWR" | "AGRI" | "UPVC_F" | "SWR_F"
+    production_pcs: float = 0.0
+    production_kg: float = 0.0
+    wastage_kg: float = 0.0
+    pulverizer_consumed_kg: float = 0.0
+    target_pcs: float = 0.0
+    yield_pct: Optional[float] = None
+    source: str = ""
+
+
+def compute_yield_metrics(rec: "YieldRecord") -> "YieldRecord":
+    """yield_pct = production_kg / (production_kg + wastage_kg) × 100."""
+    if rec.production_kg > 0:
+        total = rec.production_kg + rec.wastage_kg
+        if total > 0:
+            rec.yield_pct = round(rec.production_kg / total * 100.0, 2)
+    return rec
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D — Compound mixer batch log (PIPE Report-5(A/B/C/D))
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CompoundBatchRecord:
+    """One mixer batch log row from PIPE Report-5(A/B/C/D).
+
+    Phase 2D — loaded on-demand from /mixer, NEVER on '/'.
+    DISTINCT from compound.py CP-fittings mass-balance (existing /compound route).
+
+    mixer_availability = running_hours / (running_hours + breakdown_hours).
+    """
+    plant: str
+    date: str           # ISO
+    mixer_id: str       # "A" | "B" | "C" | "D"
+    batch_type: str
+    batch_size: float
+    num_batches: float
+    total_compound_kg: float
+    running_hours: float
+    breakdown_hours: float
+    shift: str
+    mixer_availability: Optional[float] = None
+
+
+def compute_mixer_metrics(rec: "CompoundBatchRecord") -> "CompoundBatchRecord":
+    """mixer_availability = running_hours / (running_hours + breakdown_hours)."""
+    total = rec.running_hours + rec.breakdown_hours
+    if total > 0:
+        rec.mixer_availability = round(rec.running_hours / total, 4)
+    return rec
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D — Toolroom job log (PIPE Report-21)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ToolroomRecord:
+    """One toolroom job row from PIPE Report-21.
+
+    Phase 2D — loaded on-demand from /toolroom, NEVER on '/'.
+    ~24 job rows expected per month.
+    """
+    plant: str
+    date: str
+    machine: str
+    item: str
+    work_detail: str
+    remarks: str
+    manpower: float
+    working_hours: float
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D — Scrap / wastage master (PTMT Report-10)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WastageRecord:
+    """One scrap/wastage row from PTMT Report-10.
+
+    Phase 2D — loaded on-demand from /wastage, NEVER on '/'.
+    ~33 rows expected.
+
+    INVARIANT: unit varies (KG / PCS / LTR) — NEVER sum across units.
+    """
+    plant: str
+    department: str
+    waste_item: str
+    unit: str               # "KG" | "PCS" | "LTR"  — never sum across
+    avg_waste_per_week: float
+    dispose_cycle: str
+    responsible_person: str  # RESPONSIBLE PERSON FOR DISPOSE
+    approx_sale_value: float
