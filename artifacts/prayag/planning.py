@@ -116,3 +116,77 @@ def compute_material_metrics(rec: "MaterialRecord") -> "MaterialRecord":
     else:
         rec.suggested_purchase = 0.0
     return rec
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — Maintenance master
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MaintenanceRecord:
+    """One machine row from PIPE Report-16 or PTMT Report-8 maintenance master.
+
+    Phase 2C — loaded on-demand from /maintenance, never on '/'.
+    purchase_date is the raw sheet text; machine_age_years is derived
+    by compute_maintenance_metrics() using today's date.
+    """
+    plant: str
+    machine: str
+    make: str
+    purchase_date: str          # raw: "Jan-20", "01-06-2018", etc.
+    cost: float
+    amc_applicable: str         # raw: "YES" / "NO" / "NA" / ""
+    pm_required: str            # Monthly Preventive Maintenance Required schedule text
+    check_points: str           # Monthly Check Points description
+    spares: str                 # Spare to be kept in stock
+    service_engineer: str
+    service_mobile: str
+    service_location: str
+    service_lead_time_days: float   # Lead Time to Reach factory (numeric days)
+    # Derived
+    machine_age_years: Optional[float] = None
+
+
+def compute_maintenance_metrics(rec: "MaintenanceRecord") -> "MaintenanceRecord":
+    """Derive machine_age_years from purchase_date text; return same object."""
+    import datetime
+    pd_str = rec.purchase_date.strip()
+    if not pd_str:
+        return rec
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%b-%y",
+                "%b-%Y", "%b-%y", "%B-%Y", "%Y-%m-%d", "%m/%Y"):
+        try:
+            dt = datetime.datetime.strptime(pd_str, fmt).date()
+            delta_days = (datetime.date.today() - dt).days
+            if delta_days > 0:
+                rec.machine_age_years = round(delta_days / 365.25, 1)
+            break
+        except ValueError:
+            continue
+    return rec
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — Manpower roster
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ManpowerRecord:
+    """One machine × date × shift manpower entry.
+
+    Phase 2C — loaded on-demand from /manpower, never on '/'.
+
+    PIPE Report-22 (A/B): shift='all', man_hours populated, type_flag=''.
+    PTMT Report-6 (A/B/C): shift='1st'/'2nd'/'3rd', man_hours=0.0,
+    type_flag = P/C roster flag from the sheet.
+
+    INVARIANT: This record NEVER represents production output.
+    """
+    plant: str
+    machine: str
+    date: str               # ISO "2026-06-01"
+    shift: str              # "all" | "1st" | "2nd" | "3rd"
+    required_manpower: float   # static "REQUIREMENT OF MANPOWER" col (PIPE); 0 for PTMT
+    actual_manpower: float     # per-date TOTAL MANPOWER (PIPE) or shift count (PTMT)
+    man_hours: float           # per-date TOTAL HOURS (PIPE); 0.0 for PTMT
+    type_flag: str             # "" (PIPE) | "P"/"C" (PTMT shift-roster type flag)

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Maintenance Schedule{% endblock %}
+
+{% block content %}
+<div class="px-4 pt-4 pb-2 flex items-start justify-between">
+  <div>
+    <h1 class="text-lg font-bold" style="color:var(--navy)">Maintenance Schedule</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Machine master · preventive maintenance · service contacts</p>
+  </div>
+  <a href="/manpower" class="text-xs font-semibold px-2.5 py-1 rounded-lg border mt-1"
+     style="color:var(--terra);border-color:rgba(197,90,17,0.3)">Manpower →</a>
+</div>
+
+<!-- Plant selector -->
+<div class="kpi-card mx-4 mb-3 p-3">
+  <form method="get" action="/maintenance" class="flex items-center gap-3">
+    <label class="text-xs font-semibold text-gray-500 flex-shrink-0">Plant</label>
+    <select name="plant" onchange="this.form.submit()"
+            class="text-sm border border-gray-200 rounded-lg px-2 py-1 flex-1">
+      {% for p in plants %}
+      <option value="{{ p }}" {% if p == plant %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% if error %}
+<div class="mx-4 p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">{{ error }}</div>
+{% elif records %}
+
+<!-- Summary strip -->
+<div class="grid grid-cols-3 gap-3 mx-4 mb-3">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold" style="color:var(--navy)">{{ summary.total }}</div>
+    <div class="text-xs text-gray-400">Machines</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold {% if summary.pm_count > 0 %}text-amber-600{% else %}text-gray-400{% endif %}">
+      {{ summary.pm_count }}
+    </div>
+    <div class="text-xs text-gray-400">PM Required</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold {% if summary.amc_count > 0 %}text-green-600{% else %}text-gray-400{% endif %}">
+      {{ summary.amc_count }}
+    </div>
+    <div class="text-xs text-gray-400">AMC Active</div>
+  </div>
+</div>
+<div class="grid grid-cols-2 gap-3 mx-4 mb-4">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xl font-bold text-gray-700">
+      {% if summary.avg_age %}{{ summary.avg_age }}y{% else %}&mdash;{% endif %}
+    </div>
+    <div class="text-xs text-gray-400">Avg Machine Age</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-xl font-bold text-gray-700">
+      {% if summary.avg_lead %}{{ summary.avg_lead }}d{% else %}&mdash;{% endif %}
+    </div>
+    <div class="text-xs text-gray-400">Avg Service Lead Time</div>
+  </div>
+</div>
+
+<!-- Machine table -->
+<div class="mx-4 mb-4 overflow-x-auto">
+  <table class="w-full text-xs min-w-[700px]">
+    <thead>
+      <tr class="border-b-2" style="border-color:rgba(31,56,100,0.15)">
+        <th class="px-2 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">Machine</th>
+        <th class="px-2 py-2 text-left font-semibold text-gray-600">Make</th>
+        <th class="px-2 py-2 text-right font-semibold text-gray-600 whitespace-nowrap">Age (y)</th>
+        <th class="px-2 py-2 text-right font-semibold text-gray-600">Cost</th>
+        <th class="px-2 py-2 text-center font-semibold text-gray-600">AMC</th>
+        <th class="px-2 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">PM Required</th>
+        <th class="px-2 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">Key Spares</th>
+        <th class="px-2 py-2 text-left font-semibold text-gray-600">Engineer</th>
+        <th class="px-2 py-2 text-left font-semibold text-gray-600">Location</th>
+        <th class="px-2 py-2 text-right font-semibold text-gray-600 whitespace-nowrap">Lead (d)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      {% set amc_up = r.amc_applicable.upper() %}
+      {% set has_pm = r.pm_required.upper() not in ("", "NIL", "NO", "N/A", "NA") %}
+      <tr class="border-b border-gray-50 hover:bg-gray-50">
+        <td class="px-2 py-2 font-semibold text-gray-800 leading-tight whitespace-nowrap">
+          {{ r.machine }}
+          {% if r.purchase_date %}<div class="text-gray-400 font-normal">{{ r.purchase_date }}</div>{% endif %}
+        </td>
+        <td class="px-2 py-2 text-gray-600">{{ r.make or "&mdash;" | safe }}</td>
+        <td class="px-2 py-2 text-right tabular-nums">
+          {% if r.machine_age_years is not none %}
+          <span class="{% if r.machine_age_years > 10 %}text-amber-700 font-semibold{% else %}text-gray-700{% endif %}">
+            {{ r.machine_age_years }}
+          </span>
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td class="px-2 py-2 text-right tabular-nums text-gray-600">
+          {% if r.cost > 0 %}{{ "{:,.0f}".format(r.cost) }}{% else %}&mdash;{% endif %}
+        </td>
+        <td class="px-2 py-2 text-center">
+          {% if amc_up in ("YES", "Y") %}
+          <span class="text-green-700 font-bold">✓</span>
+          {% elif amc_up in ("NO", "N") %}
+          <span class="text-red-500">✗</span>
+          {% else %}
+          <span class="text-gray-300">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="px-2 py-2">
+          {% if has_pm %}
+          <span class="text-amber-700 font-semibold">{{ r.pm_required[:60] }}{% if r.pm_required|length > 60 %}…{% endif %}</span>
+          {% else %}
+          <span class="text-gray-300">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="px-2 py-2 text-gray-600">
+          {% if r.spares.upper() not in ("", "NIL", "NO", "N/A", "NA") %}
+          {{ r.spares[:50] }}{% if r.spares|length > 50 %}…{% endif %}
+          {% else %}<span class="text-gray-300">&mdash;</span>{% endif %}
+        </td>
+        <td class="px-2 py-2 text-gray-600">
+          <div>{{ r.service_engineer or "—" }}</div>
+          {% if r.service_mobile %}<div class="text-gray-400">{{ r.service_mobile }}</div>{% endif %}
+        </td>
+        <td class="px-2 py-2 text-gray-600">{{ r.service_location or "—" }}</td>
+        <td class="px-2 py-2 text-right tabular-nums">
+          {% if r.service_lead_time_days > 0 %}
+          <span class="{% if r.service_lead_time_days > 7 %}text-red-600 font-semibold{% else %}text-gray-700{% endif %}">
+            {{ "{:.0f}".format(r.service_lead_time_days) }}
+          </span>
+          {% else %}&mdash;{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Idle-window scheduling note -->
+<div class="mx-4 mb-4 p-3 rounded-xl border text-xs text-gray-500"
+     style="background:#f8fbff;border-color:rgba(31,56,100,0.12)">
+  <span class="font-semibold text-gray-700">Idle-window scheduling:</span>
+  Machines that show zero run-hours on a given day in the production report are idle windows
+  available for PM.  Cross-reference machine names with the
+  <a href="/reports" class="underline" style="color:var(--terra)">Reports</a> run-hour data
+  for that date to identify optimal PM slots.  Service lead time &gt; 7 days is highlighted
+  in red; schedule PM at least that many days before the next planned production run.
+</div>
+
+{% else %}
+<div class="mx-4 kpi-card p-6 text-center text-sm text-gray-400">
+  No maintenance records found for {{ plant }}.
+</div>
+{% endif %}
+
+<!-- Metric definitions -->
+<details class="mx-4 mb-6">
+  <summary class="text-xs text-gray-400 cursor-pointer">Field definitions</summary>
+  <div class="mt-2 text-xs text-gray-500 space-y-1 leading-relaxed">
+    <div><strong>AMC</strong> — Annual Maintenance Contract; ✓ = active, ✗ = none.</div>
+    <div><strong>PM Required</strong> — Monthly preventive maintenance schedule as specified in the maintenance register.</div>
+    <div><strong>Key Spares</strong> — Spares recommended to be kept in stock for this machine.</div>
+    <div><strong>Lead (d)</strong> — Service engineer lead time to reach the factory (days). Red = &gt; 7 days.</div>
+    <div><strong>Age (y)</strong> — Computed from Date of Purchase to today. Orange = &gt; 10 years.</div>
+  </div>
+</details>
+{% endblock %}

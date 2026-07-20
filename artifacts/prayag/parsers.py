@@ -2585,3 +2585,298 @@ def parse_material_stock(values: list, plant: str, category: str) -> list:
         recs.append(r)
 
     return recs
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — Maintenance master parser
+# ---------------------------------------------------------------------------
+
+def parse_maintenance(values: list, plant: str) -> list:
+    """Parse PIPE Report-16 or PTMT Report-8 maintenance master.
+
+    PIPE Report-16: header row 3 (1-indexed, 0-indexed=2); 73 machine rows.
+      C=Machine Name, D=Make, E=Date of Purchase, F=Cost, G=AMC Applicable,
+      H=Monthly Preventive Maintenance Required, I=Monthly Check Points,
+      J=Spare to be Keep in Stock, L=Service Engineer Name, M=Mobile No.,
+      N=Service Engineer Location, O=Lead Time to Reach factory.
+
+    PTMT Report-8: same column names, different letter positions.
+      B=Machine Name, ... K=Service Engineer Name, N=Lead Time.
+
+    Header detection: scan rows 0-8 for the first row containing both
+    "MACHINE NAME" and "AMC" (present in the AMC Applicable header cell).
+
+    Returns a list of MaintenanceRecord (machine_age_years computed).
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    # ---- Locate header row -------------------------------------------------
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        has_machine = any("MACHINE NAME" in c for c in up)
+        has_amc     = any("AMC" in c for c in up)
+        if has_machine and has_amc:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    # ---- Column map (header-text based; same text for PIPE and PTMT) -------
+    machine_c  = fc(lambda h: "MACHINE NAME" in h)
+    make_c     = fc(lambda h: h in ("MAKE", "MAKE/MODEL") or (h.startswith("MAKE") and len(h) < 15))
+    date_c     = fc(lambda h: "DATE OF PURCHASE" in h or "PURCHASE DATE" in h or "DATE OF INST" in h)
+    # "Cost" must not match "AMC Cost" or "Cost of AMC" — check AMC not in h
+    cost_c     = fc(lambda h: ("COST" in h and "AMC" not in h and "TOTAL" not in h))
+    amc_c      = fc(lambda h: "AMC" in h)
+    pm_c       = fc(lambda h: "PREVENTIVE" in h)
+    chk_c      = fc(lambda h: "CHECK" in h and "POINT" in h)
+    spare_c    = fc(lambda h: "SPARE" in h)
+    eng_c      = fc(lambda h: "SERVICE ENGINEER" in h or ("ENGINEER" in h and "NAME" in h))
+    mobile_c   = fc(lambda h: "MOBILE" in h or ("PHONE" in h and "NO" in h))
+    loc_c      = fc(lambda h: "LOCATION" in h)
+    lead_c     = fc(lambda h: "LEAD TIME" in h or "REACH" in h)
+
+    # ---- Data rows ---------------------------------------------------------
+    recs = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        machine = str(g(row, machine_c)).strip()
+        if not machine or len(machine) < 2:
+            continue
+        up = machine.upper()
+        # Skip header echo rows, totals, and sr.no-type rows
+        if ("MACHINE NAME" in up or "TOTAL" in up
+                or up.startswith("S.") or up in ("SR", "SR.", "SNO", "S.NO")
+                or up == "M/C"):
+            continue
+        if sum(1 for v in row if str(v).strip()) < 3:
+            continue
+
+        r = _pl.MaintenanceRecord(
+            plant=plant,
+            machine=machine,
+            make=str(g(row, make_c)).strip(),
+            purchase_date=str(g(row, date_c)).strip(),
+            cost=num(g(row, cost_c)),
+            amc_applicable=str(g(row, amc_c)).strip(),
+            pm_required=str(g(row, pm_c)).strip(),
+            check_points=str(g(row, chk_c)).strip(),
+            spares=str(g(row, spare_c)).strip(),
+            service_engineer=str(g(row, eng_c)).strip(),
+            service_mobile=str(g(row, mobile_c)).strip(),
+            service_location=str(g(row, loc_c)).strip(),
+            service_lead_time_days=num(g(row, lead_c)),
+        )
+        _pl.compute_maintenance_metrics(r)
+        recs.append(r)
+
+    return recs
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — Manpower per machine per date (PIPE Report-22 / PTMT Report-6)
+# ---------------------------------------------------------------------------
+
+def _parse_date_cell_manpower(v) -> str:
+    """Return ISO date string from a cell value, or '' if not a recognisable date."""
+    import datetime
+    s = str(v).strip()
+    if not s or len(s) < 3:
+        return ""
+    # Excel serial number (approx. 2000-2040 range)
+    try:
+        n = float(s)
+        if 36526 < n < 58849:   # ~2000-01-01 to ~2061-01-01
+            dt = datetime.date(1899, 12, 30) + datetime.timedelta(days=int(n))
+            return dt.isoformat()
+        return ""
+    except (ValueError, TypeError):
+        pass
+    # Text formats
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%b-%y",
+                "%Y-%m-%d", "%d.%m.%Y", "%d %b %Y", "%d %b %y"):
+        try:
+            dt = datetime.datetime.strptime(s, fmt).date()
+            return dt.isoformat()
+        except ValueError:
+            pass
+    return ""
+
+
+def parse_manpower(values: list, plant: str, shift: str, ym: str = "") -> list:
+    """Parse PIPE Report-22 (A/B) or PTMT Report-6 (A/B/C) manpower roster.
+
+    PIPE Report-22 layout (both A and B):
+      Row 1 (0-indexed) — date header: A=M/C, B=Explanation, C=Name of Employee,
+        D=REQUIREMENT OF MANPOWER, E+ = date columns (one date per 2 cols).
+      Row 2 (0-indexed) — sub-headers: "TOTAL MANPOWER" / "TOTAL HOURS" pairs.
+      Data rows from row 3 (0-indexed).
+
+    PTMT Report-6 layout (A=1st shift, B=2nd, C=3rd):
+      Row 2 (0-indexed) — date header: col 2 = MOULDING M/C label, col 3+ = dates.
+      Row 3 (0-indexed) — sub-headers: shift count + "P"/"C" type per date pair.
+      Data rows from row 4 (0-indexed).
+
+    GUARDRAIL: PTMT Report-6 is a shift-staffing roster. ManpowerRecord.machine
+    must NEVER be used as a production-output identifier.
+
+    Date columns are detected dynamically (no hardcoded column letters).
+    ym (e.g. "2026-06") filters records to the requested month only.
+    Returns list of ManpowerRecord.
+    """
+    import planning as _pl
+
+    if not values:
+        return []
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    # ---- Detect layout: find date-header row and sub-header row ------------
+    if plant == "PIPE":
+        # Date row is row 1 (0-indexed); col 0 should contain "M/C" or "MACHINE"
+        date_header_idx = -1
+        for i, row in enumerate(values[:6]):
+            cell0 = str(g(row, 0)).strip().upper()
+            if "M/C" in cell0 or "MACHINE" in cell0 or cell0 in ("M/C", "MACHINE NAME"):
+                # Confirm: next row has "MANPOWER" or "HOUR" in it
+                if i + 1 < len(values):
+                    nxt = [str(v).strip().upper() for v in values[i + 1]]
+                    if any("MANPOWER" in c or "HOUR" in c for c in nxt):
+                        date_header_idx = i
+                        break
+        if date_header_idx < 0:
+            return []
+        sub_header_idx = date_header_idx + 1
+        data_start     = sub_header_idx + 1
+        machine_col    = 0   # M/C name is always col A (0)
+        # Required-manpower column: look for "REQUIREMENT" in date header row
+        req_mp_col = -1
+        for c, v in enumerate(values[date_header_idx]):
+            if "REQUIREMENT" in str(v).strip().upper():
+                req_mp_col = c
+                break
+
+    else:  # PTMT
+        # Date row is row 2 (0-indexed); MOULDING M/C in col 2
+        date_header_idx = -1
+        for i, row in enumerate(values[:7]):
+            cells = [str(v).strip().upper() for v in row]
+            if any("MOULDING M/C" in c or ("MOULDING" in c and "M/C" in c) for c in cells[:5]):
+                if i + 1 < len(values):
+                    date_header_idx = i
+                    break
+        if date_header_idx < 0:
+            return []
+        sub_header_idx = date_header_idx + 1
+        data_start     = sub_header_idx + 1
+        # machine_col: index of "MOULDING M/C" cell
+        machine_col = 2
+        for c, v in enumerate(values[date_header_idx][:6]):
+            if "MOULDING" in str(v).strip().upper():
+                machine_col = c
+                break
+        req_mp_col = -1  # PTMT has no static required-manpower column
+
+    date_row = values[date_header_idx]
+    sub_row  = values[sub_header_idx] if sub_header_idx < len(values) else []
+
+    # ---- Build date-pair list: [(date_iso, mp_col, ht_col)] ----------------
+    date_start_col = (req_mp_col + 1) if (req_mp_col >= 0) else (machine_col + 1)
+    # But skip non-date fixed columns (name, explanation, etc.)
+    # Guarantee we start scanning at least 1 col after machine_col
+    date_start_col = max(date_start_col, machine_col + 1)
+
+    date_pairs = []   # (date_iso, mp_col, hrs_or_type_col)
+    c = date_start_col
+    while c < len(date_row):
+        ds = _parse_date_cell_manpower(date_row[c])
+        if ds:
+            # Determine which of {c, c+1} is manpower and which is hours/type
+            sh0 = str(g(sub_row, c,   "")).strip().upper()
+            sh1 = str(g(sub_row, c+1, "")).strip().upper()
+            if plant == "PIPE":
+                if "HOUR" in sh1 or "HOUR" in sh0:
+                    mp_col  = c   if ("MANPOWER" in sh0 or "HOUR" not in sh0) else c + 1
+                    hrs_col = c+1 if ("HOUR" in sh1) else c
+                else:
+                    mp_col, hrs_col = c, c + 1
+                date_pairs.append((ds, mp_col, hrs_col, "pipe"))
+            else:  # PTMT — count col + type col
+                date_pairs.append((ds, c, c + 1, "ptmt"))
+            c += 2   # stride=2 (one date occupies 2 columns)
+        else:
+            c += 1
+
+    if not date_pairs:
+        return []
+
+    # ---- Parse data rows ---------------------------------------------------
+    recs = []
+    for row in values[data_start:]:
+        if not row:
+            continue
+        machine = str(g(row, machine_col)).strip()
+        if not machine or len(machine) < 2:
+            continue
+        up = machine.upper()
+        if ("TOTAL" in up or up in ("M/C", "MOULDING M/C", "MACHINE NAME")
+                or up.startswith("S.") or up.startswith("SR")):
+            continue
+        if sum(1 for v in row if str(v).strip()) < 2:
+            continue
+
+        req_mp = num(g(row, req_mp_col)) if req_mp_col >= 0 else 0.0
+
+        for ds, mp_col, ht_col, layout in date_pairs:
+            # Filter to ym if requested
+            if ym and not ds.startswith(ym):
+                continue
+            mp_raw = g(row, mp_col)
+            ht_raw = g(row, ht_col)
+
+            if layout == "pipe":
+                actual_mp = num(mp_raw)
+                man_hrs   = num(ht_raw)
+                if actual_mp == 0 and man_hrs == 0:
+                    continue
+                recs.append(_pl.ManpowerRecord(
+                    plant=plant,
+                    machine=machine,
+                    date=ds,
+                    shift=shift,
+                    required_manpower=req_mp,
+                    actual_manpower=actual_mp,
+                    man_hours=man_hrs,
+                    type_flag="",
+                ))
+            else:  # PTMT
+                count     = num(mp_raw)
+                type_flag = str(ht_raw).strip()
+                if count == 0 and not type_flag:
+                    continue
+                recs.append(_pl.ManpowerRecord(
+                    plant=plant,
+                    machine=machine,
+                    date=ds,
+                    shift=shift,
+                    required_manpower=0.0,
+                    actual_manpower=count,
+                    man_hours=0.0,
+                    type_flag=type_flag,
+                ))
+
+    return recs

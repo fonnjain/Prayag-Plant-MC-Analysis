@@ -215,15 +215,22 @@
 {% if planning_sources %}
 <div class="kpi-card p-4 mt-4 mb-2">
   <div class="flex items-center justify-between mb-2">
-    <h2 class="text-sm font-bold" style="color:var(--navy)">Planning &amp; Material Readiness tabs</h2>
-    <a href="/materials" class="text-xs font-semibold px-2.5 py-1 rounded-lg border"
-       style="color:var(--terra);border-color:rgba(197,90,17,0.3)">View /materials →</a>
+    <h2 class="text-sm font-bold" style="color:var(--navy)">Planning, Material &amp; Maintenance tabs</h2>
+    <div class="flex gap-2">
+      <a href="/materials" class="text-xs font-semibold px-2 py-1 rounded-lg border"
+         style="color:var(--terra);border-color:rgba(197,90,17,0.3)">/materials →</a>
+      <a href="/maintenance" class="text-xs font-semibold px-2 py-1 rounded-lg border"
+         style="color:var(--terra);border-color:rgba(197,90,17,0.3)">/maintenance →</a>
+      <a href="/manpower" class="text-xs font-semibold px-2 py-1 rounded-lg border"
+         style="color:var(--terra);border-color:rgba(197,90,17,0.3)">/manpower →</a>
+    </div>
   </div>
   <p class="text-xs text-gray-500 mb-3 leading-relaxed">
-    On-demand domain — read from the same workbooks as daily data (no extra Drive sharing).
-    <strong>Phase 2A</strong>: Demand planning (Report-1 tabs).
-    <strong>Phase 2B</strong>: Material / BOP / packaging stock readiness (Report-2/3/4 tabs, weekly snapshot).
-    Never loaded on the <code class="bg-gray-100 rounded px-1">/</code> dashboard.
+    On-demand domains — read from the same workbooks as daily data (no extra Drive sharing).
+    <strong>Phase 2A</strong>: Demand planning (Report-1).
+    <strong>Phase 2B</strong>: Material/BOP/packaging stock readiness (Report-2/3/4).
+    <strong>Phase 2C</strong>: Maintenance master (Report-16/8) + Manpower roster (Report-22/6).
+    None of these are loaded on the <code class="bg-gray-100 rounded px-1">/</code> dashboard.
   </p>
   {% for plant, cfg in planning_sources.items() %}
   <div class="mb-3">
@@ -239,6 +246,18 @@
       <span class="text-[11px] px-2 py-0.5 rounded-full border"
             style="background:#fff7ed;border-color:rgba(197,90,17,0.2);color:#9a3412">
         {{ tc.tab }} — {{ tc.category }} stock
+      </span>
+      {% endfor %}
+      {% for tc in cfg.get('maintenance_tabs', []) %}
+      <span class="text-[11px] px-2 py-0.5 rounded-full border"
+            style="background:#f0fdf4;border-color:rgba(22,101,52,0.2);color:#166534">
+        {{ tc.tab }} — maintenance master
+      </span>
+      {% endfor %}
+      {% for tc in cfg.get('manpower_tabs', []) %}
+      <span class="text-[11px] px-2 py-0.5 rounded-full border"
+            style="background:#fdf4ff;border-color:rgba(112,26,117,0.2);color:#701a75">
+        {{ tc.tab }} — manpower (shift {{ tc.shift }})
       </span>
       {% endfor %}
     </div>

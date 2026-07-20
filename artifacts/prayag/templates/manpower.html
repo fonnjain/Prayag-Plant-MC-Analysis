@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Manpower Staffing{% endblock %}
+
+{% block content %}
+<div class="px-4 pt-4 pb-2 flex items-start justify-between">
+  <div>
+    <h1 class="text-lg font-bold" style="color:var(--navy)">Manpower Staffing</h1>
+    <p class="text-xs text-gray-400 mt-0.5">
+      Per machine · per date
+      {% if plant == "PIPE" %}· TOTAL MANPOWER + HOURS (Report-22)
+      {% else %}· per shift — 1st/2nd/3rd (Report-6){% endif %}
+    </p>
+  </div>
+  <a href="/maintenance" class="text-xs font-semibold px-2.5 py-1 rounded-lg border mt-1"
+     style="color:var(--terra);border-color:rgba(197,90,17,0.3)">← Maintenance</a>
+</div>
+
+<!-- Selectors -->
+<div class="kpi-card mx-4 mb-3 p-3">
+  <form method="get" action="/manpower" class="flex items-center gap-3 flex-wrap">
+    <label class="text-xs font-semibold text-gray-500 flex-shrink-0">Plant</label>
+    <select name="plant" onchange="this.form.submit()"
+            class="text-sm border border-gray-200 rounded-lg px-2 py-1">
+      {% for p in plants %}
+      <option value="{{ p }}" {% if p == plant %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+    <label class="text-xs font-semibold text-gray-500 ml-2 flex-shrink-0">Month</label>
+    <select name="month" onchange="this.form.submit()"
+            class="text-sm border border-gray-200 rounded-lg px-2 py-1">
+      {% for m in months %}
+      <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% if error %}
+<div class="mx-4 p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">{{ error }}</div>
+{% elif machines %}
+
+<!-- Summary strip -->
+<div class="grid grid-cols-3 gap-3 mx-4 mb-4">
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold" style="color:var(--navy)">{{ summary.total_machines }}</div>
+    <div class="text-xs text-gray-400">Machines</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold" style="color:var(--navy)">{{ summary.total_mp_days }}</div>
+    <div class="text-xs text-gray-400">Manpower-days</div>
+  </div>
+  <div class="kpi-card p-3 text-center">
+    <div class="text-2xl font-bold {% if summary.zero_mp_machines > 0 %}text-amber-600{% else %}text-green-600{% endif %}">
+      {{ summary.zero_mp_machines }}
+    </div>
+    <div class="text-xs text-gray-400">With zero-day</div>
+  </div>
+</div>
+
+{% if plant == "PTMT" %}
+<div class="mx-4 mb-3 p-2.5 rounded-xl text-xs text-amber-800 border"
+     style="background:#fffbeb;border-color:rgba(217,119,6,0.25)">
+  <strong>PTMT Report-6 is a shift staffing roster</strong> — manpower counts here are never production output.
+  P = Permanent, C = Contract worker type.
+</div>
+{% endif %}
+
+<!-- Per-machine entries (flat rows) -->
+{% for m in machines %}
+<div class="mx-4 mb-3 kpi-card overflow-hidden">
+  <div class="px-3 py-2 flex items-center justify-between border-b"
+       style="border-color:rgba(31,56,100,0.08)">
+    <span class="text-sm font-bold" style="color:var(--navy)">{{ m.name }}</span>
+    <div class="flex gap-2 items-center">
+      <span class="text-xs text-gray-400">{{ m.records | length }} entries</span>
+      {% if m.has_zero %}
+      <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">
+        zero-day
+      </span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="border-b" style="border-color:rgba(31,56,100,0.06)">
+          <th class="px-2 py-1.5 text-left font-semibold text-gray-500">Date</th>
+          {% if plant == "PTMT" %}
+          <th class="px-2 py-1.5 text-center font-semibold text-gray-500">Shift</th>
+          {% endif %}
+          {% if plant == "PIPE" %}
+          <th class="px-2 py-1.5 text-right font-semibold text-gray-500">Required</th>
+          {% endif %}
+          <th class="px-2 py-1.5 text-right font-semibold text-gray-500">
+            {% if plant == "PIPE" %}Total MP{% else %}Count{% endif %}
+          </th>
+          {% if plant == "PIPE" %}
+          <th class="px-2 py-1.5 text-right font-semibold text-gray-500">Hours</th>
+          {% else %}
+          <th class="px-2 py-1.5 text-center font-semibold text-gray-500">Type</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in m.records %}
+        {% set zero = r.actual_manpower == 0 %}
+        <tr class="border-b border-gray-50 hover:bg-gray-50 {% if zero %}bg-amber-50{% endif %}">
+          <td class="px-2 py-1.5 tabular-nums text-gray-600">
+            {{ r.date[8:] }}-{{ r.date[5:7] }}-{{ r.date[:4] }}
+          </td>
+          {% if plant == "PTMT" %}
+          <td class="px-2 py-1.5 text-center text-gray-500">{{ r.shift }}</td>
+          {% endif %}
+          {% if plant == "PIPE" %}
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-500">
+            {% if r.required_manpower > 0 %}{{ "{:.0f}".format(r.required_manpower) }}{% else %}&mdash;{% endif %}
+          </td>
+          {% endif %}
+          <td class="px-2 py-1.5 text-right tabular-nums font-semibold
+                     {% if zero %}text-amber-600{% else %}text-gray-800{% endif %}">
+            {% if r.actual_manpower > 0 %}{{ "{:.0f}".format(r.actual_manpower) }}
+            {% else %}<span class="font-bold text-amber-600">0</span>{% endif %}
+          </td>
+          {% if plant == "PIPE" %}
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-600">
+            {% if r.man_hours > 0 %}{{ "{:.1f}".format(r.man_hours) }}{% else %}&mdash;{% endif %}
+          </td>
+          {% else %}
+          <td class="px-2 py-1.5 text-center text-gray-500">
+            {% if r.type_flag %}{{ r.type_flag }}{% else %}&mdash;{% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% else %}
+<div class="mx-4 kpi-card p-6 text-center text-sm text-gray-400">
+  No manpower records found for {{ plant }} — {{ month }}.
+</div>
+{% endif %}
+
+<!-- Metric definitions -->
+<details class="mx-4 mb-6 mt-2">
+  <summary class="text-xs text-gray-400 cursor-pointer">Field definitions</summary>
+  <div class="mt-2 text-xs text-gray-500 space-y-1 leading-relaxed">
+    <div><strong>Manpower-days</strong> — count of machine × date rows with a non-zero manpower figure.</div>
+    <div><strong>With zero-day</strong> — machines that have at least one date with zero staffing logged.</div>
+    {% if plant == "PIPE" %}
+    <div><strong>Required</strong> — static "REQUIREMENT OF MANPOWER" from the register (same for all dates).</div>
+    <div><strong>Total MP</strong> — actual manpower count logged for that date (TOTAL MANPOWER column).</div>
+    <div><strong>Hours</strong> — man-hours worked that date (TOTAL HOURS column).</div>
+    {% else %}
+    <div><strong>Count</strong> — headcount for that machine on that date and shift.</div>
+    <div><strong>Type</strong> — P = Permanent, C = Contract worker type.</div>
+    <div><strong>Shift</strong> — 1st / 2nd / 3rd from Report-6 (A), (B), (C) tabs respectively.</div>
+    {% endif %}
+  </div>
+</details>
+{% endblock %}

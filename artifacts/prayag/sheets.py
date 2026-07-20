@@ -110,6 +110,8 @@ def clear_caches() -> None:
     _ptmt_master_cache.clear()
     _mould_cap_cache.clear()
     _material_cache.clear()
+    _maintenance_cache.clear()
+    _manpower_cache.clear()
     try:
         _store.pg_cache_clear()
     except Exception:
@@ -2650,13 +2652,17 @@ _planning_cache: dict = {}
 _ptmt_pieces_cache: dict = {}
 _ptmt_master_cache: dict = {}
 _mould_cap_cache: dict = {}
-_material_cache: dict = {}
+_material_cache     : dict = {}
+_maintenance_cache  : dict = {}
+_manpower_cache     : dict = {}
 _PLANNING_TTL = 900.0
-_planning_lock   = threading.Lock()
-_ptmt_pc_lock    = threading.Lock()
-_ptmt_ms_lock    = threading.Lock()
-_mould_cap_lock  = threading.Lock()
-_material_lock   = threading.Lock()
+_planning_lock      = threading.Lock()
+_ptmt_pc_lock       = threading.Lock()
+_ptmt_ms_lock       = threading.Lock()
+_mould_cap_lock     = threading.Lock()
+_material_lock      = threading.Lock()
+_maintenance_lock   = threading.Lock()
+_manpower_lock      = threading.Lock()
 
 
 def load_planning(plant: str, ym: str) -> List:
@@ -2823,4 +2829,74 @@ def load_material_records(plant: str, ym: str) -> List:
                 except Exception:
                     continue
         _material_cache[key] = (now, recs)
+        return recs
+
+
+def load_maintenance_records(plant: str, ym: str) -> list:
+    """Load MaintenanceRecord list for *plant* from maintenance_tabs.
+
+    Reads from the same workbook as DAILY_SOURCES — no new Drive sharing.
+    Cached 15 min.  NEVER called from '/' or any production-metrics path;
+    only called from /maintenance on demand.
+    """
+    import parsers as _par
+    key = (plant, ym)
+    now = time.time()
+    c = _maintenance_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _maintenance_lock:
+        c = _maintenance_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            maint_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("maintenance_tabs", [])
+            for tc in maint_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_maintenance(vals, plant))
+                except Exception:
+                    continue
+        _maintenance_cache[key] = (now, recs)
+        return recs
+
+
+def load_manpower_records(plant: str, ym: str) -> list:
+    """Load ManpowerRecord list for *plant* + *ym* from manpower_tabs.
+
+    Reads from the same workbook as DAILY_SOURCES — no new Drive sharing.
+    Cached 15 min.  NEVER called from '/' or any production-metrics path;
+    only called from /manpower on demand.
+
+    GUARDRAIL: ManpowerRecord is NEVER a production-output record.
+    """
+    import parsers as _par
+    key = (plant, ym)
+    now = time.time()
+    c = _manpower_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _manpower_lock:
+        c = _manpower_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            mp_tabs = sources.PLANNING_SOURCES.get(plant, {}).get("manpower_tabs", [])
+            for tc in mp_tabs:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    recs.extend(_par.parse_manpower(vals, plant, tc["shift"], ym))
+                except Exception:
+                    continue
+        _manpower_cache[key] = (now, recs)
         return recs

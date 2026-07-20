@@ -393,4 +393,56 @@
 </div>
 {% endif %}
 
+{% if planning_sources %}
+<h2 class="text-sm font-bold px-4 mt-6 mb-2" style="color:var(--navy)">Planning Domain Registry</h2>
+<div class="mx-4 mb-4 kpi-card overflow-hidden">
+  <table class="w-full text-xs">
+    <thead>
+      <tr class="border-b" style="border-color:rgba(31,56,100,0.1)">
+        <th class="px-3 py-2 text-left font-semibold text-gray-500">Plant</th>
+        <th class="px-3 py-2 text-left font-semibold text-gray-500">Domain</th>
+        <th class="px-3 py-2 text-left font-semibold text-gray-500">Tab</th>
+        <th class="px-3 py-2 text-left font-semibold text-gray-500">Route</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for plant, cfg in planning_sources.items() %}
+        {% for tc in cfg.get('tabs', []) %}
+        <tr class="border-b border-gray-50">
+          <td class="px-3 py-1.5 font-semibold text-gray-700">{{ plant }}</td>
+          <td class="px-3 py-1.5 text-gray-500">demand ({{ tc.family }})</td>
+          <td class="px-3 py-1.5 text-gray-600">{{ tc.tab }}</td>
+          <td class="px-3 py-1.5"><a href="/planning" class="underline" style="color:var(--terra)">/planning</a></td>
+        </tr>
+        {% endfor %}
+        {% for tc in cfg.get('material_tabs', []) %}
+        <tr class="border-b border-gray-50">
+          <td class="px-3 py-1.5 font-semibold text-gray-700">{{ plant }}</td>
+          <td class="px-3 py-1.5 text-gray-500">{{ tc.category }} stock</td>
+          <td class="px-3 py-1.5 text-gray-600">{{ tc.tab }}</td>
+          <td class="px-3 py-1.5"><a href="/materials" class="underline" style="color:var(--terra)">/materials</a></td>
+        </tr>
+        {% endfor %}
+        {% for tc in cfg.get('maintenance_tabs', []) %}
+        <tr class="border-b border-gray-50">
+          <td class="px-3 py-1.5 font-semibold text-gray-700">{{ plant }}</td>
+          <td class="px-3 py-1.5 text-gray-500">maintenance</td>
+          <td class="px-3 py-1.5 text-gray-600">{{ tc.tab }}</td>
+          <td class="px-3 py-1.5"><a href="/maintenance" class="underline" style="color:var(--terra)">/maintenance</a></td>
+        </tr>
+        {% endfor %}
+        {% for tc in cfg.get('manpower_tabs', []) %}
+        <tr class="border-b border-gray-50">
+          <td class="px-3 py-1.5 font-semibold text-gray-700">{{ plant }}</td>
+          <td class="px-3 py-1.5 text-gray-500">manpower ({{ tc.shift }})</td>
+          <td class="px-3 py-1.5 text-gray-600">{{ tc.tab }}</td>
+          <td class="px-3 py-1.5"><a href="/manpower" class="underline" style="color:var(--terra)">/manpower</a></td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% endblock %}

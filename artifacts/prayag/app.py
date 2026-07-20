@@ -23,7 +23,7 @@ from sheets import (
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
-    load_material_records,
+    load_material_records, load_maintenance_records, load_manpower_records,
 )
 from sources import (
     PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526,
@@ -1644,6 +1644,7 @@ def manifest_view():
         "fetch_status": last_fetch_status(),
         "confirmation": None,
         "grain_banner": None,
+        "planning_sources": PLANNING_SOURCES,
     }
     _manifest_cache["result"] = {"ctx": ctx, "ts": now}
     return render_template("manifest.html", **ctx)
@@ -3782,6 +3783,102 @@ def materials_view():
         total_items=total_items, total_reorder=total_reorder,
         months=all_months, month=month, plant=plant, plants=plants,
         as_of_date=as_of_date, **_ctx)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — /maintenance: preventive-maintenance schedule per machine
+# ---------------------------------------------------------------------------
+
+@app.route("/maintenance")
+def maintenance_view():
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+
+    # Filter to plants that have maintenance_tabs; default PIPE
+    all_plants   = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("maintenance_tabs")]
+    plant        = request.args.get("plant", all_plants[0] if all_plants else "PIPE")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_maintenance_records(plant, default_month)
+    except SheetReadError as e:
+        return render_template("maintenance.html",
+            error=str(e), records=[], summary={},
+            plant=plant, plants=all_plants, **_ctx)
+
+    recs.sort(key=lambda r: r.machine)
+
+    total       = len(recs)
+    amc_count   = sum(1 for r in recs if r.amc_applicable.upper() in ("YES", "Y"))
+    pm_count    = sum(1 for r in recs
+                      if r.pm_required.strip().upper() not in ("", "NIL", "NO", "N/A", "NA"))
+    spares_count = sum(1 for r in recs
+                       if r.spares.strip().upper() not in ("", "NIL", "NO", "N/A", "NA"))
+    age_vals    = [r.machine_age_years for r in recs if r.machine_age_years is not None]
+    avg_age     = round(sum(age_vals) / len(age_vals), 1) if age_vals else None
+    lt_vals     = [r.service_lead_time_days for r in recs if r.service_lead_time_days > 0]
+    avg_lead    = round(sum(lt_vals) / len(lt_vals), 1) if lt_vals else None
+
+    summary = dict(total=total, amc_count=amc_count, pm_count=pm_count,
+                   spares_count=spares_count, avg_age=avg_age, avg_lead=avg_lead)
+
+    return render_template("maintenance.html",
+        error=None, records=recs, summary=summary,
+        plant=plant, plants=all_plants, **_ctx)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — /manpower: per-machine per-shift staffing (PIPE Report-22 / PTMT Report-6)
+# GUARDRAIL: PTMT Report-6 is a shift roster — never a production-output source.
+# ---------------------------------------------------------------------------
+
+@app.route("/manpower")
+def manpower_view():
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    all_plants = [p for p in PLANNING_SOURCES if PLANNING_SOURCES[p].get("manpower_tabs")]
+    plant      = request.args.get("plant", all_plants[0] if all_plants else "PIPE")
+    if plant not in all_plants:
+        plant = all_plants[0] if all_plants else "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_manpower_records(plant, month)
+    except SheetReadError as e:
+        return render_template("manpower.html",
+            error=str(e), machines=[], summary={},
+            month=month, months=all_months, plant=plant, plants=all_plants, **_ctx)
+
+    from collections import defaultdict as _dd
+    by_machine: dict = _dd(list)
+    for r in recs:
+        by_machine[r.machine].append(r)
+
+    machines       = []
+    total_mp_days  = 0
+    zero_mp_count  = 0
+    for mname, mrecs in sorted(by_machine.items()):
+        mrecs.sort(key=lambda r: (r.date, r.shift))
+        mp_days  = sum(1 for r in mrecs if r.actual_manpower > 0)
+        has_zero = any(r.actual_manpower == 0 for r in mrecs)
+        total_mp_days += mp_days
+        if has_zero:
+            zero_mp_count += 1
+        machines.append(dict(name=mname, records=mrecs,
+                             mp_days=mp_days, has_zero=has_zero))
+
+    summary = dict(total_machines=len(machines), total_mp_days=total_mp_days,
+                   zero_mp_machines=zero_mp_count, plant=plant, month=month)
+
+    return render_template("manpower.html",
+        error=None, machines=machines, summary=summary,
+        month=month, months=all_months, plant=plant, plants=all_plants, **_ctx)
 
 
 @app.route("/compound")
