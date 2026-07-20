@@ -411,3 +411,56 @@ def gom_band(label: str) -> str:
       if u.startswith(prefix.upper()):
           return band
   return "Other"
+
+
+# ---------------------------------------------------------------------------
+# Planning sources — demand / stock / piece-count tabs inside existing daily
+# workbooks. NEVER read on "/" — loaded on-demand by /planning routes only.
+# File IDs are deliberately NOT duplicated here; use planning_file_id() which
+# delegates to DAILY_SOURCES so there is a single source of truth.
+# ---------------------------------------------------------------------------
+PLANNING_SOURCES: dict = {
+    "PIPE": {
+        "tabs": [
+            {"tab": "Report-1",     "family": "CPVC", "parser": "pipe_report1"},
+            {"tab": "Report-1 (A)", "family": "UPVC", "parser": "pipe_report1"},
+            {"tab": "Report-1 (B)", "family": "AGRI", "parser": "pipe_report1"},
+            {"tab": "Report-1 (C)", "family": "SWR",  "parser": "pipe_report1"},
+        ],
+    },
+    "PTMT": {
+        "tabs": [
+            {"tab": "Report-1",     "family": "faucet",    "parser": "ptmt_report1"},
+            {"tab": "Report-1(A)",  "family": "cistern",   "parser": "ptmt_report1"},
+            {"tab": "Report-1(B)",  "family": "seatcover", "parser": "ptmt_report1"},
+        ],
+        "report7_tab": "Report-7",
+        "master_tab":  "MASTER",
+    },
+}
+
+PLANNING_FAMILY_LABELS: dict = {
+    "CPVC":      "CPVC Pipe & Fittings",
+    "UPVC":      "UPVC Pipe & Fittings",
+    "AGRI":      "Agri Pipe & Fittings",
+    "SWR":       "SWR Pipe & Fittings",
+    "faucet":    "Faucets (PTMT)",
+    "cistern":   "Cisterns (PTMT)",
+    "seatcover": "Seat Covers & Accessories (PTMT)",
+}
+
+
+def planning_file_id(plant: str, ym: str) -> str | None:
+    """Return the workbook file_id for planning tabs of *plant* in *ym*.
+
+    The planning tabs live inside the same workbooks as DAILY_SOURCES so no
+    separate file registration is needed.
+    """
+    src = DAILY_SOURCES.get(plant, {})
+    return src.get("files", {}).get(ym)
+
+
+def planning_months(plant: str) -> list[str]:
+    """Sorted list of year-months available in DAILY_SOURCES for *plant*."""
+    src = DAILY_SOURCES.get(plant, {})
+    return sorted(src.get("files", {}).keys(), reverse=True)

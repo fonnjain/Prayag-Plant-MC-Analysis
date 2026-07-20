@@ -22,8 +22,12 @@ from sheets import (
     load_report_records, load_compound_data, load_pipe_moulds, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
+    load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
 )
-from sources import PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526
+from sources import (
+    PLANT_NAMES, PLANT_LOCATIONS, ANNUAL_SOURCES, DAILY_SOURCES, FY_MONTHS, FY_MONTHS_2526,
+    PLANNING_SOURCES, PLANNING_FAMILY_LABELS, planning_months,
+)
 from metrics import (
     compute_metrics, rollup_by_plant, rollup_by_machine, rollup_by_mould,
     rollup_by_segment, rollup_by_period, rollup_by_date, downtime_pareto,
@@ -3498,6 +3502,128 @@ def report_pipe_moulds():
         missing=data.get("missing", []),
         period_label=pinfo["label"], period=period_arg,
         today_disp=_fmt(_today()), last_synced=_sync_ctx())
+
+
+# ---------------------------------------------------------------------------
+# Planning domain — /planning and /planning/ptmt-capacity
+# Completely off the "/" critical path; loads on demand from Report-1* tabs.
+# ---------------------------------------------------------------------------
+
+def _planning_months_union() -> list[str]:
+    """Sorted desc list of months available for either PIPE or PTMT planning."""
+    pipe_ms = set(planning_months("PIPE"))
+    ptmt_ms = set(planning_months("PTMT"))
+    return sorted(pipe_ms | ptmt_ms, reverse=True)
+
+
+@app.route("/planning")
+def planning_view():
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-06"
+    month  = request.args.get("month",  default_month)
+    plant  = request.args.get("plant",  "PIPE")
+    family_filter = request.args.get("family", "")
+
+    if plant not in PLANNING_SOURCES:
+        plant = "PIPE"
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        recs = load_planning(plant, month)
+    except SheetReadError as e:
+        return render_template("planning.html",
+            error=str(e), groups=[], summary={},
+            months=all_months, month=month, plant=plant,
+            plants=list(PLANNING_SOURCES.keys()),
+            family_labels=[], family_counts={}, family_filter=family_filter,
+            as_of_date="", **_ctx)
+
+    # Build groups keyed by (family, category)
+    from collections import defaultdict
+    bucket: dict = defaultdict(list)
+    for r in recs:
+        bucket[(r.family, r.category)].append(r)
+
+    groups = []
+    # Ordered by tab definition
+    tab_families = [tc["family"] for tc in PLANNING_SOURCES.get(plant, {}).get("tabs", [])]
+    seen_keys: set = set()
+    for fam in tab_families:
+        for (f, cat), items in sorted(bucket.items(), key=lambda x: (tab_families.index(x[0][0]) if x[0][0] in tab_families else 99, x[0][1])):
+            if f != fam:
+                continue
+            key = (f, cat)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            sorted_items = sorted(items, key=lambda r: r.net_requirement, reverse=True)
+            groups.append({
+                "family": f,
+                "label":  PLANNING_FAMILY_LABELS.get(f, f),
+                "category": cat,
+                "records": sorted_items,
+            })
+
+    family_counts: dict = defaultdict(int)
+    for r in recs:
+        family_counts[r.family] += 1
+
+    total_net_req = sum(r.net_requirement for r in recs)
+    need_attention = sum(
+        1 for r in recs
+        if r.days_of_cover is not None and r.days_of_cover < 7
+    )
+    as_of_date = recs[0].as_of_date if recs else ""
+
+    summary = {
+        "total_items": len(recs),
+        "need_attention": need_attention,
+        "total_net_req": total_net_req,
+    }
+
+    fam_label_list = [(tc["family"], PLANNING_FAMILY_LABELS.get(tc["family"], tc["family"]))
+                      for tc in PLANNING_SOURCES.get(plant, {}).get("tabs", [])]
+
+    return render_template("planning.html",
+        error=None, groups=groups, summary=summary,
+        months=all_months, month=month, plant=plant,
+        plants=list(PLANNING_SOURCES.keys()),
+        family_labels=fam_label_list,
+        family_counts=dict(family_counts),
+        family_filter=family_filter,
+        as_of_date=as_of_date,
+        **_ctx)
+
+
+@app.route("/planning/ptmt-capacity")
+def ptmt_capacity_view():
+    ptmt_months = planning_months("PTMT")
+    default_month = ptmt_months[0] if ptmt_months else "2026-06"
+    month = request.args.get("month", default_month)
+
+    _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
+
+    try:
+        pieces     = load_ptmt_pieces(month)
+        master_items = load_ptmt_master(month)
+    except SheetReadError as e:
+        return render_template("ptmt_capacity.html",
+            error=str(e), pieces={}, master_items=[],
+            months=ptmt_months, month=month, **_ctx)
+
+    # Sort master by machine name then item code
+    master_items = sorted(master_items, key=lambda s: (s.machine_name, s.item_code))
+
+    # Sort Report-7 machines by pieces desc
+    if pieces.get("machines"):
+        pieces["machines"] = dict(
+            sorted(pieces["machines"].items(), key=lambda kv: kv[1]["pcs"], reverse=True)
+        )
+
+    return render_template("ptmt_capacity.html",
+        error=None, pieces=pieces, master_items=master_items,
+        months=ptmt_months, month=month, **_ctx)
 
 
 @app.route("/compound")

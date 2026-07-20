@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title_suffix %} — PTMT Capacity{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <div>
+    <h2 class="text-lg font-bold" style="color:var(--navy)">PTMT Capacity View</h2>
+    <div class="text-xs text-gray-400 mt-0.5">Report-7 pieces per machine · MASTER mould standards</div>
+  </div>
+  <a href="/planning?month={{ month }}"
+     class="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border"
+     style="color:var(--navy);border-color:rgba(31,56,100,0.3)">
+    ← Demand Planning
+  </a>
+</div>
+
+<!-- Month selector -->
+<form method="get" action="/planning/ptmt-capacity"
+      class="mb-4 p-3.5 rounded-xl border flex flex-wrap items-center gap-3"
+      style="background:rgba(31,56,100,0.05);border-color:rgba(31,56,100,0.20)">
+  <label class="text-xs font-semibold" style="color:var(--navy)">Month</label>
+  <select name="month" onchange="this.form.submit()"
+          class="text-sm rounded-lg border px-2.5 py-1.5 bg-white"
+          style="border-color:rgba(31,56,100,0.25);color:var(--navy)">
+    {% for m in months %}
+    <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+{% if error %}
+<div class="rounded-xl border p-4 mb-4 text-sm"
+     style="background:#fff7f5;border-color:rgba(197,90,17,0.3);color:var(--terra)">
+  {{ error }}
+</div>
+{% else %}
+
+<!-- Report-7 summary cards -->
+<div class="text-sm font-semibold mb-2" style="color:var(--navy)">
+  Production (Report-7) — {{ month }}
+</div>
+{% if pieces.available %}
+<div class="grid grid-cols-2 gap-3 mb-5 sm:grid-cols-4">
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Total Pieces</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ "{:,.0f}".format(pieces.total_pcs) }}</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Total Weight</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ "{:,.1f}".format(pieces.total_kg) }}</div>
+    <div class="text-xs text-gray-400">kg</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Data rows</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ "{:,}".format(pieces.n_rows) }}</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Production days</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ pieces.n_dates }}</div>
+  </div>
+</div>
+
+<!-- Per-machine breakdown — pre-sorted by route (pcs desc) -->
+{% if pieces.machines %}
+<div class="text-sm font-semibold mb-2" style="color:var(--navy)">
+  Per-Machine Pieces (Report-7)
+</div>
+<div class="overflow-x-auto rounded-xl border mb-6" style="border-color:rgba(31,56,100,0.15)">
+  <table class="w-full text-xs">
+    <thead>
+      <tr style="background:rgba(31,56,100,0.06)">
+        <th class="text-left px-3 py-2 font-semibold" style="color:var(--navy)">Machine</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Pieces</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Weight (kg)</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Run (min)</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Actual pcs/hr</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for mc, d in pieces.machines.items() %}
+      {% set act_rate = (d.pcs / (d.run_min / 60)) | round(0) if d.run_min > 0 else 0 %}
+      <tr class="border-t hover:bg-gray-50 transition" style="border-color:rgba(31,56,100,0.08)">
+        <td class="px-3 py-2 font-medium" style="color:var(--navy)">{{ mc }}</td>
+        <td class="px-3 py-2 text-right tabular-nums">{{ "{:,.0f}".format(d.pcs) }}</td>
+        <td class="px-3 py-2 text-right tabular-nums">{{ "{:,.1f}".format(d.kg) }}</td>
+        <td class="px-3 py-2 text-right tabular-nums text-gray-500">{{ "{:,.0f}".format(d.run_min) }}</td>
+        <td class="px-3 py-2 text-right tabular-nums">{{ "{:,.0f}".format(act_rate) if act_rate else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% else %}
+<div class="rounded-xl border p-4 text-sm text-gray-500 mb-5" style="border-color:rgba(31,56,100,0.15)">
+  Report-7 not available for {{ month }}.
+</div>
+{% endif %}
+
+<!-- MASTER standards — pre-sorted by route (machine, item_code) -->
+<div class="text-sm font-semibold mb-2" style="color:var(--navy)">
+  Mould Standards (MASTER) — {{ master_items | length }} items
+</div>
+{% if master_items %}
+<div class="overflow-x-auto rounded-xl border mb-6" style="border-color:rgba(31,56,100,0.15)">
+  <table class="w-full text-xs">
+    <thead>
+      <tr style="background:rgba(31,56,100,0.06)">
+        <th class="text-left px-3 py-2 font-semibold" style="color:var(--navy)">Item Code</th>
+        <th class="text-left px-3 py-2 font-semibold" style="color:var(--navy)">Name</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Machine</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Cavity</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Cycle/pcs (s)</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Std pcs/hr</th>
+        <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Wt/pc (g)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for std in master_items %}
+      <tr class="border-t hover:bg-gray-50 transition" style="border-color:rgba(31,56,100,0.08)">
+        <td class="px-3 py-2 text-gray-500">{{ std.item_code }}</td>
+        <td class="px-3 py-2 font-medium" style="color:var(--navy)">{{ std.item_name }}</td>
+        <td class="px-3 py-2 text-right">{{ std.machine_name }}</td>
+        <td class="px-3 py-2 text-right tabular-nums">{{ std.mould_cavity }}</td>
+        <td class="px-3 py-2 text-right tabular-nums text-gray-500">{{ "{:.2f}".format(std.cycle_time_per_pcs) }}</td>
+        <td class="px-3 py-2 text-right tabular-nums font-semibold" style="color:var(--navy)">
+          {{ "{:,.0f}".format(std.theoretical_pcs_hr) if std.theoretical_pcs_hr else "—" }}
+        </td>
+        <td class="px-3 py-2 text-right tabular-nums text-gray-500">{{ "{:.2f}".format(std.wt_per_pc_gms) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="rounded-xl border p-4 text-sm text-gray-500" style="border-color:rgba(31,56,100,0.15)">
+  MASTER mould standards not available for {{ month }}.
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

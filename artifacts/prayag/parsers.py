@@ -2000,3 +2000,445 @@ def parse_mould_working(values: List[list], *, group: str) -> Optional[dict]:
         "sheet_total_kg": sheet_kg,
         "sheet_total_util_hours": sheet_util,
     }
+
+
+# ---------------------------------------------------------------------------
+# Planning parsers (B1 / B2) — on-demand, never on the "/" critical path
+# ---------------------------------------------------------------------------
+import planning as _planning  # lazy-import at module bottom to avoid circular ref
+
+
+def _plan_find_col(band: list, pred) -> int:
+    """Scan a list of rows (the 'band') for a cell matching pred; return col idx."""
+    for row in band:
+        for c, v in enumerate(row):
+            if pred(str(v).strip().upper()):
+                return c
+    return -1
+
+
+def parse_pipe_report1(values: list, family: str, ym: str) -> list:
+    """Parse a PIPE Report-1 / 1A / 1B / 1C demand + stock snapshot.
+
+    Header band occupies rows 3–4 (0-indexed) of the Google Sheet values array:
+    row 3 = column labels, row 4 = date sub-labels on the stock columns.
+    Data rows start at row 5+; section-title rows have no item code and are
+    used to update the running ``category`` label.
+
+    Returns a list of PlanRecord with net_requirement + days_of_cover filled.
+    """
+    if not values:
+        return []
+
+    # Locate the header row: first row that contains both "ITEM NAME" and "ITEM CODE".
+    header_idx = -1
+    for i, row in enumerate(values):
+        up = [str(v).strip().upper() for v in row]
+        if "ITEM NAME" in up and "ITEM CODE" in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    # The date sub-header is the very next row.
+    sub_idx = header_idx + 1
+
+    # Combine both rows as the "band" for column-finding.
+    band = values[header_idx:sub_idx + 1]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    name_c    = fc(lambda h: h == "ITEM NAME")
+    code_c    = fc(lambda h: h == "ITEM CODE")
+    wt_c      = fc(lambda h: "WT" in h and "KG" in h and "IDEAL" not in h)
+    ideal_c   = fc(lambda h: "IDEAL QTY" in h or "IDEAL STOCK" in h)
+    out_c     = fc(lambda h: "PER HOUR OUTPUT" in h)
+    avg90_c   = fc(lambda h: "AVG" in h and ("90" in h or "DAYS" in h) and "LAST" in h and "IDEAL" not in h)
+    req_c     = fc(lambda h: "PRODUCTION REQUIRE" in h or ("REQUIRE" in h and "MONTH" in h))
+    prod_c    = fc(lambda h: "PRODUCTION IN THE MONTH" in h)
+    close_c   = fc(lambda h: "CLOSING STOCK" in h)
+    open_c    = fc(lambda h: "OPENING STOCK" in h)
+
+    # as_of_date: the date label sitting in the sub-header at the closing-stock column.
+    as_of_date = ""
+    if sub_idx < len(values) and close_c >= 0:
+        sub_row = values[sub_idx]
+        if close_c < len(sub_row):
+            as_of_date = str(sub_row[close_c]).strip()
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    recs = []
+    category = ""
+    for row in values[sub_idx + 1:]:
+        if not row:
+            continue
+        code  = str(g(row, code_c)).strip()
+        iname = str(g(row, name_c)).strip()
+        # No item code → either a section title or a total/blank row.
+        # Section titles may appear in ANY column (often the S.No. column, idx 1)
+        # and can be as short as 2 cells, so scan the whole row for text.
+        if not code:
+            title = next((str(c).strip() for c in row if str(c).strip()), "")
+            u = title.upper()
+            if title and "TOTAL" not in u and not title.replace(",", "").replace(".", "").isdigit():
+                category = title
+            continue
+        # Data row: real item code that is not a total marker
+        if "TOTAL" in code.upper():
+            continue
+        if len(row) < 5:
+            continue
+        r = _planning.PlanRecord(
+            plant="PIPE",
+            family=family,
+            category=category,
+            item_code=code,
+            item_name=iname,
+            wt_kg=num(g(row, wt_c)),
+            ideal_qty=num(g(row, ideal_c)),
+            avg_sale_90d=num(g(row, avg90_c)),
+            per_hour_output=num(g(row, out_c)),
+            produce_required=num(g(row, req_c)),
+            produced=num(g(row, prod_c)),
+            closing_stock=num(g(row, close_c)),
+            opening_stock=num(g(row, open_c)),
+            as_of_date=as_of_date,
+        )
+        _planning.compute_plan_metrics(r)
+        recs.append(r)
+    return recs
+
+
+def parse_ptmt_report1(values: list, family: str, ym: str) -> list:
+    """Parse a PTMT Report-1 / 1A / 1B finish-stock snapshot.
+
+    PTMT Report-1 has no 'Production Require' column and no 'Opening Stock'.
+    Report-1(A) and 1(B) carry a 'Colour' column (handled by header lookup).
+    Returns a list of PlanRecord with net_requirement + days_of_cover filled.
+    """
+    if not values:
+        return []
+
+    header_idx = -1
+    for i, row in enumerate(values):
+        up = [str(v).strip().upper() for v in row]
+        if ("ITEM NAME" in up or "ITEM CODE" in up) and "S.NO." in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    sub_idx = header_idx + 1
+    band = values[header_idx:sub_idx + 1]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    name_c   = fc(lambda h: h in ("ITEM NAME", "ITEMNAME") or "ITEM NAME" in h)
+    code_c   = fc(lambda h: h == "ITEM CODE")
+    ideal_c  = fc(lambda h: "IDEAL STOCK" in h or "IDEAL QTY" in h)
+    avg_c    = fc(lambda h: "AVG" in h and ("30" in h or "DAYS" in h) and "IDEAL" not in h)
+    prod_c   = fc(lambda h: "PRODUCTION IN THE MONTH" in h)
+    close_c  = fc(lambda h: "CLOSING STOCK" in h)
+
+    as_of_date = ""
+    if sub_idx < len(values) and close_c >= 0:
+        sub_row = values[sub_idx]
+        if close_c < len(sub_row):
+            as_of_date = str(sub_row[close_c]).strip()
+
+    def g(row, c, default=""):
+        return row[c] if 0 <= c < len(row) else default
+
+    recs = []
+    category = ""
+    for row in values[sub_idx + 1:]:
+        if len(row) < 3:
+            continue
+        code  = str(g(row, code_c)).strip()
+        iname = str(g(row, name_c)).strip()
+        if not code and iname:
+            u = iname.upper()
+            if "TOTAL" not in u:
+                category = iname
+            continue
+        if not code or "TOTAL" in code.upper():
+            continue
+        r = _planning.PlanRecord(
+            plant="PTMT",
+            family=family,
+            category=category,
+            item_code=code,
+            item_name=iname,
+            wt_kg=0.0,
+            ideal_qty=num(g(row, ideal_c)),
+            avg_sale_90d=num(g(row, avg_c)),
+            per_hour_output=0.0,
+            produce_required=0.0,
+            produced=num(g(row, prod_c)),
+            closing_stock=num(g(row, close_c)),
+            opening_stock=0.0,
+            as_of_date=as_of_date,
+        )
+        _planning.compute_plan_metrics(r)
+        recs.append(r)
+    return recs
+
+
+def parse_ptmt_report7(values: list, ym: str) -> dict:
+    """Parse PTMT Report-7 (item × mould × machine × date daily production).
+
+    Header row at index 2, unit sub-headers at index 3, data from index 4+.
+    A row is a data row when: MATERIAL (col 0) is non-empty AND the DATE cell
+    (col 1) parses as a date via _long_date_day.
+
+    Returns:
+        {
+          "available": bool,
+          "total_pcs": float,
+          "total_kg": float,
+          "n_rows": int,
+          "n_dates": int,
+          "machines": { machine: {"pcs":float,"kg":float,"run_min":float} },
+          "ym": str,
+        }
+    """
+    EMPTY = {"available": False, "total_pcs": 0.0, "total_kg": 0.0,
+             "n_rows": 0, "n_dates": 0, "machines": {}, "ym": ym}
+    if not values:
+        return EMPTY
+
+    # Locate the header row (contains both "MATERIAL" and "DATE" as cells).
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        if "MATERIAL" in up and "DATE" in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return EMPTY
+
+    sub_idx = header_idx + 1
+    band = values[header_idx:sub_idx + 1]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    mat_c     = fc(lambda h: h == "MATERIAL")
+    date_c    = fc(lambda h: h == "DATE")
+    mc_c      = fc(lambda h: "MOULDING MACHINE" in h or "MOULD" in h and "MACHINE" in h)
+    pcs_c     = fc(lambda h: h == "PC" or h == "OUTPUT PRODUCTION")
+    # The "Wt in Kgs" sub-header sits one column to the right of the "Pc" sub-header.
+    # Use the sub-header row directly.
+    kg_c = -1
+    if sub_idx < len(values):
+        for c, v in enumerate(values[sub_idx]):
+            if "WT IN KGS" in str(v).strip().upper():
+                kg_c = c
+                break
+    # Actual M/C Run in Min (col 20 in the main header)
+    run_c = fc(lambda h: "ACTUAL M/C RUN IN MIN" in h or ("ACTUAL" in h and "RUN" in h and "MIN" in h))
+
+    if mat_c < 0 or date_c < 0:
+        return EMPTY
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    total_pcs = 0.0
+    total_kg  = 0.0
+    n_rows    = 0
+    dates_seen: set = set()
+    machines: dict = {}
+
+    for row in values[sub_idx + 1:]:
+        if not row:
+            continue
+        mat = str(g(row, mat_c)).strip()
+        if not mat:
+            continue
+        day = _long_date_day(g(row, date_c))
+        if day is None:
+            continue
+        dates_seen.add(str(g(row, date_c)).strip())
+        pcs = num(g(row, pcs_c)) if pcs_c >= 0 else 0.0
+        kg  = num(g(row, kg_c))  if kg_c  >= 0 else 0.0
+        rm  = num(g(row, run_c)) if run_c  >= 0 else 0.0
+        total_pcs += pcs
+        total_kg  += kg
+        n_rows    += 1
+        mc = str(g(row, mc_c)).strip() if mc_c >= 0 else ""
+        if mc:
+            entry = machines.setdefault(mc, {"pcs": 0.0, "kg": 0.0, "run_min": 0.0})
+            entry["pcs"]     += pcs
+            entry["kg"]      += kg
+            entry["run_min"] += rm
+
+    return {
+        "available": n_rows > 0,
+        "total_pcs": total_pcs,
+        "total_kg":  total_kg,
+        "n_rows":    n_rows,
+        "n_dates":   len(dates_seen),
+        "machines":  machines,
+        "ym":        ym,
+    }
+
+
+def parse_ptmt_master(values: list) -> list:
+    """Parse the PTMT MASTER mould-standards tab.
+
+    Header row is the first row that contains both 'Item Code' and 'MACHINE NAME'.
+    Data rows follow immediately. Returns a list of MouldStd with
+    theoretical_pcs_hr pre-computed.
+
+    The 611 expected data rows are those with a non-empty Item Code cell.
+    """
+    if not values:
+        return []
+
+    header_idx = -1
+    for i, row in enumerate(values):
+        up = [str(v).strip().upper() for v in row]
+        if "ITEM CODE" in up and "MACHINE NAME" in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    band = [values[header_idx]]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    code_c    = fc(lambda h: h == "ITEM CODE")
+    name_c    = fc(lambda h: h == "ITEM NAME")
+    cavity_c  = fc(lambda h: "MOULD CAVITY" in h or ("CAVITY" in h and "F" in h))
+    cyct_c    = fc(lambda h: "CYCLE TIME" in h and "PCS" not in h and "STD" not in h and "STANDARD" not in h)
+    cycp_c    = fc(lambda h: "CYCLE TIME PER PCS" in h or "CYCLE TIME PER PC" in h)
+    wt_c      = fc(lambda h: "WT PER PC" in h or "WT PER PC IN GMS" in h)
+    runner_c  = fc(lambda h: "RUNNER WEIGHT" in h and "PER PCS" not in h and "PER PC" not in h)
+    rpp_c     = fc(lambda h: "RUNNER WT PER PCS" in h or "RUNNER WT PER PC" in h)
+    mc_c      = fc(lambda h: "MACHINE NAME" in h)
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    stds = []
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        code = str(g(row, code_c)).strip()
+        if not code or "ITEM CODE" in code.upper():
+            continue
+        cavity = max(int(num(g(row, cavity_c))), 1)
+        cycp   = num(g(row, cycp_c))
+        std = _planning.MouldStd(
+            item_code=code,
+            item_name=str(g(row, name_c)).strip(),
+            mould_cavity=cavity,
+            cycle_time_secs=num(g(row, cyct_c)),
+            cycle_time_per_pcs=cycp,
+            wt_per_pc_gms=num(g(row, wt_c)),
+            runner_weight_gms=num(g(row, runner_c)),
+            runner_wt_per_pcs_gms=num(g(row, rpp_c)),
+            machine_name=str(g(row, mc_c)).strip(),
+        )
+        _planning.compute_mould_std(std)
+        stds.append(std)
+    return stds
+
+
+def parse_report12_capacity(values: list) -> dict:
+    """Derive per-machine standard-vs-actual capacity from Report-12 raw values.
+
+    Uses the Mould Cavity (F) and Cycle Time Per Pcs Standard (F) columns that
+    are already present in each data row (already read for gen_pipe_moulds).
+    Returns {machine: {pcs, kg, actual_hrs, mould_cavity_mode, cycle_time_avg,
+                        theoretical_pcs_hr}} for the Moulding capacity view (B3).
+    """
+    if not values:
+        return {}
+
+    # Locate header row
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        up = [str(v).strip().upper() for v in row]
+        if "DATE" in up and "MOULDING MACHINE" in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return {}
+
+    sub_idx = header_idx + 1
+    band = values[header_idx:sub_idx + 1]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    mc_c     = fc(lambda h: "MOULDING MACHINE" in h)
+    pcs_c    = fc(lambda h: h == "PC" or h == " PC ")
+    if pcs_c < 0:  # look in sub-header
+        for c, v in enumerate(values[sub_idx] if sub_idx < len(values) else []):
+            if str(v).strip().upper() in ("PC", " PC "):
+                pcs_c = c
+                break
+    kg_c     = -1
+    for c, v in enumerate(values[sub_idx] if sub_idx < len(values) else []):
+        if "WT IN KGS" in str(v).strip().upper():
+            kg_c = c
+            break
+    cav_c    = fc(lambda h: "MOULD CAVITY" in h)
+    cycp_c   = fc(lambda h: "CYCLE TIME PER PCS" in h or "CYCLE TIME PER PC" in h)
+    hrs_c    = fc(lambda h: "HOUR CONSUME FOR PRODUCTION" in h or "ACTUAL" in h and "HOUR" in h)
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    machines: dict = {}
+    for row in values[sub_idx + 1:]:
+        if not row:
+            continue
+        mc = str(g(row, mc_c)).strip()
+        if not mc or "TOTAL" in mc.upper() or "DATE" in mc.upper():
+            continue
+        day = _long_date_day(g(row, 0))  # DATE is col 0 in Report-12
+        if day is None:
+            continue
+        entry = machines.setdefault(mc, {
+            "pcs": 0.0, "kg": 0.0, "actual_hrs": 0.0,
+            "_cav_sum": 0.0, "_cav_n": 0,
+            "_cycp_sum": 0.0, "_cycp_n": 0,
+        })
+        pcs  = num(g(row, pcs_c))  if pcs_c  >= 0 else 0.0
+        kg   = num(g(row, kg_c))   if kg_c   >= 0 else 0.0
+        hrs  = num(g(row, hrs_c))  if hrs_c  >= 0 else 0.0
+        cav  = num(g(row, cav_c))  if cav_c  >= 0 else 0.0
+        cycp = num(g(row, cycp_c)) if cycp_c >= 0 else 0.0
+        entry["pcs"]       += pcs
+        entry["kg"]        += kg
+        entry["actual_hrs"] += hrs
+        if cav > 0:
+            entry["_cav_sum"] += cav
+            entry["_cav_n"]   += 1
+        if cycp > 0:
+            entry["_cycp_sum"] += cycp * pcs   # weighted by pcs
+            entry["_cycp_n"]   += pcs
+
+    result = {}
+    for mc, e in machines.items():
+        avg_cav  = e["_cav_sum"] / e["_cav_n"] if e["_cav_n"] else 0.0
+        avg_cycp = e["_cycp_sum"] / e["_cycp_n"] if e["_cycp_n"] else 0.0
+        th_rate  = 3600.0 / avg_cycp if avg_cycp > 0 else 0.0
+        result[mc] = {
+            "pcs":               e["pcs"],
+            "kg":                e["kg"],
+            "actual_hrs":        e["actual_hrs"],
+            "mould_cavity_avg":  round(avg_cav, 1),
+            "cycle_time_avg":    round(avg_cycp, 2),
+            "theoretical_pcs_hr": round(th_rate, 0),
+        }
+    return result

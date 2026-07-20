@@ -105,6 +105,10 @@ def clear_caches() -> None:
     _seg_labour_cache.clear()
     _index_cache.clear()
     _last_fetch_status.clear()
+    _planning_cache.clear()
+    _ptmt_pieces_cache.clear()
+    _ptmt_master_cache.clear()
+    _mould_cap_cache.clear()
     try:
         _store.pg_cache_clear()
     except Exception:
@@ -2635,3 +2639,149 @@ def _auto_refresh_loop() -> None:
 
 threading.Thread(target=_startup_warmup, daemon=True, name="cache-warmup").start()
 threading.Thread(target=_auto_refresh_loop, daemon=True, name="cache-refresh").start()
+
+
+# ---------------------------------------------------------------------------
+# Planning domain — on-demand loaders (demand / pieces / mould standards)
+# NEVER called from "/" or get_records — planning-only routes only.
+# ---------------------------------------------------------------------------
+_planning_cache: dict = {}
+_ptmt_pieces_cache: dict = {}
+_ptmt_master_cache: dict = {}
+_mould_cap_cache: dict = {}
+_PLANNING_TTL = 900.0
+_planning_lock   = threading.Lock()
+_ptmt_pc_lock    = threading.Lock()
+_ptmt_ms_lock    = threading.Lock()
+_mould_cap_lock  = threading.Lock()
+
+
+def load_planning(plant: str, ym: str) -> List:
+    """Load PlanRecord list from PLANNING_SOURCES for *plant* + *ym*.
+
+    Reads the Report-1* tabs from the same workbook as DAILY_SOURCES so no
+    extra Drive sharing is needed. Cached 15 min. Returns [] on any error.
+    """
+    import planning as _pl, parsers as _par
+    key = (plant, ym)
+    now = time.time()
+    c = _planning_cache.get(key)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _planning_lock:
+        c = _planning_cache.get(key)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id(plant, ym)
+        recs: list = []
+        if fid:
+            tabs_cfg = sources.PLANNING_SOURCES.get(plant, {}).get("tabs", [])
+            for tc in tabs_cfg:
+                try:
+                    vals = read_values(fid, tc["tab"], token)
+                    parser = tc["parser"]
+                    if parser == "pipe_report1":
+                        recs.extend(_par.parse_pipe_report1(vals, tc["family"], ym))
+                    elif parser == "ptmt_report1":
+                        recs.extend(_par.parse_ptmt_report1(vals, tc["family"], ym))
+                except Exception:
+                    continue
+        _planning_cache[key] = (now, recs)
+        return recs
+
+
+def load_ptmt_pieces(ym: str) -> dict:
+    """Load PTMT Report-7 (item × machine × date) for *ym*.
+
+    Returns a dict with per-machine pcs/kg rollup and grand totals. Off the
+    critical path — only called from /planning/ptmt-capacity.
+    """
+    import parsers as _par
+    EMPTY = {"available": False, "total_pcs": 0.0, "total_kg": 0.0,
+             "n_rows": 0, "n_dates": 0, "machines": {}, "ym": ym}
+    now = time.time()
+    c = _ptmt_pieces_cache.get(ym)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _ptmt_pc_lock:
+        c = _ptmt_pieces_cache.get(ym)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id("PTMT", ym)
+        r7_tab = sources.PLANNING_SOURCES["PTMT"]["report7_tab"]
+        result = EMPTY
+        if fid:
+            try:
+                vals = read_values(fid, r7_tab, token)
+                result = _par.parse_ptmt_report7(vals, ym)
+            except Exception:
+                pass
+        _ptmt_pieces_cache[ym] = (now, result)
+        return result
+
+
+def load_ptmt_master(ym: str) -> list:
+    """Load PTMT MASTER mould standards for *ym*.
+
+    Returns a list of MouldStd. Off the critical path.
+    """
+    import parsers as _par
+    now = time.time()
+    c = _ptmt_master_cache.get(ym)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _ptmt_ms_lock:
+        c = _ptmt_master_cache.get(ym)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id("PTMT", ym)
+        master_tab = sources.PLANNING_SOURCES["PTMT"]["master_tab"]
+        stds: list = []
+        if fid:
+            try:
+                vals = read_values(fid, master_tab, token)
+                stds = _par.parse_ptmt_master(vals)
+            except Exception:
+                pass
+        _ptmt_master_cache[ym] = (now, stds)
+        return stds
+
+
+def load_moulding_capacity(ym: str) -> dict:
+    """Derive Moulding standard-vs-actual capacity from Report-12 (B3).
+
+    Reads Report-12 from the PIPE workbook for *ym* and computes per-machine
+    theoretical pcs/hr (from Mould Cavity + Cycle Time) vs actual pcs/hr.
+    Off the critical path — only called from /planning.
+    """
+    import parsers as _par
+    now = time.time()
+    c = _mould_cap_cache.get(ym)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _mould_cap_lock:
+        c = _mould_cap_cache.get(ym)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id("PIPE", ym)
+        result: dict = {}
+        if fid:
+            try:
+                vals = read_values(fid, "Report-12", token)
+                result = _par.parse_report12_capacity(vals)
+            except Exception:
+                pass
+        _mould_cap_cache[ym] = (now, result)
+        return result

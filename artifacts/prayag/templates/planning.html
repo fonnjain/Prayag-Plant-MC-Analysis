@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Planning{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <div>
+    <h2 class="text-lg font-bold" style="color:var(--navy)">Demand Planning</h2>
+    <div class="text-xs text-gray-400 mt-0.5">Stock snapshot vs requirement — recomputed from Report-1 tabs</div>
+  </div>
+  <a href="/planning/ptmt-capacity?month={{ month }}"
+     class="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border"
+     style="color:var(--navy);border-color:rgba(31,56,100,0.3)">
+    PTMT Capacity →
+  </a>
+</div>
+
+<!-- Month + Plant selector -->
+<form method="get" action="/planning"
+      class="mb-4 p-3.5 rounded-xl border flex flex-wrap items-center gap-3"
+      style="background:rgba(31,56,100,0.05);border-color:rgba(31,56,100,0.20)">
+  <label class="text-xs font-semibold" style="color:var(--navy)">Month</label>
+  <select name="month" onchange="this.form.submit()"
+          class="text-sm rounded-lg border px-2.5 py-1.5 bg-white"
+          style="border-color:rgba(31,56,100,0.25);color:var(--navy)">
+    {% for m in months %}
+    <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+    {% endfor %}
+  </select>
+  <label class="text-xs font-semibold" style="color:var(--navy)">Plant</label>
+  <select name="plant" onchange="this.form.submit()"
+          class="text-sm rounded-lg border px-2.5 py-1.5 bg-white"
+          style="border-color:rgba(31,56,100,0.25);color:var(--navy)">
+    {% for p in plants %}
+    <option value="{{ p }}" {% if p == plant %}selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+  </select>
+  {% if family_filter %}
+  <a href="/planning?month={{ month }}&plant={{ plant }}"
+     class="text-xs underline" style="color:var(--terra)">Clear filter</a>
+  {% endif %}
+</form>
+
+{% if error %}
+<div class="rounded-xl border p-4 mb-4 text-sm"
+     style="background:#fff7f5;border-color:rgba(197,90,17,0.3);color:var(--terra)">
+  {{ error }}
+</div>
+{% elif not groups %}
+<div class="rounded-xl border p-4 text-sm text-gray-500"
+     style="border-color:rgba(31,56,100,0.15)">
+  No planning data available for {{ plant }} {{ month }}.
+  The planning tabs (Report-1*) live in the same workbook as the daily data —
+  check that the workbook for this month is wired in DAILY_SOURCES.
+</div>
+{% else %}
+
+<!-- Family tabs -->
+<div class="flex flex-wrap gap-2 mb-4">
+  {% for fam, label in family_labels %}
+  {% set cnt = family_counts.get(fam, 0) %}
+  {% if cnt > 0 %}
+  <a href="/planning?month={{ month }}&plant={{ plant }}&family={{ fam }}"
+     class="text-xs font-semibold px-3 py-1.5 rounded-lg border transition"
+     style="{% if fam == family_filter %}background:var(--navy);color:#fff;border-color:var(--navy){% else %}color:var(--navy);border-color:rgba(31,56,100,0.25);background:white{% endif %}">
+    {{ label }} <span class="opacity-70">({{ cnt }})</span>
+  </a>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<!-- Summary cards -->
+<div class="grid grid-cols-2 gap-3 mb-5 sm:grid-cols-4">
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Items</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ summary.total_items }}</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Need attention</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--terra)">{{ summary.need_attention }}</div>
+    <div class="text-xs text-gray-400">cover &lt; 7 days</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Net requirement</div>
+    <div class="text-xl font-bold mt-0.5" style="color:var(--navy)">{{ "{:,.0f}".format(summary.total_net_req) }}</div>
+    <div class="text-xs text-gray-400">pcs (gap to ideal)</div>
+  </div>
+  <div class="rounded-xl border p-3" style="border-color:rgba(31,56,100,0.15)">
+    <div class="text-xs text-gray-500">Snapshot date</div>
+    <div class="text-base font-semibold mt-0.5" style="color:var(--navy)">{{ as_of_date }}</div>
+  </div>
+</div>
+
+<!-- Items table — one section per family group -->
+{% for grp in groups %}
+{% if not family_filter or grp.family == family_filter %}
+<div class="mb-6">
+  <div class="text-sm font-semibold mb-2 flex items-center gap-2" style="color:var(--navy)">
+    {{ grp.label }}
+    <span class="text-xs font-normal text-gray-400">{{ grp.records | length }} items · {{ grp.category }}</span>
+  </div>
+  <div class="overflow-x-auto rounded-xl border" style="border-color:rgba(31,56,100,0.15)">
+    <table class="w-full text-xs">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.06)">
+          <th class="text-left px-3 py-2 font-semibold" style="color:var(--navy)">Item</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Produced</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Required</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Closing Stock</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Ideal Qty</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Net Req</th>
+          <th class="text-right px-3 py-2 font-semibold" style="color:var(--navy)">Days Cover</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in grp.records %}
+        {% set urgent = it.days_of_cover is not none and it.days_of_cover < 7 %}
+        <tr class="border-t hover:bg-gray-50 transition"
+            style="border-color:rgba(31,56,100,0.08){% if urgent %};background:rgba(197,90,17,0.04){% endif %}">
+          <td class="px-3 py-2">
+            <div class="font-medium" style="color:var(--navy)">{{ it.item_name }}</div>
+            <div class="text-gray-400">{{ it.item_code }}</div>
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums">{{ "{:,.0f}".format(it.produced) if it.produced else "—" }}</td>
+          <td class="px-3 py-2 text-right tabular-nums">{{ "{:,.0f}".format(it.produce_required) if it.produce_required else "—" }}</td>
+          <td class="px-3 py-2 text-right tabular-nums font-medium" style="color:var(--navy)">
+            {{ "{:,.0f}".format(it.closing_stock) if it.closing_stock is not none else "—" }}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums text-gray-500">{{ "{:,.0f}".format(it.ideal_qty) if it.ideal_qty else "—" }}</td>
+          <td class="px-3 py-2 text-right tabular-nums font-semibold"
+              style="color:{% if it.net_requirement > 0 %}var(--terra){% else %}#16a34a{% endif %}">
+            {% if it.net_requirement > 0 %}+{{ "{:,.0f}".format(it.net_requirement) }}{% else %}OK{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right tabular-nums">
+            {% if it.days_of_cover is not none %}
+            <span class="font-semibold" style="color:{% if urgent %}var(--terra){% elif it.days_of_cover < 14 %}#d97706{% else %}#16a34a{% endif %}">
+              {{ "{:.1f}".format(it.days_of_cover) }}d
+            </span>
+            {% else %}
+            <span class="text-gray-400">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% endif %}
+{% endblock %}
