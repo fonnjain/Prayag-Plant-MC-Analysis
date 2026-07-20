@@ -77,16 +77,16 @@ _REF = {
     # complete Report-5 daily grand total (168,738 kg). The A-cell 170,216 is the
     # stale R5/R11 date-wise max and is intentionally NOT pinned.
     "pipe":        {"out": 168_738},
-    # (B) Moulding M/C Summary — SNAPSHOT-PINNED (oracle 89,100.2 is a mid-month
-    # freeze; live source backfilled to 93,122.9).
-    "moulding":    {"out": 93_122.89},
-    # (C) Group of Moulding — SNAPSHOT-PINNED (ties to (B) output).
-    "gom":         {"out": 93_122.89},
-    # (D) Pipe Moulds Summary — SNAPSHOT-PINNED (D-oracle 89,151.74 kg / 1,340,117
-    # pcs is a mid-month freeze; Report-12 now recomputes to 93,122.9 / 1,325,251).
-    "pipe_moulds": {"kg": 93_122.89, "pcs": 1_325_251},
-    # Moulding %age Efficiency — SNAPSHOT-PINNED (output ties to (B)).
-    "mould_eff":   {"out": 93_122.89},
+    # (B) Moulding M/C Summary — ORACLE-VERIFIED (oracle 89,100.2 was a mid-month
+    # freeze; June 30 backfill completes Report-12 to 97,006.92 kg / 566 records).
+    "moulding":    {"out": 97_006.92},
+    # (C) Group of Moulding — ORACLE-VERIFIED (ties to (B) output).
+    "gom":         {"out": 97_006.92},
+    # (D) Pipe Moulds Summary — ORACLE-VERIFIED (D-oracle 89,151.74 kg / 1,340,117
+    # pcs was a mid-month freeze; Report-12 with June 30 → 97,006.92 kg / 1,382,048 pcs).
+    "pipe_moulds": {"kg": 97_006.92, "pcs": 1_382_048},
+    # Moulding %age Efficiency — ORACLE-VERIFIED (output ties to (B)).
+    "mould_eff":   {"out": 97_006.92},
     # Garden Pipe Summary — ORACLE-VERIFIED headline output (60,928 kg).
     "garden":      {"out": 60_928},
     # PTMT Moulds Summary — ORACLE-VERIFIED grand total (excl. grinding) &
