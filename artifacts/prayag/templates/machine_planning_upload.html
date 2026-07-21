@@ -43,23 +43,39 @@
         style="background:#fff;border-radius:.75rem;
                box-shadow:0 1px 4px rgba(0,0,0,.08);padding:1.1rem;">
 
-    <!-- Month selector -->
+    <!-- FY + Month selector -->
     <div style="margin-bottom:1rem;">
       <label style="display:block;font-size:.8rem;font-weight:700;
                     color:var(--navy);margin-bottom:.3rem;">
         Planning Month
       </label>
-      <select name="month"
-              style="border:1px solid #d1d5db;border-radius:.35rem;
-                     padding:.3rem .6rem;font-size:.85rem;
-                     color:var(--navy);background:#fff;width:100%;max-width:200px;">
-        {% for m in available_months %}
-        <option value="{{ m }}" {% if m == effective_month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-        {% if effective_month not in available_months %}
-        <option value="{{ effective_month }}" selected>{{ effective_month }}</option>
-        {% endif %}
-      </select>
+      <!-- Hidden input carries the YYYY-MM value that POST reads -->
+      <input type="hidden" name="month" id="mp-upload-month" value="{{ effective_month }}">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:.3rem;">
+          <label style="font-size:.75rem;font-weight:600;color:var(--navy);">FY:</label>
+          <select id="up-fy-sel" onchange="upFyChange(this)"
+                  style="border:1px solid #d1d5db;border-radius:.35rem;padding:.3rem .5rem;
+                         font-size:.82rem;color:var(--navy);background:#fff;">
+            {% for fy_label, _ in fy_groups %}
+            <option value="{{ fy_label }}" {% if fy_label == effective_fy %}selected{% endif %}>{{ fy_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:.3rem;">
+          <label style="font-size:.75rem;font-weight:600;color:var(--navy);">Month:</label>
+          <select id="up-month-sel" onchange="upMonthChange(this)"
+                  style="border:1px solid #d1d5db;border-radius:.35rem;padding:.3rem .5rem;
+                         font-size:.82rem;color:var(--navy);background:#fff;">
+            {% for opt in all_month_opts %}
+            <option value="{{ opt.value }}"
+                    data-fy="{{ opt.fy }}"
+                    {% if opt.value == effective_month %}selected{% endif %}
+                    {% if opt.fy != effective_fy %}style="display:none"{% endif %}>{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
       <p style="font-size:.7rem;color:#6b7280;margin:.25rem 0 0;">
         Must match a seeded month (mp_* tables must have data for this month).
       </p>
@@ -115,6 +131,26 @@
 </div>
 
 <script>
+// ── FY + Month for upload form ────────────────────────────────────────────────
+function upFyChange(sel) {
+  const fy = sel.value;
+  const mSel = document.getElementById('up-month-sel');
+  let first = null;
+  for (const o of mSel.options) {
+    const match = o.dataset.fy === fy;
+    o.style.display = match ? '' : 'none';
+    if (match && !first) first = o.value;
+  }
+  if (first) {
+    mSel.value = first;
+    document.getElementById('mp-upload-month').value = first;
+  }
+}
+
+function upMonthChange(sel) {
+  document.getElementById('mp-upload-month').value = sel.value;
+}
+
 function updateFileName(inp) {
   const fn = inp.files[0] ? inp.files[0].name : 'No file chosen';
   document.getElementById('file-name').textContent = fn;

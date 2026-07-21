@@ -4780,6 +4780,45 @@ def _mp_build_pipe_items(routing: list) -> list:
     ]
 
 
+def _mp_fy_selectors(available: list, current: str) -> tuple:
+    """Return (fy_groups, effective_fy, all_month_opts) for FY+Month dropdowns.
+
+    fy_groups    — list of (fy_label, [YYYY-MM, ...]) Apr→Mar within each FY
+    effective_fy — FY label matching the current effective_month
+    all_month_opts — flat list of {value, fy, label} for every month in every FY shown
+    """
+    MN = {4: "April", 5: "May", 6: "June", 7: "July", 8: "August",
+          9: "September", 10: "October", 11: "November", 12: "December",
+          1: "January", 2: "February", 3: "March"}
+    FY_ORDER = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]
+
+    def _fy_pair(ms: str) -> tuple:
+        y, m = int(ms[:4]), int(ms[5:])
+        return (y, y + 1) if m >= 4 else (y - 1, y)
+
+    # Collect FYs from seeded months + the current month (skip sentinel rows)
+    real = [m for m in available if m >= "2000-01"]
+    if current >= "2000-01":
+        real.append(current)
+    fy_set = {_fy_pair(m) for m in real} if real else {_fy_pair("2026-04")}
+
+    fy_groups: list = []
+    all_month_opts: list = []
+    for (y1, y2) in sorted(fy_set):
+        label = f"FY {y1}-{str(y2)[2:]}"
+        months: list = []
+        for mn in FY_ORDER:
+            yr = y1 if mn >= 4 else y2
+            val = f"{yr}-{mn:02d}"
+            months.append(val)
+            all_month_opts.append({"value": val, "fy": label, "label": MN[mn]})
+        fy_groups.append((label, months))
+
+    eff_pair = _fy_pair(current) if current >= "2000-01" else _fy_pair("2026-04")
+    effective_fy = f"FY {eff_pair[0]}-{str(eff_pair[1])[2:]}"
+    return fy_groups, effective_fy, all_month_opts
+
+
 @app.route("/machine-planning/data")
 def mp_data_view():
     """Machine Planning data-inputs page (MP-1). Never loads on '/'."""
@@ -4791,18 +4830,24 @@ def mp_data_view():
     if not available_months:
         available_months = [em]
 
+    fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months, em)
+
     if tab != "plumbing":
         return render_template(
             "machine_planning_data.html",
             segment=_MP_SEGMENT,
             effective_month=em,
             available_months=available_months,
+            fy_groups=fy_groups,
+            effective_fy=effective_fy,
+            all_month_opts=all_month_opts,
             tab=tab,
             db_available=_mp_model.AVAILABLE,
             compound_cards=[], bom_rows=[], per_hour_rows=[],
             pipe_items=[], pipe_machines=[], pipe_machine_names=_ALL_PIPE_MACHINES,
             fitting_machines=[], fitting_std_rows=[],
             params=None, estimated_count=0,
+            seeding_needed=False,
         )
 
     # Load data for plumbing tab
@@ -4866,6 +4911,9 @@ def mp_data_view():
         segment=_MP_SEGMENT,
         effective_month=em,
         available_months=available_months,
+        fy_groups=fy_groups,
+        effective_fy=effective_fy,
+        all_month_opts=all_month_opts,
         tab=tab,
         db_available=_mp_model.AVAILABLE,
         compound_cards=compound_cards,
@@ -5327,11 +5375,16 @@ def mp_upload():
         available_months = [em]
         db_available = False
 
+    fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months or [em], em)
+
     if request.method == "GET":
         return render_template(
             "machine_planning_upload.html",
             effective_month=em,
             available_months=available_months or [em],
+            fy_groups=fy_groups,
+            effective_fy=effective_fy,
+            all_month_opts=all_month_opts,
             db_available=db_available,
             error=None,
         )
@@ -5358,10 +5411,14 @@ def mp_upload():
             error = f"Failed to parse Excel: {exc}"
 
     if error:
+        err_fy_groups, err_effective_fy, err_all_opts = _mp_fy_selectors(available_months or [em], month)
         return render_template(
             "machine_planning_upload.html",
             effective_month=month,
             available_months=available_months or [em],
+            fy_groups=err_fy_groups,
+            effective_fy=err_effective_fy,
+            all_month_opts=err_all_opts,
             db_available=db_available,
             error=error,
         )

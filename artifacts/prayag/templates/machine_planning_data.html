@@ -98,20 +98,31 @@
       <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">Machine Planning · Data</h2>
       <p style="font-size:.72rem;color:#6b7280;margin:.1rem 0 0;">Reference inputs for optimiser — versioned per month</p>
     </div>
-    <!-- Month selector -->
-    <form method="get" style="display:flex;align-items:center;gap:.4rem;">
-      <input type="hidden" name="tab" value="{{ tab }}">
-      <label style="font-size:.75rem;font-weight:600;color:var(--navy);">Month:</label>
-      <select name="month" onchange="this.form.submit()"
-              style="border:1px solid #d1d5db;border-radius:.35rem;padding:.25rem .5rem;font-size:.8rem;color:var(--navy);background:#fff;">
-        {% for m in available_months %}
-        <option value="{{ m }}" {% if m == effective_month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-        {% if effective_month not in available_months %}
-        <option value="{{ effective_month }}" selected>{{ effective_month }} (current)</option>
-        {% endif %}
-      </select>
-    </form>
+    <!-- FY + Month selectors -->
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+      <input type="hidden" id="mp-tab-val" value="{{ tab }}">
+      <div style="display:flex;align-items:center;gap:.3rem;">
+        <label style="font-size:.75rem;font-weight:600;color:var(--navy);">FY:</label>
+        <select id="mp-fy-sel" onchange="mpFyChange(this)"
+                style="border:1px solid #d1d5db;border-radius:.35rem;padding:.25rem .5rem;font-size:.8rem;color:var(--navy);background:#fff;">
+          {% for fy_label, _ in fy_groups %}
+          <option value="{{ fy_label }}" {% if fy_label == effective_fy %}selected{% endif %}>{{ fy_label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:.3rem;">
+        <label style="font-size:.75rem;font-weight:600;color:var(--navy);">Month:</label>
+        <select id="mp-month-sel" onchange="mpMonthChange(this)"
+                style="border:1px solid #d1d5db;border-radius:.35rem;padding:.25rem .5rem;font-size:.8rem;color:var(--navy);background:#fff;">
+          {% for opt in all_month_opts %}
+          <option value="{{ opt.value }}"
+                  data-fy="{{ opt.fy }}"
+                  {% if opt.value == effective_month %}selected{% endif %}
+                  {% if opt.fy != effective_fy %}style="display:none"{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
   </div>
 
   <!-- Category tabs -->
@@ -639,6 +650,25 @@ async function mpPost(url, data) {
     body: JSON.stringify(data)
   });
   return r.json();
+}
+
+// ── FY + Month navigation ─────────────────────────────────────────────────────
+function mpFyChange(sel) {
+  const fy = sel.value;
+  const mSel = document.getElementById('mp-month-sel');
+  const tab  = document.getElementById('mp-tab-val').value;
+  let first = null;
+  for (const o of mSel.options) {
+    const match = o.dataset.fy === fy;
+    o.style.display = match ? '' : 'none';
+    if (match && !first) first = o.value;
+  }
+  if (first) window.location = '?tab=' + tab + '&month=' + first;
+}
+
+function mpMonthChange(sel) {
+  const tab = document.getElementById('mp-tab-val').value;
+  window.location = '?tab=' + tab + '&month=' + sel.value;
 }
 
 // ── Seed All (fresh deploy self-heal) ────────────────────────────────────────
