@@ -1,0 +1,1038 @@
+"""
+Machine Planning seeders — Phase MP-0.
+
+Loads source data from five Google Drive files and populates segment='PLUMBING'
+tables via mp_model.  All parsers are HEADER-BASED; item codes are normalised
+(strip + uppercase + remove spaces and hyphens) so demand codes like "PW11"
+resolve to the same key as the BOM entry "PW 11".
+
+DRIVE ACCESS POLICY: ``seed_all`` confirms Drive access for every source file
+before writing.  If any file is inaccessible it raises ``SeedAccessError``
+reporting exactly which file(s) failed — it never silently seeds empty rows.
+
+ADDITIVE/ISOLATED: nothing here imports from app.py, plan.py, or any existing
+pipeline module.  Only sheets.py helpers (read_values, list_tabs, _get_access_token)
+and mp_model upserts are called.
+"""
+from __future__ import annotations
+
+import re
+import datetime
+import logging
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger("prayag.mp_seed")
+
+import sheets
+import mp_model
+from mp_model import (
+    MpMachine, MpRouting, MpFittingStd, MpBomWeight,
+    MpPerHour, MpCompoundRecipe, MpParams,
+)
+
+# ---------------------------------------------------------------------------
+# Source file IDs
+# ---------------------------------------------------------------------------
+_FILE_IDS: Dict[str, str] = {
+    "bom":          "1R7k5O6w4qaT74G-5X2VXBtD7-Fg3uByvIw3-TeViMmA",
+    "pipe_routing": "1bJl4RLJhk0_6v-Pn1ve7T2ZR8YftpPxkwmlwcCxqHUA",
+    "fitting":      "1y2HRoJNQmE2BthE0f18YU1w0ly1LMvyqP98f2_4Wero",
+    "per_hour":     "1wlB4Y4lnP7Y2SLZX6atFN-nrKA--ByYF8m2TVHuBxD0",
+    "compound":     "1owRHQodo_ye5WMAekqa7GgcIJbmjJgwCDRzfQk8-BYM",
+}
+
+SEGMENT = "PLUMBING"
+_PIPE_MATERIAL_FAMILIES = ["CPVC", "UPVC", "SWR", "AGRI"]
+_FITTING_MATERIAL_FAMILIES = ["CPVC", "UPVC", "SWR", "AGRI"]
+_COMPOUND_WASTAGE_FACTOR = 1.01
+
+
+class SeedAccessError(Exception):
+    """Raised when one or more Drive files cannot be read."""
+
+
+class SeedParseError(Exception):
+    """Raised when a required header or block cannot be found in a sheet."""
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def current_month() -> str:
+    """Return today's month as 'YYYY-MM'."""
+    return datetime.date.today().strftime("%Y-%m")
+
+
+def norm_code(code: str) -> str:
+    """Normalise an item code: strip, uppercase, remove all spaces and hyphens.
+
+    Examples:
+        "PW 11"  -> "PW11"
+        "PW-11"  -> "PW11"
+        " ps-16 "-> "PS16"
+    """
+    return re.sub(r"[\s\-]+", "", str(code).strip()).upper()
+
+
+def _to_float(val: str) -> Optional[float]:
+    """Convert a spreadsheet cell string to float, or None if unparseable."""
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _cell(row: list, idx: int) -> str:
+    """Safe cell access — returns stripped string or '' if out of bounds."""
+    if idx < len(row):
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+    return ""
+
+
+def _header_map(header_row: list) -> Dict[str, int]:
+    """Return {normalised_header: col_index} from a header row."""
+    out: Dict[str, int] = {}
+    for i, cell in enumerate(header_row):
+        key = str(cell).strip().lower()
+        if key:
+            out[key] = i
+    return out
+
+
+def _find_header_row(rows: List[list], keywords: List[str],
+                     max_scan: int = 15) -> int:
+    """Return the index of the first row containing ALL keywords (case-insensitive).
+
+    Raises SeedParseError if not found within max_scan rows.
+    """
+    kws = [k.lower() for k in keywords]
+    for i, row in enumerate(rows[:max_scan]):
+        row_text = " ".join(str(c).lower() for c in row)
+        if all(kw in row_text for kw in kws):
+            return i
+    raise SeedParseError(
+        f"Could not find header row containing {keywords!r} in first {max_scan} rows."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Drive access check
+# ---------------------------------------------------------------------------
+
+def check_drive_access(token: str) -> Dict[str, bool]:
+    """Probe each source file with a minimal read and return {name: ok}."""
+    results: Dict[str, bool] = {}
+    for name, fid in _FILE_IDS.items():
+        try:
+            sheets.read_values(fid, "A1:A2", token)
+            results[name] = True
+        except Exception as exc:
+            logger.warning("Drive access FAIL for %s (%s): %s", name, fid, exc)
+            results[name] = False
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 1. BOM weights
+# ---------------------------------------------------------------------------
+
+def parse_bom_weights(rows: List[list]) -> List[dict]:
+    """Parse BOM weight rows (tab "NEW").
+
+    Finds the header row containing 'item code' and 'weight', then collects
+    (normalised item_code, weight_per_pc_kg) for every subsequent data row.
+
+    Returns list of dicts with keys: item_code, weight_per_pc_kg.
+    """
+    if not rows:
+        return []
+    # Find header row — look for "item code" / "weight" keywords
+    hdr_idx = -1
+    for i, row in enumerate(rows[:20]):
+        row_lower = " ".join(str(c).lower() for c in row)
+        if ("item" in row_lower or "code" in row_lower) and "weight" in row_lower:
+            hdr_idx = i
+            break
+    if hdr_idx < 0:
+        # Fall back: assume row 0 is the header if it has 2+ non-empty cells
+        hdr_idx = 0
+
+    hdr = _header_map(rows[hdr_idx])
+    # Column A = item code, Column B = weight — find by header or fallback
+    code_col = next(
+        (hdr[k] for k in hdr if "item" in k or "code" in k), 0
+    )
+    wt_col = next(
+        (hdr[k] for k in hdr if "weight" in k or "wt" in k or "kg" in k), 1
+    )
+
+    out: List[dict] = []
+    seen: Dict[str, float] = {}
+    for row in rows[hdr_idx + 1:]:
+        raw_code = _cell(row, code_col)
+        raw_wt = _cell(row, wt_col)
+        if not raw_code or not raw_wt:
+            continue
+        nc = norm_code(raw_code)
+        if not nc:
+            continue
+        # Skip pure-numeric codes — these are internal ERP item IDs, not product codes
+        if re.match(r'^\d+$', nc):
+            continue
+        wt = _to_float(raw_wt)
+        if wt is None or wt <= 0:
+            continue
+        # Last value wins on duplicate codes (normalisation may collapse variants)
+        seen[nc] = wt
+
+    for code, wt in seen.items():
+        out.append({"item_code": code, "weight_per_pc_kg": wt})
+    return out
+
+
+def seed_bom_weights(token: str, effective_month: str = "") -> dict:
+    """Fetch BOM sheet and upsert weights. Returns {rows_loaded, unweighted_codes}."""
+    em = effective_month or current_month()
+    fid = _FILE_IDS["bom"]
+    raw = sheets.read_values(fid, "NEW", token)
+    parsed = parse_bom_weights(raw)
+    if not parsed:
+        raise SeedParseError("BOM 'NEW' tab parsed 0 weight rows — check sheet access.")
+    records = [
+        MpBomWeight(
+            segment=SEGMENT,
+            item_code=r["item_code"],
+            weight_per_pc_kg=r["weight_per_pc_kg"],
+            effective_month=em,
+        )
+        for r in parsed
+    ]
+    count = mp_model.upsert_bom_weights(records)
+    return {"rows_loaded": count, "effective_month": em}
+
+
+# ---------------------------------------------------------------------------
+# 2. Pipe routing + staffing
+# ---------------------------------------------------------------------------
+
+# Machine name patterns for pipe extrusion machines
+_MC_PATTERN = re.compile(r"M/?C[-\s]?(\d+)", re.IGNORECASE)
+_NUM_PATTERN = re.compile(r"^\d+$")
+
+
+def _is_machine_name(cell: str) -> bool:
+    return bool(_MC_PATTERN.search(cell))
+
+
+def parse_pipe_routing(rows: List[list]) -> Tuple[List[dict], List[dict]]:
+    """Parse "Details" tab for pipe routing and machine staffing.
+
+    Layout (1-indexed rows):
+    - Row 2: W and OT staffing counts in paired columns for each machine
+    - Row 3: machine names (M/C-1 .. M/C-9) in the leading columns of each pair
+    - Rows 4+: item codes appear in each machine's column(s) indicating capability
+
+    Returns:
+        routing_rows: [{"item_code", "machine", "material"}, ...]
+        machine_rows: [{"machine", "operators_ot", "support_w"}, ...]
+    """
+    if len(rows) < 3:
+        return [], []
+
+    # Find the machine name row (row 3 by spec = 0-indexed 2)
+    # Scan rows 1..6 to be robust to header offsets
+    mc_row_idx = -1
+    for i in range(min(8, len(rows))):
+        row_text = " ".join(str(c) for c in rows[i])
+        if _MC_PATTERN.search(row_text):
+            mc_row_idx = i
+            break
+    if mc_row_idx < 0:
+        logger.warning("parse_pipe_routing: no machine-name row found in Details tab")
+        return [], []
+
+    mc_row = rows[mc_row_idx]
+    staffing_row = rows[mc_row_idx - 1] if mc_row_idx > 0 else []
+
+    # Identify machine columns: (col_index, machine_name)
+    machines: List[Tuple[int, str]] = []
+    for j, cell in enumerate(mc_row):
+        cell_s = str(cell).strip()
+        if _is_machine_name(cell_s):
+            machines.append((j, cell_s))
+
+    if not machines:
+        return [], []
+
+    # For each machine, extract W (support_w) and OT (operators_ot) from staffing_row.
+    # Layout assumption: machine is at col j; staffing_row[j] = W count,
+    # staffing_row[j+1] = OT count (paired columns).
+    machine_rows: List[dict] = []
+    machine_col_set: Dict[str, List[int]] = {}  # machine_name -> list of capable col indices
+
+    for j, mc_name in machines:
+        w_val = _to_float(_cell(staffing_row, j)) or 0
+        ot_val = _to_float(_cell(staffing_row, j + 1)) or 0
+        # Distinguish W vs OT: by convention smaller is OT staff
+        support_w = int(w_val)
+        operators_ot = int(ot_val)
+        machine_rows.append({
+            "machine": mc_name,
+            "support_w": support_w,
+            "operators_ot": operators_ot,
+        })
+        # Each machine may span 1 or 2 adjacent columns in data rows
+        machine_col_set[mc_name] = [j]
+        # Include paired column (j+1) if it's not the start of the next machine
+        next_machine_cols = {m[0] for m in machines if m[1] != mc_name}
+        if (j + 1) not in next_machine_cols:
+            machine_col_set[mc_name].append(j + 1)
+
+    # Collect item-code → machine mappings from data rows below the machine row
+    routing: Dict[Tuple[str, str], bool] = {}  # (item_code, machine) → capable
+    for row in rows[mc_row_idx + 1:]:
+        if not any(str(c).strip() for c in row):
+            continue  # blank row
+        # Each machine's columns may carry an item code directly
+        for mc_name, cols in machine_col_set.items():
+            for col in cols:
+                cell_val = _cell(row, col)
+                if not cell_val:
+                    continue
+                # The cell value IS the item code (or a mark like "✓" — filter marks)
+                nc = norm_code(cell_val)
+                # Skip if looks like a non-code value (single char, number-only, header text)
+                if len(nc) < 2:
+                    continue
+                if _NUM_PATTERN.match(nc):
+                    continue
+                if nc in ("TRUE", "FALSE", "YES", "NO", "X", "NA"):
+                    continue
+                routing[(nc, mc_name)] = True
+
+    routing_rows = [
+        {"item_code": ic, "machine": mc, "material": ""}
+        for (ic, mc) in routing.keys()
+    ]
+    return routing_rows, machine_rows
+
+
+def seed_pipe_routing(token: str, effective_month: str = "") -> dict:
+    """Fetch pipe routing tab and upsert mp_routing + mp_machine."""
+    em = effective_month or current_month()
+    fid = _FILE_IDS["pipe_routing"]
+    raw = sheets.read_values(fid, "Details", token)
+    routing_rows, machine_rows = parse_pipe_routing(raw)
+
+    machines = [
+        MpMachine(
+            segment=SEGMENT, machine=r["machine"], kind="extrusion",
+            support_w=r["support_w"], operators_ot=r["operators_ot"],
+            capacity_hrs_month=500.0, effective_month=em,
+        )
+        for r in machine_rows
+    ]
+    routing = [
+        MpRouting(
+            segment=SEGMENT, item_code=r["item_code"], machine=r["machine"],
+            material=r.get("material", ""), capable=True, effective_month=em,
+        )
+        for r in routing_rows
+    ]
+    mc_count = mp_model.upsert_machines(machines)
+    rt_count = mp_model.upsert_routing(routing)
+    return {
+        "machines_loaded": mc_count,
+        "routing_rows_loaded": rt_count,
+        "effective_month": em,
+        "machine_detail": [
+            {"machine": r["machine"], "W": r["support_w"], "OT": r["operators_ot"]}
+            for r in machine_rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. Fitting routing + cavity / cycle time
+# ---------------------------------------------------------------------------
+
+def parse_fitting_routing(rows: List[list]) -> Tuple[List[dict], List[dict], List[dict]]:
+    """Parse "Report-12" tab (header at row 6, i.e. 0-indexed row 5).
+
+    Expected header columns:
+        C (idx 2): Item Code
+        E (idx 4): Moulding Machine
+        + columns named 'cavity' and 'cycle time' (located by header text)
+
+    Returns:
+        routing_rows: [{"item_code", "machine"}, ...]  — distinct (item, machine) pairs
+        std_rows: [{"item_code", "machine", "cavity", "cycle_time_sec"}, ...]
+        machine_rows: [{"machine"}, ...]  — distinct moulding machines
+    """
+    if not rows:
+        return [], [], []
+
+    # Find header row (spec says row 6, i.e. index 5; scan rows 3-10 to be safe)
+    hdr_idx = -1
+    for i in range(min(12, len(rows))):
+        row = rows[i]
+        row_text = " ".join(str(c).lower() for c in row)
+        if ("item" in row_text or "code" in row_text) and "machine" in row_text:
+            hdr_idx = i
+            break
+    if hdr_idx < 0:
+        raise SeedParseError(
+            "Fitting Report-12: header row with 'Item Code' and 'Machine' not found."
+        )
+
+    hdr = rows[hdr_idx]
+    hdr_map = _header_map(hdr)
+
+    # Locate columns by header text
+    code_col = next(
+        (hdr_map[k] for k in hdr_map if "item" in k or "code" in k), 2
+    )
+    mc_col = next(
+        (hdr_map[k] for k in hdr_map
+         if "moulding" in k or ("machine" in k and "moulding" in k)), None
+    )
+    if mc_col is None:
+        mc_col = next((hdr_map[k] for k in hdr_map if "machine" in k), 4)
+
+    cavity_col = next(
+        (hdr_map[k] for k in hdr_map if "cavity" in k or "mould cav" in k), None
+    )
+    cycle_col = next(
+        (hdr_map[k] for k in hdr_map if "cycle" in k), None
+    )
+
+    routing_seen: Dict[Tuple[str, str], bool] = {}
+    std_rows: List[dict] = []
+    machine_seen: set = set()
+
+    for row in rows[hdr_idx + 1:]:
+        raw_code = _cell(row, code_col)
+        raw_mc = _cell(row, mc_col)
+        if not raw_code or not raw_mc:
+            continue
+        nc = norm_code(raw_code)
+        mc = raw_mc.strip()
+        if not nc or not mc:
+            continue
+
+        machine_seen.add(mc)
+        routing_seen[(nc, mc)] = True
+
+        cavity = _to_float(_cell(row, cavity_col)) if cavity_col is not None else None
+        cycle = _to_float(_cell(row, cycle_col)) if cycle_col is not None else None
+        std_rows.append({
+            "item_code": nc,
+            "machine": mc,
+            "cavity": cavity,
+            "cycle_time_sec": cycle,
+        })
+
+    routing_rows = [{"item_code": ic, "machine": mc} for (ic, mc) in routing_seen]
+    machine_rows = [{"machine": mc} for mc in sorted(machine_seen)]
+    return routing_rows, std_rows, machine_rows
+
+
+def seed_fitting_routing(token: str, effective_month: str = "") -> dict:
+    """Fetch fitting Report-12 and upsert mp_routing + mp_fitting_std + mp_machine."""
+    em = effective_month or current_month()
+    fid = _FILE_IDS["fitting"]
+    raw = sheets.read_values(fid, "Report-12", token)
+    routing_rows, std_rows, machine_rows = parse_fitting_routing(raw)
+
+    machines = [
+        MpMachine(
+            segment=SEGMENT, machine=r["machine"], kind="moulding",
+            support_w=0, operators_ot=0, capacity_hrs_month=500.0,
+            effective_month=em,
+        )
+        for r in machine_rows
+    ]
+    routing = [
+        MpRouting(
+            segment=SEGMENT, item_code=r["item_code"], machine=r["machine"],
+            material="", capable=True, effective_month=em,
+        )
+        for r in routing_rows
+    ]
+    stds = [
+        MpFittingStd(
+            segment=SEGMENT, item_code=r["item_code"], machine=r["machine"],
+            cavity=r["cavity"], cycle_time_sec=r["cycle_time_sec"],
+            effective_month=em,
+        )
+        for r in std_rows
+    ]
+    mc_count = mp_model.upsert_machines(machines)
+    rt_count = mp_model.upsert_routing(routing)
+    std_count = mp_model.upsert_fitting_std(stds)
+    cavity_present = sum(1 for r in std_rows if r.get("cavity") is not None)
+    return {
+        "machines_loaded": mc_count,
+        "routing_rows_loaded": rt_count,
+        "std_rows_loaded": std_count,
+        "cavity_present": cavity_present,
+        "effective_month": em,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 4. Per-hour rates
+# ---------------------------------------------------------------------------
+
+# Pairs to identify tabs for each material × type
+_PER_HOUR_TAB_KEYWORDS: List[Tuple[str, str, str]] = [
+    ("cpvc", "pipe",    ""),
+    ("upvc", "pipe",    ""),
+    ("swr",  "pipe",    ""),
+    ("agri", "pipe",    ""),
+    ("cpvc", "fitting", ""),
+    ("upvc", "fitting", ""),
+    ("swr",  "fitting", ""),
+    ("agri", "fitting", ""),
+]
+
+
+def _match_per_hour_tab(tab_name: str, material: str, mat_type: str,
+                        _unused: str = "") -> bool:
+    """Return True if tab_name is the per-hour planning tab for material×type.
+
+    Pipe tabs:    contain material + ("pipe" OR "planing"/"planning") AND NOT "fitting".
+    Fitting tabs: contain material + "fitting"/"fitt".
+
+    The positive pipe keyword ("pipe"/"planing") ensures generic tabs like
+    "CPVC TOP ITEM" or "CPVC" are excluded even though they lack "fitting".
+    """
+    tn = tab_name.lower()
+    if material not in tn:
+        return False
+    has_fitting = "fitt" in tn or "fitting" in tn
+    if mat_type == "fitting":
+        return has_fitting
+    else:  # pipe
+        has_pipe_kw = "pipe" in tn or "planing" in tn or "planning" in tn
+        return has_pipe_kw and not has_fitting
+
+
+def parse_per_hour(rows: List[list], material: str, basis: str) -> List[dict]:
+    """Parse a per-hour planning tab.
+
+    Tab structure (from live data):
+      Row 0: [material_label, 'AVG SALE ...', ..., 'PRODUCTION PER HOUR', 'WEIGHT', ...]
+      Row 1: ['PIPE'/'FITTING', aggregate totals ...]
+      Row 2+: [item_code, ...data...]
+
+    Scans for a row that contains 'production per hour' (pipe→kg_per_hr) or
+    'cycle time'/'cycle' (fitting→cycle).  The item-code column is identified
+    by an 'item'/'code' header; if absent, col 0 is used (it holds item codes
+    in the planning-tab layout).  Aggregate rows (where col 0 equals the
+    material name, "PIPE", "FITTING", or "TOTAL") are skipped.
+
+    Returns list of dicts: {item_code, basis, value}.
+    """
+    if not rows:
+        return []
+
+    is_pipe_tab = (basis == "kg_per_hr")
+    hdr_idx = -1
+    code_col: Optional[int] = None
+    value_col: Optional[int] = None
+    _code_from_explicit = False
+
+    # ── Primary scan: find the row that names the value column ───────────────
+    for i, row in enumerate(rows[:30]):
+        row_lower = " ".join(str(c).lower() for c in row)
+        if is_pipe_tab:
+            prod_match = (
+                "production per hour" in row_lower
+                or "prod per hour" in row_lower
+                or "per hour" in row_lower
+            )
+        else:
+            prod_match = "cycle time" in row_lower or "cycle" in row_lower
+
+        if not prod_match:
+            continue
+
+        hm = _header_map(row)
+        # Find value column
+        if is_pipe_tab:
+            vc = next(
+                (hm[k] for k in hm
+                 if "production per hour" in k or "per hour" in k or "prod per hr" in k),
+                None,
+            )
+        else:
+            vc = next((hm[k] for k in hm if "cycle" in k), None)
+
+        if vc is None:
+            continue
+
+        # Find code column in the SAME header row; track whether it was found
+        # explicitly (by label) or is just a 0-fallback.
+        cc_explicit = next(
+            (hm[k] for k in hm if "item" in k or "code" in k), None
+        )
+        cc = cc_explicit if cc_explicit is not None else 0
+
+        # Guard: degenerate title row (e.g. "CPVC FITTING CYCLE TIME" at col 0
+        # where the title text IS the only cell and maps to both cc and vc=0).
+        if cc == vc:
+            continue
+
+        hdr_idx = i
+        value_col = vc
+        code_col = cc
+        _code_from_explicit = cc_explicit is not None
+        break
+
+    if hdr_idx < 0 or value_col is None:
+        logger.warning("parse_per_hour: could not locate header in %s tab", material)
+        return []
+
+    code_col = code_col if code_col is not None else 0
+
+    # When the code column wasn't explicitly labeled in the header row, check
+    # nearby rows for 'ITEM CODE' — handles layouts where the item-code header
+    # appears in a different row (e.g. UPVC PIPE tab: col header in row 2 but
+    # 'PRODUCTION PER HOUR' is in row 0).
+    if not _code_from_explicit and code_col == 0 and value_col != 0:
+        for scan_i in range(max(0, hdr_idx - 5), min(len(rows), hdr_idx + 6)):
+            scan_hm = _header_map(rows[scan_i])
+            cc2 = next(
+                (scan_hm[k] for k in scan_hm if "item" in k or "code" in k),
+                None,
+            )
+            if cc2 is not None and cc2 != value_col:
+                code_col = cc2
+                break
+
+    # Aggregate labels in col 0 that are not item codes
+    _AGGREGATE = {material.upper(), material.lower(),
+                  "PIPE", "FITTING", "TOTAL", "GRAND TOTAL", "SUB TOTAL",
+                  "pipe", "fitting", "total", "grand total", "sub total"}
+
+    out: Dict[str, float] = {}
+    for row in rows[hdr_idx + 1:]:
+        raw_code = _cell(row, code_col)
+        raw_val = _cell(row, value_col)
+        if not raw_code or not raw_val:
+            continue
+        # Skip aggregate / section-label rows
+        if raw_code.strip() in _AGGREGATE:
+            continue
+        nc = norm_code(raw_code)
+        if not nc or len(nc) < 2:
+            continue
+        # Skip numeric-looking codes (pure int OR decimal number, e.g. "104.8",
+        # "33000778") — product codes always contain at least one letter.
+        if not any(c.isalpha() for c in nc):
+            continue
+        val = _to_float(raw_val)
+        if val is None or val <= 0:
+            continue
+        out[nc] = val
+
+    return [{"item_code": ic, "basis": basis, "value": v} for ic, v in out.items()]
+
+
+def seed_per_hour(token: str, effective_month: str = "") -> dict:
+    """List tabs in the per-hour file, match each material×type, parse, upsert."""
+    em = effective_month or current_month()
+    fid = _FILE_IDS["per_hour"]
+    available_tabs = sheets.list_tabs(fid, token)
+
+    all_records: List[MpPerHour] = []
+    tab_report: List[dict] = []
+
+    for material, mat_type, type_kw in _PER_HOUR_TAB_KEYWORDS:
+        basis = "kg_per_hr" if mat_type == "pipe" else "cycle"
+        matched = [t for t in available_tabs if _match_per_hour_tab(t, material, mat_type, type_kw)]
+        if not matched:
+            tab_report.append({
+                "material": material.upper(), "type": mat_type,
+                "tab": None, "rows": 0, "status": "tab_not_found",
+            })
+            continue
+        # Prefer the most specific tab: one that explicitly contains the type
+        # keyword ("pipe"/"fitting") over a generic "PRODUCTION PLANING" tab.
+        type_kw_lower = mat_type.lower()
+        matched_sorted = sorted(
+            matched,
+            key=lambda t: 0 if type_kw_lower in t.lower() else 1,
+        )
+        tab = matched_sorted[0]
+        raw = sheets.read_values(fid, tab, token)
+        parsed = parse_per_hour(raw, material.upper(), basis)
+        tab_report.append({
+            "material": material.upper(), "type": mat_type,
+            "tab": tab, "rows": len(parsed), "status": "ok" if parsed else "empty",
+        })
+        all_records.extend([
+            MpPerHour(
+                segment=SEGMENT, item_code=r["item_code"],
+                basis=r["basis"], value=r["value"], effective_month=em,
+            )
+            for r in parsed
+        ])
+
+    count = mp_model.upsert_per_hour(all_records)
+    return {"rows_loaded": count, "tab_report": tab_report, "effective_month": em}
+
+
+# ---------------------------------------------------------------------------
+# 5. Compound recipes
+# ---------------------------------------------------------------------------
+
+# Expected 8 combinations: 4 materials × 2 types
+_COMPOUND_COMBOS: List[Tuple[str, str]] = [
+    ("CPVC", "pipe"), ("UPVC", "pipe"), ("SWR", "pipe"), ("AGRI", "pipe"),
+    ("CPVC", "fitting"), ("UPVC", "fitting"), ("SWR", "fitting"), ("AGRI", "fitting"),
+]
+
+# Skip keywords in component name column
+_COMP_SKIP_WORDS = ("total", "effective", "cost", "waste", "wastage", "---")
+
+
+def _parse_compound_tab(rows: List[list]) -> Dict[Tuple[str, str], List[dict]]:
+    """Parse a compound-cost tab with a horizontal multi-block layout.
+
+    Layout (from live sheets):
+      Row 1 (0-indexed): block title labels, e.g. 'UPVC PIPE', 'CPVC PIPE',
+                         'UPVC MOULDING', 'SWR / AGRI MOULDING'
+      Row 2           : column headers per block: 'Compound', 'Ratio in KG', 'Price'
+      Row 3           : optional section label ('WORKING COMPOUND COST')
+      Rows 4+         : component data rows
+      Row ~9          : 'Total' row (skipped)
+      Row ~11         : 'WASTAGE' row (skipped)
+
+    Each block starts at the column where its label appears in row 1.
+    When multiple blocks share the same label (e.g. three 'CPVC PIPE' blocks),
+    the one with the most non-zero ratio values is kept (most complete recipe).
+
+    'SWR / AGRI MOULDING' labels expand into both SWR and AGRI fitting entries.
+
+    Returns {(material, mat_type): [component_dicts]}.
+    """
+    if len(rows) < 5:
+        return {}
+
+    # ── Find the label row ─────────────────────────────────────────────────
+    label_row_idx = -1
+    for i in range(min(5, len(rows))):
+        row_text = " ".join(str(c).strip().lower() for c in rows[i] if str(c).strip())
+        if any(m in row_text for m in ("upvc", "cpvc", "swr", "agri")):
+            if any(kw in row_text for kw in ("pipe", "moulding", "fitting")):
+                label_row_idx = i
+                break
+    if label_row_idx < 0:
+        return {}
+
+    label_row = rows[label_row_idx]
+    col_hdr_row_idx = label_row_idx + 1
+    col_hdr_row = rows[col_hdr_row_idx] if col_hdr_row_idx < len(rows) else []
+
+    # ── Find data start: skip optional section-label rows ─────────────────
+    data_start = col_hdr_row_idx + 1
+    for i in range(col_hdr_row_idx + 1, min(col_hdr_row_idx + 4, len(rows))):
+        # Rows like ['', 'WORKING COMPOUND COST', ...] are section labels
+        non_empty = [str(c).strip() for c in rows[i] if str(c).strip()]
+        if len(non_empty) <= 1:
+            data_start = i + 1
+
+    # ── Collect block positions from label row ─────────────────────────────
+    # block_specs: (start_col, material, mat_type)
+    block_specs: List[Tuple[int, str, str]] = []
+    for j, cell in enumerate(label_row):
+        cell_s = str(cell).strip()
+        if not cell_s:
+            continue
+        cell_l = cell_s.lower()
+        mat: Optional[str] = None
+        for m in ("cpvc", "upvc", "swr", "agri"):
+            if m in cell_l:
+                mat = m.upper()
+                break
+        if mat is None:
+            continue
+        if "pipe" in cell_l:
+            ptype = "pipe"
+        elif "moulding" in cell_l or "fitting" in cell_l:
+            ptype = "fitting"
+        else:
+            continue
+        # 'SWR / AGRI MOULDING' → both SWR and AGRI fitting
+        if "swr" in cell_l and "agri" in cell_l:
+            block_specs.append((j, "SWR", ptype))
+            block_specs.append((j, "AGRI", ptype))
+        else:
+            block_specs.append((j, mat, ptype))
+
+    if not block_specs:
+        return {}
+
+    # ── For each block starting column, find ratio and price cols ─────────
+    def _find_ratio_price(start_col: int) -> Tuple[Optional[int], Optional[int]]:
+        ratio_col: Optional[int] = None
+        price_col: Optional[int] = None
+        for k in range(start_col, min(start_col + 6, len(col_hdr_row))):
+            hdr_s = str(col_hdr_row[k]).lower().strip()
+            if ("ratio" in hdr_s or "qty" in hdr_s or "kg" in hdr_s) and ratio_col is None:
+                ratio_col = k
+            elif "price" in hdr_s and price_col is None:
+                price_col = k
+        return ratio_col, price_col
+
+    # ── Parse components for each block ───────────────────────────────────
+    # Group by (mat, ptype): keep a list of component-list versions
+    block_versions: Dict[Tuple[str, str], List[List[dict]]] = {}
+
+    for (start_col, mat, ptype) in block_specs:
+        ratio_col, price_col = _find_ratio_price(start_col)
+        if ratio_col is None:
+            continue
+
+        components: List[dict] = []
+        for ri in range(data_start, min(data_start + 20, len(rows))):
+            row = rows[ri]
+            comp = _cell(row, start_col)
+            if not comp:
+                continue
+            # BREAK (not continue) on total/wastage — marks the end of the
+            # working-cost block.  Without breaking we bleed into the ACTUAL
+            # section which repeats the same component names at different prices.
+            if any(kw in comp.lower() for kw in _COMP_SKIP_WORDS):
+                break
+            ratio = _to_float(_cell(row, ratio_col))
+            price = _to_float(_cell(row, price_col)) if price_col is not None else None
+            if ratio is None and price is None:
+                continue
+            components.append({
+                "component": comp.strip(),
+                "ratio_kg": ratio or 0.0,
+                "price_per_kg": price or 0.0,
+                "wastage_factor": _COMPOUND_WASTAGE_FACTOR,
+            })
+
+        if components:
+            block_versions.setdefault((mat, ptype), []).append(components)
+
+    # ── For each key, pick the most complete version (most non-zero ratios) ─
+    result: Dict[Tuple[str, str], List[dict]] = {}
+    for key, versions in block_versions.items():
+        best = max(versions, key=lambda v: sum(1 for c in v if c["ratio_kg"] > 0))
+        result[key] = best
+
+    return result
+
+
+def seed_compound_recipes(token: str, effective_month: str = "") -> dict:
+    """Read compound cost tab(s) and upsert recipes.
+
+    Sources:
+      'COMPOUND COST - P' → pipe recipes (UPVC PIPE, CPVC PIPE blocks)
+      'COMPOUND COST - F' → fitting recipes (UPVC/CPVC/SWR/AGRI MOULDING blocks)
+
+    SWR PIPE and AGRI PIPE have no ingredient-level recipe on file (the
+    dedicated tabs show item prices, not compound formulas).  Those combos
+    receive a needs_recipe=True placeholder.
+
+    When multiple blocks share the same label in a tab, the most complete
+    recipe (most non-zero ratio_kg values) is selected.
+    """
+    em = effective_month or current_month()
+    fid = _FILE_IDS["compound"]
+
+    # Read the two authoritative tabs
+    pipe_rows = sheets.read_values(fid, "COMPOUND COST - P", token)
+    fitting_rows = sheets.read_values(fid, "COMPOUND COST - F", token)
+
+    pipe_blocks = _parse_compound_tab(pipe_rows)
+    fitting_blocks = _parse_compound_tab(fitting_rows)
+
+    # Merge: pipe_blocks covers (mat, "pipe"); fitting_blocks covers (mat, "fitting")
+    all_blocks: Dict[Tuple[str, str], List[dict]] = {**pipe_blocks, **fitting_blocks}
+
+    all_records: List[MpCompoundRecipe] = []
+    combo_report: List[dict] = []
+
+    for material, mat_type in _COMPOUND_COMBOS:
+        components = all_blocks.get((material, mat_type))
+        if components:
+            for c in components:
+                all_records.append(MpCompoundRecipe(
+                    segment=SEGMENT,
+                    material=material,
+                    type=mat_type,
+                    component=c["component"],
+                    ratio_kg=c["ratio_kg"],
+                    price_per_kg=c["price_per_kg"],
+                    wastage_factor=c["wastage_factor"],
+                    needs_recipe=False,
+                    effective_month=em,
+                ))
+            total_ratio = sum(c["ratio_kg"] for c in components)
+            total_cost = sum(c["ratio_kg"] * c["price_per_kg"] for c in components)
+            tab = "COMPOUND COST - P" if mat_type == "pipe" else "COMPOUND COST - F"
+            eff_rate = (total_cost / (total_ratio * _COMPOUND_WASTAGE_FACTOR)
+                        if total_ratio > 0 else None)
+            combo_report.append({
+                "material": material, "type": mat_type,
+                "components": len(components),
+                "total_ratio_kg": round(total_ratio, 2),
+                "total_cost": round(total_cost, 2),
+                "effective_rate_per_kg": round(eff_rate, 2) if eff_rate else None,
+                "tab": tab,
+                "status": "found",
+            })
+        else:
+            all_records.append(MpCompoundRecipe(
+                segment=SEGMENT,
+                material=material,
+                type=mat_type,
+                component="",
+                ratio_kg=0.0,
+                price_per_kg=0.0,
+                wastage_factor=_COMPOUND_WASTAGE_FACTOR,
+                needs_recipe=True,
+                effective_month=em,
+            ))
+            combo_report.append({
+                "material": material, "type": mat_type,
+                "status": "needs_recipe",
+            })
+
+    count = mp_model.upsert_compound_recipe(all_records)
+    return {
+        "rows_loaded": count,
+        "combo_report": combo_report,
+        "effective_month": em,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. Params
+# ---------------------------------------------------------------------------
+
+def seed_params(effective_month: str = "") -> dict:
+    """Seed waste_pct=4, pulverizer_pct=25 for the segment."""
+    em = effective_month or current_month()
+    mp_model.upsert_params(MpParams(
+        segment=SEGMENT, waste_pct=4.0, pulverizer_pct=25.0, effective_month=em,
+    ))
+    return {"waste_pct": 4.0, "pulverizer_pct": 25.0, "effective_month": em}
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: seed_all
+# ---------------------------------------------------------------------------
+
+def seed_all(effective_month: str = "") -> dict:
+    """Seed all PLUMBING tables for the given month from Drive sources.
+
+    Checks Drive access for all 5 files FIRST.  Raises SeedAccessError listing
+    every inaccessible file instead of seeding partial data.
+
+    Returns a full report dict for acceptance-check logging.
+    """
+    if sheets.is_demo_mode():
+        raise SeedAccessError(
+            "No Google Sheets connector available (running in demo mode)."
+        )
+
+    token = sheets._get_access_token()
+    if not token:
+        raise SeedAccessError(
+            "Could not obtain a Google Sheets access token. "
+            "Please re-authorize the Google Sheets connection."
+        )
+
+    # ── 1. Drive access check ────────────────────────────────────────────────
+    access = check_drive_access(token)
+    failed = [name for name, ok in access.items() if not ok]
+    if failed:
+        raise SeedAccessError(
+            f"Cannot read the following Drive file(s): {', '.join(failed)}. "
+            "Verify that these files are shared with the connected Google account."
+        )
+
+    em = effective_month or current_month()
+    mp_model.init_mp_tables()
+    report: dict = {"effective_month": em, "drive_access": access}
+
+    # ── 2. BOM weights ──────────────────────────────────────────────────────
+    try:
+        report["bom"] = seed_bom_weights(token, em)
+    except Exception as exc:
+        raise SeedParseError(f"BOM seed failed: {exc}") from exc
+
+    # ── 3. Pipe routing + staffing ──────────────────────────────────────────
+    try:
+        report["pipe_routing"] = seed_pipe_routing(token, em)
+    except Exception as exc:
+        raise SeedParseError(f"Pipe routing seed failed: {exc}") from exc
+
+    # ── 4. Fitting routing + cavity/cycle ───────────────────────────────────
+    try:
+        report["fitting"] = seed_fitting_routing(token, em)
+    except Exception as exc:
+        raise SeedParseError(f"Fitting seed failed: {exc}") from exc
+
+    # ── 5. Per-hour rates ────────────────────────────────────────────────────
+    try:
+        report["per_hour"] = seed_per_hour(token, em)
+    except Exception as exc:
+        raise SeedParseError(f"Per-hour seed failed: {exc}") from exc
+
+    # ── 6. Compound recipes ─────────────────────────────────────────────────
+    try:
+        report["compound"] = seed_compound_recipes(token, em)
+    except Exception as exc:
+        raise SeedParseError(f"Compound seed failed: {exc}") from exc
+
+    # ── 7. Params ───────────────────────────────────────────────────────────
+    report["params"] = seed_params(em)
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# reset_defaults
+# ---------------------------------------------------------------------------
+
+def reset_defaults(segment: str, table: str, effective_month: str = "") -> dict:
+    """Re-seed one table to source defaults for the current effective_month.
+
+    ``table`` must be one of: bom, pipe_routing, fitting, per_hour, compound, params.
+    Raises SeedAccessError / SeedParseError on failure (same as seed_all).
+    """
+    if sheets.is_demo_mode():
+        raise SeedAccessError("No connector available.")
+
+    token = sheets._get_access_token()
+    if not token:
+        raise SeedAccessError("Could not obtain access token.")
+
+    em = effective_month or current_month()
+    mp_model.init_mp_tables()
+
+    dispatch = {
+        "bom":          lambda: seed_bom_weights(token, em),
+        "pipe_routing": lambda: seed_pipe_routing(token, em),
+        "fitting":      lambda: seed_fitting_routing(token, em),
+        "per_hour":     lambda: seed_per_hour(token, em),
+        "compound":     lambda: seed_compound_recipes(token, em),
+        "params":       lambda: seed_params(em),
+    }
+    if table not in dispatch:
+        raise ValueError(
+            f"Unknown table {table!r}. Must be one of: {list(dispatch)}."
+        )
+    result = dispatch[table]()
+    return {"segment": segment, "table": table, "effective_month": em, **result}
