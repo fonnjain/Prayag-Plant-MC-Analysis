@@ -213,26 +213,37 @@ class TestParseBomWeights:
 
 class TestParsePipeRouting:
     def _make_rows(self):
-        """Simulate 'Details' tab layout:
-        Row 0: irrelevant header
-        Row 1: staffing counts (W, OT pairs per machine)
-        Row 2: machine names
-        Row 3+: item codes in machine columns
+        """Simulate 'Details' tab layout (real geometry: A=Size in, B=Size mm,
+        then column pairs C/D=M/C-1, E/F=M/C-2, G/H=M/C-3, ... starting at col 2).
+
+        Row 0: W/OT labels  Row 1: staffing  Row 2: machine names  Row 3+: items.
+        We use 3 machine pairs (M/C-1..3) — remaining pairs 4..9 have no data.
         """
+        # Build a 20-col row (cols 0..19) for 9 pairs; only M/C-1..3 are populated
+        def _row(*vals):
+            """vals fills from col 0; rest padded with ''."""
+            return list(vals) + [""] * (20 - len(vals))
+
         return [
-            ["", "", "", "", ""],                        # row 0: top header
-            ["", "3", "1", "5", "1", "4", "2"],         # row 1: W, OT pairs
-            ["", "M/C-1", "", "M/C-2", "", "M/C-3", ""],# row 2: machine names
-            ["", "PW 11", "", "PW 11", "", "", ""],      # PW11 on M/C-1, M/C-2
-            ["", "PS-12", "", "", "", "PS-12", ""],      # PS12 on M/C-1, M/C-3
-            ["", "", "", "SWR 20", "", "", ""],          # SWR20 on M/C-2 only
+            # row 0: Size(in)/Size(mm) then W/OT labels
+            _row("Size (in)", "Size (mm)", "W", "OT", "W", "OT", "W", "OT"),
+            # row 1: staffing — W in first col, OT in second col of each pair
+            _row("", "", "3", "1", "5", "1", "4", "2"),
+            # row 2: machine names in first col of pair (real file: "M/C- 1" with space)
+            _row("", "", "M/C- 1", "", "M/C- 2", "", "M/C- 3", ""),
+            # row 3: PW11 on M/C-1 (CPVC) and M/C-2 (CPVC)
+            _row("3/4", "20mm", "PW 11", "CPVC", "PW 11", "CPVC", "", ""),
+            # row 4: PS12 on M/C-1 (CPVC) and M/C-3 (UPVC)
+            _row("", "20mm", "PS-12", "CPVC", "", "", "PS-12", "UPVC"),
+            # row 5: SWR20 on M/C-2 only
+            _row("", "20mm", "", "", "SWR 20", "SWR", "", ""),
         ]
 
-    def test_finds_three_machines(self):
+    def test_always_returns_nine_machines(self):
+        """Fixed-pair layout always yields exactly 9 extrusion machines."""
         rows = self._make_rows()
         _, machine_rows = parse_pipe_routing(rows)
-        names = {r["machine"] for r in machine_rows}
-        assert len(names) == 3
+        assert len(machine_rows) == 9
 
     def test_machine_names(self):
         rows = self._make_rows()
@@ -245,10 +256,24 @@ class TestParsePipeRouting:
     def test_mc1_staffing(self):
         rows = self._make_rows()
         _, machine_rows = parse_pipe_routing(rows)
-        mc1 = next(r for r in machine_rows if "1" in r["machine"] and "2" not in r["machine"] and "3" not in r["machine"])
-        # W=3, OT=1 at cols 1,2
+        mc1 = next(r for r in machine_rows if r["machine"] == "M/C-1")
         assert mc1["support_w"] == 3
         assert mc1["operators_ot"] == 1
+
+    def test_mc3_staffing(self):
+        rows = self._make_rows()
+        _, machine_rows = parse_pipe_routing(rows)
+        mc3 = next(r for r in machine_rows if r["machine"] == "M/C-3")
+        assert mc3["support_w"] == 4
+        assert mc3["operators_ot"] == 2
+
+    def test_space_in_machine_name_normalised(self):
+        """'M/C- 1' (space before digit) must normalise to 'M/C-1'."""
+        rows = self._make_rows()
+        _, machine_rows = parse_pipe_routing(rows)
+        names = {r["machine"] for r in machine_rows}
+        assert "M/C-1" in names
+        assert "M/C- 1" not in names
 
     def test_item_normalisation_in_routing(self):
         """'PW 11' in a machine column must be normalised to 'PW11' in routing."""
@@ -263,6 +288,13 @@ class TestParsePipeRouting:
         pairs = {(r["item_code"], r["machine"]) for r in routing_rows}
         assert ("PW11", "M/C-1") in pairs
         assert ("PS12", "M/C-1") in pairs
+
+    def test_empty_machine_has_no_routing(self):
+        """Machines beyond the populated pairs have 0 routing rows."""
+        rows = self._make_rows()
+        routing_rows, _ = parse_pipe_routing(rows)
+        mc9_items = [r for r in routing_rows if r["machine"] == "M/C-9"]
+        assert mc9_items == []
 
     def test_empty_rows_returns_empty(self):
         r, m = parse_pipe_routing([])

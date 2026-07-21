@@ -247,85 +247,77 @@ def _is_machine_name(cell: str) -> bool:
 def parse_pipe_routing(rows: List[list]) -> Tuple[List[dict], List[dict]]:
     """Parse "Details" tab for pipe routing and machine staffing.
 
-    Layout (1-indexed rows):
-    - Row 2: W and OT staffing counts in paired columns for each machine
-    - Row 3: machine names (M/C-1 .. M/C-9) in the leading columns of each pair
-    - Rows 4+: item codes appear in each machine's column(s) indicating capability
+    Fixed geometry (verified from the real file — do not re-derive):
+      Row 0 (0-indexed): Size(in), Size(mm), then repeating W/OT labels
+      Row 1 (0-indexed): "", "", then staffing counts (W in first col, OT in second)
+      Row 2 (0-indexed): "", "", then machine names in first col of each pair
+                         e.g. "M/C- 1" (note space before digit)
+      Rows 3+: item codes in first col of pair; material in second col
+
+    Column pairs (0-indexed, A=0/B=1 are sizes — skipped):
+      C/D=M/C-1 (2,3), E/F=M/C-2 (4,5), G/H=M/C-3 (6,7), I/J=M/C-4 (8,9),
+      K/L=M/C-5 (10,11), M/N=M/C-6 (12,13), O/P=M/C-7 (14,15),
+      Q/R=M/C-8 (16,17), S/T=M/C-9 (18,19)
 
     Returns:
         routing_rows: [{"item_code", "machine", "material"}, ...]
         machine_rows: [{"machine", "operators_ot", "support_w"}, ...]
     """
-    if len(rows) < 3:
+    if len(rows) < 4:
         return [], []
 
-    # Find the machine name row (row 3 by spec = 0-indexed 2)
-    # Scan rows 1..6 to be robust to header offsets
-    mc_row_idx = -1
-    for i in range(min(8, len(rows))):
-        row_text = " ".join(str(c) for c in rows[i])
-        if _MC_PATTERN.search(row_text):
-            mc_row_idx = i
-            break
-    if mc_row_idx < 0:
-        logger.warning("parse_pipe_routing: no machine-name row found in Details tab")
-        return [], []
+    staffing_row = rows[1]   # row 2 (1-indexed) = staffing counts
+    data_start   = 3         # rows 4+ (1-indexed) = item data
 
-    mc_row = rows[mc_row_idx]
-    staffing_row = rows[mc_row_idx - 1] if mc_row_idx > 0 else []
+    # Fixed pairs: 9 machines starting at col 2, stepping by 2
+    _PAIRS = [(2 + i * 2, 2 + i * 2 + 1) for i in range(9)]
 
-    # Identify machine columns: (col_index, machine_name)
-    machines: List[Tuple[int, str]] = []
-    for j, cell in enumerate(mc_row):
-        cell_s = str(cell).strip()
-        if _is_machine_name(cell_s):
-            machines.append((j, cell_s))
+    # Canonical machine names — strip the space the sheet inserts before the digit
+    def _canon_mc(raw: str) -> str:
+        """'M/C- 1' → 'M/C-1', 'M/C-2' → 'M/C-2'"""
+        s = re.sub(r"M/?C\s*-\s*", "M/C-", raw.strip(), flags=re.IGNORECASE)
+        return s
 
-    if not machines:
-        return [], []
-
-    # For each machine, extract W (support_w) and OT (operators_ot) from staffing_row.
-    # Layout: machine is at col j (first of pair); staffing_row[j]=W, staffing_row[j+1]=OT.
-    # The paired column j+1 carries the MATERIAL (e.g. CPVC/UPVC/SWR), NOT a second
-    # item-code column — track them separately.
     machine_rows: List[dict] = []
-    machine_code_col: Dict[str, int] = {}   # machine_name -> item-code column
-    machine_mat_col: Dict[str, int] = {}    # machine_name -> material column (j+1)
+    machine_code_col: Dict[str, int] = {}
+    machine_mat_col:  Dict[str, int] = {}
 
-    for j, mc_name in machines:
-        w_val = _to_float(_cell(staffing_row, j)) or 0
-        ot_val = _to_float(_cell(staffing_row, j + 1)) or 0
-        support_w = int(w_val)
-        operators_ot = int(ot_val)
+    for code_col, mat_col in _PAIRS:
+        mc_raw = _cell(rows[2], code_col)
+        mc_name = _canon_mc(mc_raw) if mc_raw else ""
+        if not mc_name:
+            # Derive from pair index as fallback
+            pair_idx = (code_col - 2) // 2 + 1
+            mc_name = f"M/C-{pair_idx}"
+
+        w_val  = _to_float(_cell(staffing_row, code_col)) or 0
+        ot_val = _to_float(_cell(staffing_row, mat_col))  or 0
         machine_rows.append({
-            "machine": mc_name,
-            "support_w": support_w,
-            "operators_ot": operators_ot,
+            "machine":      mc_name,
+            "support_w":    int(w_val),
+            "operators_ot": int(ot_val),
         })
-        machine_code_col[mc_name] = j
-        machine_mat_col[mc_name] = j + 1
+        machine_code_col[mc_name] = code_col
+        machine_mat_col[mc_name]  = mat_col
 
-    # Collect item-code → machine mappings from data rows below the machine row.
-    # routing maps (item_code, machine) -> material string.
+    # Collect routing from data rows
     routing: Dict[Tuple[str, str], str] = {}
-    for row in rows[mc_row_idx + 1:]:
+    for row in rows[data_start:]:
         if not any(str(c).strip() for c in row):
-            continue  # blank row
+            continue
         for mc_name, code_col in machine_code_col.items():
             cell_val = _cell(row, code_col)
             if not cell_val:
                 continue
             nc = norm_code(cell_val)
-            # Skip non-code values: too short, ERP IDs / OD decimals, boolean marks
             if len(nc) < 2:
                 continue
             if _is_spurious_numeric(nc):
                 continue
             if nc in ("TRUE", "FALSE", "YES", "NO", "X", "NA"):
                 continue
-            mat_raw = _cell(row, machine_mat_col[mc_name])
+            mat_raw  = _cell(row, machine_mat_col[mc_name])
             material = mat_raw.strip().upper() if mat_raw else ""
-            # Last entry wins (duplicate normalised codes are rare but possible)
             routing[(nc, mc_name)] = material
 
     routing_rows = [
