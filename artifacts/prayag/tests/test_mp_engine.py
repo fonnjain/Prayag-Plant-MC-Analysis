@@ -420,6 +420,48 @@ class TestDemandParsing:
         items = eng.parse_demand_excel(xlsx)
         assert len(items) == 1
 
+    def test_numeric_item_codes_kept_short_dropped_long(self):
+        """Short all-numeric codes (e.g. SWR fittings 5110, 5111) must NOT be
+        skipped; only decimal-size tokens (1.0, 104.8) and long ERP IDs
+        (>=8 digits) should be dropped.
+        """
+        from mp_engine import _is_skip_row
+
+        # Short numeric — valid item codes (SWR fittings)
+        assert _is_skip_row("5110", "") is False
+        assert _is_skip_row("5111", "") is False
+        assert _is_skip_row("5762", "") is False
+        assert _is_skip_row("1234567", "") is False   # 7 digits — still keep
+
+        # Decimal size tokens — must drop
+        assert _is_skip_row("1.0", "") is True        # row serial "1.0"
+        assert _is_skip_row("104.8", "") is True      # pipe size
+        assert _is_skip_row("63.5", "") is True
+
+        # Long ERP / row-serial IDs — must drop
+        assert _is_skip_row("12345678", "") is True   # 8 digits
+        assert _is_skip_row("123456789", "") is True  # 9 digits
+
+        # TOTAL / blank — still dropped
+        assert _is_skip_row("TOTAL", "") is True
+        assert _is_skip_row("", "") is True
+
+        # parse_fitting_demand must now include numeric SWR items
+        xlsx_fit = self._make_xlsx({
+            "SWR Fitting": [
+                ("Item Code", None),   # header — skip
+                ("5110", 16657),       # numeric code — KEEP
+                ("5111", 29436),       # numeric code — KEEP
+                ("TOTAL", 46093),      # total — skip
+            ],
+        })
+        from mp_engine import parse_fitting_demand
+        items = parse_fitting_demand(xlsx_fit)
+        codes = {it.item_code for it in items}
+        assert "5110" in codes, "5110 must be kept by the demand parser"
+        assert "5111" in codes, "5111 must be kept by the demand parser"
+        assert len(items) == 2
+
 
 # ── Serialisation round-trip ──────────────────────────────────────────────────
 

@@ -166,14 +166,25 @@ def _is_total_row(cell_a: str) -> bool:
 
 
 def _is_skip_row(cell_a: str, cell_d: str) -> bool:
-    """True for blank, header, or TOTAL rows."""
+    """True for blank, header, TOTAL, ERP-ID, or decimal-size rows.
+
+    Keeps short all-numeric item codes (e.g. SWR fittings 5110, 5111, 5762).
+    Only drops numeric tokens that are clearly NOT item codes:
+      - Decimal size values: "104.8", "1.0", "63.5" (digit.digit pattern)
+      - Long ERP / row-serial IDs: 8+ consecutive digits
+    """
     if not cell_a:
         return True
     if _is_total_row(cell_a):
         return True
-    # Skip pure numeric codes (row numbers, blank separators)
     nc = _norm_code(cell_a)
-    if not nc or nc.isdigit():
+    if not nc:
+        return True
+    # Decimal size tokens ("104.8", "1.0") — digits.digits, no letters
+    if re.match(r'^\d+\.\d+$', nc):
+        return True
+    # Long all-digit strings are ERP IDs or row serials, not item codes
+    if nc.isdigit() and len(nc) >= 8:
         return True
     # Skip header-like rows ("ITEM CODE", "SR.", etc.)
     if re.match(r"^(ITEM|SR|S\.?\s*NO|SERIAL|DESCRIPTION|PRODUCT)", nc, re.I):
