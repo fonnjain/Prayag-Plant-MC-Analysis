@@ -5062,9 +5062,12 @@ _MP2_RUN_CACHE: dict = {}
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str) -> str:
+def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str,
+                   fitting_demand_dicts: list | None = None) -> str:
     """Persist run to mp_plan_run (DB) or _MP2_RUN_CACHE. Returns run_id str."""
-    payload = {"demand": demand_dicts, "effective_month": effective_month,
+    payload = {"demand": demand_dicts,
+               "fitting_demand": fitting_demand_dicts or [],
+               "effective_month": effective_month,
                "segment": segment}
     try:
         from mp_model import MpPlanRun, insert_plan_run
@@ -5112,7 +5115,7 @@ def _mp2_load_run(run_id: str) -> dict | None:
 
 
 def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
-    """Re-run engine from stored demand in session."""
+    """Re-run pipe engine from stored demand in session."""
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -5128,6 +5131,31 @@ def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
         )
     except Exception as exc:
         app.logger.error("mp2 re-run failed: %s", exc)
+        return None
+
+
+def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None":
+    """Re-run fitting engine from stored fitting demand in session."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return None
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return None
+    fit_dicts = payload.get("fitting_demand") or []
+    if not fit_dicts:
+        return None
+    fitting_demand = [
+        _mp_engine.FittingDemandItem(**d) for d in fit_dicts
+    ]
+    try:
+        return _mp_engine.run_fitting_engine(
+            fitting_demand,
+            payload["effective_month"],
+            payload.get("segment", _mp_seed.SEGMENT),
+        )
+    except Exception as exc:
+        app.logger.error("mp3 fitting re-run failed: %s", exc)
         return None
 
 
@@ -5173,10 +5201,11 @@ def mp_upload():
         try:
             file_bytes = file.read()
             demand = _mp_engine.parse_demand_excel(file_bytes)
-            if not demand:
-                error = ("No pipe items found in the uploaded file. "
-                         "Check that the file has CPVC Pipe / UPVC Pipe / "
-                         "SWR Pipe / AGRI Pipe tabs with data in cols A and D.")
+            fitting_demand = _mp_engine.parse_fitting_demand(file_bytes)
+            if not demand and not fitting_demand:
+                error = ("No pipe or fitting items found in the uploaded file. "
+                         "Check that the file has CPVC/UPVC/SWR/AGRI Pipe or "
+                         "Fitting tabs with data in cols A and D.")
         except Exception as exc:
             error = f"Failed to parse Excel: {exc}"
 
@@ -5189,9 +5218,11 @@ def mp_upload():
             error=error,
         )
 
-    # Store demand & run_id in session
+    # Store pipe + fitting demand & run_id in session
     demand_dicts = [dataclasses.asdict(d) for d in demand]
-    run_id = _mp2_store_run(demand_dicts, month, _mp_seed.SEGMENT)
+    fitting_demand_dicts = [dataclasses.asdict(d) for d in fitting_demand]
+    run_id = _mp2_store_run(demand_dicts, month, _mp_seed.SEGMENT,
+                            fitting_demand_dicts=fitting_demand_dicts)
     session["mp2_run_id"] = run_id
     session["mp2_month"]  = month
     return redirect(url_for("mp_results"))
@@ -5201,19 +5232,30 @@ def mp_upload():
 def mp_results():
     """Show optimiser results for the most recently uploaded demand plan."""
     result = _mp2_result_from_session()
-    if result is None:
+    fitting_result = _mp3_fitting_result_from_session()
+    if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
 
-    baseline_by_mc = {ml.machine: ml for ml in result.baseline_machine_loads}
-    opt_peak   = max((ml.assigned_hrs for ml in result.machine_loads), default=0)
-    opt_peak_pct  = max((ml.utilisation_pct for ml in result.machine_loads), default=0)
-    base_peak  = max((ml.assigned_hrs for ml in result.baseline_machine_loads), default=0)
-    base_peak_pct = max((ml.utilisation_pct for ml in result.baseline_machine_loads), default=0)
-    n_estimated = sum(1 for it in result.items if it.rate_estimated)
+    # Pipe section stats
+    baseline_by_mc = {ml.machine: ml for ml in result.baseline_machine_loads} if result else {}
+    opt_peak       = max((ml.assigned_hrs    for ml in result.machine_loads),          default=0) if result else 0
+    opt_peak_pct   = max((ml.utilisation_pct for ml in result.machine_loads),          default=0) if result else 0
+    base_peak      = max((ml.assigned_hrs    for ml in result.baseline_machine_loads), default=0) if result else 0
+    base_peak_pct  = max((ml.utilisation_pct for ml in result.baseline_machine_loads), default=0) if result else 0
+    n_estimated    = sum(1 for it in result.items if it.rate_estimated) if result else 0
+
+    # Fitting section stats
+    fit_baseline_by_mc = {ml.machine: ml for ml in fitting_result.baseline_machine_loads} if fitting_result else {}
+    fit_opt_peak      = max((ml.assigned_hrs    for ml in fitting_result.machine_loads),          default=0) if fitting_result else 0
+    fit_opt_peak_pct  = max((ml.utilisation_pct for ml in fitting_result.machine_loads),          default=0) if fitting_result else 0
+    fit_base_peak     = max((ml.assigned_hrs    for ml in fitting_result.baseline_machine_loads), default=0) if fitting_result else 0
+    fit_base_peak_pct = max((ml.utilisation_pct for ml in fitting_result.baseline_machine_loads), default=0) if fitting_result else 0
+    fit_n_estimated   = sum(1 for it in fitting_result.items if it.rate_estimated) if fitting_result else 0
 
     return render_template(
         "machine_planning_results.html",
         result=result,
+        fitting_result=fitting_result,
         baseline_by_mc=baseline_by_mc,
         opt_peak_hrs=opt_peak,
         opt_peak_pct=opt_peak_pct,
@@ -5221,22 +5263,47 @@ def mp_results():
         base_peak_pct=base_peak_pct,
         n_estimated=n_estimated,
         groups=_mp_engine.REPORT_11_GROUPS,
+        fit_baseline_by_mc=fit_baseline_by_mc,
+        fit_opt_peak_hrs=fit_opt_peak,
+        fit_opt_peak_pct=fit_opt_peak_pct,
+        fit_base_peak_hrs=fit_base_peak,
+        fit_base_peak_pct=fit_base_peak_pct,
+        fit_n_estimated=fit_n_estimated,
     )
 
 
 @app.route("/machine-planning/report/<report_id>")
 def mp_report_download(report_id: str):
-    """Download Report-11 or Report-11A/B/C/D as .xlsx.
+    """Download Report-11/11A-D (pipe) or Report-12 (fittings) as .xlsx.
 
-    Allowed report_id: '11', '11A', '11B', '11C', '11D'.
-    Re-runs the engine from the stored demand so the file is always fresh.
+    Allowed: '11', '11A', '11B', '11C', '11D', '12'.
+    Re-runs the engine from stored demand so the file is always fresh.
     """
     from flask import send_file as _send_file
 
-    allowed = {"11", "11A", "11B", "11C", "11D"}
+    allowed = {"11", "11A", "11B", "11C", "11D", "12"}
     if report_id not in allowed:
         abort(404)
 
+    # Report-12 — fittings
+    if report_id == "12":
+        fitting_result = _mp3_fitting_result_from_session()
+        if fitting_result is None:
+            return redirect(url_for("mp_upload"))
+        try:
+            xlsx_bytes = _mp_reports.report_12_bytes(fitting_result)
+            filename = f"Report-12_Fitting_Plan_{fitting_result.effective_month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_report_download 12 failed: %s", exc)
+            abort(500)
+        return _send_file(
+            io.BytesIO(xlsx_bytes),
+            mimetype=_XLSX_MIME,
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    # Report-11 / 11A-D — pipes
     result = _mp2_result_from_session()
     if result is None:
         return redirect(url_for("mp_upload"))

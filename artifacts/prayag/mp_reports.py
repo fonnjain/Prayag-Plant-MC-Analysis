@@ -274,3 +274,213 @@ def report_11x_bytes(result: EngineResult, group: str) -> bytes:
         filter_label=", ".join(machines),
     )
     return _wb_bytes(wb)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REPORT-12 — MOULDING PLAN (MP-3 fittings)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Exact plant layout: header at row 6 (rows 1-5 = title block).
+# Columns (16 total):
+#   DATE | MATERIAL | ITEM CODE | Moulding Machine | Mould Cavity |
+#   Run Cavity | No. of Cycle | Pcs | Wt in Kgs | Cycle Time |
+#   Running Hours | Ideal Output Per Hour | Actual Output Per Hour |
+#   Output Efficiency | Rejection Pcs | Rejection Kg
+#
+# PLAN fields populated: material, item code, machine, mould cavity,
+#   run cavity (=mould cavity), no. of cycle, pcs, wt in kgs,
+#   cycle time (sec), running hours, ideal output per hour.
+# Actuals-only columns left blank: actual output per hour,
+#   output efficiency, rejection pcs, rejection kg.
+
+_R12_COLS = [
+    "DATE",
+    "MATERIAL",
+    "ITEM CODE",
+    "Moulding Machine",
+    "Mould Cavity",
+    "Run Cavity",
+    "No. of Cycle",
+    "Pcs",
+    "Wt in Kgs",
+    "Cycle Time",
+    "Running Hours",
+    "Ideal Output Per Hour",
+    "Actual Output Per Hour",
+    "Output Efficiency",
+    "Rejection Pcs",
+    "Rejection Kg",
+]
+
+
+def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[name-defined]
+    """Return Report-12 planning .xlsx for the given fitting engine result."""
+    from mp_engine import FittingEngineResult, FittingItemResult, FittingAssignedPortion
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Report-12"
+
+    month  = result.effective_month      # e.g. "2026-07"
+    seg    = result.segment
+
+    # ── Style helpers ────────────────────────────────────────────────────────
+    title_font  = Font(bold=True, size=13, color="FFFFFF")
+    header_font = Font(bold=True, size=10)
+    plan_font   = Font(color="1F3864")   # navy
+    plan_fill   = PatternFill("solid", fgColor="EBF0FA")
+    sub_fill    = PatternFill("solid", fgColor="D9E1F2")
+
+    thin  = Side(style="thin")
+    med   = Side(style="medium")
+    bord_header = Border(left=med, right=med, top=med, bottom=med)
+    bord_data   = Border(left=thin, right=thin, top=thin, bottom=thin)
+    bord_total  = Border(left=med, right=med, top=med, bottom=med)
+    center_aln  = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_aln    = Alignment(horizontal="left",   vertical="center")
+
+    def _hfmt(cell: Any, val: Any) -> None:
+        cell.value     = val
+        cell.font      = header_font
+        cell.fill      = sub_fill
+        cell.border    = bord_header
+        cell.alignment = center_aln
+
+    def _dfmt(cell: Any, val: Any, bold: bool = False) -> None:
+        cell.value     = val
+        cell.font      = Font(bold=bold, size=10, color="1F3864")
+        cell.fill      = plan_fill
+        cell.border    = bord_data
+        cell.alignment = left_aln
+
+    # ── Title block (rows 1-5) ───────────────────────────────────────────────
+    ws.merge_cells("A1:P1")
+    t1 = ws["A1"]
+    t1.value     = f"PRAYAG PIPES & FITTINGS — MOULDING SECTION"
+    t1.font      = title_font
+    t1.fill      = PatternFill("solid", fgColor="1F3864")
+    t1.alignment = center_aln
+
+    ws.merge_cells("A2:P2")
+    t2 = ws["A2"]
+    t2.value     = "REPORT-12  ·  PRODUCTION PLAN (FITTINGS)"
+    t2.font      = Font(bold=True, size=11, color="1F3864")
+    t2.alignment = center_aln
+
+    ws.merge_cells("A3:P3")
+    t3 = ws["A3"]
+    t3.value     = f"Month: {month}   |   Segment: {seg}"
+    t3.font      = Font(size=10, italic=True)
+    t3.alignment = center_aln
+
+    ws.merge_cells("A4:P4")
+    t4 = ws["A4"]
+    t4.value     = "Status: MACHINE PLAN (actuals-only columns left blank)"
+    t4.font      = Font(size=9, italic=True, color="C55A11")
+    t4.alignment = center_aln
+
+    ws.merge_cells("A5:P5")
+    # blank spacer row
+
+    # ── Header row 6 ─────────────────────────────────────────────────────────
+    for col_idx, col_name in enumerate(_R12_COLS, start=1):
+        cell = ws.cell(row=6, column=col_idx)
+        _hfmt(cell, col_name)
+    ws.row_dimensions[6].height = 36
+
+    # ── Column widths ─────────────────────────────────────────────────────────
+    _widths = [12, 9, 14, 18, 12, 12, 13, 10, 12, 12, 14, 20, 22, 16, 14, 12]
+    for i, w in enumerate(_widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # ── Data rows (row 7 onward) ──────────────────────────────────────────────
+    row = 7
+    machine_totals: dict = {}   # for summary at bottom
+
+    routable_items = [
+        it for it in result.items
+        if it.has_weight and it.has_machine and it.assignments
+    ]
+    # Sort by material, then item_code for readability
+    routable_items = sorted(routable_items, key=lambda x: (x.material, x.item_code))
+
+    for it in routable_items:
+        for a in it.assignments:
+            mc          = a.machine
+            qty_a       = a.qty_pcs
+            mat_kg_a    = a.material_kg
+            hrs_a       = a.hrs
+            cavity      = it.cavity
+            cycle       = it.cycle_time_sec
+            ideal_pps   = it.pcs_per_hr  # cavity × 3600 / cycle  (or fallback)
+            wt_a        = round(qty_a * (it.weight_per_pc_kg or 0.0), 3)
+            num_cycles_a = round(qty_a / cavity) if (cavity and cavity > 0) else None
+
+            row_vals = [
+                month,           # DATE (planning month)
+                it.material,     # MATERIAL
+                it.item_code,    # ITEM CODE
+                mc,              # Moulding Machine
+                cavity,          # Mould Cavity
+                cavity,          # Run Cavity (plan = mould cavity)
+                num_cycles_a,    # No. of Cycle
+                round(qty_a),    # Pcs
+                wt_a,            # Wt in Kgs
+                cycle,           # Cycle Time (sec)
+                round(hrs_a, 3), # Running Hours
+                round(ideal_pps, 2) if ideal_pps else None,  # Ideal Output Per Hour
+                None,            # Actual Output Per Hour (blank — plan)
+                None,            # Output Efficiency (blank — plan)
+                None,            # Rejection Pcs (blank — plan)
+                None,            # Rejection Kg (blank — plan)
+            ]
+            for col_idx, val in enumerate(row_vals, start=1):
+                _dfmt(ws.cell(row=row, column=col_idx), val)
+
+            # Accumulate machine totals
+            if mc not in machine_totals:
+                machine_totals[mc] = {"hrs": 0.0, "pcs": 0.0, "wt_kg": 0.0}
+            machine_totals[mc]["hrs"]   += hrs_a
+            machine_totals[mc]["pcs"]   += qty_a
+            machine_totals[mc]["wt_kg"] += wt_a
+            row += 1
+
+    # ── Coverage gaps block ───────────────────────────────────────────────────
+    row += 1
+    ws.merge_cells(f"A{row}:P{row}")
+    gap_cell = ws.cell(row=row, column=1)
+    no_wt    = len(result.coverage_gaps.no_weight)
+    no_mc    = len(result.coverage_gaps.no_machine)
+    gap_cell.value = (
+        f"Coverage: {len(routable_items)} items planned  |  "
+        f"No-weight flagged: {no_wt}  |  "
+        f"No-machine (unroutable): {no_mc}  |  "
+        f"Material-level fallback used: {result.n_route_estimated} items"
+    )
+    gap_cell.font      = Font(bold=True, italic=True, size=9, color="C55A11")
+    gap_cell.alignment = left_aln
+    row += 2
+
+    # ── Per-machine summary ───────────────────────────────────────────────────
+    ws.merge_cells(f"A{row}:P{row}")
+    ws.cell(row=row, column=1).value = "MACHINE SUMMARY"
+    ws.cell(row=row, column=1).font  = Font(bold=True, size=10, color="FFFFFF")
+    ws.cell(row=row, column=1).fill  = PatternFill("solid", fgColor="1F3864")
+    ws.cell(row=row, column=1).alignment = center_aln
+    row += 1
+
+    sum_headers = ["Machine", "Planned Hours", "Total Pcs", "Total Wt (kg)"]
+    for ci, h in enumerate(sum_headers, start=1):
+        c = ws.cell(row=row, column=ci)
+        _hfmt(c, h)
+    row += 1
+
+    for mc in sorted(machine_totals):
+        t = machine_totals[mc]
+        _dfmt(ws.cell(row=row, column=1), mc, bold=True)
+        _dfmt(ws.cell(row=row, column=2), round(t["hrs"], 3))
+        _dfmt(ws.cell(row=row, column=3), round(t["pcs"]))
+        _dfmt(ws.cell(row=row, column=4), round(t["wt_kg"], 2))
+        row += 1
+
+    return _wb_bytes(wb)
