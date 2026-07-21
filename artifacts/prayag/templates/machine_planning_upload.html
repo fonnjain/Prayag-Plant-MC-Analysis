@@ -2,13 +2,24 @@
 {% block content %}
 <div style="padding:0 .75rem 5rem; max-width:540px; margin:0 auto;">
 
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
+    <a href="{{ url_for('mp_home') }}"
+       style="font-size:.75rem;color:#6b7280;text-decoration:none;
+              border:1px solid #d1d5db;border-radius:.3rem;padding:.2rem .45rem;">
+      ← Home
+    </a>
+    <span style="font-size:.75rem;background:#e0f2fe;color:#0369a1;
+                 border-radius:99px;padding:.1rem .5rem;font-weight:600;">
+      🏭 Plumbing
+    </span>
+  </div>
   <div style="margin-bottom:1rem;">
     <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
-      Machine Planning · Upload Demand
+      Upload Weekly Release Plan
     </h2>
     <p style="font-size:.73rem;color:#6b7280;margin:.2rem 0 0;">
-      Weekly release-plan Excel — 12 category tabs. Only the four Pipe tabs are read:
-      <em>CPVC Pipe, UPVC Pipe, SWR Pipe, AGRI Pipe</em>.
+      Excel with Pipe tabs (<em>CPVC, UPVC, SWR, AGRI Pipe</em>) and Fitting tabs
+      (<em>CPVC, UPVC, SWR, AGRI Fitting</em>).
       Col&nbsp;A&nbsp;=&nbsp;Item Code, Col&nbsp;D&nbsp;=&nbsp;Production Plan (pcs).
     </p>
   </div>

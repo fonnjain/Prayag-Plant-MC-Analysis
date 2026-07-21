@@ -5057,13 +5057,89 @@ import mp_engine as _mp_engine        # noqa: E402
 import mp_reports as _mp_reports      # noqa: E402
 
 # In-process run cache (fallback when Postgres unavailable).
-# Key = run_id (str); value = {"demand": [...], "effective_month": str}
+# Key = run_id (str); value = {"demand": [...], "fitting_demand": [...], ...}
 _MP2_RUN_CACHE: dict = {}
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(_UPLOADS_DIR, exist_ok=True)
+
+
+def _build_frozen_inputs(month: str, segment: str) -> dict:
+    """Snapshot all mp_* seed data for month/segment into a JSON-safe dict."""
+    import mp_model as _mpm
+    try:
+        prm = _mpm.get_params(segment, month)
+        return {
+            "segment": segment,
+            "month": month,
+            "params": dataclasses.asdict(prm) if prm else None,
+            "bom": _mpm.get_bom_weight_rows(segment, month),
+            "per_hour": _mpm.get_per_hour(segment, month),
+            "routing": _mpm.get_routing(segment, month),
+            "fitting_std": _mpm.get_fitting_std(segment, month),
+            "machines": _mpm.get_machines(segment, month),
+            "compound_recipe": _mpm.get_compound_recipes(segment, month),
+        }
+    except Exception as exc:
+        app.logger.warning("_build_frozen_inputs: %s", exc)
+        return {"segment": segment, "month": month, "error": str(exc)}
+
+
+def _reconstruct_display_vars(run_row: dict) -> dict:
+    """Build template vars from a frozen plan-run DB row (results JSON)."""
+    results   = run_row.get("results") or {}
+    pipe_r    = results.get("pipe") or {}
+    fitting_r = results.get("fitting") or {}
+
+    ml_list  = pipe_r.get("machine_loads") or []
+    bml_list = pipe_r.get("baseline_machine_loads") or []
+    baseline_by_mc = {ml["machine"]: ml for ml in bml_list}
+    opt_peak     = max((ml["assigned_hrs"]    for ml in ml_list),  default=0)
+    opt_peak_pct = max((ml["utilisation_pct"] for ml in ml_list),  default=0)
+    base_peak     = max((ml["assigned_hrs"]    for ml in bml_list), default=0)
+    base_peak_pct = max((ml["utilisation_pct"] for ml in bml_list), default=0)
+    n_estimated  = sum(1 for it in (pipe_r.get("items") or []) if it.get("rate_estimated"))
+
+    fml_list  = fitting_r.get("machine_loads") or []
+    fbml_list = fitting_r.get("baseline_machine_loads") or []
+    fit_baseline_by_mc = {ml["machine"]: ml for ml in fbml_list}
+    fit_opt_peak     = max((ml["assigned_hrs"]    for ml in fml_list),  default=0)
+    fit_opt_peak_pct = max((ml["utilisation_pct"] for ml in fml_list),  default=0)
+    fit_base_peak     = max((ml["assigned_hrs"]    for ml in fbml_list), default=0)
+    fit_base_peak_pct = max((ml["utilisation_pct"] for ml in fbml_list), default=0)
+    fit_n_estimated  = sum(1 for it in (fitting_r.get("items") or []) if it.get("rate_estimated"))
+
+    pt = pipe_r.get("totals") or {}
+    ft = fitting_r.get("totals") or {}
+    combined_material_kg = (pt.get("routable_material_kg") or 0) + (ft.get("routable_material_kg") or 0)
+    combined_fresh_kg    = (pt.get("routable_fresh_compound_kg") or 0) + (ft.get("routable_fresh_compound_kg") or 0)
+    combined_pulv_kg     = (pt.get("routable_pulverizer_kg") or 0) + (ft.get("routable_pulverizer_kg") or 0)
+
+    return dict(
+        result=pipe_r or None,
+        fitting_result=fitting_r or None,
+        baseline_by_mc=baseline_by_mc,
+        opt_peak_hrs=opt_peak,
+        opt_peak_pct=opt_peak_pct,
+        base_peak_hrs=base_peak,
+        base_peak_pct=base_peak_pct,
+        n_estimated=n_estimated,
+        groups=_mp_engine.REPORT_11_GROUPS,
+        fit_baseline_by_mc=fit_baseline_by_mc,
+        fit_opt_peak_hrs=fit_opt_peak,
+        fit_opt_peak_pct=fit_opt_peak_pct,
+        fit_base_peak_hrs=fit_base_peak,
+        fit_base_peak_pct=fit_base_peak_pct,
+        fit_n_estimated=fit_n_estimated,
+        combined_material_kg=combined_material_kg,
+        combined_fresh_kg=combined_fresh_kg,
+        combined_pulv_kg=combined_pulv_kg,
+    )
 
 
 def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str,
-                   fitting_demand_dicts: list | None = None) -> str:
+                   fitting_demand_dicts: list | None = None,
+                   file_path: str = "") -> str:
     """Persist run to mp_plan_run (DB) or _MP2_RUN_CACHE. Returns run_id str."""
     payload = {"demand": demand_dicts,
                "fitting_demand": fitting_demand_dicts or [],
@@ -5075,9 +5151,11 @@ def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str,
             segment=segment,
             month=effective_month,
             uploaded_demand=demand_dicts,
+            fitting_demand=fitting_demand_dicts or [],
             frozen_inputs=None,
             results=None,
             status="pending",
+            uploaded_file_path=file_path,
         )
         db_id = insert_plan_run(row)
         run_id = str(db_id)
@@ -5096,17 +5174,20 @@ def _mp2_load_run(run_id: str) -> dict | None:
         return _MP2_RUN_CACHE[run_id]
     # Try DB
     try:
-        from mp_model import MpModelError
         import mp_model as _mpm
         with _mpm._conn() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT segment, month, uploaded_demand FROM mp_plan_run WHERE id=%s",
+                "SELECT segment, month, uploaded_demand, fitting_demand FROM mp_plan_run WHERE id=%s",
                 (int(run_id),)
             )
             row = cur.fetchone()
         if row:
-            payload = {"segment": row[0], "effective_month": row[1],
-                       "demand": row[2] if isinstance(row[2], list) else []}
+            payload = {
+                "segment": row[0],
+                "effective_month": row[1],
+                "demand": row[2] if isinstance(row[2], list) else [],
+                "fitting_demand": row[3] if isinstance(row[3], list) else [],
+            }
             _MP2_RUN_CACHE[run_id] = payload
             return payload
     except Exception:
@@ -5157,6 +5238,22 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
     except Exception as exc:
         app.logger.error("mp3 fitting re-run failed: %s", exc)
         return None
+
+
+@app.route("/machine-planning")
+def mp_home():
+    """Machine Planning landing — category selector + recent plan runs."""
+    try:
+        from mp_model import list_plan_runs, init_mp_tables
+        init_mp_tables()
+        runs = list_plan_runs(_mp_seed.SEGMENT, limit=10)
+    except Exception:
+        runs = []
+    return render_template(
+        "machine_planning_home.html",
+        runs=runs,
+        segment=_mp_seed.SEGMENT,
+    )
 
 
 @app.route("/machine-planning/upload", methods=["GET", "POST"])
@@ -5223,6 +5320,20 @@ def mp_upload():
     fitting_demand_dicts = [dataclasses.asdict(d) for d in fitting_demand]
     run_id = _mp2_store_run(demand_dicts, month, _mp_seed.SEGMENT,
                             fitting_demand_dicts=fitting_demand_dicts)
+
+    # Persist raw Excel to disk and update DB with path
+    try:
+        _file_path = os.path.join(_UPLOADS_DIR, f"mp_{run_id}.xlsx")
+        with open(_file_path, "wb") as _fh:
+            _fh.write(file_bytes)
+        try:
+            from mp_model import update_plan_run_file_path
+            update_plan_run_file_path(int(run_id), _file_path)
+        except Exception:
+            pass
+    except Exception as _fe:
+        app.logger.warning("mp file save: %s", _fe)
+
     session["mp2_run_id"] = run_id
     session["mp2_month"]  = month
     return redirect(url_for("mp_results"))
@@ -5231,6 +5342,7 @@ def mp_upload():
 @app.route("/machine-planning/results")
 def mp_results():
     """Show optimiser results for the most recently uploaded demand plan."""
+    run_id = session.get("mp2_run_id")
     result = _mp2_result_from_session()
     fitting_result = _mp3_fitting_result_from_session()
     if result is None and fitting_result is None:
@@ -5252,6 +5364,20 @@ def mp_results():
     fit_base_peak_pct = max((ml.utilisation_pct for ml in fitting_result.baseline_machine_loads), default=0) if fitting_result else 0
     fit_n_estimated   = sum(1 for it in fitting_result.items if it.rate_estimated) if fitting_result else 0
 
+    # Combined totals
+    combined_material_kg = (
+        (result.totals.routable_material_kg if result else 0) +
+        (fitting_result.totals.routable_material_kg if fitting_result else 0)
+    )
+    combined_fresh_kg = (
+        (result.totals.routable_fresh_compound_kg if result else 0) +
+        (fitting_result.totals.routable_fresh_compound_kg if fitting_result else 0)
+    )
+    combined_pulv_kg = (
+        (result.totals.routable_pulverizer_kg if result else 0) +
+        (fitting_result.totals.routable_pulverizer_kg if fitting_result else 0)
+    )
+
     return render_template(
         "machine_planning_results.html",
         result=result,
@@ -5269,6 +5395,12 @@ def mp_results():
         fit_base_peak_hrs=fit_base_peak,
         fit_base_peak_pct=fit_base_peak_pct,
         fit_n_estimated=fit_n_estimated,
+        combined_material_kg=combined_material_kg,
+        combined_fresh_kg=combined_fresh_kg,
+        combined_pulv_kg=combined_pulv_kg,
+        run_id=run_id,
+        frozen=False,
+        run_status="pending",
     )
 
 
@@ -5330,6 +5462,136 @@ def mp_report_download(report_id: str):
         as_attachment=True,
         download_name=filename,
     )
+
+
+# ---------------------------------------------------------------------------
+# MP-4: Freeze / Finalize / Run history routes
+# ---------------------------------------------------------------------------
+
+@app.route("/machine-planning/freeze", methods=["POST"])
+def mp_freeze():
+    """Freeze the current session's plan run — writes frozen_inputs + results."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return redirect(url_for("mp_upload"))
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return redirect(url_for("mp_upload"))
+
+    result         = _mp2_result_from_session()
+    fitting_result = _mp3_fitting_result_from_session()
+
+    month   = payload.get("effective_month", "")
+    segment = payload.get("segment", _mp_seed.SEGMENT)
+
+    frozen_inputs     = _build_frozen_inputs(month, segment)
+    results_snapshot  = {
+        "pipe":    dataclasses.asdict(result)         if result         else None,
+        "fitting": dataclasses.asdict(fitting_result) if fitting_result else None,
+    }
+
+    try:
+        from mp_model import update_plan_run_freeze
+        update_plan_run_freeze(int(run_id), frozen_inputs, results_snapshot)
+    except Exception as exc:
+        app.logger.error("mp_freeze: %s", exc)
+
+    return redirect(url_for("mp_run_list"))
+
+
+@app.route("/machine-planning/runs")
+def mp_run_list():
+    """List past plan runs."""
+    try:
+        from mp_model import list_plan_runs, init_mp_tables
+        init_mp_tables()
+        runs = list_plan_runs(_mp_seed.SEGMENT, limit=40)
+    except Exception:
+        runs = []
+    return render_template("machine_planning_runs.html", runs=runs)
+
+
+@app.route("/machine-planning/runs/<int:run_id>")
+def mp_run_detail(run_id: int):
+    """View a frozen plan run read-only."""
+    from mp_model import get_plan_run_by_id
+    row = get_plan_run_by_id(run_id)
+    if not row:
+        abort(404)
+    if not row.get("results"):
+        return render_template(
+            "machine_planning_runs.html",
+            runs=[],
+            error=f"Run #{run_id} has not been frozen yet (status: {row.get('status','?')}). "
+                  "Upload and freeze a run first.",
+        )
+    vars_ = _reconstruct_display_vars(row)
+    return render_template(
+        "machine_planning_run_detail.html",
+        run_row=row,
+        run_id=run_id,
+        run_status=row.get("status", "draft"),
+        frozen=True,
+        **vars_,
+    )
+
+
+@app.route("/machine-planning/runs/<int:run_id>/finalize", methods=["POST"])
+def mp_run_finalize(run_id: int):
+    """Lock a plan run as finalized (immutable)."""
+    try:
+        from mp_model import finalize_plan_run
+        finalize_plan_run(run_id)
+    except Exception as exc:
+        app.logger.error("mp_run_finalize %s: %s", run_id, exc)
+    return redirect(url_for("mp_run_detail", run_id=run_id))
+
+
+@app.route("/machine-planning/runs/<int:run_id>/report/<report_id>")
+def mp_frozen_run_report(run_id: int, report_id: str):
+    """Download a report from a frozen run (re-runs engine from stored demand)."""
+    from flask import send_file as _send_file2
+    from mp_model import get_plan_run_by_id
+
+    allowed = {"11", "11A", "11B", "11C", "11D", "12"}
+    if report_id not in allowed:
+        abort(404)
+    row = get_plan_run_by_id(run_id)
+    if not row:
+        abort(404)
+
+    if report_id == "12":
+        fit_dicts = row.get("fitting_demand") or []
+        if not fit_dicts:
+            abort(404)
+        fit_dm = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
+        try:
+            fres      = _mp_engine.run_fitting_engine(fit_dm, row["month"], row.get("segment", _mp_seed.SEGMENT))
+            xlsx_b    = _mp_reports.report_12_bytes(fres)
+            fname     = f"Report-12_Fitting_Plan_{row['month']}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report 12: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME, as_attachment=True, download_name=fname)
+
+    demand_dicts = row.get("uploaded_demand") or []
+    if not demand_dicts:
+        abort(404)
+    dm = [_mp_engine.DemandItem(**d) for d in demand_dicts]
+    try:
+        res = _mp_engine.run_engine(dm, row["month"], row.get("segment", _mp_seed.SEGMENT))
+        if report_id == "11":
+            xlsx_b = _mp_reports.report_11_bytes(res)
+            fname  = f"Report-11_Pipe_Plan_{row['month']}.xlsx"
+        else:
+            grp    = report_id[2:]
+            xlsx_b = _mp_reports.report_11x_bytes(res, grp)
+            mcs    = "_".join(m.replace("/", "").replace(" ", "") for m in _mp_engine.REPORT_11_GROUPS.get(grp, []))
+            fname  = f"Report-11{grp}_{mcs}_{row['month']}.xlsx"
+    except Exception as exc:
+        app.logger.error("mp_frozen_run_report %s: %s", report_id, exc)
+        abort(500)
+    return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME, as_attachment=True, download_name=fname)
 
 
 # ---------------------------------------------------------------------------

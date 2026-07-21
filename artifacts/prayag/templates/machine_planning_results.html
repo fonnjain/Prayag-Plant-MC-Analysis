@@ -16,6 +16,20 @@
               border:1px solid var(--terra);border-radius:.35rem;padding:.2rem .5rem;">
       ↩ New Upload
     </a>
+    {% if run_id and not frozen %}
+    <form method="post" action="{{ url_for('mp_freeze') }}" style="margin:0;">
+      <button type="submit"
+              style="background:var(--navy);color:#fff;border:none;border-radius:.35rem;
+                     padding:.25rem .65rem;font-size:.78rem;font-weight:700;cursor:pointer;">
+        ❄️ Freeze Plan
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('mp_run_list') }}"
+       style="font-size:.76rem;color:#6b7280;text-decoration:none;
+              border:1px solid #d1d5db;border-radius:.35rem;padding:.2rem .5rem;">
+      📋 Runs
+    </a>
   </div>
 
   {# ── Estimated-rate notice ──────────────────────────────────────────── #}
@@ -57,6 +71,27 @@
     </div>
     {% endfor %}
   </div>
+
+  {# ── Combined material summary (pipe + fitting) ──────────────────── #}
+  {% if combined_material_kg %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.7rem;margin-bottom:.9rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .55rem;
+               text-transform:uppercase;letter-spacing:.05em;">Combined Material (Pipe + Fitting)</h3>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;">
+      {% for lbl,val,bg,fg in [
+          ('Total (kg)', combined_material_kg, '#e0e7ff', '#4338ca'),
+          ('Fresh (kg)',  combined_fresh_kg,   '#d1fae5', '#065f46'),
+          ('Pulv (kg)',   combined_pulv_kg,    '#fef3c7', '#92400e'),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.45rem;padding:.5rem .6rem;">
+        <div style="font-size:.65rem;font-weight:700;color:{{ fg }};text-transform:uppercase;">{{ lbl }}</div>
+        <div style="font-size:.95rem;font-weight:800;color:{{ fg }};">{{ "{:,.0f}".format(val) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 
   {# ── Coverage gaps ────────────────────────────────────────────────── #}
   {% set gaps = result.coverage_gaps %}
@@ -143,9 +178,14 @@
                      color:{{ '#c55a11' if over else '#065f46' }};">
             {{ "{:,.1f}".format(ml.assigned_hrs) }}
           </td>
-          <td style="padding:.3rem .5rem;text-align:right;font-weight:700;
-                     color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
-            {{ "{:.1f}".format(ml.utilisation_pct) }}%
+          <td style="padding:.3rem .5rem;text-align:right;">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%
+            </div>
+            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
+              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
+                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
+            </div>
           </td>
           {% if bl %}
           {% set b_over = bl.utilisation_pct > 100 %}
@@ -417,9 +457,14 @@
                      color:{{ '#c55a11' if over else '#065f46' }};">
             {{ "{:,.1f}".format(ml.assigned_hrs) }}
           </td>
-          <td style="padding:.3rem .5rem;text-align:right;font-weight:700;
-                     color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
-            {{ "{:.1f}".format(ml.utilisation_pct) }}%
+          <td style="padding:.3rem .5rem;text-align:right;">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%
+            </div>
+            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
+              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
+                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
+            </div>
           </td>
           {% if bl %}
           {% set b_over = bl.utilisation_pct > 100 %}

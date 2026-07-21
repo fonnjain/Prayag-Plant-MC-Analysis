@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:0 .75rem 5rem; max-width:900px; margin:0 auto;">
+
+  {# ── Header ────────────────────────────────────────────────────────────── #}
+  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
+    <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
+      Frozen Run #{{ run_id }}
+    </h2>
+    {% if result %}
+    <span style="font-size:.75rem;color:#6b7280;background:#f3f4f6;
+                 border-radius:99px;padding:.15rem .6rem;">
+      {{ result.effective_month }} · {{ result.segment }}
+    </span>
+    {% endif %}
+    <span style="font-size:.72rem;border-radius:99px;padding:.15rem .55rem;
+                 {% if run_status=='finalized' %}background:#d1fae5;color:#065f46;
+                 {% else %}background:#fef3c7;color:#92400e;{% endif %}">
+      {{ run_status }}
+    </span>
+    {% if run_row.created_at %}
+    <span style="font-size:.7rem;color:#9ca3af;">
+      {{ run_row.created_at.strftime('%d-%m-%Y %H:%M') }}
+    </span>
+    {% endif %}
+    <a href="{{ url_for('mp_run_list') }}"
+       style="margin-left:auto;font-size:.76rem;color:#6b7280;text-decoration:none;
+              border:1px solid #d1d5db;border-radius:.35rem;padding:.2rem .5rem;">
+      ← Runs
+    </a>
+    {% if run_status == 'draft' %}
+    <form method="post" action="{{ url_for('mp_run_finalize', run_id=run_id) }}" style="margin:0;">
+      <button type="submit"
+              style="background:#065f46;color:#fff;border:none;border-radius:.35rem;
+                     padding:.25rem .65rem;font-size:.78rem;font-weight:700;cursor:pointer;">
+        ✅ Finalize
+      </button>
+    </form>
+    {% elif run_status == 'finalized' %}
+    <span style="font-size:.75rem;color:#065f46;font-weight:700;">✅ Finalized</span>
+    {% endif %}
+  </div>
+
+  {# ── Combined material summary ─────────────────────────────────────────── #}
+  {% if combined_material_kg %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.7rem;margin-bottom:.9rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .55rem;
+               text-transform:uppercase;letter-spacing:.05em;">Combined Material</h3>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;">
+      {% for lbl,val,bg,fg in [
+          ('Total (kg)', combined_material_kg, '#e0e7ff', '#4338ca'),
+          ('Fresh (kg)',  combined_fresh_kg,   '#d1fae5', '#065f46'),
+          ('Pulv (kg)',   combined_pulv_kg,    '#fef3c7', '#92400e'),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.45rem;padding:.5rem .6rem;">
+        <div style="font-size:.65rem;font-weight:700;color:{{ fg }};text-transform:uppercase;">{{ lbl }}</div>
+        <div style="font-size:.95rem;font-weight:800;color:{{ fg }};">{{ "{:,.0f}".format(val) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Pipe section ─────────────────────────────────────────────────────── #}
+  {% if result and result.machine_loads %}
+  <div style="border-left:3px solid var(--navy);padding-left:.6rem;margin-bottom:.6rem;">
+    <span style="font-size:.78rem;font-weight:800;color:var(--navy);">PIPE · Extrusion Machines</span>
+    <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
+      Opt peak: {{ "{:.1f}".format(opt_peak_hrs) }}h ({{ "{:.1f}".format(opt_peak_pct) }}%) ·
+      Base peak: {{ "{:.1f}".format(base_peak_hrs) }}h ({{ "{:.1f}".format(base_peak_pct) }}%)
+    </span>
+  </div>
+
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:.75rem;">
+      <thead>
+        <tr style="background:var(--navy);color:#fff;">
+          <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Cap h</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt h</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Days</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Mat kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ml in result.machine_loads %}
+        {% set bl = baseline_by_mc.get(ml.machine) %}
+        {% set over = ml.utilisation_pct > 100 %}
+        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
+          <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
+                     color:{{ '#c55a11' if over else '#065f46' }};">
+            {{ "{:,.1f}".format(ml.assigned_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct>60 else '#6b7280') }};">
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%
+            </div>
+            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
+              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
+                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
+            </div>
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if bl and bl.utilisation_pct>100 else '#4b5563' }};">
+            {% if bl %}{{ "{:.1f}".format(bl.utilisation_pct) }}%{% else %}—{% endif %}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:.1f}".format(ml.machine_days) }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.material_kg) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# Coverage gaps — pipe #}
+  {% set gaps = result.coverage_gaps %}
+  {% if gaps.no_weight or gaps.no_machine or gaps.locked_out_machines or gaps.idle_machines %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.65rem;margin-bottom:1rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .5rem;">
+      Pipe Coverage Gaps
+    </h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.45rem;font-size:.72rem;">
+      {% if gaps.no_weight %}
+      <div style="background:#fee2e2;border-radius:.4rem;padding:.5rem .65rem;">
+        <strong style="color:#991b1b;">No BOM weight — {{ gaps.no_weight|length }}</strong>
+        <div style="color:#7f1d1d;line-height:1.5;margin-top:.2rem;">
+          {% for ic in gaps.no_weight[:10] %}{{ ic }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% if gaps.no_weight|length > 10 %} +{{ gaps.no_weight|length - 10 }} more{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if gaps.no_machine %}
+      <div style="background:#fef3c7;border-radius:.4rem;padding:.5rem .65rem;">
+        <strong style="color:#92400e;">No capable machine — {{ gaps.no_machine|length }}</strong>
+        <div style="color:#78350f;line-height:1.5;margin-top:.2rem;">
+          {% for ic in gaps.no_machine[:10] %}{{ ic }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% if gaps.no_machine|length > 10 %} +{{ gaps.no_machine|length - 10 }} more{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if gaps.locked_out_machines %}
+      <div style="background:#f3f4f6;border-radius:.4rem;padding:.5rem .65rem;">
+        🔒 <strong style="color:#374151;">Locked-out:</strong>
+        {{ gaps.locked_out_machines | join(", ") }}
+      </div>
+      {% endif %}
+      {% if gaps.idle_machines %}
+      <div style="background:#f0f9ff;border-radius:.4rem;padding:.5rem .65rem;">
+        💤 <strong style="color:#0369a1;">Idle:</strong> {{ gaps.idle_machines | join(", ") }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Pipe downloads #}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.65rem;margin-bottom:1rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .5rem;">
+      Download — Pipe Reports
+    </h3>
+    <div style="display:flex;flex-wrap:wrap;gap:.45rem;">
+      <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11') }}"
+         style="background:var(--navy);color:#fff;text-decoration:none;
+                padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:700;">
+        📥 Report-11
+      </a>
+      {% for g in ['A','B','C','D'] %}
+      <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11'+g) }}"
+         style="background:var(--terra);color:#fff;text-decoration:none;
+                padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:600;">
+        📥 11{{ g }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}{# end pipe section #}
+
+  {# ── Fitting section ──────────────────────────────────────────────────── #}
+  {% if fitting_result and fitting_result.machine_loads %}
+  <div style="border-top:2px solid var(--navy);margin:1.2rem 0 .8rem;"></div>
+
+  <div style="border-left:3px solid var(--terra);padding-left:.6rem;margin-bottom:.6rem;">
+    <span style="font-size:.78rem;font-weight:800;color:var(--navy);">FITTINGS · Moulding Machines</span>
+    <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
+      Opt peak: {{ "{:.1f}".format(fit_opt_peak_hrs) }}h ({{ "{:.1f}".format(fit_opt_peak_pct) }}%) ·
+      Base peak: {{ "{:.1f}".format(fit_base_peak_hrs) }}h ({{ "{:.1f}".format(fit_base_peak_pct) }}%)
+    </span>
+  </div>
+
+  {% set fgaps = fitting_result.coverage_gaps %}
+  {% if fgaps.no_weight or fgaps.no_machine or fitting_result.n_route_estimated %}
+  <div style="display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.65rem;font-size:.75rem;">
+    {% if fgaps.no_weight %}
+    <span style="background:#fee2e2;color:#991b1b;border-radius:99px;padding:.15rem .55rem;">
+      ⚠ {{ fgaps.no_weight|length }} no-weight
+    </span>
+    {% endif %}
+    {% if fgaps.no_machine %}
+    <span style="background:#fef3c7;color:#92400e;border-radius:99px;padding:.15rem .55rem;">
+      ⚠ {{ fgaps.no_machine|length }} unroutable
+    </span>
+    {% endif %}
+    {% if fitting_result.n_route_estimated %}
+    <span style="background:#eff6ff;color:#1e40af;border-radius:99px;padding:.15rem .55rem;">
+      ℹ {{ fitting_result.n_route_estimated }} material-fallback
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:.75rem;">
+      <thead>
+        <tr style="background:var(--navy);color:#fff;">
+          <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Cap h</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt h</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Days</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Mat kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ml in fitting_result.machine_loads %}
+        {% set bl = fit_baseline_by_mc.get(ml.machine) %}
+        {% set over = ml.utilisation_pct > 100 %}
+        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
+          <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
+                     color:{{ '#c55a11' if over else '#065f46' }};">
+            {{ "{:,.1f}".format(ml.assigned_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct>60 else '#6b7280') }};">
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%
+            </div>
+            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
+              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
+                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
+            </div>
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if bl and bl.utilisation_pct>100 else '#4b5563' }};">
+            {% if bl %}{{ "{:.1f}".format(bl.utilisation_pct) }}%{% else %}—{% endif %}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:.1f}".format(ml.machine_days) }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.material_kg) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# Fitting download #}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.65rem;margin-bottom:1rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .5rem;">
+      Download — Fittings Report
+    </h3>
+    <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='12') }}"
+       style="display:inline-block;background:var(--navy);color:#fff;text-decoration:none;
+              padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:700;">
+      📥 Report-12 (Moulding Plan)
+    </a>
+  </div>
+  {% endif %}{# end fitting section #}
+
+</div>
+{% endblock %}

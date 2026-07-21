@@ -115,10 +115,12 @@ class MpParams:
 class MpPlanRun:
     segment: str
     month: str
-    uploaded_demand: Any = None     # JSON-serialisable
+    uploaded_demand: Any = None     # JSON-serialisable (pipe demand dicts)
+    fitting_demand: Any = None      # JSON-serialisable (fitting demand dicts)
     frozen_inputs: Any = None       # snapshot of all seed inputs at run time
-    results: Any = None             # optimiser output
-    status: str = "draft"           # 'draft' | 'finalized'
+    results: Any = None             # optimiser output (pipe + fitting)
+    status: str = "pending"         # 'pending' | 'draft' (frozen) | 'finalized'
+    uploaded_file_path: str = ""    # path to .xlsx saved on disk
     created_at: Optional[datetime.datetime] = None
 
 
@@ -211,16 +213,23 @@ CREATE TABLE IF NOT EXISTS mp_params (
 );
 
 CREATE TABLE IF NOT EXISTS mp_plan_run (
-    id               BIGSERIAL   PRIMARY KEY,
-    segment          TEXT        NOT NULL,
-    month            TEXT        NOT NULL,
-    uploaded_demand  JSONB,
-    frozen_inputs    JSONB,
-    results          JSONB,
-    status           TEXT        NOT NULL DEFAULT 'draft',
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id                   BIGSERIAL   PRIMARY KEY,
+    segment              TEXT        NOT NULL,
+    month                TEXT        NOT NULL,
+    uploaded_demand      JSONB,
+    fitting_demand       JSONB,
+    frozen_inputs        JSONB,
+    results              JSONB,
+    status               TEXT        NOT NULL DEFAULT 'pending',
+    uploaded_file_path   TEXT        NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mp_plan_run_natural UNIQUE (segment, month, created_at)
 );
+"""
+
+_MIGRATIONS = """
+ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS fitting_demand       JSONB;
+ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS uploaded_file_path   TEXT NOT NULL DEFAULT '';
 """
 
 
@@ -232,6 +241,10 @@ def init_mp_tables() -> None:
     try:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(_DDL)
+            for stmt in _MIGRATIONS.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    cur.execute(stmt)
         _INITIALISED = True
     except Exception as e:
         raise MpModelError(f"init_mp_tables failed: {e}") from e
@@ -506,8 +519,9 @@ def insert_plan_run(row: MpPlanRun) -> int:
     init_mp_tables()
     sql = """
         INSERT INTO mp_plan_run
-            (segment, month, uploaded_demand, frozen_inputs, results, status)
-        VALUES (%s,%s,%s,%s,%s,%s)
+            (segment, month, uploaded_demand, fitting_demand,
+             frozen_inputs, results, status, uploaded_file_path)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """
     try:
@@ -515,14 +529,101 @@ def insert_plan_run(row: MpPlanRun) -> int:
             cur.execute(sql, (
                 row.segment, row.month,
                 json.dumps(row.uploaded_demand) if row.uploaded_demand is not None else None,
+                json.dumps(row.fitting_demand) if row.fitting_demand is not None else None,
                 json.dumps(row.frozen_inputs) if row.frozen_inputs is not None else None,
                 json.dumps(row.results) if row.results is not None else None,
                 row.status,
+                row.uploaded_file_path or "",
             ))
             new_id = cur.fetchone()[0]
         return new_id
     except Exception as e:
         raise MpModelError(f"insert_plan_run: {e}") from e
+
+
+def update_plan_run_file_path(run_id: int, file_path: str) -> None:
+    """Set uploaded_file_path after file has been saved to disk."""
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE mp_plan_run SET uploaded_file_path=%s WHERE id=%s",
+                (file_path, run_id),
+            )
+    except Exception as e:
+        raise MpModelError(f"update_plan_run_file_path: {e}") from e
+
+
+def update_plan_run_freeze(run_id: int, frozen_inputs: Any, results: Any) -> None:
+    """Write frozen_inputs + results snapshot; set status='draft'."""
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE mp_plan_run
+                   SET frozen_inputs=%s, results=%s, status='draft'
+                   WHERE id=%s AND status != 'finalized'""",
+                (
+                    json.dumps(frozen_inputs),
+                    json.dumps(results),
+                    run_id,
+                ),
+            )
+    except Exception as e:
+        raise MpModelError(f"update_plan_run_freeze: {e}") from e
+
+
+def finalize_plan_run(run_id: int) -> None:
+    """Lock a plan run (status → 'finalized', immutable thereafter)."""
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE mp_plan_run SET status='finalized' WHERE id=%s AND status='draft'",
+                (run_id,),
+            )
+    except Exception as e:
+        raise MpModelError(f"finalize_plan_run: {e}") from e
+
+
+def list_plan_runs(segment: str, limit: int = 30) -> list:
+    """Return most-recent plan runs for the segment, newest first."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """SELECT id, segment, month, status, uploaded_file_path, created_at
+                   FROM mp_plan_run
+                   WHERE segment=%s
+                   ORDER BY created_at DESC
+                   LIMIT %s""",
+                (segment, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_plan_run_by_id(run_id: int) -> Optional[dict]:
+    """Return a single plan run as a dict (or None if not found)."""
+    if not AVAILABLE:
+        return None
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """SELECT id, segment, month, uploaded_demand, fitting_demand,
+                          frozen_inputs, results, status, uploaded_file_path, created_at
+                   FROM mp_plan_run WHERE id=%s""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

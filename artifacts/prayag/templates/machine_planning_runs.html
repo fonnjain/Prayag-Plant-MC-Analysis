@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:0 .75rem 5rem; max-width:720px; margin:0 auto;">
+
+  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
+    <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
+      Plan Runs
+    </h2>
+    <a href="{{ url_for('mp_home') }}"
+       style="margin-left:auto;font-size:.76rem;color:#6b7280;text-decoration:none;
+              border:1px solid #d1d5db;border-radius:.35rem;padding:.2rem .5rem;">
+      ← Home
+    </a>
+    <a href="{{ url_for('mp_upload') }}"
+       style="font-size:.76rem;color:#fff;background:var(--terra);text-decoration:none;
+              border-radius:.35rem;padding:.25rem .6rem;font-weight:700;">
+      + New Plan
+    </a>
+  </div>
+
+  {% if error is defined and error %}
+  <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:.5rem;
+              padding:.65rem .9rem;margin-bottom:.85rem;font-size:.82rem;color:#991b1b;">
+    ⚠️ {{ error }}
+  </div>
+  {% endif %}
+
+  {% if runs %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow:hidden;">
+    <table style="width:100%;border-collapse:collapse;font-size:.78rem;">
+      <thead>
+        <tr style="background:var(--navy);color:#fff;">
+          <th style="padding:.45rem .6rem;text-align:left;">Run</th>
+          <th style="padding:.45rem .6rem;text-align:left;">Month</th>
+          <th style="padding:.45rem .6rem;text-align:left;">Created</th>
+          <th style="padding:.45rem .6rem;text-align:center;">Status</th>
+          <th style="padding:.45rem .6rem;text-align:center;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr style="background:{{ '#f0fdf4' if run.status=='finalized' else ('#fffbeb' if run.status=='draft' else '#fff') }};
+                   border-bottom:1px solid #f3f4f6;">
+          <td style="padding:.4rem .6rem;font-weight:700;color:var(--navy);">#{{ run.id }}</td>
+          <td style="padding:.4rem .6rem;">{{ run.month }}</td>
+          <td style="padding:.4rem .6rem;color:#6b7280;font-size:.73rem;">
+            {{ run.created_at.strftime('%d-%m-%Y %H:%M') if run.created_at else '—' }}
+          </td>
+          <td style="padding:.4rem .6rem;text-align:center;">
+            <span style="font-size:.7rem;border-radius:99px;padding:.1rem .5rem;
+                         {% if run.status=='finalized' %}background:#d1fae5;color:#065f46;
+                         {% elif run.status=='draft' %}background:#fef3c7;color:#92400e;
+                         {% else %}background:#f3f4f6;color:#6b7280;{% endif %}">
+              {{ run.status }}
+            </span>
+          </td>
+          <td style="padding:.4rem .6rem;text-align:center;">
+            {% if run.status in ('draft', 'finalized') %}
+            <a href="{{ url_for('mp_run_detail', run_id=run.id) }}"
+               style="font-size:.75rem;color:var(--terra);text-decoration:none;
+                      border:1px solid var(--terra);border-radius:.3rem;padding:.15rem .4rem;">
+              View
+            </a>
+            {% else %}
+            <span style="font-size:.73rem;color:#9ca3af;">pending</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="background:#f9fafb;border-radius:.6rem;padding:1.5rem;text-align:center;
+              font-size:.82rem;color:#6b7280;">
+    No frozen plan runs yet.
+    <a href="{{ url_for('mp_upload') }}" style="color:var(--terra);">Upload one →</a>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

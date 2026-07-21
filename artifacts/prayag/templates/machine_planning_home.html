@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:0 .75rem 5rem; max-width:600px; margin:0 auto;">
+
+  <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0 0 .25rem;">
+    Machine Planning
+  </h2>
+  <p style="font-size:.73rem;color:#6b7280;margin:0 0 1.1rem;">
+    Upload a weekly release-plan Excel and run the pipe + fitting optimisers.
+  </p>
+
+  {# Category selector #}
+  <div style="display:flex;gap:.65rem;margin-bottom:1.25rem;">
+    <a href="{{ url_for('mp_upload') }}"
+       style="flex:1;background:var(--navy);color:#fff;text-align:center;
+              text-decoration:none;padding:.8rem .5rem;border-radius:.55rem;
+              font-size:.95rem;font-weight:700;letter-spacing:.01em;">
+      🏭 Plumbing
+      <div style="font-size:.68rem;font-weight:400;opacity:.75;margin-top:.15rem;">
+        Pipe + Fitting
+      </div>
+    </a>
+    <div style="flex:1;background:#f3f4f6;color:#9ca3af;text-align:center;
+                padding:.8rem .5rem;border-radius:.55rem;font-size:.95rem;
+                font-weight:700;cursor:not-allowed;user-select:none;">
+      🔩 PTMT
+      <div style="font-size:.68rem;font-weight:400;margin-top:.15rem;">Coming soon</div>
+    </div>
+  </div>
+
+  {# Quick links #}
+  <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;">
+    <a href="{{ url_for('mp_run_list') }}"
+       style="flex:1;background:#eff6ff;color:#1e40af;text-align:center;
+              text-decoration:none;padding:.55rem;border-radius:.4rem;
+              font-size:.82rem;font-weight:600;">
+      📋 Plan Runs{% if runs %} ({{ runs|length }}){% endif %}
+    </a>
+    <a href="{{ url_for('mp_data_view') }}"
+       style="flex:1;background:#f0fdf4;color:#065f46;text-align:center;
+              text-decoration:none;padding:.55rem;border-radius:.4rem;
+              font-size:.82rem;font-weight:600;">
+      ⚙️ MP·Data
+    </a>
+  </div>
+
+  {# Recent runs #}
+  {% if runs %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:.75rem;">
+    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .6rem;">
+      Recent Plan Runs
+    </h3>
+    {% for run in runs[:5] %}
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:.45rem 0;{% if not loop.last %}border-bottom:1px solid #f3f4f6;{% endif %}">
+      <div>
+        <span style="font-size:.8rem;font-weight:700;color:var(--navy);">
+          {{ run.month }}
+        </span>
+        <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
+          #{{ run.id }} ·
+          {{ run.created_at.strftime('%d-%m-%Y') if run.created_at else '—' }}
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem;">
+        <span style="font-size:.68rem;border-radius:99px;padding:.1rem .45rem;
+                     {% if run.status == 'finalized' %}background:#d1fae5;color:#065f46;
+                     {% elif run.status == 'draft' %}background:#fef3c7;color:#92400e;
+                     {% else %}background:#f3f4f6;color:#6b7280;{% endif %}">
+          {{ run.status }}
+        </span>
+        {% if run.status in ('draft', 'finalized') %}
+        <a href="{{ url_for('mp_run_detail', run_id=run.id) }}"
+           style="font-size:.72rem;color:var(--terra);text-decoration:none;">
+          View →
+        </a>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% if runs|length > 5 %}
+    <a href="{{ url_for('mp_run_list') }}"
+       style="display:block;text-align:center;font-size:.76rem;
+              color:var(--terra);margin-top:.6rem;text-decoration:none;">
+      View all {{ runs|length }} runs →
+    </a>
+    {% endif %}
+  </div>
+  {% else %}
+  <div style="background:#f9fafb;border-radius:.6rem;padding:1.5rem;text-align:center;
+              font-size:.82rem;color:#6b7280;">
+    No plan runs yet — click <strong>Plumbing</strong> above to upload a weekly release plan.
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
