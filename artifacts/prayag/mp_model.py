@@ -434,6 +434,51 @@ def upsert_compound_recipe(rows: List[MpCompoundRecipe]) -> int:
         raise MpModelError(f"upsert_compound_recipe: {e}") from e
 
 
+def clean_extrusion_routing(segment: str, effective_month: str) -> None:
+    """DELETE extrusion machines and M/C-%% routing rows before a fresh pipe re-seed."""
+    if not AVAILABLE:
+        return
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM mp_machine "
+                "WHERE segment=%s AND effective_month=%s AND kind='extrusion'",
+                (segment, effective_month),
+            )
+            cur.execute(
+                "DELETE FROM mp_routing "
+                "WHERE segment=%s AND effective_month=%s AND machine LIKE 'M/C-%%'",
+                (segment, effective_month),
+            )
+    except Exception as e:
+        raise MpModelError(f"clean_extrusion_routing: {e}") from e
+
+
+def clean_moulding_routing(segment: str, effective_month: str) -> None:
+    """DELETE moulding machines, non-M/C routing rows, and fitting_std rows."""
+    if not AVAILABLE:
+        return
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM mp_machine "
+                "WHERE segment=%s AND effective_month=%s AND kind='moulding'",
+                (segment, effective_month),
+            )
+            cur.execute(
+                "DELETE FROM mp_routing "
+                "WHERE segment=%s AND effective_month=%s AND machine NOT LIKE 'M/C-%%'",
+                (segment, effective_month),
+            )
+            cur.execute(
+                "DELETE FROM mp_fitting_std "
+                "WHERE segment=%s AND effective_month=%s",
+                (segment, effective_month),
+            )
+    except Exception as e:
+        raise MpModelError(f"clean_moulding_routing: {e}") from e
+
+
 def upsert_params(row: MpParams) -> int:
     init_mp_tables()
     sql = """

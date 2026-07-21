@@ -19,6 +19,7 @@ from mp_seed import (
     _cell,
     _header_map,
     _find_header_row,
+    _is_spurious_numeric,
     parse_bom_weights,
     parse_pipe_routing,
     parse_fitting_routing,
@@ -733,3 +734,232 @@ class TestAcceptanceCounts:
         for r in result:
             assert " " not in r["item_code"]
             assert "-" not in r["item_code"]
+
+
+# ===========================================================================
+# _is_spurious_numeric (FIX 3)
+# ===========================================================================
+
+class TestIsSpuriousNumeric:
+    """Unit tests for the whitelist-style numeric filter."""
+
+    # ── Codes that MUST be kept (return False) ────────────────────────────
+    def test_keeps_4digit_integer(self):
+        """4-digit numeric codes like 5110 are real fitting item codes."""
+        assert _is_spurious_numeric("5110") is False
+
+    def test_keeps_5110(self):
+        """Regression: item 5110 from the verified source must not be dropped."""
+        assert _is_spurious_numeric("5110") is False
+
+    def test_keeps_5111(self):
+        assert _is_spurious_numeric("5111") is False
+
+    def test_keeps_5digit_integer(self):
+        assert _is_spurious_numeric("51210") is False
+
+    def test_keeps_7digit_integer(self):
+        assert _is_spurious_numeric("5121001") is False
+
+    def test_keeps_alpha_code(self):
+        assert _is_spurious_numeric("PW11") is False
+
+    def test_keeps_alphanumeric(self):
+        assert _is_spurious_numeric("PS12") is False
+
+    # ── Codes that MUST be dropped (return True) ──────────────────────────
+    def test_drops_8digit_erp_id(self):
+        """8-digit pure integers are internal ERP IDs."""
+        assert _is_spurious_numeric("33000778") is True
+
+    def test_drops_9digit_erp_id(self):
+        assert _is_spurious_numeric("330007789") is True
+
+    def test_drops_decimal_od(self):
+        """Decimals like '104.8' are OD sizes, not item codes."""
+        assert _is_spurious_numeric("104.8") is True
+
+    def test_drops_small_decimal(self):
+        assert _is_spurious_numeric("11.8") is True
+
+    def test_drops_zero_decimal(self):
+        assert _is_spurious_numeric("0.5") is True
+
+
+# ===========================================================================
+# FIX 3 regression: numeric codes survive BOM and per-hour parsers
+# ===========================================================================
+
+class TestNumericCodeSurvival:
+    """5110, 5111 must pass through all parsers after the _is_spurious_numeric fix."""
+
+    def test_bom_keeps_5110(self):
+        rows = [
+            ["Item Code", "Weight/pc(kg)"],
+            ["5110", "0.120"],
+            ["5111", "0.095"],
+            ["PS12", "0.085"],
+        ]
+        result = parse_bom_weights(rows)
+        codes = {r["item_code"] for r in result}
+        assert "5110" in codes, f"5110 must not be filtered; got {codes}"
+        assert "5111" in codes
+
+    def test_bom_still_drops_erp_id(self):
+        rows = [
+            ["Item Code", "Weight/pc(kg)"],
+            ["33000778", "0.500"],  # 8-digit ERP ID → must be dropped
+            ["PS12", "0.085"],
+        ]
+        result = parse_bom_weights(rows)
+        codes = {r["item_code"] for r in result}
+        assert "33000778" not in codes
+        assert "PS12" in codes
+
+    def test_bom_still_drops_decimal_od(self):
+        rows = [
+            ["Item Code", "Weight/pc(kg)"],
+            ["104.8", "0.500"],  # OD size → must be dropped
+            ["PS12", "0.085"],
+        ]
+        result = parse_bom_weights(rows)
+        codes = {r["item_code"] for r in result}
+        assert "1048" not in codes  # norm_code("104.8") = "1048" → decimal detected pre-norm
+        assert "PS12" in codes
+
+    def test_per_hour_fitting_keeps_5110(self):
+        """Fitting cycle-time tab: numeric item codes must survive."""
+        rows = [
+            ["CPVC FITTING CYCLE TIME", "", ""],
+            ["Item Code", "Description", "Cycle Time (sec)"],
+            ["5110", "Elbow 20mm", "22"],
+            ["5111", "Tee 20mm", "24"],
+            ["PS12", "Socket 12mm", "18"],
+        ]
+        result = parse_per_hour(rows, "CPVC", "cycle")
+        codes = {r["item_code"] for r in result}
+        assert "5110" in codes, f"5110 must survive parse_per_hour; got {codes}"
+        assert "5111" in codes
+        assert "PS12" in codes
+
+    def test_per_hour_erp_id_dropped(self):
+        rows = [
+            ["Item Code", "Description", "Cycle Time (sec)"],
+            ["33000778", "ERP row", "20"],
+            ["PS12", "Socket", "18"],
+        ]
+        result = parse_per_hour(rows, "CPVC", "cycle")
+        codes = {r["item_code"] for r in result}
+        assert "33000778" not in codes
+        assert "PS12" in codes
+
+
+# ===========================================================================
+# FIX 1: pipe routing — material column (paired second col = material, not code)
+# ===========================================================================
+
+class TestParsePipeRoutingMaterial:
+    """Verify that the second column of each machine pair is read as material,
+    not as a second item-code column."""
+
+    def _make_rows_with_material(self):
+        """Layout matching real Pipes_details:
+        Row 0: W/OT labels at cols C,D (idx 2,3) repeating
+        Row 1: staffing counts
+        Row 2: machine names in first col of each pair (C=2, E=4)
+        Row 3+: item code in col j, material in col j+1
+        """
+        return [
+            ["", "", "W", "OT", "W", "OT"],          # row 0: labels
+            ["", "", "3",  "1", "5",  "1"],            # row 1: staffing counts
+            ["", "", "M/C-1", "", "M/C-2", ""],        # row 2: machine names
+            ["", "", "PW11", "CPVC", "PW11", "UPVC"],  # PW11 on both, diff material
+            ["", "", "PS12", "CPVC", "",     ""],       # PS12 on M/C-1 only
+            ["", "", "",     "",     "SWR20","SWR"],    # SWR20 on M/C-2 only
+        ]
+
+    def test_material_not_treated_as_item_code(self):
+        """'CPVC'/'UPVC'/'SWR' in material column must NOT appear as item codes."""
+        rows = self._make_rows_with_material()
+        routing_rows, _ = parse_pipe_routing(rows)
+        codes = {r["item_code"] for r in routing_rows}
+        assert "CPVC" not in codes
+        assert "UPVC" not in codes
+        assert "SWR" not in codes
+
+    def test_material_stored_in_routing_row(self):
+        rows = self._make_rows_with_material()
+        routing_rows, _ = parse_pipe_routing(rows)
+        by_pair = {(r["item_code"], r["machine"]): r["material"] for r in routing_rows}
+        assert by_pair.get(("PW11", "M/C-1")) == "CPVC"
+        assert by_pair.get(("PW11", "M/C-2")) == "UPVC"
+        assert by_pair.get(("SWR20", "M/C-2")) == "SWR"
+
+    def test_correct_item_codes_still_loaded(self):
+        rows = self._make_rows_with_material()
+        routing_rows, _ = parse_pipe_routing(rows)
+        codes = {r["item_code"] for r in routing_rows}
+        assert "PW11" in codes
+        assert "PS12" in codes
+        assert "SWR20" in codes
+
+    def test_staffing_correct(self):
+        rows = self._make_rows_with_material()
+        _, machine_rows = parse_pipe_routing(rows)
+        by_mc = {r["machine"]: r for r in machine_rows}
+        assert by_mc["M/C-1"]["support_w"] == 3
+        assert by_mc["M/C-1"]["operators_ot"] == 1
+        assert by_mc["M/C-2"]["support_w"] == 5
+        assert by_mc["M/C-2"]["operators_ot"] == 1
+
+    def test_idle_machine_no_items(self):
+        """A machine column with no item codes → machine seeded, 0 routing rows for it."""
+        rows = [
+            ["", "", "W", "OT", "W", "OT"],
+            ["", "", "3",  "1", "4",  "1"],
+            ["", "", "M/C-1", "", "M/C-2", ""],   # M/C-2 has no items below
+            ["", "", "PW11", "CPVC", "", ""],
+        ]
+        routing_rows, machine_rows = parse_pipe_routing(rows)
+        mc_names = {r["machine"] for r in machine_rows}
+        assert "M/C-2" in mc_names  # machine still seeded
+        mc2_items = [r for r in routing_rows if r["machine"] == "M/C-2"]
+        assert mc2_items == []      # but zero routing rows
+
+
+# ===========================================================================
+# FIX 2: per-hour — kg/hr column header (SWR tab style)
+# ===========================================================================
+
+class TestParsePerHourKgHr:
+    """SWR-style tabs may use 'KG/HR' instead of 'Production Per Hour'."""
+
+    def _make_swr_rows(self):
+        return [
+            ["SWR PLANING", "", "", "", ""],
+            ["Period:", "June 2026", "", "", ""],
+            ["", "", "", "", ""],
+            ["Item Code", "Description", "Size", "KG/HR", "Unit"],
+            ["SWR20", "SWR Pipe 20", "20mm", "180", "kg/hr"],
+            ["SWR25", "SWR Pipe 25", "25mm", "200", "kg/hr"],
+            ["TOTAL", "", "", "", ""],
+        ]
+
+    def test_swr_kg_hr_column_parsed(self):
+        rows = self._make_swr_rows()
+        result = parse_per_hour(rows, "SWR", "kg_per_hr")
+        codes = {r["item_code"] for r in result}
+        assert "SWR20" in codes, f"SWR20 must be parsed from KG/HR column; got {codes}"
+        assert "SWR25" in codes
+
+    def test_swr_correct_values(self):
+        rows = self._make_swr_rows()
+        result = parse_per_hour(rows, "SWR", "kg_per_hr")
+        by_code = {r["item_code"]: r["value"] for r in result}
+        assert by_code["SWR20"] == pytest.approx(180.0)
+        assert by_code["SWR25"] == pytest.approx(200.0)
+
+    def test_swr_basis_kg_per_hr(self):
+        rows = self._make_swr_rows()
+        result = parse_per_hour(rows, "SWR", "kg_per_hr")
+        assert all(r["basis"] == "kg_per_hr" for r in result)

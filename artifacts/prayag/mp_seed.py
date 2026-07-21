@@ -91,6 +91,24 @@ def _cell(row: list, idx: int) -> str:
     return ""
 
 
+def _is_spurious_numeric(nc: str) -> bool:
+    """Return True if *nc* (already normalised) is clearly NOT a real item code.
+
+    Drops:
+      - Decimal strings like '104.8' or '11.8'  (OD / size values)
+      - 8-or-more-digit pure integers like '33000778'  (internal ERP IDs)
+
+    Keeps:
+      - 4–7-digit integers like '5110', '5121'  (real fitting / pipe item codes)
+      - Any code containing at least one letter
+    """
+    if "." in nc:
+        return True                    # decimal → OD size
+    if re.match(r"^\d{8,}$", nc):
+        return True                    # 8+ pure digits → ERP internal ID
+    return False
+
+
 def _header_map(header_row: list) -> Dict[str, int]:
     """Return {normalised_header: col_index} from a header row."""
     out: Dict[str, int] = {}
@@ -178,8 +196,8 @@ def parse_bom_weights(rows: List[list]) -> List[dict]:
         nc = norm_code(raw_code)
         if not nc:
             continue
-        # Skip pure-numeric codes — these are internal ERP item IDs, not product codes
-        if re.match(r'^\d+$', nc):
+        # Drop ERP IDs (8+ digits) and OD-size decimals; keep 4–7 digit item codes
+        if _is_spurious_numeric(nc):
             continue
         wt = _to_float(raw_wt)
         if wt is None or wt <= 0:
@@ -267,15 +285,16 @@ def parse_pipe_routing(rows: List[list]) -> Tuple[List[dict], List[dict]]:
         return [], []
 
     # For each machine, extract W (support_w) and OT (operators_ot) from staffing_row.
-    # Layout assumption: machine is at col j; staffing_row[j] = W count,
-    # staffing_row[j+1] = OT count (paired columns).
+    # Layout: machine is at col j (first of pair); staffing_row[j]=W, staffing_row[j+1]=OT.
+    # The paired column j+1 carries the MATERIAL (e.g. CPVC/UPVC/SWR), NOT a second
+    # item-code column — track them separately.
     machine_rows: List[dict] = []
-    machine_col_set: Dict[str, List[int]] = {}  # machine_name -> list of capable col indices
+    machine_code_col: Dict[str, int] = {}   # machine_name -> item-code column
+    machine_mat_col: Dict[str, int] = {}    # machine_name -> material column (j+1)
 
     for j, mc_name in machines:
         w_val = _to_float(_cell(staffing_row, j)) or 0
         ot_val = _to_float(_cell(staffing_row, j + 1)) or 0
-        # Distinguish W vs OT: by convention smaller is OT staff
         support_w = int(w_val)
         operators_ot = int(ot_val)
         machine_rows.append({
@@ -283,44 +302,41 @@ def parse_pipe_routing(rows: List[list]) -> Tuple[List[dict], List[dict]]:
             "support_w": support_w,
             "operators_ot": operators_ot,
         })
-        # Each machine may span 1 or 2 adjacent columns in data rows
-        machine_col_set[mc_name] = [j]
-        # Include paired column (j+1) if it's not the start of the next machine
-        next_machine_cols = {m[0] for m in machines if m[1] != mc_name}
-        if (j + 1) not in next_machine_cols:
-            machine_col_set[mc_name].append(j + 1)
+        machine_code_col[mc_name] = j
+        machine_mat_col[mc_name] = j + 1
 
-    # Collect item-code → machine mappings from data rows below the machine row
-    routing: Dict[Tuple[str, str], bool] = {}  # (item_code, machine) → capable
+    # Collect item-code → machine mappings from data rows below the machine row.
+    # routing maps (item_code, machine) -> material string.
+    routing: Dict[Tuple[str, str], str] = {}
     for row in rows[mc_row_idx + 1:]:
         if not any(str(c).strip() for c in row):
             continue  # blank row
-        # Each machine's columns may carry an item code directly
-        for mc_name, cols in machine_col_set.items():
-            for col in cols:
-                cell_val = _cell(row, col)
-                if not cell_val:
-                    continue
-                # The cell value IS the item code (or a mark like "✓" — filter marks)
-                nc = norm_code(cell_val)
-                # Skip if looks like a non-code value (single char, number-only, header text)
-                if len(nc) < 2:
-                    continue
-                if _NUM_PATTERN.match(nc):
-                    continue
-                if nc in ("TRUE", "FALSE", "YES", "NO", "X", "NA"):
-                    continue
-                routing[(nc, mc_name)] = True
+        for mc_name, code_col in machine_code_col.items():
+            cell_val = _cell(row, code_col)
+            if not cell_val:
+                continue
+            nc = norm_code(cell_val)
+            # Skip non-code values: too short, ERP IDs / OD decimals, boolean marks
+            if len(nc) < 2:
+                continue
+            if _is_spurious_numeric(nc):
+                continue
+            if nc in ("TRUE", "FALSE", "YES", "NO", "X", "NA"):
+                continue
+            mat_raw = _cell(row, machine_mat_col[mc_name])
+            material = mat_raw.strip().upper() if mat_raw else ""
+            # Last entry wins (duplicate normalised codes are rare but possible)
+            routing[(nc, mc_name)] = material
 
     routing_rows = [
-        {"item_code": ic, "machine": mc, "material": ""}
-        for (ic, mc) in routing.keys()
+        {"item_code": ic, "machine": mc, "material": mat}
+        for (ic, mc), mat in routing.items()
     ]
     return routing_rows, machine_rows
 
 
 def seed_pipe_routing(token: str, effective_month: str = "") -> dict:
-    """Fetch pipe routing tab and upsert mp_routing + mp_machine."""
+    """Fetch pipe routing tab and upsert mp_routing + mp_machine (extrusion)."""
     em = effective_month or current_month()
     fid = _FILE_IDS["pipe_routing"]
     raw = sheets.read_values(fid, "Details", token)
@@ -341,6 +357,8 @@ def seed_pipe_routing(token: str, effective_month: str = "") -> dict:
         )
         for r in routing_rows
     ]
+    # Clean existing extrusion rows first so stale codes never accumulate
+    mp_model.clean_extrusion_routing(SEGMENT, em)
     mc_count = mp_model.upsert_machines(machines)
     rt_count = mp_model.upsert_routing(routing)
     return {
@@ -469,6 +487,8 @@ def seed_fitting_routing(token: str, effective_month: str = "") -> dict:
         )
         for r in std_rows
     ]
+    # Clean existing moulding rows first so stale codes never accumulate
+    mp_model.clean_moulding_routing(SEGMENT, em)
     mc_count = mp_model.upsert_machines(machines)
     rt_count = mp_model.upsert_routing(routing)
     std_count = mp_model.upsert_fitting_std(stds)
@@ -546,13 +566,16 @@ def parse_per_hour(rows: List[list], material: str, basis: str) -> List[dict]:
     _code_from_explicit = False
 
     # ── Primary scan: find the row that names the value column ───────────────
-    for i, row in enumerate(rows[:30]):
+    # Scan up to 40 rows to handle tabs with long preamble sections (e.g. SWR).
+    for i, row in enumerate(rows[:40]):
         row_lower = " ".join(str(c).lower() for c in row)
         if is_pipe_tab:
             prod_match = (
-                "production per hour" in row_lower
-                or "prod per hour" in row_lower
-                or "per hour" in row_lower
+                "per hour" in row_lower
+                or "kg/hr" in row_lower
+                or "kg / hr" in row_lower
+                or "output/hr" in row_lower
+                or "prod/hr" in row_lower
             )
         else:
             prod_match = "cycle time" in row_lower or "cycle" in row_lower
@@ -565,7 +588,9 @@ def parse_per_hour(rows: List[list], material: str, basis: str) -> List[dict]:
         if is_pipe_tab:
             vc = next(
                 (hm[k] for k in hm
-                 if "production per hour" in k or "per hour" in k or "prod per hr" in k),
+                 if "per hour" in k or "per hr" in k
+                 or "kg/hr" in k or "kg / hr" in k
+                 or "output/hr" in k or "prod/hr" in k),
                 None,
             )
         else:
@@ -630,9 +655,8 @@ def parse_per_hour(rows: List[list], material: str, basis: str) -> List[dict]:
         nc = norm_code(raw_code)
         if not nc or len(nc) < 2:
             continue
-        # Skip numeric-looking codes (pure int OR decimal number, e.g. "104.8",
-        # "33000778") — product codes always contain at least one letter.
-        if not any(c.isalpha() for c in nc):
+        # Drop ERP IDs (8+ digits) and OD-size decimals; 4–7 digit codes are real
+        if _is_spurious_numeric(nc):
             continue
         val = _to_float(raw_val)
         if val is None or val <= 0:
