@@ -3,18 +3,24 @@ name: MP-0 seed parser & upsert lessons
 description: Hard-won bugs in mp_seed.py / mp_model.py for the Plumbing planning data model.
 ---
 
-## Compound tab (_parse_compound_tab)
+## Compound tab (_parse_block_explicit)
 
 The COMPOUND COST - P / -F tabs have a WORKING section followed by an
 ACTUAL section with identical block labels but different prices.
-**Use `break`, NOT `continue`, on "total"/"wastage" rows** so the parser
-stops at the end of the WORKING block and never bleeds into ACTUAL.
-Multiple blocks may share the same label (e.g. three "CPVC PIPE" cols at
-cols 7/12/17); pick the version with the most non-zero ratio_kg values.
+Fragile block-finder replaced with `_parse_block_explicit(rows, comp_col,
+ratio_col, price_col)` reading explicit column indices from
+`_PIPE_EXPLICIT_COLS` / `_FITTING_EXPLICIT_COLS`.
 
-**Why:** `continue` skips the row but reads on, consuming all 20 slots and
-reaching the ACTUAL section — doubles the component list and inflates the
-ratio sum (251 instead of 125.65 kg for CPVC pipe).
+**WASTAGE-before-Total (CPVC-Fitting regression):** Some blocks (e.g.
+CPVC-Fitting) have NO "Total" row — the block ends directly at the WASTAGE
+row.  Check for "wastage" BEFORE "total" in the scan loop and `break`
+immediately, capturing `wastage_factor` from the ratio column.  If "total"
+is checked first and "wastage" falls in the post-total branch only, the
+parser treats the WASTAGE row as a component, then reads into the ACTUAL
+section — giving wrong component count and inflated effective rate.
+
+**Why:** CPVC-Fitting: 1 component CG-122 (50 kg × 175.00) → eff=176.75.
+Without the fix: 2 components, ratio=51.01, eff=179.82.
 
 ## parse_per_hour — degenerate-header guard
 

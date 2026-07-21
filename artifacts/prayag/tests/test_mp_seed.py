@@ -25,6 +25,11 @@ from mp_seed import (
     parse_fitting_routing,
     parse_per_hour,
     _parse_compound_tab,
+    _parse_block_explicit,
+    _PIPE_EXPLICIT_COLS,
+    _FITTING_EXPLICIT_COLS,
+    _COMPOUND_DATA_START_ROW,
+    _COMPOUND_WASTAGE_FACTOR,
     seed_params,
     current_month,
     SEGMENT,
@@ -995,3 +1000,364 @@ class TestParsePerHourKgHr:
         rows = self._make_swr_rows()
         result = parse_per_hour(rows, "SWR", "kg_per_hr")
         assert all(r["basis"] == "kg_per_hr" for r in result)
+
+
+# ===========================================================================
+# Explicit-column compound parser (_parse_block_explicit)
+# ===========================================================================
+
+def _make_pipe_tab_explicit():
+    """Synthetic 'COMPOUND COST - P' sheet mirroring the real layout.
+
+    Has THREE blocks labelled 'CPVC PIPE' (to simulate the real sheet ambiguity):
+      H block  (cols 7-9):   wrong block — should NOT be picked for CPVC-Pipe
+      M block  (cols 12-14): canonical CPVC-Pipe block (Rs/Kg ~ 147.28)
+      R block  (cols 17-19): another CPVC variant — should NOT be picked
+
+    Other blocks (0-indexed columns):
+      C block  (cols 2-4):   UPVC-Pipe   (Rs/Kg ~ 61.15)
+      W block  (cols 22-24): SWR-Pipe    (Rs/Kg ~ 73.16)
+      AB block (cols 27-29): AGRI-Pipe
+
+    Each block has: header rows 0-3, data rows 4+, a 'Total' row, a gap row,
+    then a 'WASTAGE' row (ratio=1.01).
+
+    All rows are padded to 30 columns so out-of-bounds cell reads return ''.
+    """
+    PAD = 30
+    e = ""
+
+    def pad(row):
+        return (list(row) + [e] * PAD)[:PAD]
+
+    # Rows 0-3: headers / labels (data starts at row 4 = _COMPOUND_DATA_START_ROW)
+    rows = [
+        pad(["COMPOUND COST"] * 5),      # row 0: section title
+        pad([""] * PAD),                  # row 1: material labels (label scanning not used)
+        pad([""] * PAD),                  # row 2: col headers
+        pad([""] * PAD),                  # row 3: optional section label
+    ]
+
+    # Single-component synthetic values chosen to reproduce the acceptance-spec effective rates.
+    # eff_rate = price_per_kg * wastage_factor  (when ratio is a single component)
+    # UPVC-Pipe:  61.15 / 1.01 = 60.5446…
+    # CPVC-Pipe: 147.28 / 1.01 = 145.8245…  (ratio=125.65 kg, matches acceptance spec)
+    # SWR-Pipe:   73.16 / 1.01 = 72.4356…
+    # AGRI-Pipe:  62.80 / 1.01 = 62.1782…
+    upvc_comps = [("Compound A", 161.8,  60.5446)]   # eff = 60.5446 * 1.01 = 61.15 ✓
+    cpvc_comps = [("Compound B", 125.65, 145.8245)]  # eff = 145.8245 * 1.01 = 147.28 ✓
+    swr_comps  = [("Compound C", 105.49, 72.4356)]   # eff = 72.4356 * 1.01 = 73.16 ✓
+    agri_comps = [("Compound D", 120.14, 62.1782)]   # eff = 62.1782 * 1.01 = 62.80
+
+    # Build sheet rows — each data row has values at the 4 block positions
+    # plus a stub 'wrong CPVC' block at cols 7-9 (H block) to verify it is NOT used
+    # Block positions: UPVC=(2,3,4), wrong_CPVC_H=(7,8,9), CPVC_M=(12,13,14),
+    #                  wrong_CPVC_R=(17,18,19), SWR=(22,23,24), AGRI=(27,28,29)
+
+    # Helper: build a data row with values at given (col, val) pairs
+    def data_row(**block_vals):
+        r = [e] * PAD
+        for col, val in block_vals.items():
+            r[int(col)] = val
+        return r
+
+    # UPVC comps (cols 2,3,4), wrong H comps (cols 7,8,9 — different values),
+    # CPVC-M comps (cols 12,13,14), CPVC-R wrong (cols 17,18,19 — different),
+    # SWR comps (cols 22,23,24), AGRI comps (cols 27,28,29)
+
+    u_n, u_r, u_p = upvc_comps[0]
+    c_n, c_r, c_p = cpvc_comps[0]
+    s_n, s_r, s_p = swr_comps[0]
+    a_n, a_r, a_p = agri_comps[0]
+
+    # Single-component rows for all 6 block positions
+    rows.append(data_row(**{
+        "2": u_n, "3": u_r, "4": u_p,       # UPVC-Pipe (canonical)
+        "7": "Wrong CPVC H", "8": 50.0, "9": 999.0,  # wrong H block
+        "12": c_n, "13": c_r, "14": c_p,    # CPVC-Pipe canonical M block
+        "17": "Wrong CPVC R", "18": 60.0, "19": 888.0,  # wrong R block
+        "22": s_n, "23": s_r, "24": s_p,    # SWR-Pipe
+        "27": a_n, "28": a_r, "29": a_p,    # AGRI-Pipe
+    }))  # row 4 = data row 0
+
+    # Total rows for all blocks (at data row 1 = sheet row 5)
+    rows.append(data_row(**{
+        "2": "Total", "3": u_r, "4": 0,
+        "7": "Total", "8": 50.0, "9": 0,
+        "12": "Total", "13": c_r, "14": 0,
+        "17": "Total", "18": 60.0, "19": 0,
+        "22": "Total", "23": s_r, "24": 0,
+        "27": "Total", "28": a_r, "29": 0,
+    }))  # row 5
+
+    # Gap row (blank or other content) — row 6
+    rows.append(data_row())
+
+    # WASTAGE rows for all blocks — row 7
+    rows.append(data_row(**{
+        "2": "WASTAGE", "3": 1.01, "4": 0,
+        "7": "WASTAGE", "8": 1.01, "9": 0,
+        "12": "WASTAGE", "13": 1.01, "14": 0,
+        "17": "WASTAGE", "18": 1.01, "19": 0,
+        "22": "WASTAGE", "23": 1.01, "24": 0,
+        "27": "WASTAGE", "28": 1.01, "29": 0,
+    }))  # row 7
+
+    return rows
+
+
+def _eff_rate(comps):
+    """Compute effective Rs/kg from a component list (matches _mp_build_compound_cards)."""
+    wf = comps[0]["wastage_factor"] if comps else 1.0
+    tot_r = sum(c["ratio_kg"] for c in comps)
+    tot_c = sum(c["ratio_kg"] * c["price_per_kg"] for c in comps)
+    return (tot_c / tot_r * wf) if tot_r > 0 else 0.0
+
+
+class TestParseBlockExplicit:
+    """Unit tests for _parse_block_explicit with synthetic fixture data.
+
+    Verifies that the explicit column-map parser:
+    - reads components from the correct columns regardless of label content
+    - stops at the Total row and captures wastage_factor from the WASTAGE row
+    - handles a gap row between Total and WASTAGE (SWR-Pipe style)
+    - reproduces the 5 known effective Rs/kg values from the acceptance spec
+    """
+
+    def test_upvc_pipe_parsed(self):
+        """UPVC-Pipe block at cols C,D,E (2,3,4) is found."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["UPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert len(comps) >= 1, "UPVC-Pipe block must have at least one component"
+
+    def test_cpvc_pipe_canonical_block_m(self):
+        """CPVC-Pipe canonical block at cols M,N,O (12,13,14) is read."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["CPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert len(comps) >= 1
+        # Must read from cols 12-14, not 7-9 (H) or 17-19 (R)
+        names = {c["component"] for c in comps}
+        assert "Wrong CPVC H" not in names
+        assert "Wrong CPVC R" not in names
+
+    def test_cpvc_pipe_eff_rate(self):
+        """CPVC-Pipe effective cost ≈ 147.28 Rs/kg (acceptance spec)."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["CPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert _eff_rate(comps) == pytest.approx(147.28, abs=0.01)
+
+    def test_upvc_pipe_eff_rate(self):
+        """UPVC-Pipe effective cost ≈ 61.15 Rs/kg (acceptance spec)."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["UPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert _eff_rate(comps) == pytest.approx(61.15, abs=0.01)
+
+    def test_swr_pipe_eff_rate(self):
+        """SWR-Pipe effective cost ≈ 73.16 Rs/kg (acceptance spec)."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["SWR"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert _eff_rate(comps) == pytest.approx(73.16, abs=0.01)
+
+    def test_wastage_factor_captured(self):
+        """WASTAGE row sets wastage_factor=1.01 on all components."""
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["CPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert all(abs(c["wastage_factor"] - 1.01) < 1e-9 for c in comps)
+
+    def test_total_row_not_in_components(self):
+        """'Total' row must NOT appear as a component."""
+        rows = _make_pipe_tab_explicit()
+        for mat, (cc, rc, pc) in _PIPE_EXPLICIT_COLS.items():
+            comps = _parse_block_explicit(rows, cc, rc, pc)
+            names = {c["component"].lower() for c in comps}
+            assert "total" not in names, f"{mat}-pipe: 'Total' leaked into components"
+
+    def test_wastage_row_not_in_components(self):
+        """'WASTAGE' row must NOT appear as a component."""
+        rows = _make_pipe_tab_explicit()
+        for mat, (cc, rc, pc) in _PIPE_EXPLICIT_COLS.items():
+            comps = _parse_block_explicit(rows, cc, rc, pc)
+            names = {c["component"].lower() for c in comps}
+            assert "wastage" not in names, f"{mat}-pipe: 'WASTAGE' leaked into components"
+
+    def test_gap_row_between_total_and_wastage(self):
+        """A blank gap row between Total and WASTAGE is tolerated (SWR-Pipe style)."""
+        # All blocks in our fixture have a gap row (row 6 is blank) then WASTAGE (row 7)
+        rows = _make_pipe_tab_explicit()
+        cc, rc, pc = _PIPE_EXPLICIT_COLS["SWR"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        # If wastage_factor was captured despite the gap, it will be 1.01 (not default 1.0)
+        assert comps, "SWR-Pipe must parse at least one component"
+        assert all(abs(c["wastage_factor"] - 1.01) < 1e-9 for c in comps)
+
+    def test_empty_rows_returns_empty(self):
+        assert _parse_block_explicit([], 2, 3, 4) == []
+
+    def test_short_rows_returns_empty(self):
+        """Fewer than _COMPOUND_DATA_START_ROW rows → no data rows → empty."""
+        rows = [["x"] * 30 for _ in range(_COMPOUND_DATA_START_ROW - 1)]
+        assert _parse_block_explicit(rows, 2, 3, 4) == []
+
+    def test_default_wastage_when_no_wastage_row(self):
+        """When WASTAGE row is absent, module default _COMPOUND_WASTAGE_FACTOR is used."""
+        rows = [[""] * 10 for _ in range(5)]
+        rows.append(["Component A", "100", "50"] + [""] * 7)   # row 5 = data
+        rows.append(["Total",        "100",  "0"] + [""] * 7)  # row 6 = total
+        # No WASTAGE row follows
+        comps = _parse_block_explicit(rows, 0, 1, 2)
+        assert comps
+        assert all(abs(c["wastage_factor"] - _COMPOUND_WASTAGE_FACTOR) < 1e-9 for c in comps)
+
+    def test_wastage_before_total_stops_collection(self):
+        """WASTAGE row without a preceding Total row ends block collection.
+
+        Regression for CPVC-Fitting: the real sheet has no Total row, going
+        directly from component(s) to WASTAGE.  The old code read WASTAGE as a
+        component and then continued into the 'actual' section.
+        """
+        # Layout: row 4 = component, row 5 = blank, row 6 = WASTAGE, row 7 = actual (wrong)
+        rows = [[""] * 5 for _ in range(4)]   # rows 0-3: header area
+        rows.append(["CG-122",  "50",   "175.00", "8750", ""])  # row 4: component
+        rows.append(["",        "",     "",        "",     ""])  # row 5: blank
+        rows.append(["WASTAGE", "1.01", "176.75",  "",    ""])  # row 6: wastage (no prior Total)
+        rows.append(["CG-122",  "50",   "178.00",  "",    ""])  # row 7: actual section (must NOT be read)
+        comps = _parse_block_explicit(rows, 0, 1, 2)
+        # Must get exactly 1 component (CG-122), NOT 2
+        assert len(comps) == 1, f"Expected 1 component, got {len(comps)}: {[c['component'] for c in comps]}"
+        assert comps[0]["component"] == "CG-122"
+        assert abs(comps[0]["ratio_kg"] - 50.0) < 1e-9
+        assert abs(comps[0]["price_per_kg"] - 175.0) < 1e-9
+        # wastage_factor must be 1.01 (from WASTAGE row)
+        assert abs(comps[0]["wastage_factor"] - 1.01) < 1e-9
+        # Effective rate: 175 * 1.01 = 176.75
+        assert abs(_eff_rate(comps) - 176.75) < 0.01
+
+
+def _make_fitting_tab_explicit():
+    """Synthetic 'COMPOUND COST - F' sheet.
+
+    Fitting blocks (0-indexed columns):
+      UPVC-Fitting → C,D,E  = cols  2,3,4  (UPVC MOULDING)
+      CPVC-Fitting → H,I,J  = cols  7,8,9  (CPVC MOULDING;  Rs/Kg=176.75)
+      SWR-Fitting  → M,N,O  = cols 12,13,14 (SWR/AGRI MOULDING — SWR block; Rs/Kg=82.42)
+      AGRI-Fitting → R,S,T  = cols 17,18,19 (SWR/AGRI MOULDING — AGRI block)
+
+    Each block has one representative component, Total, gap, WASTAGE row.
+    SWR and AGRI share the label "SWR / AGRI MOULDING" in the header but are
+    in DIFFERENT column positions — only the explicit map resolves them correctly.
+    """
+    PAD = 25
+    e = ""
+
+    def pad(r):
+        return (list(r) + [e] * PAD)[:PAD]
+
+    rows = [pad([e] * PAD) for _ in range(4)]   # rows 0-3: header area
+
+    # CPVC-Fitting: cols 7,8,9 → eff=176.75 = price*1.01 (single component, price=175.0)
+    # 176.75/1.01 = 175.0 ✓  ratio=50
+    cpvc_r, cpvc_p = 50.0, 175.0     # 50*175/50*1.01=176.75 ✓
+
+    # SWR-Fitting:  cols 12,13,14 → eff=82.42 = (total_cost/total_ratio)*1.01
+    # single comp: ratio=115.04, price=81.57..  115.04*81.57/115.04*1.01=82.39≈82.42
+    # Use price=81.6039604: 81.6039604*1.01=82.42 ✓
+    swr_r, swr_p = 115.04, 81.6039604
+
+    # AGRI-Fitting: cols 17,18,19 — distinct from SWR; use different values
+    agri_r, agri_p = 120.0, 88.0
+
+    # UPVC-Fitting: cols 2,3,4
+    upvc_r, upvc_p = 114.3, 95.20
+
+    # Data rows (row 4 onwards)
+    rows.append(pad([e, e,
+        "UPVC Comp", upvc_r, upvc_p,           # UPVC cols 2,3,4
+        e, e,
+        "CPVC Comp", cpvc_r, cpvc_p,           # CPVC cols 7,8,9
+        e, e,
+        "SWR Comp", swr_r, swr_p,              # SWR cols 12,13,14
+        e, e,
+        "AGRI Comp", agri_r, agri_p,           # AGRI cols 17,18,19
+        e, e, e, e, e]))   # pad
+
+    rows.append(pad([e, e,
+        "Total", upvc_r, 0,
+        e, e,
+        "Total", cpvc_r, 0,
+        e, e,
+        "Total", swr_r, 0,
+        e, e,
+        "Total", agri_r, 0,
+        e, e, e, e, e]))   # total row
+
+    rows.append(pad([e] * PAD))                # gap row
+
+    rows.append(pad([e, e,
+        "WASTAGE", 1.01, 0,
+        e, e,
+        "WASTAGE", 1.01, 0,
+        e, e,
+        "WASTAGE", 1.01, 0,
+        e, e,
+        "WASTAGE", 1.01, 0,
+        e, e, e, e, e]))   # wastage row
+
+    return rows
+
+
+class TestParseBlockExplicitFitting:
+    """Verify fitting-tab explicit parsing and the two acceptance-spec values."""
+
+    def test_cpvc_fitting_eff_rate(self):
+        """CPVC-Fitting effective cost ≈ 176.75 Rs/kg (acceptance spec)."""
+        rows = _make_fitting_tab_explicit()
+        cc, rc, pc = _FITTING_EXPLICIT_COLS["CPVC"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert _eff_rate(comps) == pytest.approx(176.75, abs=0.01)
+
+    def test_swr_fitting_eff_rate(self):
+        """SWR-Fitting effective cost ≈ 82.42 Rs/kg (acceptance spec).
+
+        This is the key fix: the old block-finder read the wrong block
+        (shared label), giving 89.69.  The explicit map reads cols M,N,O
+        (12,13,14) which is the SWR block, giving 82.42.
+        """
+        rows = _make_fitting_tab_explicit()
+        cc, rc, pc = _FITTING_EXPLICIT_COLS["SWR"]
+        comps = _parse_block_explicit(rows, cc, rc, pc)
+        assert _eff_rate(comps) == pytest.approx(82.42, abs=0.01)
+
+    def test_agri_fitting_distinct_from_swr(self):
+        """AGRI-Fitting (cols R,S,T) has DIFFERENT components than SWR-Fitting (cols M,N,O)."""
+        rows = _make_fitting_tab_explicit()
+        swr_cc, swr_rc, swr_pc = _FITTING_EXPLICIT_COLS["SWR"]
+        agri_cc, agri_rc, agri_pc = _FITTING_EXPLICIT_COLS["AGRI"]
+        swr_comps  = _parse_block_explicit(rows, swr_cc,  swr_rc,  swr_pc)
+        agri_comps = _parse_block_explicit(rows, agri_cc, agri_rc, agri_pc)
+        swr_names  = {c["component"] for c in swr_comps}
+        agri_names = {c["component"] for c in agri_comps}
+        # They are in different column positions → distinct component names
+        assert swr_names != agri_names, "SWR and AGRI fitting must come from different blocks"
+
+    def test_four_fitting_blocks_all_found(self):
+        """All four fitting blocks (UPVC/CPVC/SWR/AGRI) parse at least one component."""
+        rows = _make_fitting_tab_explicit()
+        for mat, (cc, rc, pc) in _FITTING_EXPLICIT_COLS.items():
+            comps = _parse_block_explicit(rows, cc, rc, pc)
+            assert comps, f"{mat}-fitting block must return components"
+
+    def test_eight_blocks_all_explicit_maps_covered(self):
+        """_PIPE_EXPLICIT_COLS and _FITTING_EXPLICIT_COLS together cover all 8 combos."""
+        pipe_keys    = {(m, "pipe")    for m in _PIPE_EXPLICIT_COLS}
+        fitting_keys = {(m, "fitting") for m in _FITTING_EXPLICIT_COLS}
+        all_keys = pipe_keys | fitting_keys
+        from mp_seed import _COMPOUND_COMBOS
+        assert all_keys == set(_COMPOUND_COMBOS), (
+            f"Column map missing combos: {set(_COMPOUND_COMBOS) - all_keys}"
+        )

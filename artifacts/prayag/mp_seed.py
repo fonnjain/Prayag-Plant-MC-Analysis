@@ -715,6 +715,126 @@ _COMPOUND_COMBOS: List[Tuple[str, str]] = [
 # Skip keywords in component name column
 _COMP_SKIP_WORDS = ("total", "effective", "cost", "waste", "wastage", "---")
 
+# ---------------------------------------------------------------------------
+# Explicit verified column map (0-indexed) for each recipe block.
+# Columns: (compound_name_col, ratio_kg_col, price_per_kg_col)
+#
+# "COMPOUND COST - P" tab (pipe recipes):
+#   CPVC-Pipe → M,N,O = cols 12,13,14  ← canonical block; NOT the H or R variants
+#   UPVC-Pipe → C,D,E = cols  2, 3, 4
+#   SWR-Pipe  → W,X,Y = cols 22,23,24
+#   AGRI-Pipe → AB,AC,AD = cols 27,28,29
+#
+# "COMPOUND COST - F" tab (fitting recipes):
+#   UPVC-Fitting → C,D,E  = cols  2, 3, 4  (header "UPVC MOULDING")
+#   CPVC-Fitting → H,I,J  = cols  7, 8, 9  (header "CPVC MOULDING")
+#   SWR-Fitting  → M,N,O  = cols 12,13,14  (header "SWR / AGRI MOULDING" — SWR block)
+#   AGRI-Fitting → R,S,T  = cols 17,18,19  (header "SWR / AGRI MOULDING" — AGRI block)
+# ---------------------------------------------------------------------------
+_PIPE_EXPLICIT_COLS: Dict[str, Tuple[int, int, int]] = {
+    "UPVC": ( 2,  3,  4),
+    "CPVC": (12, 13, 14),
+    "SWR":  (22, 23, 24),
+    "AGRI": (27, 28, 29),
+}
+_FITTING_EXPLICIT_COLS: Dict[str, Tuple[int, int, int]] = {
+    "UPVC": ( 2,  3,  4),
+    "CPVC": ( 7,  8,  9),
+    "SWR":  (12, 13, 14),
+    "AGRI": (17, 18, 19),
+}
+# Row index (0-based) where component data begins (= row 5 in Google Sheets)
+_COMPOUND_DATA_START_ROW: int = 4
+
+
+def _parse_block_explicit(
+    rows: List[list],
+    comp_col: int,
+    ratio_col: int,
+    price_col: int,
+) -> List[dict]:
+    """Parse a single compound recipe block at FIXED column positions.
+
+    Scans from ``_COMPOUND_DATA_START_ROW`` (row 5 in Sheets, 0-indexed row 4)
+    downward:
+
+    * Collects component rows until the first row whose compound-name cell
+      contains "total" (case-insensitive).
+    * After the Total row, scans up to 5 further rows for a "WASTAGE" row;
+      the Ratio column of that row holds the wastage_factor (typically 1.01).
+    * Non-component rows before Total (e.g. section labels containing "effective"
+      or "---") are skipped without stopping the scan.
+
+    Returns a (possibly empty) list of component dicts::
+
+        {"component": str, "ratio_kg": float,
+         "price_per_kg": float, "wastage_factor": float}
+
+    ``wastage_factor`` is back-patched on all components once the WASTAGE row
+    is found.  If no WASTAGE row is found within 5 rows after Total, the module
+    default ``_COMPOUND_WASTAGE_FACTOR`` is used.
+    """
+    components: List[dict] = []
+    wastage_factor = _COMPOUND_WASTAGE_FACTOR
+    past_total = False
+    total_row_idx = -1
+
+    for ri in range(_COMPOUND_DATA_START_ROW, len(rows)):
+        row = rows[ri]
+        comp_name = _cell(row, comp_col)
+
+        if past_total:
+            # Stop hard after 5 rows beyond Total (handles gaps in the sheet)
+            if ri > total_row_idx + 5:
+                break
+            if not comp_name:
+                continue
+            if "wastage" in comp_name.lower():
+                wf_val = _to_float(_cell(row, ratio_col))
+                if wf_val is not None and wf_val > 0:
+                    wastage_factor = wf_val
+            break  # done with this block regardless
+
+        if not comp_name:
+            continue
+
+        comp_lower = comp_name.lower().strip()
+
+        # WASTAGE row encountered before any Total (e.g. CPVC-Fitting has no Total row).
+        # Treat as end-of-block and capture wastage_factor from the ratio column.
+        if "wastage" in comp_lower:
+            wf_val = _to_float(_cell(row, ratio_col))
+            if wf_val is not None and wf_val > 0:
+                wastage_factor = wf_val
+            break
+
+        if "total" in comp_lower:
+            past_total = True
+            total_row_idx = ri
+            continue
+
+        # Section labels / decorative rows — skip without stopping
+        if any(kw in comp_lower for kw in ("effective", "---")):
+            continue
+
+        ratio = _to_float(_cell(row, ratio_col))
+        price = _to_float(_cell(row, price_col))
+        if ratio is None and price is None:
+            continue
+
+        components.append({
+            "component": comp_name.strip(),
+            "ratio_kg": ratio or 0.0,
+            "price_per_kg": price or 0.0,
+            "wastage_factor": _COMPOUND_WASTAGE_FACTOR,  # back-patched below
+        })
+
+    # Stamp the resolved wastage_factor onto every component
+    for c in components:
+        c["wastage_factor"] = wastage_factor
+
+    return components
+
 
 def _parse_compound_tab(rows: List[list]) -> Dict[Tuple[str, str], List[dict]]:
     """Parse a compound-cost tab with a horizontal multi-block layout.
@@ -849,31 +969,33 @@ def _parse_compound_tab(rows: List[list]) -> Dict[Tuple[str, str], List[dict]]:
 
 
 def seed_compound_recipes(token: str, effective_month: str = "") -> dict:
-    """Read compound cost tab(s) and upsert recipes.
+    """Read compound cost tab(s) and upsert recipes using EXPLICIT column map.
 
     Sources:
-      'COMPOUND COST - P' → pipe recipes (UPVC PIPE, CPVC PIPE blocks)
-      'COMPOUND COST - F' → fitting recipes (UPVC/CPVC/SWR/AGRI MOULDING blocks)
+      'COMPOUND COST - P' → pipe recipes  (UPVC/CPVC/SWR/AGRI PIPE)
+      'COMPOUND COST - F' → fitting recipes (UPVC/CPVC/SWR/AGRI MOULDING)
 
-    SWR PIPE and AGRI PIPE have no ingredient-level recipe on file (the
-    dedicated tabs show item prices, not compound formulas).  Those combos
-    receive a needs_recipe=True placeholder.
-
-    When multiple blocks share the same label in a tab, the most complete
-    recipe (most non-zero ratio_kg values) is selected.
+    Column positions are hardcoded via ``_PIPE_EXPLICIT_COLS`` /
+    ``_FITTING_EXPLICIT_COLS`` — no header label scanning.  This avoids
+    the ambiguity caused by three 'CPVC PIPE' blocks in the P tab; the
+    canonical CPVC-Pipe block is always cols M,N,O (indices 12,13,14).
     """
     em = effective_month or current_month()
     fid = _FILE_IDS["compound"]
 
-    # Read the two authoritative tabs
-    pipe_rows = sheets.read_values(fid, "COMPOUND COST - P", token)
+    pipe_rows    = sheets.read_values(fid, "COMPOUND COST - P", token)
     fitting_rows = sheets.read_values(fid, "COMPOUND COST - F", token)
 
-    pipe_blocks = _parse_compound_tab(pipe_rows)
-    fitting_blocks = _parse_compound_tab(fitting_rows)
-
-    # Merge: pipe_blocks covers (mat, "pipe"); fitting_blocks covers (mat, "fitting")
-    all_blocks: Dict[Tuple[str, str], List[dict]] = {**pipe_blocks, **fitting_blocks}
+    # Parse each block via the verified explicit column map
+    all_blocks: Dict[Tuple[str, str], List[dict]] = {}
+    for mat, (cc, rc, pc) in _PIPE_EXPLICIT_COLS.items():
+        comps = _parse_block_explicit(pipe_rows, cc, rc, pc)
+        if comps:
+            all_blocks[(mat, "pipe")] = comps
+    for mat, (cc, rc, pc) in _FITTING_EXPLICIT_COLS.items():
+        comps = _parse_block_explicit(fitting_rows, cc, rc, pc)
+        if comps:
+            all_blocks[(mat, "fitting")] = comps
 
     all_records: List[MpCompoundRecipe] = []
     combo_report: List[dict] = []
@@ -895,9 +1017,10 @@ def seed_compound_recipes(token: str, effective_month: str = "") -> dict:
                 ))
             total_ratio = sum(c["ratio_kg"] for c in components)
             total_cost = sum(c["ratio_kg"] * c["price_per_kg"] for c in components)
+            wf = components[0]["wastage_factor"] if components else _COMPOUND_WASTAGE_FACTOR
             tab = "COMPOUND COST - P" if mat_type == "pipe" else "COMPOUND COST - F"
-            eff_rate = (total_cost / (total_ratio * _COMPOUND_WASTAGE_FACTOR)
-                        if total_ratio > 0 else None)
+            # eff_rate matches _mp_build_compound_cards: (cost/ratio) × wastage_factor
+            eff_rate = (total_cost / total_ratio * wf if total_ratio > 0 else None)
             combo_report.append({
                 "material": material, "type": mat_type,
                 "components": len(components),
