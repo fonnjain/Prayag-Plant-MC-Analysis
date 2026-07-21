@@ -526,3 +526,151 @@ class TestRouteIsolation:
         import mp_reports
         src = inspect.getsource(mp_reports)
         assert "@app.route" not in src
+
+
+# ── Compound cost ─────────────────────────────────────────────────────────────
+
+class TestComputeEffectiveCosts:
+    """Unit tests for compute_effective_costs() formula."""
+
+    # Minimal recipe rows matching CPVC/pipe from DB (5 components, no needs_recipe)
+    _CPVC_PIPE_ROWS = [
+        {"material": "CPVC", "type": "pipe", "ratio_kg": 89.0,  "price_per_kg": 155.0, "wastage_factor": 1.0, "needs_recipe": False},
+        {"material": "CPVC", "type": "pipe", "ratio_kg": 5.0,   "price_per_kg": 38.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        {"material": "CPVC", "type": "pipe", "ratio_kg": 2.0,   "price_per_kg": 22.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        {"material": "CPVC", "type": "pipe", "ratio_kg": 2.0,   "price_per_kg": 18.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        {"material": "CPVC", "type": "pipe", "ratio_kg": 2.0,   "price_per_kg": 15.0,  "wastage_factor": 1.0, "needs_recipe": False},
+    ]
+    # DB-verified effective cost for CPVC/pipe = 147.28 Rs/kg
+    # Verify formula: (89×155 + 5×38 + 2×22 + 2×18 + 2×15) / (89+5+2+2+2) × 1.0
+    #               = (13795+190+44+36+30) / 100 = 14095/100 = 140.95  [synthetic]
+    # Actual DB rows may differ — use a simple 1-component synthetic case for determinism.
+    _SIMPLE_ROWS = [
+        {"material": "UPVC", "type": "pipe", "ratio_kg": 80.0,  "price_per_kg": 60.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        {"material": "UPVC", "type": "pipe", "ratio_kg": 20.0,  "price_per_kg": 65.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        # effective = (80×60 + 20×65) / 100 × 1.0 = (4800+1300)/100 = 61.0
+        {"material": "SWR",  "type": "pipe", "ratio_kg": 100.0, "price_per_kg": 73.16, "wastage_factor": 1.0, "needs_recipe": False},
+        # effective = 73.16
+        {"material": "AGRI", "type": "fitting", "ratio_kg": 50.0, "price_per_kg": 90.0, "wastage_factor": 1.0, "needs_recipe": False},
+        # fitting type — should NOT appear in "pipe" cost_map
+        {"material": "BAD",  "type": "pipe", "ratio_kg": 0.0,   "price_per_kg": 50.0,  "wastage_factor": 1.0, "needs_recipe": False},
+        # zero ratio → unpriced
+        {"material": "NOPE", "type": "pipe", "ratio_kg": 10.0,  "price_per_kg": 50.0,  "wastage_factor": 1.0, "needs_recipe": True},
+        # needs_recipe → unpriced
+    ]
+
+    def test_effective_cost_formula_simple(self):
+        cost_map, unpriced = eng.compute_effective_costs(self._SIMPLE_ROWS, "pipe")
+        # UPVC: weighted avg of 60 and 65
+        assert "UPVC" in cost_map
+        assert abs(cost_map["UPVC"] - 61.0) < 0.01
+        # SWR: single component
+        assert "SWR" in cost_map
+        assert abs(cost_map["SWR"] - 73.16) < 0.01
+        # AGRI is fitting type → not in pipe cost_map
+        assert "AGRI" not in cost_map
+        # BAD has zero ratio → unpriced
+        assert "BAD" in unpriced
+        # NOPE needs_recipe → unpriced
+        assert "NOPE" in unpriced
+
+    def test_fitting_type_isolation(self):
+        """Type filter: fitting rows must not bleed into pipe cost_map."""
+        rows = [
+            {"material": "SWR", "type": "fitting", "ratio_kg": 10.0, "price_per_kg": 89.0,
+             "wastage_factor": 1.0, "needs_recipe": False},
+        ]
+        cost_map_pipe, _ = eng.compute_effective_costs(rows, "pipe")
+        cost_map_fit, _  = eng.compute_effective_costs(rows, "fitting")
+        assert "SWR" not in cost_map_pipe
+        assert "SWR" in cost_map_fit
+        assert abs(cost_map_fit["SWR"] - 89.0) < 0.01
+
+    def test_wastage_factor_applied(self):
+        """wastage_factor multiplies the effective cost."""
+        rows = [
+            {"material": "CPVC", "type": "pipe", "ratio_kg": 100.0, "price_per_kg": 100.0,
+             "wastage_factor": 1.05, "needs_recipe": False},
+        ]
+        cost_map, _ = eng.compute_effective_costs(rows, "pipe")
+        assert abs(cost_map["CPVC"] - 105.0) < 0.01
+
+    def test_needs_recipe_skips_to_unpriced(self):
+        rows = [
+            {"material": "CPVC", "type": "pipe", "ratio_kg": 100.0, "price_per_kg": 150.0,
+             "wastage_factor": 1.0, "needs_recipe": True},
+        ]
+        cost_map, unpriced = eng.compute_effective_costs(rows, "pipe")
+        assert "CPVC" not in cost_map
+        assert "CPVC" in unpriced
+
+    def test_empty_rows_returns_empty(self):
+        cost_map, unpriced = eng.compute_effective_costs([], "pipe")
+        assert cost_map == {}
+        assert unpriced == set()
+
+    def test_material_key_is_uppercased(self):
+        """Material keys in the recipe may be mixed case — result must be upper."""
+        rows = [
+            {"material": "cpvc", "type": "pipe", "ratio_kg": 100.0, "price_per_kg": 147.0,
+             "wastage_factor": 1.0, "needs_recipe": False},
+        ]
+        cost_map, _ = eng.compute_effective_costs(rows, "pipe")
+        assert "CPVC" in cost_map
+        assert "cpvc" not in cost_map
+
+    def test_plan_totals_cost_field_defaults_zero(self):
+        """PlanTotals deserialization backward-compat: missing field → 0.0."""
+        d = {
+            "total_qty_pcs": 100, "total_material_kg": 50, "total_fresh_compound_kg": 40,
+            "total_pulverizer_kg": 10, "routable_material_kg": 50,
+            "routable_fresh_compound_kg": 40, "routable_pulverizer_kg": 10,
+            # NOTE: routable_compound_cost_rs intentionally absent (old frozen run)
+        }
+        t = eng.PlanTotals(**d)
+        assert t.routable_compound_cost_rs == 0.0
+
+    def test_engine_result_cost_fields_default(self):
+        """EngineResult.from_dict with old payload (no cost fields) must not raise."""
+        result = _make_minimal_engine_result()
+        d = result.to_dict()
+        # Strip new fields to simulate an old frozen run dict
+        d.pop("effective_costs", None)
+        d.pop("cost_by_material", None)
+        d.pop("n_unpriced", None)
+        d["totals"].pop("routable_compound_cost_rs", None)
+        restored = eng.EngineResult.from_dict(d)
+        assert restored.effective_costs == {}
+        assert restored.cost_by_material == {}
+        assert restored.n_unpriced == 0
+        assert restored.totals.routable_compound_cost_rs == 0.0
+
+
+def _make_minimal_engine_result() -> eng.EngineResult:
+    """Build a trivial EngineResult for serialisation tests."""
+    item = eng.ItemResult(
+        item_code="X001", raw_code="X001", material="UPVC", qty_pcs=100.0,
+        weight_per_pc_kg=0.5, material_kg=55.0, fresh_compound_kg=44.0,
+        pulverizer_kg=11.0, rate_kg_per_hr=100.0, rate_estimated=False,
+        machine_hrs=0.44, capable_machines=["M/C-1"],
+        assignments=[eng.AssignedPortion(machine="M/C-1", hrs=0.44, material_kg=55.0,
+                                          qty_pcs=100.0)],
+        has_weight=True, has_machine=True,
+    )
+    gaps = eng.CoverageGaps(no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[])
+    totals = eng.PlanTotals(
+        total_qty_pcs=100, total_material_kg=55, total_fresh_compound_kg=44,
+        total_pulverizer_kg=11, routable_material_kg=55,
+        routable_fresh_compound_kg=44, routable_pulverizer_kg=11,
+    )
+    ml = eng.MachineLoad(
+        machine="M/C-1", capacity_hrs=500.0, assigned_hrs=0.44,
+        utilisation_pct=0.09, machine_days=1, material_kg=55.0,
+        fresh_compound_kg=44.0, pulverizer_kg=11.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    return eng.EngineResult(
+        segment="PLUMBING", effective_month="2026-07",
+        items=[item], machine_loads=[ml], coverage_gaps=gaps, totals=totals,
+        baseline_machine_loads=[ml], params_used={"waste_pct": 4.0, "pulverizer_pct": 25.0},
+    )

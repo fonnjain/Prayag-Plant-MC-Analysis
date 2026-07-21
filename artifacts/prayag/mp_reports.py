@@ -56,6 +56,7 @@ _COLUMNS = [
     ("Ideal Output Per Hour",   18, '#,##0.0;-#,##0.0;"-"',  "right"),
     ("Actual Output Per Hour",  18, "General",                "center"),
     ("Output Efficiency",       16, "General",                "center"),
+    ("Compound Cost (Rs)",      18, '#,##0.0;-#,##0.0;"-"',  "right"),
 ]
 
 _PLAN_PLACEHOLDER = ""    # blank for actuals-only columns in plan report
@@ -141,9 +142,10 @@ def _build_rows(
 ) -> List[tuple]:
     """
     Build data rows in (machine, item_code) order.
-    Returns list of 13-tuples matching _COLUMNS order.
+    Returns list of 14-tuples matching _COLUMNS order (incl. Compound Cost).
     """
     date_label = _month_label(result.effective_month)
+    cost_map: Dict[str, float] = getattr(result, "effective_costs", {}) or {}
     rows = []
 
     # Flatten assignments: (machine, item) → AssignedPortion
@@ -153,6 +155,14 @@ def _build_rows(
                 continue
             if not item.has_weight or not item.has_machine:
                 continue
+            # Per-assignment compound cost: assignment's share of fresh × rate
+            mat_upper = item.material.upper()
+            cost_per_kg = cost_map.get(mat_upper)
+            if cost_per_kg is not None and item.material_kg > 0:
+                fresh_frac = item.fresh_compound_kg / item.material_kg
+                a_cost: object = round(a.material_kg * fresh_frac * cost_per_kg, 1)
+            else:
+                a_cost = _PLAN_PLACEHOLDER
             rows.append((
                 a.machine,                      # sort key
                 item.item_code,                 # sort key
@@ -169,6 +179,7 @@ def _build_rows(
                 round(item.rate_kg_per_hr, 1),  # Ideal Output Per Hour
                 _PLAN_PLACEHOLDER,              # Actual Output Per Hour
                 _PLAN_PLACEHOLDER,              # Output Efficiency
+                a_cost,                         # Compound Cost (Rs)
             ))
 
     # Sort by machine number, then item code
@@ -196,8 +207,8 @@ def _add_totals_row(ws, data_rows: List[tuple], n_data: int):
     r = _DATA_ROW + n_data
     totals = [None] * len(_COLUMNS)
     totals[0] = "TOTAL"   # DATE col
-    # Sum numeric columns: Running Hours (5), Ideal Weight (6), Pcs (7), Weight (8)
-    for col_idx in (5, 6, 7, 8):
+    # Sum numeric columns: Running Hours (5), Ideal Weight (6), Pcs (7), Weight (8), Cost (13)
+    for col_idx in (5, 6, 7, 8, 13):
         vals = []
         for row_vals in data_rows:
             v = row_vals[col_idx]
@@ -310,7 +321,9 @@ _R12_COLS = [
     "Output Efficiency",
     "Rejection Pcs",
     "Rejection Kg",
+    "Compound Cost (Rs)",
 ]
+_R12_N_COLS = len(_R12_COLS)   # 17
 
 
 def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[name-defined]
@@ -354,32 +367,34 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
         cell.alignment = left_aln
 
     # ── Title block (rows 1-5) ───────────────────────────────────────────────
-    ws.merge_cells("A1:P1")
+    _last_col = get_column_letter(_R12_N_COLS)
+
+    ws.merge_cells(f"A1:{_last_col}1")
     t1 = ws["A1"]
     t1.value     = f"PRAYAG PIPES & FITTINGS — MOULDING SECTION"
     t1.font      = title_font
     t1.fill      = PatternFill("solid", fgColor="1F3864")
     t1.alignment = center_aln
 
-    ws.merge_cells("A2:P2")
+    ws.merge_cells(f"A2:{_last_col}2")
     t2 = ws["A2"]
     t2.value     = "REPORT-12  ·  PRODUCTION PLAN (FITTINGS)"
     t2.font      = Font(bold=True, size=11, color="1F3864")
     t2.alignment = center_aln
 
-    ws.merge_cells("A3:P3")
+    ws.merge_cells(f"A3:{_last_col}3")
     t3 = ws["A3"]
     t3.value     = f"Month: {month}   |   Segment: {seg}"
     t3.font      = Font(size=10, italic=True)
     t3.alignment = center_aln
 
-    ws.merge_cells("A4:P4")
+    ws.merge_cells(f"A4:{_last_col}4")
     t4 = ws["A4"]
     t4.value     = "Status: MACHINE PLAN (actuals-only columns left blank)"
     t4.font      = Font(size=9, italic=True, color="C55A11")
     t4.alignment = center_aln
 
-    ws.merge_cells("A5:P5")
+    ws.merge_cells(f"A5:{_last_col}5")
     # blank spacer row
 
     # ── Header row 6 ─────────────────────────────────────────────────────────
@@ -389,7 +404,7 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
     ws.row_dimensions[6].height = 36
 
     # ── Column widths ─────────────────────────────────────────────────────────
-    _widths = [12, 9, 14, 18, 12, 12, 13, 10, 12, 12, 14, 20, 22, 16, 14, 12]
+    _widths = [12, 9, 14, 18, 12, 12, 13, 10, 12, 12, 14, 20, 22, 16, 14, 12, 18]
     for i, w in enumerate(_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -404,7 +419,16 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
     # Sort by material, then item_code for readability
     routable_items = sorted(routable_items, key=lambda x: (x.material, x.item_code))
 
+    fit_cost_map: Dict[str, float] = getattr(result, "effective_costs", {}) or {}
+
     for it in routable_items:
+        # Fresh fraction is constant across all assignments for this item
+        if it.material_kg > 0:
+            fresh_frac = it.fresh_compound_kg / it.material_kg
+        else:
+            fresh_frac = 0.0
+        item_cost_per_kg = fit_cost_map.get(it.material.upper())
+
         for a in it.assignments:
             mc          = a.machine
             qty_a       = a.qty_pcs
@@ -415,6 +439,11 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
             ideal_pps   = it.pcs_per_hr  # cavity × 3600 / cycle  (or fallback)
             wt_a        = round(qty_a * (it.weight_per_pc_kg or 0.0), 3)
             num_cycles_a = round(qty_a / cavity) if (cavity and cavity > 0) else None
+
+            if item_cost_per_kg is not None:
+                a_cost_r12 = round(a.material_kg * fresh_frac * item_cost_per_kg, 1)
+            else:
+                a_cost_r12 = None
 
             row_vals = [
                 month,           # DATE (planning month)
@@ -433,6 +462,7 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
                 None,            # Output Efficiency (blank — plan)
                 None,            # Rejection Pcs (blank — plan)
                 None,            # Rejection Kg (blank — plan)
+                a_cost_r12,      # Compound Cost (Rs)
             ]
             for col_idx, val in enumerate(row_vals, start=1):
                 _dfmt(ws.cell(row=row, column=col_idx), val)
@@ -447,7 +477,7 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
 
     # ── Coverage gaps block ───────────────────────────────────────────────────
     row += 1
-    ws.merge_cells(f"A{row}:P{row}")
+    ws.merge_cells(f"A{row}:{_last_col}{row}")
     gap_cell = ws.cell(row=row, column=1)
     no_wt    = len(result.coverage_gaps.no_weight)
     no_mc    = len(result.coverage_gaps.no_machine)
@@ -462,7 +492,7 @@ def report_12_bytes(result: "FittingEngineResult") -> bytes:  # type: ignore[nam
     row += 2
 
     # ── Per-machine summary ───────────────────────────────────────────────────
-    ws.merge_cells(f"A{row}:P{row}")
+    ws.merge_cells(f"A{row}:{_last_col}{row}")
     ws.cell(row=row, column=1).value = "MACHINE SUMMARY"
     ws.cell(row=row, column=1).font  = Font(bold=True, size=10, color="FFFFFF")
     ws.cell(row=row, column=1).fill  = PatternFill("solid", fgColor="1F3864")

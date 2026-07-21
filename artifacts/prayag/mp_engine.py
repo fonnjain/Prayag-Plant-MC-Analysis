@@ -14,7 +14,7 @@ import dataclasses
 import io
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ── openpyxl (for demand Excel parsing) ─────────────────────────────────────
 try:
@@ -115,6 +115,7 @@ class PlanTotals:
     routable_material_kg: float
     routable_fresh_compound_kg: float
     routable_pulverizer_kg: float
+    routable_compound_cost_rs: float = 0.0  # fresh_compound × effective cost/kg
 
 
 @dataclasses.dataclass
@@ -127,6 +128,10 @@ class EngineResult:
     totals: PlanTotals
     baseline_machine_loads: List[MachineLoad] # unbalanced (first capable machine)
     params_used: Dict[str, float]
+    # Compound cost fields (default empty so old frozen runs deserialise cleanly)
+    effective_costs: Dict[str, float] = dataclasses.field(default_factory=dict)
+    cost_by_material: Dict[str, float] = dataclasses.field(default_factory=dict)
+    n_unpriced: int = 0
 
     def to_dict(self) -> dict:
         """Return a JSON-serialisable dict (via dataclasses.asdict)."""
@@ -146,7 +151,9 @@ class EngineResult:
             return MachineLoad(**x)
 
         gaps = CoverageGaps(**d["coverage_gaps"])
-        totals = PlanTotals(**d["totals"])
+        totals_d = dict(d["totals"])
+        totals_d.setdefault("routable_compound_cost_rs", 0.0)
+        totals = PlanTotals(**totals_d)
         return EngineResult(
             segment=d["segment"],
             effective_month=d["effective_month"],
@@ -156,7 +163,54 @@ class EngineResult:
             totals=totals,
             baseline_machine_loads=[_ml(r) for r in d.get("baseline_machine_loads", [])],
             params_used=d.get("params_used", {}),
+            effective_costs=d.get("effective_costs", {}),
+            cost_by_material=d.get("cost_by_material", {}),
+            n_unpriced=d.get("n_unpriced", 0),
         )
+
+
+# ── Compound-cost helpers ─────────────────────────────────────────────────────
+
+def compute_effective_costs(
+    recipe_rows: List[dict],
+    item_type: str,
+) -> Tuple[Dict[str, float], Set[str]]:
+    """Compute effective compound cost per kg by material for the given item type.
+
+    Effective cost/kg = sum(ratio_kg × price_per_kg) / sum(ratio_kg) × wastage_factor
+
+    Args:
+        recipe_rows: rows from mp_compound_recipe for the segment/month.
+        item_type: "pipe" or "fitting" (matches the ``type`` column).
+
+    Returns:
+        cost_map  : {MATERIAL_UPPER: Rs_per_kg}  — priced recipes only
+        unpriced  : set of material names with needs_recipe=True or zero ratio
+    """
+    groups: Dict[str, list] = defaultdict(list)
+    for r in recipe_rows:
+        if str(r.get("type", "")).lower() == item_type.lower():
+            groups[str(r.get("material", "")).upper()].append(r)
+
+    cost_map: Dict[str, float] = {}
+    unpriced: Set[str] = set()
+
+    for mat, rows in groups.items():
+        if any(r.get("needs_recipe") for r in rows):
+            unpriced.add(mat)
+            continue
+        total_ratio    = sum(float(r.get("ratio_kg") or 0) for r in rows)
+        total_weighted = sum(
+            float(r.get("ratio_kg") or 0) * float(r.get("price_per_kg") or 0)
+            for r in rows
+        )
+        wf = float(rows[0].get("wastage_factor") or 1.0)
+        if total_ratio > 0:
+            cost_map[mat] = round(total_weighted / total_ratio * wf, 4)
+        else:
+            unpriced.add(mat)
+
+    return cost_map, unpriced
 
 
 # ── Demand parsing ───────────────────────────────────────────────────────────
@@ -586,6 +640,25 @@ def run_engine(
         locked_out_machines=locked_out,
     )
 
+    # ── Compound cost ─────────────────────────────────────────────────────────
+    recipe_rows = _mp.get_compound_recipes(segment, effective_month)
+    cost_map_pipe, unpriced_pipe = compute_effective_costs(recipe_rows, "pipe")
+
+    pipe_cost_by_mat: Dict[str, float] = {}
+    n_unpriced_pipe = 0
+    rout_compound_cost = 0.0
+    for it in items:
+        if not it.has_weight:
+            continue
+        mat = it.material.upper()
+        if mat in unpriced_pipe:
+            n_unpriced_pipe += 1
+        elif mat in cost_map_pipe:
+            item_cost = it.fresh_compound_kg * cost_map_pipe[mat]
+            pipe_cost_by_mat[mat] = pipe_cost_by_mat.get(mat, 0.0) + item_cost
+            if it.has_machine:
+                rout_compound_cost += item_cost
+
     # ── Totals ───────────────────────────────────────────────────────────────
     total_qty     = sum(it.qty_pcs       for it in items)
     total_mat_kg  = sum(it.material_kg   for it in items if it.has_weight)
@@ -604,6 +677,7 @@ def run_engine(
         routable_material_kg=round(rout_mat_kg, 2),
         routable_fresh_compound_kg=round(rout_fresh, 2),
         routable_pulverizer_kg=round(rout_pulv, 2),
+        routable_compound_cost_rs=round(rout_compound_cost, 2),
     )
 
     return EngineResult(
@@ -615,6 +689,9 @@ def run_engine(
         totals=totals,
         baseline_machine_loads=base_loads,
         params_used={"waste_pct": waste_pct, "pulverizer_pct": pulv_pct},
+        effective_costs=cost_map_pipe,
+        cost_by_material={k: round(v, 2) for k, v in pipe_cost_by_mat.items()},
+        n_unpriced=n_unpriced_pipe,
     )
 
 
@@ -687,6 +764,10 @@ class FittingEngineResult:
     params_used: Dict[str, float]
     n_route_estimated: int    # items using material-level fallback routing
     n_unroutable: int         # items with no machine even after fallback
+    # Compound cost fields (default empty so old frozen runs deserialise cleanly)
+    effective_costs: Dict[str, float] = dataclasses.field(default_factory=dict)
+    cost_by_material: Dict[str, float] = dataclasses.field(default_factory=dict)
+    n_unpriced: int = 0
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -703,17 +784,22 @@ class FittingEngineResult:
         def _ml(x: dict) -> MachineLoad:
             return MachineLoad(**x)
 
+        totals_d = dict(d["totals"])
+        totals_d.setdefault("routable_compound_cost_rs", 0.0)
         return FittingEngineResult(
             segment=d["segment"],
             effective_month=d["effective_month"],
             items=[_item(dict(r)) for r in d.get("items", [])],
             machine_loads=[_ml(r) for r in d.get("machine_loads", [])],
             coverage_gaps=CoverageGaps(**d["coverage_gaps"]),
-            totals=PlanTotals(**d["totals"]),
+            totals=PlanTotals(**totals_d),
             baseline_machine_loads=[_ml(r) for r in d.get("baseline_machine_loads", [])],
             params_used=d.get("params_used", {}),
             n_route_estimated=d.get("n_route_estimated", 0),
             n_unroutable=d.get("n_unroutable", 0),
+            effective_costs=d.get("effective_costs", {}),
+            cost_by_material=d.get("cost_by_material", {}),
+            n_unpriced=d.get("n_unpriced", 0),
         )
 
 
@@ -1189,6 +1275,25 @@ def run_fitting_engine(
         locked_out_machines=locked,
     )
 
+    # ── Compound cost ─────────────────────────────────────────────────────────
+    fit_recipe_rows = _mp.get_compound_recipes(segment, effective_month)
+    cost_map_fit, unpriced_fit = compute_effective_costs(fit_recipe_rows, "fitting")
+
+    fit_cost_by_mat: Dict[str, float] = {}
+    n_unpriced_fit = 0
+    rout_fit_cost = 0.0
+    for it in items:
+        if not it.has_weight:
+            continue
+        mat = it.material.upper()
+        if mat in unpriced_fit:
+            n_unpriced_fit += 1
+        elif mat in cost_map_fit:
+            item_cost = it.fresh_compound_kg * cost_map_fit[mat]
+            fit_cost_by_mat[mat] = fit_cost_by_mat.get(mat, 0.0) + item_cost
+            if it.has_machine:
+                rout_fit_cost += item_cost
+
     # ── Totals ────────────────────────────────────────────────────────────────
     total_qty    = sum(it.qty_pcs       for it in items)
     total_mat_kg = sum(it.material_kg   for it in items if it.has_weight)
@@ -1206,6 +1311,7 @@ def run_fitting_engine(
         routable_material_kg=round(rout_mat_kg, 2),
         routable_fresh_compound_kg=round(rout_fresh, 2),
         routable_pulverizer_kg=round(rout_pulv, 2),
+        routable_compound_cost_rs=round(rout_fit_cost, 2),
     )
 
     return FittingEngineResult(
@@ -1219,4 +1325,7 @@ def run_fitting_engine(
         params_used={"waste_pct": waste_pct, "pulverizer_pct": pulv_pct},
         n_route_estimated=n_route_estimated,
         n_unroutable=n_unroutable,
+        effective_costs=cost_map_fit,
+        cost_by_material={k: round(v, 2) for k, v in fit_cost_by_mat.items()},
+        n_unpriced=n_unpriced_fit,
     )

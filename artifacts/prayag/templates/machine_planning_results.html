@@ -93,6 +93,97 @@
   </div>
   {% endif %}
 
+  {# ── Compound cost summary ───────────────────────────────────────── #}
+  {% set pipe_cost  = result.totals.routable_compound_cost_rs if result else 0 %}
+  {% set fit_cost   = fitting_result.totals.routable_compound_cost_rs if fitting_result else 0 %}
+  {% set total_cost = pipe_cost + fit_cost %}
+  {% if total_cost > 0 or result.n_unpriced or (fitting_result and fitting_result.n_unpriced) %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.7rem;margin-bottom:.9rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .55rem;
+               text-transform:uppercase;letter-spacing:.05em;">
+      Compound Cost (Fresh Compound Only · Pulverizer = Recovered)
+    </h3>
+
+    {# ── Headline cards ── #}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.6rem;">
+      {% for lbl,val,bg,fg in [
+          ('Pipe Cost (Rs)',    pipe_cost,  '#e0e7ff','#4338ca'),
+          ('Fitting Cost (Rs)', fit_cost,   '#d1fae5','#065f46'),
+          ('Combined (Rs)',     total_cost, '#1f3864','#ffffff'),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.45rem;padding:.5rem .6rem;">
+        <div style="font-size:.65rem;font-weight:700;color:{{ fg }};text-transform:uppercase;">{{ lbl }}</div>
+        <div style="font-size:.92rem;font-weight:800;color:{{ fg }};">
+          {{ "{:,.0f}".format(val) }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# ── Cost/kg per recipe ── #}
+    {% set pipe_eff  = result.effective_costs if result else {} %}
+    {% set fit_eff   = fitting_result.effective_costs if fitting_result else {} %}
+    {% set all_mats  = (pipe_eff.keys()|list + fit_eff.keys()|list)|unique|sort %}
+    {% if all_mats %}
+    <table style="width:100%;font-size:.72rem;border-collapse:collapse;margin-bottom:.45rem;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:.2rem .4rem;color:#6b7280;">Material</th>
+          <th style="text-align:right;padding:.2rem .4rem;color:#6b7280;">Pipe (Rs/kg)</th>
+          <th style="text-align:right;padding:.2rem .4rem;color:#6b7280;">Fitting (Rs/kg)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mat in all_mats %}
+        <tr style="border-top:1px solid #f3f4f6;">
+          <td style="padding:.2rem .4rem;font-weight:600;color:var(--navy);">{{ mat }}</td>
+          <td style="text-align:right;padding:.2rem .4rem;">
+            {% if mat in pipe_eff %}{{ "{:,.2f}".format(pipe_eff[mat]) }}{% else %}—{% endif %}
+          </td>
+          <td style="text-align:right;padding:.2rem .4rem;">
+            {% if mat in fit_eff %}{{ "{:,.2f}".format(fit_eff[mat]) }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {# ── By-material cost breakdown ── #}
+    {% set pipe_by_mat = result.cost_by_material if result else {} %}
+    {% set fit_by_mat  = fitting_result.cost_by_material if fitting_result else {} %}
+    {% set cost_mats   = (pipe_by_mat.keys()|list + fit_by_mat.keys()|list)|unique|sort %}
+    {% if cost_mats %}
+    <div style="font-size:.7rem;color:#374151;margin-bottom:.35rem;font-weight:600;">
+      Cost by material (Rs):
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:.3rem;">
+      {% for mat in cost_mats %}
+      {% set pv = pipe_by_mat.get(mat, 0) %}
+      {% set fv = fit_by_mat.get(mat, 0) %}
+      <div style="background:#f9fafb;border-radius:.35rem;padding:.3rem .45rem;">
+        <div style="font-size:.62rem;font-weight:700;color:var(--navy);">{{ mat }}</div>
+        <div style="font-size:.78rem;font-weight:800;color:#1f2937;">{{ "{:,.0f}".format(pv + fv) }}</div>
+        {% if pv and fv %}
+        <div style="font-size:.58rem;color:#6b7280;">P {{ "{:,.0f}".format(pv) }} · F {{ "{:,.0f}".format(fv) }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ── Unpriced warning ── #}
+    {% set n_up = (result.n_unpriced if result else 0) + (fitting_result.n_unpriced if fitting_result else 0) %}
+    {% if n_up > 0 %}
+    <div style="margin-top:.45rem;font-size:.72rem;color:#92400e;
+                background:#fff7ed;border-radius:.35rem;padding:.3rem .5rem;">
+      ⚠️ {{ n_up }} item{{ 's' if n_up > 1 }} in unpriced recipes (needs_recipe) — cost shown as blank for those.
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {# ── Coverage gaps ────────────────────────────────────────────────── #}
   {% set gaps = result.coverage_gaps %}
   {% if gaps.no_weight or gaps.no_machine or gaps.locked_out_machines or gaps.idle_machines %}
