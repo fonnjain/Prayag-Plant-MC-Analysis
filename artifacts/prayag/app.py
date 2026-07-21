@@ -3617,9 +3617,10 @@ def plan_board():
     _ctx = {"today_disp": _fmt(_today()), "last_synced": _sync_ctx()}
 
     try:
-        plans = build_plan(plant, month)
+        plans, plant_alerts = build_plan(plant, month)
     except Exception as exc:
         plans = []
+        plant_alerts = []
         _ctx["error"] = str(exc)
 
     actionable = [p for p in plans if p.actionable]
@@ -3630,6 +3631,7 @@ def plan_board():
         plans=plans,
         actionable=actionable,
         blocked=blocked,
+        plant_alerts=plant_alerts,
         month=month,
         plant=plant,
         plants=list(PLANNING_SOURCES.keys()),
@@ -3656,7 +3658,7 @@ def plan_detail():
         return redirect(f"/plan?plant={plant}&month={month}")
 
     try:
-        plans = build_plan(plant, month)
+        plans, _plant_alerts = build_plan(plant, month)
     except Exception as exc:
         return render_template(
             "plan_detail.html",

@@ -71,14 +71,16 @@
             <span class="text-sm
               {% if g.status == 'green' %}text-green-600
               {% elif g.status == 'red' %}text-red-600
+              {% elif g.status == 'plant-wide' %}text-orange-500
               {% else %}text-gray-300{% endif %}">
-              {% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% else %}○{% endif %}
+              {% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% elif g.status == 'plant-wide' %}◐{% else %}○{% endif %}
             </span>
           </td>
           <td class="px-3 py-2 font-semibold text-gray-700">{{ g.name }}</td>
           <td class="px-3 py-2
             {% if g.status == 'green' %}text-green-700
             {% elif g.status == 'red' %}text-red-600 font-semibold
+            {% elif g.status == 'plant-wide' %}text-orange-700
             {% else %}text-gray-400 italic{% endif %}">
             {{ g.reason }}
           </td>

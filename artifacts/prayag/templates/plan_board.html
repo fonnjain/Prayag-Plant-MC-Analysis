@@ -58,8 +58,9 @@
           class="inline-flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5
           {% if g.status == 'green' %}bg-green-50 text-green-700
           {% elif g.status == 'red' %}bg-red-50 text-red-700
+          {% elif g.status == 'plant-wide' %}bg-orange-50 text-orange-700
           {% else %}bg-gray-100 text-gray-400{% endif %}">
-      <span class="text-[8px]">{% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% else %}○{% endif %}</span>
+      <span class="text-[8px]">{% if g.status == 'green' %}●{% elif g.status == 'red' %}●{% elif g.status == 'plant-wide' %}◐{% else %}○{% endif %}</span>
       {{ g.name }}
     </span>
     {% endfor %}
@@ -105,6 +106,25 @@
   {% if error %}
   <div class="rounded-lg p-3 mb-3 text-xs text-red-700 bg-red-50 border border-red-200">
     {{ error }}
+  </div>
+  {% endif %}
+
+  {# Plant-wide material alert banner #}
+  {% if plant_alerts %}
+  <div class="rounded-lg p-3 mb-3 border text-xs" style="background:#FFF7ED;border-color:#FB923C">
+    <div class="font-semibold mb-1" style="color:#C55A11">⚠ Plant material risk</div>
+    {% for a in plant_alerts %}
+    <div class="text-gray-700">
+      <span class="font-medium">{{ a.item_name }}</span>
+      {% if a.cover_display is not none %}
+       — cover {{ "%.0f"|format(a.cover_display) }}d &lt; lead {{ "%.0f"|format(a.lead_time_days) }}d
+      {% endif %}
+      {% if a.as_of %}
+      <span class="text-gray-400 ml-1">(as of {{ a.as_of }})</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="text-gray-400 mt-1">Applies to all machines — shown per-machine as ◐ plant-wide</div>
   </div>
   {% endif %}
 

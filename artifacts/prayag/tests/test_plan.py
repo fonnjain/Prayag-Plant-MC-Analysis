@@ -13,6 +13,7 @@ from plan import (
     _PIPE_PRODUCTION_MACHINES,
     _norm, _partial_match, _lookup, _lookup_list,
     _classify_ptmt_item, _find_worst_rm, _build_run_queue, _evaluate_gates, build_plan,
+    _is_plant_wide_rm, _WorstRm,
 )
 
 
@@ -118,9 +119,9 @@ def test_find_worst_rm_finds_worst():
     ]
     result = _find_worst_rm(mats)
     assert result is not None
-    name, cover, lead, _ = result
-    assert name == "Resin B"
-    assert cover == 1.0
+    assert isinstance(result, _WorstRm)
+    assert result.item_name == "Resin B"
+    assert result.days_of_cover == 1.0
 
 
 def test_find_worst_rm_ignores_non_rm():
@@ -137,8 +138,7 @@ def test_find_worst_rm_item_type_filter_excludes_unrelated():
     # Only check CPVC
     result = _find_worst_rm(mats, item_types={"CPVC"})
     assert result is not None
-    name, cover, _, _ = result
-    assert name == "CPVC Resin"  # UPVC excluded
+    assert result.item_name == "CPVC Resin"  # UPVC excluded
 
 
 def test_find_worst_rm_empty_item_type_always_included():
@@ -381,13 +381,13 @@ def _make_rm_at_reorder(item_type=""):
 
 
 def test_bottleneck_material_beats_capacity():
-    """When material is RED and capacity is RED, material wins (higher priority)."""
-    run_queue = [_qi("ITEM_A", 500.0, 10.0, family="TEST")]
+    """Machine-specific RED material beats RED capacity (higher priority)."""
+    run_queue = [_qi("ITEM_A", 500.0, 10.0, family="SPECIFIC")]
     m_result = _FakeMetricsResult(actual_hours=500.0, ideal_hours=500.0)
     gates, bottleneck, reason = _evaluate_gates(
         _norm("M C 1"), "TEST",
         run_queue,
-        [_make_rm_at_reorder(item_type="")],  # empty item_type → always included
+        [_make_rm_at_reorder(item_type="SPECIFIC")],  # machine-specific → RED (not plant-wide)
         {}, {},
         m_result, 500.0, 500.0, "2026-06",
     )
@@ -412,7 +412,7 @@ def test_bottleneck_capacity_when_only_red():
 
 
 def test_grey_gate_never_bottleneck():
-    """Tooling and Feed are always grey → never bottleneck even when all others grey."""
+    """GREY/plant-wide gates never become bottleneck even when all others grey."""
     gates, bottleneck, reason = _evaluate_gates(
         _norm("M C 3"), "PTMT",
         [],   # empty queue → Material GREY
@@ -422,7 +422,7 @@ def test_grey_gate_never_bottleneck():
     )
     for g in gates:
         if g.name in ("Tooling", "Feed"):
-            assert g.status == "grey", f"{g.name} must always be grey"
+            assert g.status == "grey", f"{g.name} should be grey with default params"
     assert bottleneck is None
 
 
@@ -561,17 +561,17 @@ def test_six_gates_always_present():
         assert expected in names
 
 
-def test_tooling_and_feed_always_grey():
-    """Tooling and Feed are unconditionally grey (Phase 2D not built)."""
+def test_tooling_and_feed_grey_when_no_data():
+    """Tooling and Feed default to GREY when no Phase 2D data is provided."""
     gates, _, _ = _evaluate_gates(
         _norm("M C 11"), "PTMT",
         [], [], {}, {},
         _FakeMetricsResult(), 100.0, 200.0, "2026-06",
+        # toolroom_items=None, mixer_recs_for_type=None (defaults) → GREY
     )
     for g in gates:
         if g.name in ("Tooling", "Feed"):
             assert g.status == "grey"
-            assert "Phase 2D" in g.reason
 
 
 # ---------------------------------------------------------------------------
@@ -676,3 +676,193 @@ def test_pipe_roster_includes_mc_1_through_9():
         assert expected in _PIPE_PRODUCTION_MACHINES, (
             f"'{expected}' missing from PIPE production roster"
         )
+
+
+# ---------------------------------------------------------------------------
+# _is_plant_wide_rm helper
+# ---------------------------------------------------------------------------
+
+def test_is_plant_wide_rm_empty_type():
+    """Empty item_type is always plant-wide."""
+    assert _is_plant_wide_rm("", "PIPE")
+    assert _is_plant_wide_rm("", "PTMT")
+
+
+def test_is_plant_wide_rm_matches_plant_name():
+    """item_type equal to the plant name is plant-wide."""
+    assert _is_plant_wide_rm("PIPE", "PIPE")
+    assert _is_plant_wide_rm("ptmt", "PTMT")   # case-insensitive
+
+
+def test_is_plant_wide_rm_specific_type_not_plant_wide():
+    """item_type naming a specific sub-type is NOT plant-wide."""
+    assert not _is_plant_wide_rm("CPVC", "PIPE")
+    assert not _is_plant_wide_rm("UPVC", "PIPE")
+    assert not _is_plant_wide_rm("CISTERN", "PTMT")
+
+
+# ---------------------------------------------------------------------------
+# Material gate — plant-wide status
+# ---------------------------------------------------------------------------
+
+def test_material_gate_plant_wide_not_bottleneck():
+    """RM with empty item_type (plant-wide) → gate status 'plant-wide', not bottleneck."""
+    run_queue = [_qi("ITEM_A", 300.0, 5.0, family="GENERIC")]
+    mat = _make_rm_at_reorder(item_type="")   # empty → plant-wide for any plant
+    m_result = _FakeMetricsResult(actual_hours=100.0, ideal_hours=200.0)
+    gates, bottleneck, reason = _evaluate_gates(
+        _norm("M C 5"), "TEST",
+        run_queue,
+        [mat], {}, {},
+        m_result, 100.0, 200.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    assert mat_gate.status == "plant-wide", "Generic RM must be plant-wide, not red"
+    # plant-wide never makes the machine the bottleneck
+    assert bottleneck != "Material", "plant-wide gate must not be the bottleneck"
+
+
+def test_material_gate_plant_wide_reason_contains_item_name():
+    """plant-wide gate reason must include the item name for traceability."""
+    run_queue = [_qi("ITEM_B", 100.0, 3.0, family="SOMETHING")]
+    mat = _make_rm_at_reorder(item_type="")
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 6"), "MOULDING",
+        run_queue,
+        [mat], {}, {},
+        None, 0.0, 0.0, "2026-06",
+    )
+    mat_gate = next(g for g in gates if g.name == "Material")
+    assert "Resin K-67" in mat_gate.reason
+
+
+# ---------------------------------------------------------------------------
+# Tooling gate — Phase 2D
+# ---------------------------------------------------------------------------
+
+class _FakeToolroomItem:
+    def __init__(self, item):
+        self.item = item
+
+
+def test_tooling_red_with_active_job():
+    """Non-empty frozenset of toolroom items → Tooling=RED."""
+    gates, bottleneck, reason = _evaluate_gates(
+        _norm("M C 20"), "PTMT",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        toolroom_items=frozenset({"CISTERN MOULD A", "CISTERN MOULD B"}),
+    )
+    tooling_gate = next(g for g in gates if g.name == "Tooling")
+    assert tooling_gate.status == "red"
+    assert bottleneck == "Tooling"
+
+
+def test_tooling_green_no_active_job():
+    """Empty frozenset (data loaded, no match) → Tooling=GREEN."""
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 21"), "PTMT",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        toolroom_items=frozenset(),
+    )
+    tooling_gate = next(g for g in gates if g.name == "Tooling")
+    assert tooling_gate.status == "green"
+
+
+def test_tooling_grey_when_none():
+    """toolroom_items=None (default) → Tooling=GREY (no data)."""
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 22"), "PTMT",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        toolroom_items=None,
+    )
+    tooling_gate = next(g for g in gates if g.name == "Tooling")
+    assert tooling_gate.status == "grey"
+
+
+# ---------------------------------------------------------------------------
+# Feed gate — Phase 2D
+# ---------------------------------------------------------------------------
+
+class _FakeMixerRecord:
+    def __init__(self, batch_type, total_compound_kg=0.0, breakdown_hours=0.0):
+        self.batch_type = batch_type
+        self.total_compound_kg = total_compound_kg
+        self.breakdown_hours = breakdown_hours
+
+
+def test_feed_red_mixer_breakdown():
+    """Mixer records with breakdown_hours>0 and total_compound_kg==0 → Feed=RED."""
+    mixer_recs = [_FakeMixerRecord("CPVC", total_compound_kg=0.0, breakdown_hours=3.5)]
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 30"), "PIPE",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        mixer_recs_for_type=mixer_recs,
+    )
+    feed_gate = next(g for g in gates if g.name == "Feed")
+    assert feed_gate.status == "red"
+    assert "breakdown" in feed_gate.reason.lower()
+
+
+def test_feed_green_compound_available():
+    """Mixer records with compound produced → Feed=GREEN."""
+    mixer_recs = [_FakeMixerRecord("CPVC", total_compound_kg=5000.0, breakdown_hours=0.0)]
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 31"), "PIPE",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        mixer_recs_for_type=mixer_recs,
+    )
+    feed_gate = next(g for g in gates if g.name == "Feed")
+    assert feed_gate.status == "green"
+    assert "5,000" in feed_gate.reason
+
+
+def test_feed_grey_empty_list():
+    """mixer_recs_for_type=[] (data loaded, no records for type) → Feed=GREY."""
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 32"), "PIPE",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        mixer_recs_for_type=[],
+    )
+    feed_gate = next(g for g in gates if g.name == "Feed")
+    assert feed_gate.status == "grey"
+
+
+def test_feed_grey_none():
+    """mixer_recs_for_type=None (default) → Feed=GREY (no data)."""
+    gates, _, _ = _evaluate_gates(
+        _norm("M C 33"), "PIPE",
+        [], [], {}, {},
+        _FakeMetricsResult(), 0.0, 0.0, "2026-06",
+        mixer_recs_for_type=None,
+    )
+    feed_gate = next(g for g in gates if g.name == "Feed")
+    assert feed_gate.status == "grey"
+
+
+# ---------------------------------------------------------------------------
+# _find_worst_rm — cover_display uses stock_days_sheet when present
+# ---------------------------------------------------------------------------
+
+def test_find_worst_rm_cover_display_uses_stock_days_sheet():
+    """When stock_days_sheet is set on the record, cover_display must use it."""
+    mat = _FakeMat("RM", True, 46.57, 60.0, "GRANUALS-CG122")
+    mat.stock_days_sheet = 17.0  # sheet's own value differs from rolling-avg
+    result = _find_worst_rm([mat])
+    assert result is not None
+    assert result.cover_display == 17.0, "cover_display must use stock_days_sheet"
+    assert result.days_of_cover == 46.57, "days_of_cover must retain the computed value"
+
+
+def test_find_worst_rm_cover_display_fallback_when_no_sheet():
+    """When stock_days_sheet is absent, cover_display falls back to days_of_cover."""
+    mat = _FakeMat("RM", True, 10.0, 30.0, "Resin X")
+    # no .stock_days_sheet attribute → getattr returns None → fallback
+    result = _find_worst_rm([mat])
+    assert result is not None
+    assert result.cover_display == 10.0

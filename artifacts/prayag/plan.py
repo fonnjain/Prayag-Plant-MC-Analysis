@@ -1,27 +1,31 @@
 """
 plan.py — Phase 3 Unified per-machine planning view.
 
-build_plan(plant, month) joins on-demand loaders (Phases 2A–2C)
+build_plan(plant, month) joins on-demand loaders (Phases 2A–2D)
 plus existing production/metrics into one MachinePlan per machine.
+Returns (plans, plant_alerts) — a list of MachinePlan and a list of
+plant-wide material alert dicts for the banner on /plan.
 
 INVARIANTS
   * NEVER called on "/".  Triggered only from /plan routes.
   * Reuses existing L1/L2 cached loaders — no new sheet reads.
   * Recomputes every gate; trusts no stored flag.
-  * Feed + Tooling gates are GREY until Phase 2D lands.
-  * Grey gates NEVER become the bottleneck.
+  * Feed gate wired from compound mixer-batch log (Report-5 A-D).
+  * Tooling gate wired from toolroom job log (Report-21).
+  * Grey and plant-wide gates NEVER become the bottleneck.
   * Machine roster = PRODUCTION sources only (daily prod_recs + PIPE fixed list).
     Maintenance records (Report-16/8) are a LEFT JOIN — NEVER added to the roster.
     MouldStd names are a lookup index for PTMT — NEVER added to the roster.
   * Material gate is PER-MACHINE, filtered to the machine's run-queue types.
     A machine with an empty queue gets Material=GREY ("no mapped demand").
-    Generic plant-level RM (item_type == plant name) is always included.
+    Generic plant-level RM (item_type == plant name) is surfaced as "plant-wide"
+    status (not "red") — the plant-level banner carries the risk signal.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +134,28 @@ def _lookup_list(idx: Dict[str, list], norm_key: str) -> list:
     return []
 
 
+class _WorstRm(NamedTuple):
+    """Return type of _find_worst_rm: worst reorder-triggered RM item."""
+    item_name: str
+    days_of_cover: Optional[float]    # recomputed; used as sort key
+    cover_display: Optional[float]    # stock_days_sheet when available, else days_of_cover
+    lead_time_days: float
+    as_of_date: str
+    item_type: str                    # uppercased; "" = unclassified / generic
+
+
+def _is_plant_wide_rm(item_type: str, plant: str) -> bool:
+    """True when an RM item has no machine/type-specific attribution.
+
+    Records with item_type equal to the plant name (e.g. 'PIPE') or empty string
+    are generic plant-level inputs (e.g. GRANUALS-CG122 for PIPE).  They are surfaced
+    as a shared plant-level alert banner rather than identical red on every card.
+    """
+    t = (item_type or "").strip().upper()
+    p = (plant or "").strip().upper()
+    return not t or t == p
+
+
 def _classify_ptmt_item(item_name: str) -> str:
     """Map a MouldStd item_name to a PlanRecord family ('cistern'|'seatcover'|'faucet').
 
@@ -151,15 +177,20 @@ def _classify_ptmt_item(item_name: str) -> str:
     return "faucet"
 
 
-def _find_worst_rm(mat_recs: list, item_types: Optional[Set[str]] = None):
-    """Return (item_name, cover_days, lead_days, as_of) for the RM item
-    with the lowest days_of_cover that is at or below reorder level.
+def _find_worst_rm(mat_recs: list, item_types: Optional[Set[str]] = None) -> Optional[_WorstRm]:
+    """Return _WorstRm for the RM item with the lowest days_of_cover at reorder level.
 
     If item_types is provided, only RM records whose item_type (uppercased)
     is in item_types, or whose item_type is empty/unknown, are considered.
     Returns None when all RM stock is healthy or no matching RM records exist.
+
+    cover_display uses stock_days_sheet (the sheet's own pre-computed "Stock Days"
+    column) when available, falling back to the recomputed days_of_cover.  For PIPE
+    Report-2 the two can diverge because the sheet uses actual-month consumption while
+    the app computes from a rolling average.  The sheet value matches what Prayag staff
+    read from the report.
     """
-    worst = None
+    worst: Optional[_WorstRm] = None
     worst_cover = float("inf")
     for r in mat_recs:
         if r.category != "RM":
@@ -171,8 +202,15 @@ def _find_worst_rm(mat_recs: list, item_types: Optional[Set[str]] = None):
         if r.reorder_flag and r.days_of_cover is not None:
             if r.days_of_cover < worst_cover:
                 worst_cover = r.days_of_cover
-                worst = (r.item_name, r.days_of_cover, r.lead_time_days,
-                         r.as_of_date)
+                sds = getattr(r, "stock_days_sheet", None)
+                worst = _WorstRm(
+                    item_name=r.item_name,
+                    days_of_cover=r.days_of_cover,
+                    cover_display=sds if sds is not None else r.days_of_cover,
+                    lead_time_days=r.lead_time_days,
+                    as_of_date=r.as_of_date,
+                    item_type=(getattr(r, "item_type", "") or "").strip().upper(),
+                )
     return worst
 
 
@@ -299,13 +337,24 @@ def _evaluate_gates(
     actual_h: float,
     ideal_h: float,
     month: str,
+    *,
+    mixer_recs_for_type: Optional[list] = None,
+    toolroom_items: Optional[frozenset] = None,
 ) -> Tuple[List[GateStatus], Optional[str], str]:
     """Evaluate all six readiness gates; return (gates, bottleneck_name, reason).
 
     Material gate is PER-MACHINE — filtered to the types in this machine's run queue.
     A machine with an empty queue gets Material=GREY (no mapped demand).
-    Generic plant-level RM (item_type == plant name) is always included.
-    Grey gates NEVER become the bottleneck.
+    Generic plant-level RM (item_type == plant name) is surfaced as "plant-wide" status
+    (not "red") — machine is NOT individually bottlenecked; the banner carries the risk.
+    Grey and plant-wide gates NEVER become the bottleneck.
+
+    mixer_recs_for_type — CompoundBatchRecord list for this machine's compound types;
+                          None = no data (GREY); [] = data but no records for type (GREY);
+                          non-empty: breakdown_hours>0 + total_compound_kg==0 → RED, else GREEN.
+    toolroom_items      — frozenset of item names in active toolroom jobs for this machine;
+                          None = no data (GREY); frozenset() = loaded, no match (GREEN);
+                          non-empty = active job blocking the machine (RED).
     """
     gates: List[GateStatus] = []
 
@@ -333,12 +382,22 @@ def _evaluate_gates(
         mat_as_of = rm_recs[0].as_of_date if rm_recs else ""
 
         if rm_worst:
-            name, cover, lead, as_of = rm_worst
-            gates.append(GateStatus(
-                name="Material", status="red",
-                reason=f"{name} cover {cover:.0f}d < lead {lead:.0f}d",
-                provenance=f"Report-2/3/4 as of {as_of or month}",
-            ))
+            cd = (rm_worst.cover_display
+                  if rm_worst.cover_display is not None else rm_worst.days_of_cover)
+            if _is_plant_wide_rm(rm_worst.item_type, plant):
+                gates.append(GateStatus(
+                    name="Material", status="plant-wide",
+                    reason=(f"plant-wide: {rm_worst.item_name} cover "
+                            f"{cd:.0f}d < lead {rm_worst.lead_time_days:.0f}d"),
+                    provenance=f"Report-2/3/4 as of {rm_worst.as_of_date or month}",
+                ))
+            else:
+                gates.append(GateStatus(
+                    name="Material", status="red",
+                    reason=(f"{rm_worst.item_name} cover "
+                            f"{cd:.0f}d < lead {rm_worst.lead_time_days:.0f}d"),
+                    provenance=f"Report-2/3/4 as of {rm_worst.as_of_date or month}",
+                ))
         elif rm_recs:
             gates.append(GateStatus(
                 name="Material", status="green",
@@ -352,19 +411,58 @@ def _evaluate_gates(
                 provenance="",
             ))
 
-    # ── 2. Tooling (always GREY — Phase 2D not yet built) ──────────────
-    gates.append(GateStatus(
-        name="Tooling", status="grey",
-        reason="not yet tracked (Phase 2D)",
-        provenance="",
-    ))
+    # ── 2. Tooling (Report-21) ──────────────────────────────────────────
+    if toolroom_items is None:
+        gates.append(GateStatus(
+            name="Tooling", status="grey",
+            reason="No toolroom data for this machine",
+            provenance="",
+        ))
+    elif toolroom_items:
+        items_str = ", ".join(sorted(toolroom_items)[:2])
+        if len(toolroom_items) > 2:
+            items_str += f" (+{len(toolroom_items) - 2} more)"
+        gates.append(GateStatus(
+            name="Tooling", status="red",
+            reason=f"Active toolroom job: {items_str}",
+            provenance=f"Report-21 as of {month}",
+        ))
+    else:
+        gates.append(GateStatus(
+            name="Tooling", status="green",
+            reason="No active toolroom job this period",
+            provenance=f"Report-21 as of {month}",
+        ))
 
-    # ── 3. Feed (always GREY — Phase 2D not yet built) ─────────────────
-    gates.append(GateStatus(
-        name="Feed", status="grey",
-        reason="not yet tracked (Phase 2D)",
-        provenance="",
-    ))
+    # ── 3. Feed / compound (Report-5 A-D) ──────────────────────────────
+    if mixer_recs_for_type is None or not mixer_recs_for_type:
+        reason = ("No compound/mixer data for this type"
+                  if mixer_recs_for_type is not None
+                  else "No compound/mixer data available")
+        gates.append(GateStatus(
+            name="Feed", status="grey",
+            reason=reason,
+            provenance="",
+        ))
+    else:
+        has_breakdown = any(
+            getattr(r, "breakdown_hours", 0) > 0
+            and getattr(r, "total_compound_kg", 0) == 0
+            for r in mixer_recs_for_type
+        )
+        if has_breakdown:
+            gates.append(GateStatus(
+                name="Feed", status="red",
+                reason="Mixer breakdown — no compound produced for this type",
+                provenance=f"Report-5(A-D) as of {month}",
+            ))
+        else:
+            total_kg = sum(getattr(r, "total_compound_kg", 0) for r in mixer_recs_for_type)
+            gates.append(GateStatus(
+                name="Feed", status="green",
+                reason=f"Compound available ({total_kg:,.0f} kg produced)",
+                provenance=f"Report-5(A-D) as of {month}",
+            ))
 
     # ── 4. Machine health (maintenance register) ───────────────────────
     maint_r = _lookup(maint_idx, norm_m)
@@ -468,9 +566,11 @@ def _evaluate_gates(
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_plan(plant: str, month: str) -> List[MachinePlan]:
-    """Build MachinePlan list for all machines in plant for the given month.
+def build_plan(plant: str, month: str) -> Tuple[List[MachinePlan], List[dict]]:
+    """Build (MachinePlan list, plant_alerts list) for plant + month.
 
+    plant_alerts — list of dicts for plant-wide RM items at reorder:
+      {"item_name", "cover_display", "lead_time_days", "as_of"}
     Machine roster = production sources only; maintenance is a LEFT JOIN.
     MUST NOT be called from the "/" critical path.
     """
@@ -497,6 +597,17 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
         mp_recs = sheets.load_manpower_records(plant, month)
     except Exception:
         mp_recs = []
+
+    # Phase 2D: compound/feed (Report-5 A-D) and toolroom (Report-21)
+    try:
+        mixer_recs_raw: Optional[list] = sheets.load_mixer_records(plant, month)
+    except Exception:
+        mixer_recs_raw = None  # None → GREY per machine
+
+    try:
+        toolroom_recs_raw: Optional[list] = sheets.load_toolroom_records(plant, month)
+    except Exception:
+        toolroom_recs_raw = None  # None → GREY per machine
 
     mould_stds: list = []
     if plant == "PTMT":
@@ -549,6 +660,56 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
     pipe_plan_by_family: Dict[str, list] = {}
     for r in plan_recs:
         pipe_plan_by_family.setdefault(r.family.upper().strip(), []).append(r)
+
+    # ── 2b. Plant-wide material alerts (shared banner on /plan) ─────────
+    _best_pa: Dict[str, dict] = {}
+    for _r in mat_recs:
+        if _r.category != "RM" or not _r.reorder_flag:
+            continue
+        _itype = (getattr(_r, "item_type", "") or "").strip().upper()
+        if not _is_plant_wide_rm(_itype, plant):
+            continue
+        _sds = getattr(_r, "stock_days_sheet", None)
+        _cd = _sds if _sds is not None else _r.days_of_cover
+        _nm = _r.item_name
+        _existing = _best_pa.get(_nm)
+        if _existing is None or (_cd or 999) < (_existing["cover_display"] or 999):
+            _best_pa[_nm] = {
+                "item_name": _nm, "cover_display": _cd,
+                "lead_time_days": _r.lead_time_days, "as_of": _r.as_of_date,
+            }
+    plant_alerts: List[dict] = sorted(
+        _best_pa.values(), key=lambda a: (a["cover_display"] or 999)
+    )
+
+    # Per-machine Phase 2D helpers (closures over *_recs_raw locals above)
+    def _mixer_for(families: Set[str]) -> Optional[list]:
+        """Mixer records for these compound families; None → no data → GREY."""
+        if mixer_recs_raw is None or not families:
+            return None
+        fam_upper = {f.strip().upper() for f in families if f}
+        matched = [
+            r for r in mixer_recs_raw
+            if (getattr(r, "batch_type", "") or "").strip().upper() in fam_upper
+        ]
+        return matched  # [] = data loaded but 0 records for type → GREY per spec
+
+    def _toolroom_for(norm_m_: str, stds_: list) -> Optional[frozenset]:
+        """Toolroom items for this machine's moulds; None → no data → GREY."""
+        if toolroom_recs_raw is None:
+            return None
+        if plant == "PTMT":
+            if not stds_:
+                return None  # no mould data for machine → GREY
+            mould_norms = {_norm(s.item_name) for s in stds_}
+            return frozenset(
+                r.item for r in toolroom_recs_raw
+                if _norm(r.item) in mould_norms
+                or any(_partial_match(_norm(r.item), mn) for mn in mould_norms)
+            )
+        # PIPE/CP: Report-21 tracks moulds/lathe ops, not extrusion dies
+        # → no reliable per-machine mapping → GREY
+        return None
 
     # ── 3. Collect machine names from PRODUCTION sources only ────────────
     #    maint_recs → LEFT JOIN, never roster source.
@@ -609,6 +770,19 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
             pipe_all_plan_recs=plan_recs,
         )
 
+        # Phase 2D: compound families and mould stds for this machine
+        if plant in ("PIPE", "CP"):
+            _m_fams: Set[str] = (pipe_machine_materials.get(norm_m)
+                                  or set(pipe_plan_by_family.keys()))
+        elif plant == "PTMT":
+            _m_stds_loc = _lookup_list(ptmt_machine_stds, norm_m)
+            _m_fams = ({_classify_ptmt_item(s.item_name).upper() for s in _m_stds_loc}
+                       or {"FAUCET", "CISTERN", "SEATCOVER"})
+        else:
+            _m_fams = set()
+        _toolroom_stds = (_lookup_list(ptmt_machine_stds, norm_m)
+                          if plant == "PTMT" else [])
+
         gates, bottleneck, bn_reason = _evaluate_gates(
             norm_m=norm_m,
             plant=plant,
@@ -620,6 +794,8 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
             actual_h=actual_h,
             ideal_h=ideal_h,
             month=month,
+            mixer_recs_for_type=_mixer_for(_m_fams),
+            toolroom_items=_toolroom_for(norm_m, _toolroom_stds),
         )
 
         actionable = (
@@ -652,4 +828,4 @@ def build_plan(plant: str, month: str) -> List[MachinePlan]:
         p.bottleneck or "",
         p.machine,
     ))
-    return plans
+    return plans, plant_alerts
