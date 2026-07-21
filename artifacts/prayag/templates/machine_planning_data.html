@@ -1,0 +1,681 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.mp-tab { padding:.5rem 1rem; border-radius:.5rem; font-size:.85rem; font-weight:600; cursor:pointer; }
+.mp-tab.active { background:var(--terra); color:#fff; }
+.mp-tab:not(.active) { background:#f3f4f6; color:#374151; }
+.section-card { background:#fff; border-radius:.75rem; box-shadow:0 1px 4px rgba(0,0,0,.08); margin-bottom:1rem; overflow:hidden; }
+.section-header { display:flex; align-items:center; justify-content:space-between; padding:.75rem 1rem; cursor:pointer; background:#f9fafb; border-bottom:1px solid #e5e7eb; }
+.section-title { font-weight:700; font-size:.9rem; color:var(--navy); }
+.section-body { padding:.75rem 1rem; }
+.badge { display:inline-block; padding:.1rem .45rem; border-radius:.25rem; font-size:.7rem; font-weight:600; }
+.badge-pipe { background:#dbeafe; color:#1e40af; }
+.badge-fitting { background:#d1fae5; color:#065f46; }
+.badge-kghr { background:#ede9fe; color:#5b21b6; }
+.badge-cycle { background:#fef3c7; color:#92400e; }
+.badge-estimated { background:#fee2e2; color:#991b1b; }
+.badge-edited { background:#d1fae5; color:#065f46; }
+.badge-default { background:#f3f4f6; color:#374151; }
+.edit-cell { cursor:pointer; border-bottom:1px dashed #d1d5db; min-width:3rem; display:inline-block; }
+.edit-cell:hover { background:#fef9f5; }
+.mp-input { width:5rem; border:1px solid var(--terra); border-radius:.25rem; padding:.15rem .35rem; font-size:.85rem; }
+.mp-input:focus { outline:none; border-color:var(--navy); }
+.tbl { width:100%; border-collapse:collapse; font-size:.8rem; }
+.tbl th { background:var(--navy); color:#fff; padding:.4rem .5rem; text-align:left; white-space:nowrap; font-weight:600; }
+.tbl td { padding:.35rem .5rem; border-bottom:1px solid #f3f4f6; vertical-align:middle; }
+.tbl tr:nth-child(even) td { background:#fafafa; }
+.tbl tr:hover td { background:#fef9f5; }
+.machine-panel { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:.5rem; margin-bottom:1rem; }
+.machine-card { border:1px solid #e5e7eb; border-radius:.5rem; padding:.5rem; background:#fff; }
+.machine-card h4 { font-size:.8rem; font-weight:700; color:var(--navy); margin-bottom:.35rem; }
+.machine-card .field { display:flex; align-items:center; justify-content:space-between; margin:.15rem 0; font-size:.75rem; color:#374151; }
+.compound-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.75rem; }
+.compound-card { border:1px solid #e5e7eb; border-radius:.5rem; padding:.75rem; background:#fff; }
+.compound-card h4 { font-size:.85rem; font-weight:700; color:var(--navy); margin-bottom:.5rem; display:flex; gap:.35rem; align-items:center; }
+.compound-totals { background:#f8fafc; border-radius:.35rem; padding:.4rem .6rem; font-size:.78rem; margin-top:.5rem; }
+.reset-btn { font-size:.72rem; padding:.2rem .6rem; border-radius:.25rem; background:#fee2e2; color:#991b1b; border:none; cursor:pointer; font-weight:600; }
+.reset-btn:hover { background:#fecaca; }
+.save-btn { font-size:.72rem; padding:.2rem .6rem; border-radius:.25rem; background:var(--terra); color:#fff; border:none; cursor:pointer; font-weight:600; }
+.save-btn:hover { opacity:.85; }
+.search-box { border:1px solid #d1d5db; border-radius:.35rem; padding:.3rem .6rem; font-size:.82rem; width:100%; max-width:260px; }
+.toast-container { position:fixed; top:4.5rem; right:.75rem; z-index:9999; display:flex; flex-direction:column; gap:.35rem; }
+.toast { padding:.45rem .9rem; border-radius:.4rem; font-size:.78rem; font-weight:600; color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.18); animation:fadeInOut 2.8s forwards; }
+.toast.ok { background:#059669; }
+.toast.err { background:#dc2626; }
+@keyframes fadeInOut { 0%{opacity:0;transform:translateY(-8px)} 10%{opacity:1;transform:translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+.chk-machine { width:1rem; height:1rem; accent-color:var(--terra); }
+.idle-badge { display:inline-block; font-size:.65rem; font-weight:600; background:#f3f4f6; color:#6b7280; padding:.05rem .35rem; border-radius:.2rem; }
+</style>
+
+<div class="toast-container" id="toast-container"></div>
+
+<div style="padding:0 .75rem 1rem; max-width:100%;">
+
+  <!-- Page header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
+    <div>
+      <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">Machine Planning · Data</h2>
+      <p style="font-size:.72rem;color:#6b7280;margin:.1rem 0 0;">Reference inputs for optimiser — versioned per month</p>
+    </div>
+    <!-- Month selector -->
+    <form method="get" style="display:flex;align-items:center;gap:.4rem;">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <label style="font-size:.75rem;font-weight:600;color:var(--navy);">Month:</label>
+      <select name="month" onchange="this.form.submit()"
+              style="border:1px solid #d1d5db;border-radius:.35rem;padding:.25rem .5rem;font-size:.8rem;color:var(--navy);background:#fff;">
+        {% for m in available_months %}
+        <option value="{{ m }}" {% if m == effective_month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+        {% if effective_month not in available_months %}
+        <option value="{{ effective_month }}" selected>{{ effective_month }} (current)</option>
+        {% endif %}
+      </select>
+    </form>
+  </div>
+
+  <!-- Category tabs -->
+  <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+    <a href="?tab=plumbing&month={{ effective_month }}" class="mp-tab {% if tab=='plumbing' %}active{% endif %}">🔧 Plumbing (Pipes + Fittings)</a>
+    <a href="?tab=ptmt&month={{ effective_month }}" class="mp-tab {% if tab=='ptmt' %}active{% endif %}">⚙️ PTMT</a>
+  </div>
+
+  {% if tab == 'ptmt' %}
+  <div class="section-card">
+    <div class="section-body" style="text-align:center;padding:2rem;color:#6b7280;">
+      <div style="font-size:2rem;margin-bottom:.5rem;">🔜</div>
+      <p style="font-weight:600;font-size:.9rem;">PTMT data inputs — coming in a future phase.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if tab == 'plumbing' %}
+
+  {% if not db_available %}
+  <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:.5rem;padding:.75rem;margin-bottom:1rem;font-size:.82rem;color:#92400e;">
+    ⚠️ Database unavailable — read-only view. Edits require DATABASE_URL.
+  </div>
+  {% endif %}
+
+  {% if not compound_cards and not bom_rows %}
+  <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:.5rem;padding:.75rem;margin-bottom:1rem;font-size:.82rem;color:#991b1b;">
+    No seed data found for <strong>{{ effective_month }}</strong>.
+    Run <code>seed_all("{{ effective_month }}")</code> from the console, then reload.
+  </div>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 1 — COMPOUND RECIPES
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-compound')">
+      <span class="section-title">1 · Compound Recipes
+        <span class="badge badge-default" style="margin-left:.35rem;">{{ compound_cards|length }} cards</span>
+      </span>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="reset-btn" onclick="event.stopPropagation();mpReset('compound','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+        <span id="chev-s-compound" style="font-size:1rem;color:var(--navy);">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="s-compound">
+      <p style="font-size:.72rem;color:#6b7280;margin-bottom:.75rem;">
+        Edit <em>wastage factor</em> per card. All other fields are seeded from source and reset-to-default.
+        Live totals update as you type.
+      </p>
+      <div class="compound-grid">
+        {% for card in compound_cards %}
+        <div class="compound-card" id="cc-{{ card.material }}-{{ card.type }}">
+          <h4>
+            <span class="badge {% if card.type=='pipe' %}badge-pipe{% else %}badge-fitting{% endif %}">{{ card.type }}</span>
+            {{ card.material }}
+            {% if card.needs_recipe %}<span class="badge badge-estimated">no source</span>{% endif %}
+          </h4>
+          {% if card.components %}
+          <table class="tbl" style="font-size:.75rem;">
+            <thead><tr><th>Component</th><th>kg</th><th>₹/kg</th></tr></thead>
+            <tbody>
+              {% for c in card.components %}
+              <tr><td>{{ c.component }}</td>
+                  <td>{{ "%.2f"|format(c.ratio_kg) }}</td>
+                  <td>{{ "%.2f"|format(c.price_per_kg) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p style="font-size:.75rem;color:#6b7280;">No components — needs recipe.</p>
+          {% endif %}
+          <div class="compound-totals">
+            <div style="display:flex;justify-content:space-between;">
+              <span>Total kg:</span>
+              <strong class="cc-total-kg" data-base="{{ card.total_kg }}">{{ "%.2f"|format(card.total_kg) }}</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span>Total ₹:</span>
+              <strong class="cc-total-cost" data-base="{{ card.total_cost }}">{{ "%.1f"|format(card.total_cost) }}</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span>₹/kg (eff.):</span>
+              <strong class="cc-cost-kg">{{ "%.2f"|format(card.cost_per_kg) }}</strong>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;">
+            <label style="font-size:.75rem;font-weight:600;color:var(--navy);">Wastage factor:</label>
+            <input type="number" step="0.001" min="1" max="2"
+                   class="mp-input cc-wastage"
+                   value="{{ card.wastage_factor }}"
+                   data-material="{{ card.material }}"
+                   data-type="{{ card.type }}"
+                   oninput="recomputeCard(this)">
+            <button class="save-btn" onclick="saveCompound('{{ card.material }}','{{ card.type }}','{{ effective_month }}')"
+                    {% if not db_available %}disabled{% endif %}>Save</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 2 — BOM WEIGHTS
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-bom')">
+      <span class="section-title">2 · BOM Weights
+        <span class="badge badge-default" style="margin-left:.35rem;">{{ bom_rows|length }} rows</span>
+      </span>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="reset-btn" onclick="event.stopPropagation();mpReset('bom','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+        <span id="chev-s-bom" style="font-size:1rem;color:var(--navy);">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="s-bom" style="display:none;">
+      <div style="margin-bottom:.5rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+        <input type="text" class="search-box" placeholder="Search item code…" oninput="mpSearch('bom-tbl',this.value)">
+        <span style="font-size:.72rem;color:#6b7280;">Click a weight to edit inline.</span>
+      </div>
+      <div class="table-scroll">
+        <table class="tbl" id="bom-tbl">
+          <thead><tr><th>Item Code</th><th>Weight/pc (kg)</th></tr></thead>
+          <tbody>
+            {% for r in bom_rows %}
+            <tr data-search="{{ r.item_code|lower }}">
+              <td>{{ r.item_code }}</td>
+              <td>
+                <span class="edit-cell bom-wt"
+                      data-code="{{ r.item_code }}"
+                      data-val="{{ r.weight_per_pc_kg }}"
+                      onclick="inlineEdit(this,'bom','{{ effective_month }}')"
+                      {% if not db_available %}style="pointer-events:none;"{% endif %}>
+                  {{ "%.4f"|format(r.weight_per_pc_kg|float) }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 3 — PRODUCTION PER HOUR
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-ph')">
+      <span class="section-title">3 · Production Per Hour
+        <span class="badge badge-default" style="margin-left:.35rem;">{{ per_hour_rows|length }} rows</span>
+        {% if estimated_count > 0 %}
+        <span class="badge badge-estimated" style="margin-left:.25rem;">{{ estimated_count }} estimated</span>
+        {% endif %}
+      </span>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="reset-btn" onclick="event.stopPropagation();mpReset('per_hour','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+        <span id="chev-s-ph" style="font-size:1rem;color:var(--navy);">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="s-ph" style="display:none;">
+      {% if estimated_count > 0 %}
+      <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.35rem;padding:.5rem .75rem;font-size:.76rem;color:#92400e;margin-bottom:.6rem;">
+        ⚠️ <strong>{{ estimated_count }} SWR/AGRI pipe items</strong> have no seeded per-hour rate
+        (no source tab in the workbook). They are flagged <span class="badge badge-estimated">estimated — no source</span>
+        and will use the category average at optimise time. You can set a manual rate by clicking the value cell.
+      </div>
+      {% endif %}
+      <div style="margin-bottom:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+        <input type="text" class="search-box" placeholder="Search item code…" oninput="mpSearch('ph-tbl',this.value)">
+      </div>
+      <div class="table-scroll">
+        <table class="tbl" id="ph-tbl">
+          <thead><tr><th>Item Code</th><th>Basis</th><th>Value</th><th>Source</th></tr></thead>
+          <tbody>
+            {% for r in per_hour_rows %}
+            <tr data-search="{{ r.item_code|lower }}">
+              <td>{{ r.item_code }}</td>
+              <td><span class="badge {% if r.basis=='kg_per_hr' %}badge-kghr{% else %}badge-cycle{% endif %}">{{ r.basis }}</span></td>
+              <td>
+                <span class="edit-cell ph-val"
+                      data-code="{{ r.item_code }}"
+                      data-basis="{{ r.basis }}"
+                      data-val="{{ r.value }}"
+                      onclick="inlineEdit(this,'per_hour','{{ effective_month }}')"
+                      {% if not db_available %}style="pointer-events:none;"{% endif %}>
+                  {{ "%.1f"|format(r.value|float) }}
+                </span>
+              </td>
+              <td>
+                {% if r.is_estimated %}
+                <span class="badge badge-estimated">estimated — no source</span>
+                {% else %}
+                <span class="badge badge-default">seeded</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 4 — PIPE ROUTING
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-pipe')">
+      <span class="section-title">4 · Pipe Routing
+        <span class="badge badge-default" style="margin-left:.35rem;">{{ pipe_items|length }} items · {{ pipe_machine_names|length }} machines</span>
+      </span>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="reset-btn" onclick="event.stopPropagation();mpReset('pipe_routing','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+        <span id="chev-s-pipe" style="font-size:1rem;color:var(--navy);">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="s-pipe" style="display:none;">
+
+      <!-- Machine capacity panel -->
+      <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.25rem 0 .5rem;">Extrusion Machines — Capacity</h3>
+      <div class="machine-panel">
+        {% for m in pipe_machines %}
+        <div class="machine-card">
+          <h4>{{ m.machine }}{% if m.item_count == 0 %} <span class="idle-badge">idle</span>{% endif %}</h4>
+          <div class="field"><span>W (support):</span><strong>{{ m.support_w }}</strong></div>
+          <div class="field"><span>OT (oper.):</span><strong>{{ m.operators_ot }}</strong></div>
+          <div class="field">
+            <span>Capacity hrs:</span>
+            <input type="number" step="1" min="0" max="744"
+                   class="mp-input" style="width:4rem;"
+                   value="{{ m.capacity_hrs_month|int }}"
+                   data-machine="{{ m.machine }}"
+                   data-kind="extrusion"
+                   onchange="saveMachine(this,'{{ effective_month }}')"
+                   {% if not db_available %}disabled{% endif %}>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Item routing table -->
+      <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.5rem 0 .35rem;">Item → Machine Routing (checkboxes)</h3>
+      <p style="font-size:.72rem;color:#6b7280;margin-bottom:.5rem;">Check/uncheck to edit which machines can run each item. Each row saves individually.</p>
+      <div style="margin-bottom:.5rem;">
+        <input type="text" class="search-box" placeholder="Search item code…" oninput="mpSearch('pipe-tbl',this.value)">
+      </div>
+      <div class="table-scroll">
+        <table class="tbl" id="pipe-tbl">
+          <thead>
+            <tr>
+              <th style="position:sticky;left:0;z-index:2;background:var(--navy);">Item</th>
+              <th>Mat.</th>
+              {% for mc in pipe_machine_names %}
+              <th style="text-align:center;">{{ mc|replace('M/C-','M') }}</th>
+              {% endfor %}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in pipe_items %}
+            <tr data-search="{{ item.item_code|lower }}" id="pr-{{ item.item_code }}">
+              <td style="font-weight:600;position:sticky;left:0;background:inherit;white-space:nowrap;">{{ item.item_code }}</td>
+              <td><span class="badge badge-default" style="font-size:.65rem;">{{ item.material }}</span></td>
+              {% for mc in pipe_machine_names %}
+              <td style="text-align:center;">
+                <input type="checkbox" class="chk-machine"
+                       data-item="{{ item.item_code }}"
+                       data-machine="{{ mc }}"
+                       {% if mc in item.capable_machines %}checked{% endif %}
+                       onchange="savePipeRouting('{{ item.item_code }}','{{ effective_month }}')"
+                       {% if not db_available %}disabled{% endif %}>
+              </td>
+              {% endfor %}
+              <td></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 5 — FITTING ROUTING
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-fitting')">
+      <span class="section-title">5 · Fitting Routing
+        <span class="badge badge-default" style="margin-left:.35rem;">{{ fitting_std_rows|length }} item-machine rows</span>
+      </span>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="reset-btn" onclick="event.stopPropagation();mpReset('fitting_routing','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+        <span id="chev-s-fitting" style="font-size:1rem;color:var(--navy);">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="s-fitting" style="display:none;">
+
+      <!-- Moulding machines panel -->
+      <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.25rem 0 .5rem;">Moulding Machines — Capacity</h3>
+      <div class="machine-panel">
+        {% for m in fitting_machines %}
+        <div class="machine-card">
+          <h4>{{ m.machine }}</h4>
+          <div class="field"><span>W:</span><strong>{{ m.support_w }}</strong></div>
+          <div class="field"><span>OT:</span><strong>{{ m.operators_ot }}</strong></div>
+          <div class="field">
+            <span>Capacity hrs:</span>
+            <input type="number" step="1" min="0" max="744"
+                   class="mp-input" style="width:4rem;"
+                   value="{{ m.capacity_hrs_month|int }}"
+                   data-machine="{{ m.machine }}"
+                   data-kind="moulding"
+                   onchange="saveMachine(this,'{{ effective_month }}')"
+                   {% if not db_available %}disabled{% endif %}>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Fitting std table -->
+      <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.5rem 0 .35rem;">Fitting Standards (item × machine)</h3>
+      <div style="margin-bottom:.5rem;">
+        <input type="text" class="search-box" placeholder="Search item code…" oninput="mpSearch('fitting-tbl',this.value)">
+      </div>
+      <div class="table-scroll">
+        <table class="tbl" id="fitting-tbl">
+          <thead>
+            <tr><th>Item</th><th>Machine</th><th>Cavity</th><th>Cycle (sec)</th></tr>
+          </thead>
+          <tbody>
+            {% for r in fitting_std_rows %}
+            <tr data-search="{{ r.item_code|lower }}">
+              <td style="font-weight:600;">{{ r.item_code }}</td>
+              <td>{{ r.machine }}</td>
+              <td>
+                <span class="edit-cell fit-cavity"
+                      data-code="{{ r.item_code }}"
+                      data-machine="{{ r.machine }}"
+                      data-field="cavity"
+                      data-val="{{ r.cavity if r.cavity is not none else '' }}"
+                      onclick="inlineEditFitting(this,'{{ effective_month }}')"
+                      {% if not db_available %}style="pointer-events:none;"{% endif %}>
+                  {{ r.cavity if r.cavity is not none else '—' }}
+                </span>
+              </td>
+              <td>
+                <span class="edit-cell fit-cycle"
+                      data-code="{{ r.item_code }}"
+                      data-machine="{{ r.machine }}"
+                      data-field="cycle_time_sec"
+                      data-val="{{ r.cycle_time_sec if r.cycle_time_sec is not none else '' }}"
+                      onclick="inlineEditFitting(this,'{{ effective_month }}')"
+                      {% if not db_available %}style="pointer-events:none;"{% endif %}>
+                  {{ r.cycle_time_sec if r.cycle_time_sec is not none else '—' }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 6 — PARAMETERS
+  ═══════════════════════════════════════════════════════ -->
+  <div class="section-card">
+    <div class="section-header" onclick="toggleSection('s-params')">
+      <span class="section-title">6 · Parameters</span>
+      <span id="chev-s-params" style="font-size:1rem;color:var(--navy);">▾</span>
+    </div>
+    <div class="section-body" id="s-params">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.75rem;">
+        <div class="machine-card">
+          <h4>Waste %</h4>
+          <div class="field">
+            <span>Default 4%</span>
+            <input type="number" step="0.1" min="0" max="100"
+                   class="mp-input" id="param-waste"
+                   value="{{ params.waste_pct if params else 4.0 }}">
+          </div>
+        </div>
+        <div class="machine-card">
+          <h4>Pulverizer %</h4>
+          <div class="field">
+            <span>Default 25%</span>
+            <input type="number" step="0.1" min="0" max="100"
+                   class="mp-input" id="param-pulv"
+                   value="{{ params.pulverizer_pct if params else 25.0 }}">
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:.75rem;display:flex;gap:.5rem;">
+        <button class="save-btn" onclick="saveParams('{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>Save Parameters</button>
+        <button class="reset-btn" onclick="mpReset('params','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset</button>
+      </div>
+    </div>
+  </div>
+
+  {% endif %}{# end plumbing tab #}
+
+</div>{# end outer padding div #}
+
+<script>
+const _EM = "{{ effective_month }}";
+const _SEG = "{{ segment }}";
+
+// ── Section toggle ──────────────────────────────────────────────────────────
+function toggleSection(id) {
+  const el = document.getElementById(id);
+  const ch = document.getElementById('chev-' + id);
+  const hidden = el.style.display === 'none' || el.style.display === '';
+  el.style.display = hidden ? 'block' : 'none';
+  if (ch) ch.textContent = hidden ? '▴' : '▾';
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────────
+function showToast(msg, ok) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (ok ? 'ok' : 'err');
+  t.textContent = msg;
+  document.getElementById('toast-container').appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ── Generic POST helper ──────────────────────────────────────────────────────
+async function mpPost(url, data) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  });
+  return r.json();
+}
+
+// ── Search filter ────────────────────────────────────────────────────────────
+function mpSearch(tableId, q) {
+  const lq = q.toLowerCase();
+  document.querySelectorAll('#' + tableId + ' tbody tr').forEach(tr => {
+    const s = tr.dataset.search || '';
+    tr.style.display = (!lq || s.includes(lq)) ? '' : 'none';
+  });
+}
+
+// ── Inline edit (BOM / per-hour) ─────────────────────────────────────────────
+function inlineEdit(span, section, em) {
+  if (span.querySelector('input')) return;
+  const old = span.dataset.val;
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.className = 'mp-input';
+  inp.value = old;
+  inp.style.width = '6rem';
+  span.textContent = '';
+  span.appendChild(inp);
+  inp.focus();
+  inp.select();
+
+  const commit = async () => {
+    const val = parseFloat(inp.value);
+    if (isNaN(val) || val < 0) { restoreSpan(span, old); return; }
+    let url, payload;
+    if (section === 'bom') {
+      url = '/machine-planning/data/save/bom';
+      payload = {segment: _SEG, item_code: span.dataset.code, weight_per_pc_kg: val, effective_month: em};
+    } else {
+      url = '/machine-planning/data/save/per-hour';
+      payload = {segment: _SEG, item_code: span.dataset.code, basis: span.dataset.basis, value: val, effective_month: em};
+    }
+    const res = await mpPost(url, payload);
+    if (res.ok) {
+      span.dataset.val = val;
+      restoreSpan(span, section === 'bom' ? val.toFixed(4) : val.toFixed(1));
+      showToast('Saved', true);
+    } else {
+      restoreSpan(span, old);
+      showToast(res.error || 'Save failed', false);
+    }
+  };
+  inp.addEventListener('blur', commit);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { restoreSpan(span, old); } });
+}
+
+function restoreSpan(span, text) {
+  span.textContent = text;
+}
+
+// ── Inline edit fitting std ──────────────────────────────────────────────────
+function inlineEditFitting(span, em) {
+  if (span.querySelector('input')) return;
+  const old = span.dataset.val;
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.className = 'mp-input';
+  inp.value = old;
+  inp.style.width = '5rem';
+  span.textContent = '';
+  span.appendChild(inp);
+  inp.focus();
+  inp.select();
+
+  const commit = async () => {
+    const raw = inp.value.trim();
+    const val = raw === '' ? null : parseFloat(raw);
+    const payload = {
+      segment: _SEG,
+      item_code: span.dataset.code,
+      machine: span.dataset.machine,
+      effective_month: em,
+    };
+    payload[span.dataset.field] = val;
+    const res = await mpPost('/machine-planning/data/save/routing/fitting', payload);
+    if (res.ok) {
+      span.dataset.val = raw;
+      restoreSpan(span, raw === '' ? '—' : raw);
+      showToast('Saved', true);
+    } else {
+      restoreSpan(span, old === '' ? '—' : old);
+      showToast(res.error || 'Save failed', false);
+    }
+  };
+  inp.addEventListener('blur', commit);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { restoreSpan(span, old === '' ? '—' : old); } });
+}
+
+// ── Machine capacity save ────────────────────────────────────────────────────
+async function saveMachine(inp, em) {
+  const val = parseFloat(inp.value);
+  if (isNaN(val) || val < 0) return;
+  const res = await mpPost('/machine-planning/data/save/machine', {
+    segment: _SEG,
+    machine: inp.dataset.machine,
+    kind: inp.dataset.kind,
+    capacity_hrs_month: val,
+    effective_month: em
+  });
+  showToast(res.ok ? 'Saved' : (res.error || 'Save failed'), res.ok);
+}
+
+// ── Pipe routing save (checkboxes) ────────────────────────────────────────────
+async function savePipeRouting(itemCode, em) {
+  const row = document.getElementById('pr-' + itemCode);
+  if (!row) return;
+  const machines = Array.from(row.querySelectorAll('input[type=checkbox]'))
+    .filter(c => c.checked)
+    .map(c => c.dataset.machine);
+  const res = await mpPost('/machine-planning/data/save/routing/pipe', {
+    segment: _SEG,
+    item_code: itemCode,
+    machines: machines,
+    effective_month: em
+  });
+  showToast(res.ok ? 'Saved' : (res.error || 'Save failed'), res.ok);
+}
+
+// ── Compound wastage save ─────────────────────────────────────────────────────
+async function saveCompound(material, type_, em) {
+  const inp = document.querySelector(
+    `.cc-wastage[data-material="${material}"][data-type="${type_}"]`);
+  if (!inp) return;
+  const val = parseFloat(inp.value);
+  if (isNaN(val) || val < 1) { showToast('Wastage factor must be ≥ 1', false); return; }
+  const res = await mpPost('/machine-planning/data/save/compound', {
+    segment: _SEG, material, type: type_, wastage_factor: val, effective_month: em
+  });
+  showToast(res.ok ? 'Saved' : (res.error || 'Save failed'), res.ok);
+}
+
+// ── Compound live recompute ───────────────────────────────────────────────────
+function recomputeCard(inp) {
+  const card = inp.closest('.compound-card');
+  if (!card) return;
+  const wf = parseFloat(inp.value) || 1;
+  const baseKg   = parseFloat(card.querySelector('.cc-total-kg').dataset.base)  || 0;
+  const baseCost = parseFloat(card.querySelector('.cc-total-cost').dataset.base) || 0;
+  const effCostKg = baseKg > 0 ? (baseCost / baseKg) * wf : 0;
+  card.querySelector('.cc-cost-kg').textContent = effCostKg.toFixed(2);
+}
+
+// ── Params save ───────────────────────────────────────────────────────────────
+async function saveParams(em) {
+  const waste = parseFloat(document.getElementById('param-waste').value);
+  const pulv  = parseFloat(document.getElementById('param-pulv').value);
+  if (isNaN(waste) || isNaN(pulv)) { showToast('Invalid value', false); return; }
+  const res = await mpPost('/machine-planning/data/save/params', {
+    segment: _SEG, waste_pct: waste, pulverizer_pct: pulv, effective_month: em
+  });
+  showToast(res.ok ? 'Saved' : (res.error || 'Save failed'), res.ok);
+}
+
+// ── Reset section ────────────────────────────────────────────────────────────
+async function mpReset(section, em) {
+  if (!confirm('Reset "' + section + '" for ' + em + ' to seeded defaults? This re-reads the source sheets.')) return;
+  showToast('Resetting…', true);
+  const res = await mpPost('/machine-planning/data/reset/' + section, {effective_month: em, segment: _SEG});
+  if (res.ok) {
+    showToast('Reset complete — reloading…', true);
+    setTimeout(() => location.reload(), 1200);
+  } else {
+    showToast(res.error || 'Reset failed', false);
+  }
+}
+</script>
+{% endblock %}

@@ -4675,6 +4675,381 @@ def segment_input_save():
 
 
 # ---------------------------------------------------------------------------
+# Machine Planning — Data Page (MP-1)
+# Additive / isolated: new routes only, never touches "/", "/data", or "/plan".
+# ---------------------------------------------------------------------------
+import mp_model as _mp_model  # noqa: E402
+import mp_seed as _mp_seed    # noqa: E402
+
+_MP_SEGMENT = "PLUMBING"
+_ALL_PIPE_MACHINES = [
+    "M/C-1", "M/C-2", "M/C-3", "M/C-4", "M/C-5",
+    "M/C-6", "M/C-7", "M/C-8", "M/C-9",
+]
+
+
+def _mp_build_compound_cards(recipes: list) -> list:
+    """Group recipe rows into card dicts with live-computed totals."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    wastage: dict = {}
+    needs: dict = {}
+    for r in recipes:
+        key = (r["material"], r["type"])
+        if r.get("component"):
+            groups[key].append(r)
+        wastage[key] = float(r["wastage_factor"])
+        needs[key] = bool(r["needs_recipe"])
+
+    cards = []
+    for mat in ("CPVC", "UPVC", "SWR", "AGRI"):
+        for typ in ("pipe", "fitting"):
+            key = (mat, typ)
+            comps = groups.get(key, [])
+            wf = wastage.get(key, 1.0)
+            total_kg = sum(float(c["ratio_kg"]) for c in comps)
+            total_cost = sum(float(c["ratio_kg"]) * float(c["price_per_kg"]) for c in comps)
+            cost_per_kg = (total_cost / total_kg * wf) if total_kg > 0 else 0.0
+            cards.append({
+                "material": mat,
+                "type": typ,
+                "wastage_factor": wf,
+                "needs_recipe": needs.get(key, True),
+                "components": [
+                    {"component": c["component"],
+                     "ratio_kg": float(c["ratio_kg"]),
+                     "price_per_kg": float(c["price_per_kg"])}
+                    for c in comps
+                ],
+                "total_kg": total_kg,
+                "total_cost": total_cost,
+                "cost_per_kg": cost_per_kg,
+            })
+    return cards
+
+
+def _mp_build_pipe_items(routing: list) -> list:
+    """Build per-item dicts from routing rows (extrusion machines M/C-*)."""
+    from collections import defaultdict
+    by_item: dict = defaultdict(lambda: {"capable_machines": [], "material": ""})
+    for r in routing:
+        mc = r["machine"]
+        if not mc.startswith("M/C-"):
+            continue
+        ic = r["item_code"]
+        if mc not in by_item[ic]["capable_machines"]:
+            by_item[ic]["capable_machines"].append(mc)
+        if not by_item[ic]["material"] and r.get("material"):
+            by_item[ic]["material"] = r["material"]
+    return [
+        {"item_code": ic, "capable_machines": d["capable_machines"], "material": d["material"]}
+        for ic, d in sorted(by_item.items())
+    ]
+
+
+@app.route("/machine-planning/data")
+def mp_data_view():
+    """Machine Planning data-inputs page (MP-1). Never loads on '/'."""
+    _mp_model.init_mp_tables()
+    tab = request.args.get("tab", "plumbing")
+    em = request.args.get("month", "") or _mp_seed.current_month()
+
+    available_months = _mp_model.get_available_months(_MP_SEGMENT)
+    if not available_months:
+        available_months = [em]
+
+    if tab != "plumbing":
+        return render_template(
+            "machine_planning_data.html",
+            segment=_MP_SEGMENT,
+            effective_month=em,
+            available_months=available_months,
+            tab=tab,
+            db_available=_mp_model.AVAILABLE,
+            compound_cards=[], bom_rows=[], per_hour_rows=[],
+            pipe_items=[], pipe_machines=[], pipe_machine_names=_ALL_PIPE_MACHINES,
+            fitting_machines=[], fitting_std_rows=[],
+            params=None, estimated_count=0,
+        )
+
+    # Load data for plumbing tab
+    recipes  = _mp_model.get_compound_recipes(_MP_SEGMENT, em)
+    bom_raw  = _mp_model.get_bom_weight_rows(_MP_SEGMENT, em)
+    ph_rows  = _mp_model.get_per_hour(_MP_SEGMENT, em)
+    routing  = _mp_model.get_routing(_MP_SEGMENT, em)
+    fit_std  = _mp_model.get_fitting_std(_MP_SEGMENT, em)
+    machines = _mp_model.get_machines(_MP_SEGMENT, em)
+    params   = _mp_model.get_params(_MP_SEGMENT, em)
+
+    compound_cards = _mp_build_compound_cards(recipes)
+    pipe_items     = _mp_build_pipe_items(routing)
+
+    # Items in per-hour (kg_per_hr)
+    ph_codes_kg = {r["item_code"] for r in ph_rows if r["basis"] == "kg_per_hr"}
+    # Pipe items whose material has no per-hour source (SWR, AGRI)
+    estimated_materials = {"SWR", "AGRI"}
+    estimated_items: set = set()
+    for item in pipe_items:
+        if item["material"].upper() in estimated_materials and item["item_code"] not in ph_codes_kg:
+            estimated_items.add(item["item_code"])
+
+    # Tag per-hour rows
+    ph_display = []
+    for r in ph_rows:
+        ph_display.append({**r, "is_estimated": False,
+                            "value": float(r["value"])})
+    # Add estimated-rate stub rows for SWR/AGRI pipe items not in per_hour
+    for item in pipe_items:
+        if item["item_code"] in estimated_items:
+            ph_display.append({
+                "item_code": item["item_code"],
+                "basis": "kg_per_hr",
+                "value": 0.0,
+                "is_estimated": True,
+            })
+    ph_display.sort(key=lambda x: (x["basis"], x["item_code"]))
+
+    pipe_machines_data = [m for m in machines if m["kind"] == "extrusion"]
+    # Annotate with item count
+    pipe_item_set_per_mc: dict = {}
+    for item in pipe_items:
+        for mc in item["capable_machines"]:
+            pipe_item_set_per_mc.setdefault(mc, set()).add(item["item_code"])
+    for m in pipe_machines_data:
+        m["item_count"] = len(pipe_item_set_per_mc.get(m["machine"], set()))
+        m["capacity_hrs_month"] = float(m.get("capacity_hrs_month") or 500)
+
+    fitting_machines_data = [m for m in machines if m["kind"] == "moulding"]
+    for m in fitting_machines_data:
+        m["capacity_hrs_month"] = float(m.get("capacity_hrs_month") or 500)
+
+    return render_template(
+        "machine_planning_data.html",
+        segment=_MP_SEGMENT,
+        effective_month=em,
+        available_months=available_months,
+        tab=tab,
+        db_available=_mp_model.AVAILABLE,
+        compound_cards=compound_cards,
+        bom_rows=[{"item_code": r["item_code"],
+                   "weight_per_pc_kg": float(r["weight_per_pc_kg"])} for r in bom_raw],
+        per_hour_rows=ph_display,
+        estimated_count=len(estimated_items),
+        pipe_items=pipe_items,
+        pipe_machines=pipe_machines_data,
+        pipe_machine_names=_ALL_PIPE_MACHINES,
+        fitting_machines=fitting_machines_data,
+        fitting_std_rows=[
+            {"item_code": r["item_code"], "machine": r["machine"],
+             "cavity": r["cavity"], "cycle_time_sec": r["cycle_time_sec"]}
+            for r in fit_std
+        ],
+        params=params,
+    )
+
+
+# ── Save endpoints (return JSON) ────────────────────────────────────────────
+
+@app.route("/machine-planning/data/save/params", methods=["POST"])
+def mp_save_params():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        waste = float(data["waste_pct"])
+        pulv  = float(data["pulverizer_pct"])
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        _mp_model.upsert_params(_mp_model.MpParams(
+            segment=_MP_SEGMENT, waste_pct=waste,
+            pulverizer_pct=pulv, effective_month=em,
+        ))
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/bom", methods=["POST"])
+def mp_save_bom():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        ic  = str(data["item_code"]).strip()
+        wt  = float(data["weight_per_pc_kg"])
+        if wt < 0:
+            raise ValueError("weight must be ≥ 0")
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        _mp_model.upsert_single_bom(_mp_model.MpBomWeight(
+            segment=_MP_SEGMENT, item_code=ic,
+            weight_per_pc_kg=wt, effective_month=em,
+        ))
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/per-hour", methods=["POST"])
+def mp_save_per_hour():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        ic    = str(data["item_code"]).strip()
+        basis = str(data["basis"]).strip()
+        val   = float(data["value"])
+        if basis not in ("kg_per_hr", "cycle"):
+            raise ValueError(f"invalid basis {basis!r}")
+        if val < 0:
+            raise ValueError("value must be ≥ 0")
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        _mp_model.upsert_single_per_hour(_mp_model.MpPerHour(
+            segment=_MP_SEGMENT, item_code=ic,
+            basis=basis, value=val, effective_month=em,
+        ))
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/machine", methods=["POST"])
+def mp_save_machine():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        machine = str(data["machine"]).strip()
+        kind    = str(data["kind"]).strip()
+        cap     = float(data["capacity_hrs_month"])
+        if kind not in ("extrusion", "moulding"):
+            raise ValueError(f"invalid kind {kind!r}")
+        if cap < 0:
+            raise ValueError("capacity must be ≥ 0")
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        # Fetch current row to preserve W/OT, update capacity only
+        existing = _mp_model.get_machines(_MP_SEGMENT, em, kind=kind)
+        row = next((m for m in existing if m["machine"] == machine), None)
+        _mp_model.upsert_machines([_mp_model.MpMachine(
+            segment=_MP_SEGMENT,
+            machine=machine,
+            kind=kind,
+            operators_ot=int(row["operators_ot"]) if row else 0,
+            support_w=int(row["support_w"]) if row else 0,
+            capacity_hrs_month=cap,
+            effective_month=em,
+        )])
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/routing/pipe", methods=["POST"])
+def mp_save_pipe_routing():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        ic       = str(data["item_code"]).strip()
+        machines = [str(m).strip() for m in data.get("machines", [])]
+        invalid  = [m for m in machines if not m.startswith("M/C-")]
+        if invalid:
+            raise ValueError(f"invalid machine names: {invalid}")
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        _mp_model.upsert_routing_for_item(_MP_SEGMENT, ic, em, machines)
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/routing/fitting", methods=["POST"])
+def mp_save_fitting_routing():
+    """Save cavity and/or cycle_time_sec for one item-machine fitting std row."""
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        ic      = str(data["item_code"]).strip()
+        machine = str(data["machine"]).strip()
+        cavity  = float(data["cavity"]) if data.get("cavity") is not None else None
+        cycle   = float(data["cycle_time_sec"]) if data.get("cycle_time_sec") is not None else None
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    # Read current row to preserve the other field if not provided
+    existing = _mp_model.get_fitting_std(_MP_SEGMENT, em)
+    cur = next((r for r in existing if r["item_code"] == ic and r["machine"] == machine), {})
+    if "cavity" not in data:
+        cavity = cur.get("cavity")
+    if "cycle_time_sec" not in data:
+        cycle = cur.get("cycle_time_sec")
+    try:
+        _mp_model.upsert_single_fitting_std(_mp_model.MpFittingStd(
+            segment=_MP_SEGMENT, item_code=ic, machine=machine,
+            cavity=cavity, cycle_time_sec=cycle, effective_month=em,
+        ))
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/save/compound", methods=["POST"])
+def mp_save_compound():
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        material = str(data["material"]).strip().upper()
+        type_    = str(data["type"]).strip().lower()
+        wf       = float(data["wastage_factor"])
+        if material not in ("CPVC", "UPVC", "SWR", "AGRI"):
+            raise ValueError(f"invalid material {material!r}")
+        if type_ not in ("pipe", "fitting"):
+            raise ValueError(f"invalid type {type_!r}")
+        if wf < 1.0:
+            raise ValueError("wastage_factor must be ≥ 1")
+    except (KeyError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        count = _mp_model.upsert_compound_wastage(_MP_SEGMENT, material, type_, wf, em)
+        return jsonify({"ok": True, "rows_updated": count})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/reset/<section>", methods=["POST"])
+def mp_reset_section(section: str):
+    """Re-run the MP-0 seed loader for one section, restoring source defaults."""
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    allowed = {"compound", "bom", "per_hour", "pipe_routing",
+               "fitting_routing", "params"}
+    if section not in allowed:
+        return jsonify({"ok": False, "error": f"unknown section {section!r}"}), 400
+    try:
+        from sheets import _get_access_token
+        token = _get_access_token()
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"cannot get access token: {exc}"}), 500
+    try:
+        if section == "compound":
+            _mp_seed.seed_compound_recipes(token, em)
+        elif section == "bom":
+            _mp_seed.seed_bom_weights(token, em)
+        elif section == "per_hour":
+            _mp_seed.seed_per_hour(token, em)
+        elif section == "pipe_routing":
+            _mp_seed.seed_pipe_routing(token, em)
+        elif section == "fitting_routing":
+            _mp_seed.seed_fitting_routing(token, em)
+        elif section == "params":
+            _mp_seed.seed_params(em)
+        return jsonify({"ok": True, "section": section, "effective_month": em})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Read-only JSON API (v1) — external apps consume the same pipeline the
 # dashboard uses. Key managed via /settings/api-key UI (see api.py).
 # ---------------------------------------------------------------------------

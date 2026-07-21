@@ -572,3 +572,245 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
         )
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Read queries — MP-1 data page
+# ---------------------------------------------------------------------------
+
+def get_machines(segment: str, effective_month: str, kind: Optional[str] = None) -> List[dict]:
+    """Return machine rows as plain dicts, optionally filtered by kind."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if kind:
+                cur.execute(
+                    "SELECT * FROM mp_machine WHERE segment=%s AND effective_month=%s "
+                    "AND kind=%s ORDER BY machine",
+                    (segment, effective_month, kind),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM mp_machine WHERE segment=%s AND effective_month=%s "
+                    "ORDER BY kind, machine",
+                    (segment, effective_month),
+                )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_routing(segment: str, effective_month: str) -> List[dict]:
+    """Return all routing rows as plain dicts."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM mp_routing WHERE segment=%s AND effective_month=%s "
+                "ORDER BY item_code, machine",
+                (segment, effective_month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_fitting_std(segment: str, effective_month: str) -> List[dict]:
+    """Return all fitting_std rows as plain dicts."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM mp_fitting_std WHERE segment=%s AND effective_month=%s "
+                "ORDER BY item_code, machine",
+                (segment, effective_month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_per_hour(segment: str, effective_month: str) -> List[dict]:
+    """Return all per-hour rows as plain dicts."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM mp_per_hour WHERE segment=%s AND effective_month=%s "
+                "ORDER BY basis, item_code",
+                (segment, effective_month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_bom_weight_rows(segment: str, effective_month: str) -> List[dict]:
+    """Return all BOM weight rows as plain dicts (sorted by item_code)."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT item_code, weight_per_pc_kg FROM mp_bom_weight "
+                "WHERE segment=%s AND effective_month=%s ORDER BY item_code",
+                (segment, effective_month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_compound_recipes(segment: str, effective_month: str) -> List[dict]:
+    """Return all compound recipe rows as plain dicts."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM mp_compound_recipe WHERE segment=%s AND effective_month=%s "
+                "ORDER BY material, type, component",
+                (segment, effective_month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_available_months(segment: str) -> List[str]:
+    """Return distinct effective_month values that have any mp_ data for this segment."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT effective_month FROM mp_params WHERE segment=%s "
+                "ORDER BY effective_month DESC",
+                (segment,),
+            )
+            return [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Targeted single-row upserts — MP-1 edit endpoints
+# ---------------------------------------------------------------------------
+
+def upsert_single_bom(row: MpBomWeight) -> int:
+    """Upsert one BOM weight row (ON CONFLICT UPDATE)."""
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured.")
+    init_mp_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO mp_bom_weight (segment, item_code, weight_per_pc_kg, effective_month, updated_at)
+            VALUES (%s, %s, %s, %s, now())
+            ON CONFLICT (segment, item_code, effective_month)
+            DO UPDATE SET weight_per_pc_kg = EXCLUDED.weight_per_pc_kg, updated_at = now()
+            """,
+            (row.segment, row.item_code, row.weight_per_pc_kg, row.effective_month),
+        )
+        conn.commit()
+    return 1
+
+
+def upsert_single_per_hour(row: MpPerHour) -> int:
+    """Upsert one per-hour row (ON CONFLICT UPDATE)."""
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured.")
+    init_mp_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO mp_per_hour (segment, item_code, basis, value, effective_month, updated_at)
+            VALUES (%s, %s, %s, %s, %s, now())
+            ON CONFLICT (segment, item_code, basis, effective_month)
+            DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (row.segment, row.item_code, row.basis, row.value, row.effective_month),
+        )
+        conn.commit()
+    return 1
+
+
+def upsert_single_fitting_std(row: MpFittingStd) -> int:
+    """Upsert one fitting_std row (ON CONFLICT UPDATE cavity + cycle_time_sec)."""
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured.")
+    init_mp_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO mp_fitting_std
+                (segment, item_code, machine, cavity, cycle_time_sec, effective_month, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, now())
+            ON CONFLICT (segment, item_code, machine, effective_month)
+            DO UPDATE SET cavity = EXCLUDED.cavity,
+                          cycle_time_sec = EXCLUDED.cycle_time_sec,
+                          updated_at = now()
+            """,
+            (row.segment, row.item_code, row.machine,
+             row.cavity, row.cycle_time_sec, row.effective_month),
+        )
+        conn.commit()
+    return 1
+
+
+def upsert_routing_for_item(
+    segment: str, item_code: str, effective_month: str, machines: List[str]
+) -> int:
+    """Replace routing rows for one item (DELETE current + INSERT capable machines)."""
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured.")
+    init_mp_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM mp_routing WHERE segment=%s AND item_code=%s AND effective_month=%s",
+            (segment, item_code, effective_month),
+        )
+        for mc in machines:
+            cur.execute(
+                """
+                INSERT INTO mp_routing
+                    (segment, item_code, machine, capable, effective_month, updated_at)
+                VALUES (%s, %s, %s, TRUE, %s, now())
+                ON CONFLICT (segment, item_code, machine, effective_month) DO NOTHING
+                """,
+                (segment, item_code, mc, effective_month),
+            )
+        conn.commit()
+    return len(machines)
+
+
+def upsert_compound_wastage(
+    segment: str, material: str, type_: str, wastage_factor: float, effective_month: str
+) -> int:
+    """Update wastage_factor for all component rows of a (material, type) card."""
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured.")
+    init_mp_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE mp_compound_recipe
+               SET wastage_factor = %s, updated_at = now()
+             WHERE segment=%s AND material=%s AND type=%s AND effective_month=%s
+            """,
+            (wastage_factor, segment, material, type_, effective_month),
+        )
+        count = cur.rowcount
+        conn.commit()
+    return count
