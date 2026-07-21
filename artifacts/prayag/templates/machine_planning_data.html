@@ -45,6 +45,47 @@
 @keyframes fadeInOut { 0%{opacity:0;transform:translateY(-8px)} 10%{opacity:1;transform:translateY(0)} 80%{opacity:1} 100%{opacity:0} }
 .chk-machine { width:1rem; height:1rem; accent-color:var(--terra); }
 .idle-badge { display:inline-block; font-size:.65rem; font-weight:600; background:#f3f4f6; color:#6b7280; padding:.05rem .35rem; border-radius:.2rem; }
+
+/* ── Section nav strip ──────────────────────────────────────────────────── */
+.sec-nav {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  margin: 0 -.75rem .75rem;
+  padding: .4rem .75rem;
+  display: flex;
+  gap: .4rem;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.sec-nav::-webkit-scrollbar { display: none; }
+.sec-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .25rem .65rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: #374151;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+  user-select: none;
+}
+.sec-pill:hover { background: #e5e7eb; }
+.sec-pill.active {
+  background: var(--navy);
+  color: #fff;
+  border-color: var(--navy);
+}
 </style>
 
 <div class="toast-container" id="toast-container"></div>
@@ -74,10 +115,22 @@
   </div>
 
   <!-- Category tabs -->
-  <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+  <div style="display:flex;gap:.5rem;margin-bottom:{% if tab=='plumbing' %}.5rem{% else %}1rem{% endif %};flex-wrap:wrap;">
     <a href="?tab=plumbing&month={{ effective_month }}" class="mp-tab {% if tab=='plumbing' %}active{% endif %}">🔧 Plumbing (Pipes + Fittings)</a>
     <a href="?tab=ptmt&month={{ effective_month }}" class="mp-tab {% if tab=='ptmt' %}active{% endif %}">⚙️ PTMT</a>
   </div>
+
+  {% if tab == 'plumbing' %}
+  <!-- Section nav strip -->
+  <nav class="sec-nav" id="sec-nav" aria-label="Jump to section">
+    <button class="sec-pill active" data-sec="sec-compound" onclick="navJump('sec-compound','s-compound')">1 · Compound</button>
+    <button class="sec-pill" data-sec="sec-bom"      onclick="navJump('sec-bom','s-bom')">2 · BOM Weights</button>
+    <button class="sec-pill" data-sec="sec-ph"       onclick="navJump('sec-ph','s-ph')">3 · Per Hour</button>
+    <button class="sec-pill" data-sec="sec-pipe"     onclick="navJump('sec-pipe','s-pipe')">4 · Pipe Routing</button>
+    <button class="sec-pill" data-sec="sec-fitting"  onclick="navJump('sec-fitting','s-fitting')">5 · Fitting Routing</button>
+    <button class="sec-pill" data-sec="sec-params"   onclick="navJump('sec-params','s-params')">6 · Parameters</button>
+  </nav>
+  {% endif %}
 
   {% if tab == 'ptmt' %}
   <div class="section-card">
@@ -106,7 +159,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 1 — COMPOUND RECIPES
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-compound">
     <div class="section-header" onclick="toggleSection('s-compound')">
       <span class="section-title">1 · Compound Recipes
         <span class="badge badge-default" style="margin-left:.35rem;">{{ compound_cards|length }} cards</span>
@@ -178,7 +231,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 2 — BOM WEIGHTS
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-bom">
     <div class="section-header" onclick="toggleSection('s-bom')">
       <span class="section-title">2 · BOM Weights
         <span class="badge badge-default" style="margin-left:.35rem;">{{ bom_rows|length }} rows</span>
@@ -220,7 +273,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 3 — PRODUCTION PER HOUR
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-ph">
     <div class="section-header" onclick="toggleSection('s-ph')">
       <span class="section-title">3 · Production Per Hour
         <span class="badge badge-default" style="margin-left:.35rem;">{{ per_hour_rows|length }} rows</span>
@@ -280,7 +333,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 4 — PIPE ROUTING
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-pipe">
     <div class="section-header" onclick="toggleSection('s-pipe')">
       <span class="section-title">4 · Pipe Routing
         <span class="badge badge-default" style="margin-left:.35rem;">{{ pipe_items|length }} items · {{ pipe_machine_names|length }} machines</span>
@@ -359,7 +412,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 5 — FITTING ROUTING
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-fitting">
     <div class="section-header" onclick="toggleSection('s-fitting')">
       <span class="section-title">5 · Fitting Routing
         <span class="badge badge-default" style="margin-left:.35rem;">{{ fitting_std_rows|length }} item-machine rows</span>
@@ -441,7 +494,7 @@
   <!-- ═══════════════════════════════════════════════════════
        SECTION 6 — PARAMETERS
   ═══════════════════════════════════════════════════════ -->
-  <div class="section-card">
+  <div class="section-card" id="sec-params">
     <div class="section-header" onclick="toggleSection('s-params')">
       <span class="section-title">6 · Parameters</span>
       <span id="chev-s-params" style="font-size:1rem;color:var(--navy);">▾</span>
@@ -490,6 +543,62 @@ function toggleSection(id) {
   el.style.display = hidden ? 'block' : 'none';
   if (ch) ch.textContent = hidden ? '▴' : '▾';
 }
+
+// ── Section nav ─────────────────────────────────────────────────────────────
+const _NAV_SECTIONS = [
+  { card: 'sec-compound', body: 's-compound' },
+  { card: 'sec-bom',      body: 's-bom' },
+  { card: 'sec-ph',       body: 's-ph' },
+  { card: 'sec-pipe',     body: 's-pipe' },
+  { card: 'sec-fitting',  body: 's-fitting' },
+  { card: 'sec-params',   body: 's-params' },
+];
+
+function navSetActive(cardId) {
+  document.querySelectorAll('#sec-nav .sec-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.sec === cardId);
+  });
+  // Scroll the active pill into view within the nav strip
+  const pill = document.querySelector(`#sec-nav [data-sec="${cardId}"]`);
+  if (pill) pill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+}
+
+function navJump(cardId, bodyId) {
+  // Open the section if it is collapsed
+  const body = document.getElementById(bodyId);
+  if (body && (body.style.display === 'none' || body.style.display === '')) {
+    toggleSection(bodyId);
+  }
+  // Scroll the card into view
+  const card = document.getElementById(cardId);
+  if (card) {
+    const navH = (document.getElementById('sec-nav') || {}).offsetHeight || 0;
+    const top = card.getBoundingClientRect().top + window.scrollY - navH - 8;
+    window.scrollTo({ top, behavior: 'smooth' });
+  }
+  navSetActive(cardId);
+}
+
+// Scroll-spy: highlight the pill for whichever section is nearest the top
+(function initScrollSpy() {
+  const nav = document.getElementById('sec-nav');
+  if (!nav) return;
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const navH = nav.offsetHeight + 8;
+      let active = _NAV_SECTIONS[0].card;
+      for (const { card } of _NAV_SECTIONS) {
+        const el = document.getElementById(card);
+        if (el && el.getBoundingClientRect().top <= navH + 4) active = card;
+      }
+      navSetActive(active);
+      ticking = false;
+    });
+  }, { passive: true });
+})();
 
 // ── Toast ───────────────────────────────────────────────────────────────────
 function showToast(msg, ok) {
