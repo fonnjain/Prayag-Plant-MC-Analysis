@@ -149,10 +149,32 @@
   </div>
   {% endif %}
 
-  {% if not compound_cards and not bom_rows %}
+  {% if seeding_needed %}
+  <!-- Seeding banner: shown when BOM table is empty on a fresh deploy -->
+  <div id="seed-banner" style="background:#fef9f5;border:1px solid var(--terra);border-radius:.5rem;padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;">
+    <div>
+      <strong style="color:var(--terra);">⚡ Tables empty for {{ effective_month }}</strong>
+      <span style="font-size:.78rem;color:#6b7280;margin-left:.5rem;">
+        Background seed in progress — or click <em>Seed All</em> to load now (~30 s).
+        Auto-refresh in <span id="seed-secs">60</span> s.
+      </span>
+    </div>
+    <button class="save-btn" id="seed-all-btn"
+            onclick="mpSeedAll('{{ effective_month }}')"
+            style="white-space:nowrap;min-width:7rem;">↺ Seed All</button>
+  </div>
+  <script>
+  (function(){
+    var secs = 60, el = document.getElementById('seed-secs');
+    var t = setInterval(function(){
+      secs--; if(el) el.textContent = secs;
+      if(secs<=0){ clearInterval(t); location.reload(); }
+    }, 1000);
+  })();
+  </script>
+  {% elif not compound_cards and not bom_rows %}
   <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:.5rem;padding:.75rem;margin-bottom:1rem;font-size:.82rem;color:#991b1b;">
-    No seed data found for <strong>{{ effective_month }}</strong>.
-    Run <code>seed_all("{{ effective_month }}")</code> from the console, then reload.
+    No seed data found for <strong>{{ effective_month }}</strong> and database unavailable.
   </div>
   {% endif %}
 
@@ -617,6 +639,20 @@ async function mpPost(url, data) {
     body: JSON.stringify(data)
   });
   return r.json();
+}
+
+// ── Seed All (fresh deploy self-heal) ────────────────────────────────────────
+async function mpSeedAll(em) {
+  const btn = document.getElementById('seed-all-btn');
+  if (btn) { btn.textContent = 'Seeding…'; btn.disabled = true; }
+  const res = await mpPost('/machine-planning/data/reset/all', {effective_month: em});
+  if (res.ok) {
+    showToast('Seed complete — reloading…', true);
+    setTimeout(() => location.reload(), 1500);
+  } else {
+    showToast(res.error || 'Seed failed', false);
+    if (btn) { btn.textContent = '↺ Seed All'; btn.disabled = false; }
+  }
 }
 
 // ── Search filter ────────────────────────────────────────────────────────────

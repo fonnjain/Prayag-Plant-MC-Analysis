@@ -12,6 +12,7 @@ import json
 import logging
 import time
 import hmac
+import threading
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
@@ -4682,6 +4683,38 @@ import mp_model as _mp_model  # noqa: E402
 import mp_seed as _mp_seed    # noqa: E402
 
 _MP_SEGMENT = "PLUMBING"
+
+# ── Auto-seed: fire once per worker when BOM table is empty ─────────────────
+_MP_AUTO_SEED_DONE: bool = False
+_MP_AUTO_SEED_LOCK = threading.Lock()
+
+
+def _mp_schedule_auto_seed() -> None:
+    """Spawn a one-shot background thread that seeds all PLUMBING tables if
+    the BOM table is empty for the current month.  Safe to call many times —
+    only the first call (per process) actually starts a thread.
+    """
+    global _MP_AUTO_SEED_DONE
+    with _MP_AUTO_SEED_LOCK:
+        if _MP_AUTO_SEED_DONE or not _mp_model.AVAILABLE:
+            return
+        _MP_AUTO_SEED_DONE = True
+
+    def _bg() -> None:
+        try:
+            em = _mp_seed.current_month()
+            _mp_model.init_mp_tables()
+            if _mp_model.get_bom_weight_rows(_MP_SEGMENT, em):
+                return  # already seeded — nothing to do
+            app.logger.info("mp-auto-seed: BOM empty for %s/%s — seeding all tables", _MP_SEGMENT, em)
+            _mp_seed.seed_all(em)
+            app.logger.info("mp-auto-seed: complete for %s/%s", _MP_SEGMENT, em)
+        except Exception as exc:
+            app.logger.warning("mp-auto-seed failed: %s", exc)
+
+    threading.Thread(target=_bg, daemon=True, name="mp-auto-seed").start()
+
+# ────────────────────────────────────────────────────────────────────────────
 _ALL_PIPE_MACHINES = [
     "M/C-1", "M/C-2", "M/C-3", "M/C-4", "M/C-5",
     "M/C-6", "M/C-7", "M/C-8", "M/C-9",
@@ -4776,6 +4809,11 @@ def mp_data_view():
     recipes  = _mp_model.get_compound_recipes(_MP_SEGMENT, em)
     bom_raw  = _mp_model.get_bom_weight_rows(_MP_SEGMENT, em)
     ph_rows  = _mp_model.get_per_hour(_MP_SEGMENT, em)
+
+    # Trigger background auto-seed when BOM is empty (first visit on a fresh deploy)
+    seeding_needed = bool(_mp_model.AVAILABLE and not bom_raw)
+    if seeding_needed:
+        _mp_schedule_auto_seed()
     routing  = _mp_model.get_routing(_MP_SEGMENT, em)
     fit_std  = _mp_model.get_fitting_std(_MP_SEGMENT, em)
     machines = _mp_model.get_machines(_MP_SEGMENT, em)
@@ -4845,7 +4883,20 @@ def mp_data_view():
             for r in fit_std
         ],
         params=params,
+        seeding_needed=seeding_needed,
     )
+
+
+@app.route("/machine-planning/data/reset/all", methods=["POST"])
+def mp_reset_all_sections():
+    """Seed every PLUMBING data table (compound+BOM+per-hour+routing+fitting+params) in one call."""
+    data = request.get_json(force=True) or {}
+    em = data.get("effective_month", "") or _mp_seed.current_month()
+    try:
+        _mp_seed.seed_all(em)
+        return jsonify({"ok": True, "effective_month": em, "section": "all"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ── Save endpoints (return JSON) ────────────────────────────────────────────
