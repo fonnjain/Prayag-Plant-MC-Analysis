@@ -5050,6 +5050,222 @@ def mp_reset_section(section: str):
 
 
 # ---------------------------------------------------------------------------
+# Machine Planning — Phase MP-2: demand upload, optimiser, Report-11/11A-D
+# ADDITIVE / ISOLATED: only /machine-planning/* routes. Never touches "/".
+# ---------------------------------------------------------------------------
+import mp_engine as _mp_engine        # noqa: E402
+import mp_reports as _mp_reports      # noqa: E402
+
+# In-process run cache (fallback when Postgres unavailable).
+# Key = run_id (str); value = {"demand": [...], "effective_month": str}
+_MP2_RUN_CACHE: dict = {}
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str) -> str:
+    """Persist run to mp_plan_run (DB) or _MP2_RUN_CACHE. Returns run_id str."""
+    payload = {"demand": demand_dicts, "effective_month": effective_month,
+               "segment": segment}
+    try:
+        from mp_model import MpPlanRun, insert_plan_run
+        row = MpPlanRun(
+            segment=segment,
+            month=effective_month,
+            uploaded_demand=demand_dicts,
+            frozen_inputs=None,
+            results=None,
+            status="pending",
+        )
+        db_id = insert_plan_run(row)
+        run_id = str(db_id)
+    except Exception:
+        import hashlib, time
+        run_id = hashlib.md5(
+            f"{effective_month}{time.time()}".encode()
+        ).hexdigest()[:12]
+    _MP2_RUN_CACHE[run_id] = payload
+    return run_id
+
+
+def _mp2_load_run(run_id: str) -> dict | None:
+    """Retrieve run payload from cache (or re-fetch from DB if cold worker)."""
+    if run_id in _MP2_RUN_CACHE:
+        return _MP2_RUN_CACHE[run_id]
+    # Try DB
+    try:
+        from mp_model import MpModelError
+        import mp_model as _mpm
+        with _mpm._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT segment, month, uploaded_demand FROM mp_plan_run WHERE id=%s",
+                (int(run_id),)
+            )
+            row = cur.fetchone()
+        if row:
+            payload = {"segment": row[0], "effective_month": row[1],
+                       "demand": row[2] if isinstance(row[2], list) else []}
+            _MP2_RUN_CACHE[run_id] = payload
+            return payload
+    except Exception:
+        pass
+    return None
+
+
+def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
+    """Re-run engine from stored demand in session."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return None
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return None
+    demand = [
+        _mp_engine.DemandItem(**d) for d in payload["demand"]
+    ]
+    try:
+        return _mp_engine.run_engine(
+            demand, payload["effective_month"], payload.get("segment", _mp_seed.SEGMENT)
+        )
+    except Exception as exc:
+        app.logger.error("mp2 re-run failed: %s", exc)
+        return None
+
+
+@app.route("/machine-planning/upload", methods=["GET", "POST"])
+def mp_upload():
+    """GET: demand upload form. POST: parse Excel, run engine, redirect to results."""
+    em = _mp_seed.current_month()
+    # Collect available months from seeded BOM (any month that has data)
+    try:
+        from mp_model import _conn, init_mp_tables
+        init_mp_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT effective_month FROM mp_bom_weight "
+                "WHERE segment=%s ORDER BY effective_month DESC LIMIT 12",
+                (_mp_seed.SEGMENT,)
+            )
+            available_months = [r[0] for r in cur.fetchall()]
+        db_available = True
+    except Exception:
+        available_months = [em]
+        db_available = False
+
+    if request.method == "GET":
+        return render_template(
+            "machine_planning_upload.html",
+            effective_month=em,
+            available_months=available_months or [em],
+            db_available=db_available,
+            error=None,
+        )
+
+    # POST — process upload
+    file = request.files.get("demand_file")
+    month = request.form.get("month", em).strip() or em
+    error = None
+
+    if not file or not file.filename:
+        error = "No file uploaded. Please choose a .xlsx file."
+    elif not file.filename.lower().endswith(".xlsx"):
+        error = "Only .xlsx files are accepted."
+    else:
+        try:
+            file_bytes = file.read()
+            demand = _mp_engine.parse_demand_excel(file_bytes)
+            if not demand:
+                error = ("No pipe items found in the uploaded file. "
+                         "Check that the file has CPVC Pipe / UPVC Pipe / "
+                         "SWR Pipe / AGRI Pipe tabs with data in cols A and D.")
+        except Exception as exc:
+            error = f"Failed to parse Excel: {exc}"
+
+    if error:
+        return render_template(
+            "machine_planning_upload.html",
+            effective_month=month,
+            available_months=available_months or [em],
+            db_available=db_available,
+            error=error,
+        )
+
+    # Store demand & run_id in session
+    demand_dicts = [dataclasses.asdict(d) for d in demand]
+    run_id = _mp2_store_run(demand_dicts, month, _mp_seed.SEGMENT)
+    session["mp2_run_id"] = run_id
+    session["mp2_month"]  = month
+    return redirect(url_for("mp_results"))
+
+
+@app.route("/machine-planning/results")
+def mp_results():
+    """Show optimiser results for the most recently uploaded demand plan."""
+    result = _mp2_result_from_session()
+    if result is None:
+        return redirect(url_for("mp_upload"))
+
+    baseline_by_mc = {ml.machine: ml for ml in result.baseline_machine_loads}
+    opt_peak   = max((ml.assigned_hrs for ml in result.machine_loads), default=0)
+    opt_peak_pct  = max((ml.utilisation_pct for ml in result.machine_loads), default=0)
+    base_peak  = max((ml.assigned_hrs for ml in result.baseline_machine_loads), default=0)
+    base_peak_pct = max((ml.utilisation_pct for ml in result.baseline_machine_loads), default=0)
+    n_estimated = sum(1 for it in result.items if it.rate_estimated)
+
+    return render_template(
+        "machine_planning_results.html",
+        result=result,
+        baseline_by_mc=baseline_by_mc,
+        opt_peak_hrs=opt_peak,
+        opt_peak_pct=opt_peak_pct,
+        base_peak_hrs=base_peak,
+        base_peak_pct=base_peak_pct,
+        n_estimated=n_estimated,
+        groups=_mp_engine.REPORT_11_GROUPS,
+    )
+
+
+@app.route("/machine-planning/report/<report_id>")
+def mp_report_download(report_id: str):
+    """Download Report-11 or Report-11A/B/C/D as .xlsx.
+
+    Allowed report_id: '11', '11A', '11B', '11C', '11D'.
+    Re-runs the engine from the stored demand so the file is always fresh.
+    """
+    from flask import send_file as _send_file
+
+    allowed = {"11", "11A", "11B", "11C", "11D"}
+    if report_id not in allowed:
+        abort(404)
+
+    result = _mp2_result_from_session()
+    if result is None:
+        return redirect(url_for("mp_upload"))
+
+    try:
+        if report_id == "11":
+            xlsx_bytes = _mp_reports.report_11_bytes(result)
+            filename = f"Report-11_Pipe_Plan_{result.effective_month}.xlsx"
+        else:
+            group = report_id[2:]   # 'A' / 'B' / 'C' / 'D'
+            xlsx_bytes = _mp_reports.report_11x_bytes(result, group)
+            mcs = "_".join(
+                m.replace("/", "").replace(" ", "")
+                for m in _mp_engine.REPORT_11_GROUPS.get(group, [])
+            )
+            filename = f"Report-11{group}_{mcs}_{result.effective_month}.xlsx"
+    except Exception as exc:
+        app.logger.error("mp_report_download %s failed: %s", report_id, exc)
+        abort(500)
+
+    return _send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype=_XLSX_MIME,
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Read-only JSON API (v1) — external apps consume the same pipeline the
 # dashboard uses. Key managed via /settings/api-key UI (see api.py).
 # ---------------------------------------------------------------------------

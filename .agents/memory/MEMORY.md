@@ -40,3 +40,4 @@
 - [Jinja2 macro definition order](jinja2-macro-order.md) — macros must be defined BEFORE any call site in the same template; Jinja2 does not hoist macros; placing {% macro %} at bottom causes UndefinedError at render.
 - [Phase 3 plan.py join correctness](prayag-plan-phase3-joins.md) — PIPE roster from _PIPE_PRODUCTION_MACHINES only; PTMT queue is family-join (PSF codes ≠ product codes, zero overlap); Material gate per-machine with plant name in item_types.
 - [Phase 3 plan.py follow-ups](prayag-plan-phase3-followups.md) — plant-wide RM banner (_is_plant_wide_rm + build_plan returns tuple); _WorstRm NamedTuple (cover_display=stock_days_sheet); Feed/Tooling gate state machines (None→GREY, frozenset()→GREEN, non-empty→RED).
+- [MP-2 engine design](prayag-mp2-engine.md) — LPT+parallel-split optimiser, rate-fallback (SWR/AGRI→mat-avg→overall), persistence via mp_plan_run+in-process cache, Report-11 exact col order + 11A-D groups.

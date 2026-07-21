@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:0 .75rem 5rem; max-width:540px; margin:0 auto;">
+
+  <div style="margin-bottom:1rem;">
+    <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
+      Machine Planning · Upload Demand
+    </h2>
+    <p style="font-size:.73rem;color:#6b7280;margin:.2rem 0 0;">
+      Weekly release-plan Excel — 12 category tabs. Only the four Pipe tabs are read:
+      <em>CPVC Pipe, UPVC Pipe, SWR Pipe, AGRI Pipe</em>.
+      Col&nbsp;A&nbsp;=&nbsp;Item Code, Col&nbsp;D&nbsp;=&nbsp;Production Plan (pcs).
+    </p>
+  </div>
+
+  {% if error %}
+  <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:.5rem;
+              padding:.65rem .9rem;margin-bottom:.85rem;font-size:.82rem;color:#991b1b;">
+    ⚠️ {{ error }}
+  </div>
+  {% endif %}
+
+  {% if not db_available %}
+  <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.5rem;
+              padding:.65rem .9rem;margin-bottom:.85rem;font-size:.82rem;color:#92400e;">
+    ⚠️ Database unavailable — results will be held in-process (session only).
+    Downloads will work within this server session.
+  </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" id="upload-form"
+        style="background:#fff;border-radius:.75rem;
+               box-shadow:0 1px 4px rgba(0,0,0,.08);padding:1.1rem;">
+
+    <!-- Month selector -->
+    <div style="margin-bottom:1rem;">
+      <label style="display:block;font-size:.8rem;font-weight:700;
+                    color:var(--navy);margin-bottom:.3rem;">
+        Planning Month
+      </label>
+      <select name="month"
+              style="border:1px solid #d1d5db;border-radius:.35rem;
+                     padding:.3rem .6rem;font-size:.85rem;
+                     color:var(--navy);background:#fff;width:100%;max-width:200px;">
+        {% for m in available_months %}
+        <option value="{{ m }}" {% if m == effective_month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+        {% if effective_month not in available_months %}
+        <option value="{{ effective_month }}" selected>{{ effective_month }}</option>
+        {% endif %}
+      </select>
+      <p style="font-size:.7rem;color:#6b7280;margin:.25rem 0 0;">
+        Must match a seeded month (mp_* tables must have data for this month).
+      </p>
+    </div>
+
+    <!-- File upload -->
+    <div style="margin-bottom:1rem;">
+      <label style="display:block;font-size:.8rem;font-weight:700;
+                    color:var(--navy);margin-bottom:.3rem;">
+        Weekly Release Plan (.xlsx)
+      </label>
+      <div style="border:2px dashed #d1d5db;border-radius:.5rem;padding:1.25rem;
+                  text-align:center;cursor:pointer;background:#fafafa;"
+           id="drop-zone" onclick="document.getElementById('file-inp').click()">
+        <div style="font-size:1.5rem;margin-bottom:.35rem;">📤</div>
+        <p style="font-size:.82rem;font-weight:600;color:var(--navy);margin:0;">
+          Click to choose or drag & drop
+        </p>
+        <p style="font-size:.7rem;color:#6b7280;margin:.15rem 0 0;"
+           id="file-name">No file chosen</p>
+        <input type="file" name="demand_file" id="file-inp" accept=".xlsx"
+               style="display:none;" onchange="updateFileName(this)" required>
+      </div>
+    </div>
+
+    <!-- Submit -->
+    <button type="submit" id="submit-btn"
+            style="width:100%;padding:.65rem;background:var(--terra);color:#fff;
+                   border:none;border-radius:.5rem;font-size:.9rem;
+                   font-weight:700;cursor:pointer;letter-spacing:.02em;">
+      ⚙️ Run Optimiser
+    </button>
+
+    <p style="font-size:.7rem;color:#6b7280;text-align:center;margin:.5rem 0 0;">
+      Processing reads BOM weights, per-hour rates, routing and machine data
+      from the selected month's seed tables.
+    </p>
+  </form>
+
+  <!-- What gets run info card -->
+  <div style="background:#f0f4ff;border:1px solid #c7d2fe;border-radius:.5rem;
+              padding:.75rem;margin-top:1rem;font-size:.76rem;color:#374151;">
+    <strong style="color:var(--navy);">What the optimiser does:</strong>
+    <ol style="margin:.4rem 0 0 1rem;padding:0;line-height:1.7;">
+      <li>Computes material kg, fresh compound, and pulverizer kg per SKU.</li>
+      <li>Looks up kg/hr rate per item — SWR &amp; AGRI use a category-average fallback
+          and are marked <em>estimated rate</em>.</li>
+      <li>LPT + parallel-split balances load across capable extrusion machines,
+          then produces an unbalanced baseline for comparison.</li>
+      <li>Downloads Report-11 (all machines) + 11A–D (machine groups).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+function updateFileName(inp) {
+  const fn = inp.files[0] ? inp.files[0].name : 'No file chosen';
+  document.getElementById('file-name').textContent = fn;
+}
+// Drag-and-drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.style.borderColor='var(--terra)'; });
+dz.addEventListener('dragleave', () => { dz.style.borderColor='#d1d5db'; });
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.style.borderColor = '#d1d5db';
+  const f = e.dataTransfer.files[0];
+  if (f) {
+    document.getElementById('file-inp').files = e.dataTransfer.files;
+    document.getElementById('file-name').textContent = f.name;
+  }
+});
+document.getElementById('upload-form').addEventListener('submit', function() {
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Running optimiser…';
+});
+</script>
+{% endblock %}
