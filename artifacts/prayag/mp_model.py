@@ -112,9 +112,13 @@ class MpParams:
     waste_pct: float = 4.0
     pulverizer_pct: float = 25.0
     effective_month: str = ""
-    min_run_block_hours: float = 5.0
+    min_run_block_hours: float = 2.0
     night_changeover_allowed: bool = False
     week_days: str = "[6,6,6,7]"
+    cpvc_mat_rate: float = 0.0   # 0 = compute from seeded items
+    upvc_mat_rate: float = 0.0
+    swr_mat_rate: float = 0.0
+    agri_mat_rate: float = 0.0
 
 
 @dataclasses.dataclass
@@ -242,6 +246,10 @@ ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS working_days_month   INT     NO
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS min_run_block_hours  NUMERIC NOT NULL DEFAULT 5;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS night_changeover_allowed BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS week_days            TEXT NOT NULL DEFAULT '[6,6,6,7]';
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS cpvc_mat_rate NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS upvc_mat_rate NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS swr_mat_rate  NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS agri_mat_rate NUMERIC NOT NULL DEFAULT 0;
 """
 
 
@@ -508,18 +516,30 @@ def upsert_params(row: MpParams) -> int:
     init_mp_tables()
     sql = """
         INSERT INTO mp_params
-            (segment, waste_pct, pulverizer_pct, effective_month, updated_at)
-        VALUES (%s,%s,%s,%s,now())
+            (segment, waste_pct, pulverizer_pct, effective_month,
+             min_run_block_hours, night_changeover_allowed, week_days,
+             cpvc_mat_rate, upvc_mat_rate, swr_mat_rate, agri_mat_rate,
+             updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
         ON CONFLICT ON CONSTRAINT mp_params_natural
         DO UPDATE SET
-            waste_pct      = EXCLUDED.waste_pct,
-            pulverizer_pct = EXCLUDED.pulverizer_pct,
-            updated_at     = now()
+            waste_pct               = EXCLUDED.waste_pct,
+            pulverizer_pct          = EXCLUDED.pulverizer_pct,
+            min_run_block_hours     = EXCLUDED.min_run_block_hours,
+            night_changeover_allowed= EXCLUDED.night_changeover_allowed,
+            week_days               = EXCLUDED.week_days,
+            cpvc_mat_rate           = EXCLUDED.cpvc_mat_rate,
+            upvc_mat_rate           = EXCLUDED.upvc_mat_rate,
+            swr_mat_rate            = EXCLUDED.swr_mat_rate,
+            agri_mat_rate           = EXCLUDED.agri_mat_rate,
+            updated_at              = now()
     """
     try:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(sql, (
-                row.segment, row.waste_pct, row.pulverizer_pct, row.effective_month
+                row.segment, row.waste_pct, row.pulverizer_pct, row.effective_month,
+                row.min_run_block_hours, row.night_changeover_allowed, row.week_days,
+                row.cpvc_mat_rate, row.upvc_mat_rate, row.swr_mat_rate, row.agri_mat_rate,
             ))
         return 1
     except Exception as e:
@@ -682,9 +702,13 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
             waste_pct=float(row["waste_pct"]),
             pulverizer_pct=float(row["pulverizer_pct"]),
             effective_month=row["effective_month"],
-            min_run_block_hours=float(row["min_run_block_hours"]) if row.get("min_run_block_hours") is not None else 5.0,
+            min_run_block_hours=float(row["min_run_block_hours"]) if row.get("min_run_block_hours") is not None else 2.0,
             night_changeover_allowed=bool(row.get("night_changeover_allowed", False)),
             week_days=str(row.get("week_days") or "[6,6,6,7]"),
+            cpvc_mat_rate=float(row["cpvc_mat_rate"]) if row.get("cpvc_mat_rate") is not None else 0.0,
+            upvc_mat_rate=float(row["upvc_mat_rate"]) if row.get("upvc_mat_rate") is not None else 0.0,
+            swr_mat_rate=float(row["swr_mat_rate"])  if row.get("swr_mat_rate")  is not None else 0.0,
+            agri_mat_rate=float(row["agri_mat_rate"]) if row.get("agri_mat_rate") is not None else 0.0,
         )
     except Exception:
         return None

@@ -4962,14 +4962,22 @@ def mp_save_params():
     data = request.get_json(force=True) or {}
     em = data.get("effective_month", "") or _mp_seed.current_month()
     try:
-        waste = float(data["waste_pct"])
-        pulv  = float(data["pulverizer_pct"])
+        waste    = float(data["waste_pct"])
+        pulv     = float(data["pulverizer_pct"])
+        minblock = float(data.get("min_run_block_hours", 2.0) or 2.0)
+        cpvc_r   = float(data.get("cpvc_mat_rate", 0.0) or 0.0)
+        upvc_r   = float(data.get("upvc_mat_rate", 0.0) or 0.0)
+        swr_r    = float(data.get("swr_mat_rate",  0.0) or 0.0)
+        agri_r   = float(data.get("agri_mat_rate", 0.0) or 0.0)
     except (KeyError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     try:
         _mp_model.upsert_params(_mp_model.MpParams(
             segment=_MP_SEGMENT, waste_pct=waste,
             pulverizer_pct=pulv, effective_month=em,
+            min_run_block_hours=minblock,
+            cpvc_mat_rate=cpvc_r, upvc_mat_rate=upvc_r,
+            swr_mat_rate=swr_r,   agri_mat_rate=agri_r,
         ))
         return jsonify({"ok": True})
     except Exception as exc:

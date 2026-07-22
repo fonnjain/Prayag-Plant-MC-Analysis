@@ -289,10 +289,10 @@ def run_shift_schedule(
     # ── Load DB params ────────────────────────────────────────────────────────
     params_row = _mp.get_params(segment, effective_month)
     if params_row:
-        min_run_block = float(getattr(params_row, "min_run_block_hours", 5.0) or 5.0)
+        min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
         week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
     else:
-        min_run_block = 5.0
+        min_run_block = 2.0
         week_days_str = "[6,6,6,7]"
 
     try:

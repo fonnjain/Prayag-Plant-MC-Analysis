@@ -586,8 +586,16 @@ def run_engine(
                 pipe_caps[ic].append(mc)
             routed_machines.add(mc)
 
-    # Rate lookups
+    # Rate lookups — computed from seeded items, then overridden by stored params
     ph_dict, mat_avg, overall_avg = _build_rate_lookups(ph_rows, routing)
+    if params_row:
+        for _mat, _attr in [
+            ("CPVC", "cpvc_mat_rate"), ("UPVC", "upvc_mat_rate"),
+            ("SWR",  "swr_mat_rate"),  ("AGRI", "agri_mat_rate"),
+        ]:
+            _v = float(getattr(params_row, _attr, 0.0) or 0.0)
+            if _v > 0.0:
+                mat_avg[_mat] = _v
 
     # ── Per-item chain math ──────────────────────────────────────────────────
     items: List[ItemResult] = []

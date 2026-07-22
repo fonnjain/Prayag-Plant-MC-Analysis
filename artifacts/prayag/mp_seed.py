@@ -41,6 +41,19 @@ _FILE_IDS: Dict[str, str] = {
     "compound":     "1owRHQodo_ye5WMAekqa7GgcIJbmjJgwCDRzfQk8-BYM",
 }
 
+# June 2026 "MACHINE PLANING JUNE 2026" workbook — real per-hour rates for all pipe materials.
+# Two tabs must be merged: "PIPE PURD PLAN " (CPVC/SWR/AGRI) + "MACHINE" (UPVC).
+_JUNE_PIPE_FILE_ID = "15mh7lXXuNqpyIg36jK7uMbensI4QRQ-5ILEqsjSbRNU"
+
+# Per-material kg/hr fallback rates seeded as defaults.
+# These are stored in mp_params and override the computed mat_avg in the engine.
+_PIPE_MAT_DEFAULTS: Dict[str, float] = {
+    "CPVC": 145.6,
+    "UPVC": 250.0,
+    "SWR":  295.0,
+    "AGRI": 300.0,
+}
+
 SEGMENT = "PLUMBING"
 _PIPE_MATERIAL_FAMILIES = ["CPVC", "UPVC", "SWR", "AGRI"]
 _FITTING_MATERIAL_FAMILIES = ["CPVC", "UPVC", "SWR", "AGRI"]
@@ -658,17 +671,163 @@ def parse_per_hour(rows: List[list], material: str, basis: str) -> List[dict]:
     return [{"item_code": ic, "basis": basis, "value": v} for ic, v in out.items()]
 
 
-def seed_per_hour(token: str, effective_month: str = "") -> dict:
-    """List tabs in the per-hour file, match each material×type, parse, upsert."""
-    em = effective_month or current_month()
-    fid = _FILE_IDS["per_hour"]
-    available_tabs = sheets.list_tabs(fid, token)
+def parse_june_pipe_tab(rows: List[list]) -> Dict[str, float]:
+    """Parse the 'PIPE PURD PLAN ' tab from the June 2026 workbook.
 
+    Layout (0-indexed):
+      Row 2 = header: col 1='Row Labels' (item code), col 3='TYPE', col 5='PER HOUR OUT PUT'
+      Row 3+ = data rows
+
+    Returns {norm_code: kg_per_hr} for all rows where TYPE ∈ {CPVC,SWR,AGRI} and
+    col F is a valid positive number.  UPVC rows have a blank col F — they are
+    silently skipped and will be loaded from the MACHINE tab instead.
+    """
+    HEADER_IDX = 2  # 0-indexed row that contains the column headers
+    CODE_COL  = 1
+    TYPE_COL  = 3
+    RATE_COL  = 5
+    VALID_TYPES = {"CPVC", "UPVC", "SWR", "AGRI"}
+
+    out: Dict[str, float] = {}
+    for i, row in enumerate(rows):
+        if i <= HEADER_IDX:
+            continue
+        raw_type = _cell(row, TYPE_COL).strip().upper()
+        if raw_type not in VALID_TYPES:
+            continue
+        raw_code = _cell(row, CODE_COL)
+        raw_rate = _cell(row, RATE_COL)
+        if not raw_code or not raw_rate:
+            continue
+        nc = norm_code(raw_code)
+        if not nc or len(nc) < 2:
+            continue
+        if _is_spurious_numeric(nc):
+            continue
+        val = _to_float(raw_rate)
+        if val is None or val <= 0:
+            continue
+        out[nc] = val
+    return out
+
+
+def parse_june_machine_tab(rows: List[list]) -> Dict[str, float]:
+    """Parse the 'MACHINE' (11 NO SHEET) tab from the June 2026 workbook.
+
+    Layout (0-indexed):
+      Row 0  = header ('11 NO SHEET', ..., 'PC IN HOURS')
+      Row 1+ = data rows: col 1=item code, col 5=per-hour rate
+
+    Skips cells containing #N/A, #DIV/0!, empty strings, or any non-numeric value.
+    Returns {norm_code: kg_per_hr} for all parseable rows.
+    """
+    CODE_COL = 1
+    RATE_COL = 5
+    _FORMULA_ERRORS = {"#N/A", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NULL!", "#NUM!"}
+
+    out: Dict[str, float] = {}
+    for i, row in enumerate(rows):
+        if i == 0:
+            continue  # header row
+        raw_code = _cell(row, CODE_COL)
+        raw_rate = _cell(row, RATE_COL)
+        if not raw_code or not raw_rate:
+            continue
+        if raw_rate.strip().upper() in _FORMULA_ERRORS:
+            continue
+        nc = norm_code(raw_code)
+        if not nc or len(nc) < 2:
+            continue
+        if _is_spurious_numeric(nc):
+            continue
+        val = _to_float(raw_rate)
+        if val is None or val <= 0:
+            continue
+        out[nc] = val
+    return out
+
+
+def seed_june_pipe_per_hour(token: str, effective_month: str = "") -> dict:
+    """Read the June 2026 workbook and seed pipe kg/hr rates for all four materials.
+
+    Reads two tabs and merges them:
+      - 'PIPE PURD PLAN ' — CPVC (8 items), SWR (24 items), AGRI (31 items)
+      - 'MACHINE'         — UPVC (7 items, all 250 kg/hr); also has some CPVC rows
+    Where an item appears in both, PIPE PURD PLAN takes precedence.
+
+    Returns a report dict describing what was read.
+    """
+    em = effective_month or current_month()
+    fid = _JUNE_PIPE_FILE_ID
+    tab_report: List[dict] = []
+
+    # ── Tab 1: PIPE PURD PLAN  (trailing space) ───────────────────────────────
+    try:
+        rows1 = sheets.read_values(fid, "PIPE PURD PLAN ", token)
+        pplan = parse_june_pipe_tab(rows1)
+        tab_report.append({
+            "tab": "PIPE PURD PLAN ", "rows": len(pplan), "status": "ok" if pplan else "empty",
+        })
+    except Exception as exc:
+        logger.warning("seed_june_pipe_per_hour: PIPE PURD PLAN read failed: %s", exc)
+        pplan = {}
+        tab_report.append({"tab": "PIPE PURD PLAN ", "rows": 0, "status": f"error: {exc}"})
+
+    # ── Tab 2: MACHINE (11 NO SHEET) ──────────────────────────────────────────
+    try:
+        rows2 = sheets.read_values(fid, "MACHINE", token)
+        machine = parse_june_machine_tab(rows2)
+        tab_report.append({
+            "tab": "MACHINE", "rows": len(machine), "status": "ok" if machine else "empty",
+        })
+    except Exception as exc:
+        logger.warning("seed_june_pipe_per_hour: MACHINE tab read failed: %s", exc)
+        machine = {}
+        tab_report.append({"tab": "MACHINE", "rows": 0, "status": f"error: {exc}"})
+
+    # ── Merge: PIPE PURD PLAN preferred ───────────────────────────────────────
+    merged: Dict[str, float] = {**machine, **pplan}  # pplan overwrites machine
+
+    records = [
+        MpPerHour(
+            segment=SEGMENT, item_code=ic,
+            basis="kg_per_hr", value=val, effective_month=em,
+        )
+        for ic, val in merged.items()
+    ]
+    return {
+        "rows_loaded": len(records),
+        "tab_report": tab_report,
+        "effective_month": em,
+        "_records": records,
+    }
+
+
+def seed_per_hour(token: str, effective_month: str = "") -> dict:
+    """Seed per-hour rates for all materials and types.
+
+    Pipe (kg/hr): read from the June 2026 workbook (_JUNE_PIPE_FILE_ID) which
+    has real per-machine output rates for all four pipe materials.
+
+    Fitting (cycle): still read from the old per_hour file using the existing
+    tab-matching logic.
+    """
+    em = effective_month or current_month()
     all_records: List[MpPerHour] = []
     tab_report: List[dict] = []
 
+    # ── Pipe rates from June 2026 workbook ────────────────────────────────────
+    june_result = seed_june_pipe_per_hour(token, em)
+    all_records.extend(june_result.get("_records", []))
+    tab_report.extend(june_result.get("tab_report", []))
+
+    # ── Fitting cycle times from the original per_hour file ───────────────────
+    fid = _FILE_IDS["per_hour"]
+    available_tabs = sheets.list_tabs(fid, token)
     for material, mat_type, type_kw in _PER_HOUR_TAB_KEYWORDS:
-        basis = "kg_per_hr" if mat_type == "pipe" else "cycle"
+        if mat_type != "fitting":
+            continue  # pipe rates already loaded from June workbook
+        basis = "cycle"
         matched = [t for t in available_tabs if _match_per_hour_tab(t, material, mat_type, type_kw)]
         if not matched:
             tab_report.append({
@@ -676,12 +835,9 @@ def seed_per_hour(token: str, effective_month: str = "") -> dict:
                 "tab": None, "rows": 0, "status": "tab_not_found",
             })
             continue
-        # Prefer the most specific tab: one that explicitly contains the type
-        # keyword ("pipe"/"fitting") over a generic "PRODUCTION PLANING" tab.
         type_kw_lower = mat_type.lower()
         matched_sorted = sorted(
-            matched,
-            key=lambda t: 0 if type_kw_lower in t.lower() else 1,
+            matched, key=lambda t: 0 if type_kw_lower in t.lower() else 1,
         )
         tab = matched_sorted[0]
         raw = sheets.read_values(fid, tab, token)
@@ -1060,12 +1216,27 @@ def seed_compound_recipes(token: str, effective_month: str = "") -> dict:
 # ---------------------------------------------------------------------------
 
 def seed_params(effective_month: str = "") -> dict:
-    """Seed waste_pct=4, pulverizer_pct=25 for the segment."""
+    """Seed default planning parameters for the segment.
+
+    Defaults:
+      waste_pct=4, pulverizer_pct=25, min_run_block_hours=2
+      Material fallback rates: CPVC 145.6, UPVC 250, SWR 295, AGRI 300 kg/hr
+    """
     em = effective_month or current_month()
     mp_model.upsert_params(MpParams(
         segment=SEGMENT, waste_pct=4.0, pulverizer_pct=25.0, effective_month=em,
+        min_run_block_hours=2.0,
+        cpvc_mat_rate=_PIPE_MAT_DEFAULTS["CPVC"],
+        upvc_mat_rate=_PIPE_MAT_DEFAULTS["UPVC"],
+        swr_mat_rate=_PIPE_MAT_DEFAULTS["SWR"],
+        agri_mat_rate=_PIPE_MAT_DEFAULTS["AGRI"],
     ))
-    return {"waste_pct": 4.0, "pulverizer_pct": 25.0, "effective_month": em}
+    return {
+        "waste_pct": 4.0, "pulverizer_pct": 25.0,
+        "min_run_block_hours": 2.0,
+        "mat_rates": _PIPE_MAT_DEFAULTS,
+        "effective_month": em,
+    }
 
 
 # ---------------------------------------------------------------------------
