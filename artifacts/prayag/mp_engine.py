@@ -89,6 +89,9 @@ class ItemResult:
     assignments: List[AssignedPortion]
     has_weight: bool
     has_machine: bool
+    # "item" = seeded per-item rate; "mat_avg" = per-material average;
+    # "overall_avg" = overall pipe average (last-resort fallback)
+    rate_fallback_tier: str = "item"
 
 
 @dataclasses.dataclass
@@ -369,13 +372,19 @@ def _get_rate(
     ph_dict: Dict[str, float],
     mat_avg: Dict[str, float],
     overall_avg: float,
-) -> Tuple[float, bool]:
-    """Return (rate_kg_per_hr, rate_estimated)."""
+) -> Tuple[float, bool, str]:
+    """Return (rate_kg_per_hr, rate_estimated, fallback_tier).
+
+    fallback_tier values:
+      "item"        — seeded per-item rate (no estimation)
+      "mat_avg"     — per-material average of seeded items (rate_estimated=True)
+      "overall_avg" — overall pipe average, last resort (rate_estimated=True)
+    """
     if item_code in ph_dict:
-        return ph_dict[item_code], False
+        return ph_dict[item_code], False, "item"
     if material in mat_avg:
-        return mat_avg[material], True
-    return overall_avg, True
+        return mat_avg[material], True, "mat_avg"
+    return overall_avg, True, "overall_avg"
 
 
 # ── Optimiser ────────────────────────────────────────────────────────────────
@@ -612,10 +621,11 @@ def run_engine(
         fresh       = material_kg * (1.0 - pulv_pct / 100.0)
         pulv        = material_kg - fresh
 
-        rate, estimated = _get_rate(ic, mat, ph_dict, mat_avg, overall_avg)
+        rate, estimated, tier = _get_rate(ic, mat, ph_dict, mat_avg, overall_avg)
         if rate <= 0:
             rate = overall_avg
             estimated = True
+            tier = "overall_avg"
         machine_hrs = material_kg / rate if rate > 0 else 0.0
 
         caps = pipe_caps.get(ic, [])
@@ -632,6 +642,7 @@ def run_engine(
             pulverizer_kg=round(pulv, 4),
             rate_kg_per_hr=round(rate, 4),
             rate_estimated=estimated,
+            rate_fallback_tier=tier,
             machine_hrs=round(machine_hrs, 4),
             capable_machines=sorted(caps),
             assignments=[],

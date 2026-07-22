@@ -10,11 +10,17 @@ SWR-pipe and AGRI-pipe items have no seeded per_hour rates. The engine resolves:
 2. Average of seeded items with the **same material** (cross-ref via routing table's material column)
 3. Overall average of all seeded kg_per_hr items
 
-`rate_estimated=True` on all fallback items. The fallback must use the routing table to
-determine which per_hour items belong to which material — per_hour rows don't store material directly.
+`rate_estimated=True` on all fallback items. `rate_fallback_tier` records which level was used:
+  - `"item"` — exact seeded rate
+  - `"mat_avg"` — per-material average of seeded items
+  - `"overall_avg"` — last-resort overall pipe average
 
-**Why:** SWR/AGRI items have zero per-hour rows; using only-CPVC/UPVC rates for the overall avg
-prevents divide-by-zero and gives a reasonable starting estimate.
+`_get_rate()` returns a 3-tuple `(rate, estimated, tier)`. The tier is stored on `ItemResult`
+(`rate_fallback_tier: str = "item"` default) and exposed in the consolidated plan report
+Tab 7 and in the Report-11 rate-fallback note block below the totals row.
+
+**Why:** SWR/AGRI items have zero per-hour rows; tier tracking lets planners audit how many
+machine-hours rely on estimated vs exact rates, and which materials need seeding attention.
 
 ## LPT + parallel-split algorithm
 
@@ -36,14 +42,21 @@ reduces peak load (acceptance run: 42.6% peak reduction).
 - This means results are always fresh (use current mp_* table values, not stale stored result)
 - Re-run is fast: all reads are from Postgres mp_* tables (no network I/O)
 
-## Report-11 column order (exact, spec-locked)
+## Report-11 column order (exact, 16 cols)
 
-DATE | MACHINE NAME | MACHINE NO. | TYPES | ITEM CODE |
-Running Hours | Ideal Weight (KG) | Pcs | Weight | Wt./Pc. |
-Ideal Output Per Hour | Actual Output Per Hour | Output Efficiency
+DATE | WEEK | SHIFT | MACHINE NAME | MACHINE NO. | TYPES | ITEM CODE |
+Running Hours | Production Wt (KG) | Material Req (KG) | Pcs | Wt./Pc. |
+Ideal Output Per Hour | Actual Output Per Hour | Output Efficiency | Compound Cost (Rs)
+
+- **Production Wt (KG)** = qty_pcs × wt_per_pc  (no waste — what is physically produced)
+- **Material Req (KG)**  = material_kg from engine (= production_wt × (1 + waste%)) — total material to procure
+- **WEEK / SHIFT** = "W1".."W4" / "DAY"/"NIGHT" when ScheduleResult is passed; blank for monthly-aggregate fallback
+- **DATE** = day number when scheduled; month label (e.g. "Jul-2026") when aggregate
 
 Header at row 5. Rows 1–4 = title block. Data from row 6.
+Totals cols: Running Hours, Production Wt, Material Req, Pcs, Compound Cost.
 Actuals-only columns (Actual Output Per Hour, Output Efficiency) left blank for plan output.
+A Rate Fallback Summary block is appended below the totals row when any item uses an estimated rate.
 
 ## Machine-group config
 

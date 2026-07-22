@@ -5581,13 +5581,46 @@ def mp_schedule_view():
     )
 
 
-@app.route("/machine-planning/report/zip")
-def mp_report_zip():
-    """Download all available report files (11, 11A-D, 12) as a single ZIP."""
+@app.route("/machine-planning/report/consolidated")
+def mp_report_consolidated():
+    """Download the 7-tab consolidated plan workbook as .xlsx."""
     from flask import send_file as _send_file
 
     result         = _mp2_result_from_session()
     fitting_result = _mp3_fitting_result_from_session()
+    schedule_result = _mp_schedule_from_session()
+
+    if result is None and fitting_result is None:
+        return redirect(url_for("mp_upload"))
+
+    try:
+        xlsx_bytes = _mp_reports.consolidated_plan_bytes(
+            engine_result=result,
+            fitting_result=fitting_result,
+            schedule_result=schedule_result,
+        )
+        month = (result or fitting_result).effective_month
+        filename = f"Consolidated_Plan_{month}.xlsx"
+    except Exception as exc:
+        app.logger.error("mp_report_consolidated failed: %s", exc)
+        abort(500)
+
+    return _send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype=_XLSX_MIME,
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@app.route("/machine-planning/report/zip")
+def mp_report_zip():
+    """Download all available report files (11, 11A-D, 12, consolidated) as ZIP."""
+    from flask import send_file as _send_file
+
+    result          = _mp2_result_from_session()
+    fitting_result  = _mp3_fitting_result_from_session()
+    schedule_result = _mp_schedule_from_session()
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -5600,14 +5633,14 @@ def mp_report_zip():
         if result is not None:
             try:
                 zf.writestr(f"Report-11_Pipe_Plan_{month}.xlsx",
-                            _mp_reports.report_11_bytes(result))
+                            _mp_reports.report_11_bytes(result, schedule=schedule_result))
                 built += 1
             except Exception as exc:
                 app.logger.error("zip: report 11 failed: %s", exc)
             for g in ("A", "B", "C", "D"):
                 try:
                     zf.writestr(f"Report-11{g}_{month}.xlsx",
-                                _mp_reports.report_11x_bytes(result, g))
+                                _mp_reports.report_11x_bytes(result, g, schedule=schedule_result))
                     built += 1
                 except Exception as exc:
                     app.logger.error("zip: report 11%s failed: %s", g, exc)
@@ -5619,6 +5652,17 @@ def mp_report_zip():
                 built += 1
             except Exception as exc:
                 app.logger.error("zip: report 12 failed: %s", exc)
+
+        try:
+            zf.writestr(f"Consolidated_Plan_{month}.xlsx",
+                        _mp_reports.consolidated_plan_bytes(
+                            engine_result=result,
+                            fitting_result=fitting_result,
+                            schedule_result=schedule_result,
+                        ))
+            built += 1
+        except Exception as exc:
+            app.logger.error("zip: consolidated plan failed: %s", exc)
 
     if built == 0:
         abort(500)
@@ -5668,13 +5712,15 @@ def mp_report_download(report_id: str):
     if result is None:
         return redirect(url_for("mp_upload"))
 
+    schedule_result = _mp_schedule_from_session()
+
     try:
         if report_id == "11":
-            xlsx_bytes = _mp_reports.report_11_bytes(result)
+            xlsx_bytes = _mp_reports.report_11_bytes(result, schedule=schedule_result)
             filename = f"Report-11_Pipe_Plan_{result.effective_month}.xlsx"
         else:
             group = report_id[2:]   # 'A' / 'B' / 'C' / 'D'
-            xlsx_bytes = _mp_reports.report_11x_bytes(result, group)
+            xlsx_bytes = _mp_reports.report_11x_bytes(result, group, schedule=schedule_result)
             mcs = "_".join(
                 m.replace("/", "").replace(" ", "")
                 for m in _mp_engine.REPORT_11_GROUPS.get(group, [])
