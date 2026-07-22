@@ -330,9 +330,17 @@
   {% if result %}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
               padding:.75rem;margin-bottom:1rem;">
-    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .65rem;">
-      Download Reports — Pipe
-    </h3>
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.65rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        Download Reports — Pipe
+      </h3>
+      <a href="{{ url_for('mp_report_zip') }}"
+         style="margin-left:auto;background:#1e293b;color:#fff;text-decoration:none;
+                padding:.38rem .75rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;">
+        🗜️ Download All as ZIP
+      </a>
+    </div>
     <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
       <a href="{{ url_for('mp_report_download', report_id='11') }}"
          style="background:var(--navy);color:#fff;text-decoration:none;
@@ -599,9 +607,17 @@
   {# Report-12 download #}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
               padding:.75rem;margin-bottom:1rem;">
-    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .65rem;">
-      Download Reports — Fittings
-    </h3>
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.65rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        Download Reports — Fittings
+      </h3>
+      <a href="{{ url_for('mp_report_zip') }}"
+         style="margin-left:auto;background:#1e293b;color:#fff;text-decoration:none;
+                padding:.38rem .75rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;">
+        🗜️ Download All as ZIP
+      </a>
+    </div>
     <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
       <a href="{{ url_for('mp_report_download', report_id='12') }}"
          style="background:var(--navy);color:#fff;text-decoration:none;

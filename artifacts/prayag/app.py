@@ -13,6 +13,8 @@ import logging
 import time
 import hmac
 import threading
+import io
+import zipfile
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
@@ -5576,6 +5578,57 @@ def mp_schedule_view():
         blocks_by_mc=dict(blocks_by_mc),
         fill_map=fill_map,
         machines=machines,
+    )
+
+
+@app.route("/machine-planning/report/zip")
+def mp_report_zip():
+    """Download all available report files (11, 11A-D, 12) as a single ZIP."""
+    from flask import send_file as _send_file
+
+    result         = _mp2_result_from_session()
+    fitting_result = _mp3_fitting_result_from_session()
+
+    if result is None and fitting_result is None:
+        return redirect(url_for("mp_upload"))
+
+    buf = io.BytesIO()
+    month = (result or fitting_result).effective_month
+    built = 0
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if result is not None:
+            try:
+                zf.writestr(f"Report-11_Pipe_Plan_{month}.xlsx",
+                            _mp_reports.report_11_bytes(result))
+                built += 1
+            except Exception as exc:
+                app.logger.error("zip: report 11 failed: %s", exc)
+            for g in ("A", "B", "C", "D"):
+                try:
+                    zf.writestr(f"Report-11{g}_{month}.xlsx",
+                                _mp_reports.report_11x_bytes(result, g))
+                    built += 1
+                except Exception as exc:
+                    app.logger.error("zip: report 11%s failed: %s", g, exc)
+
+        if fitting_result is not None:
+            try:
+                zf.writestr(f"Report-12_Fitting_Plan_{month}.xlsx",
+                            _mp_reports.report_12_bytes(fitting_result))
+                built += 1
+            except Exception as exc:
+                app.logger.error("zip: report 12 failed: %s", exc)
+
+    if built == 0:
+        abort(500)
+
+    buf.seek(0)
+    return _send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"MachPlanning_Reports_{month}.zip",
     )
 
 
