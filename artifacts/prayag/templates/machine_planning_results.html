@@ -685,5 +685,148 @@
 
   {% endif %}{# end fitting_result #}
 
+  {# ── Shift Schedule Preview ───────────────────────────────────────────── #}
+  {% if schedule_result %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        📅 Shift Schedule — Weekly Fill
+      </h3>
+      <a href="{{ url_for('mp_schedule_view') }}"
+         style="margin-left:auto;font-size:.74rem;color:var(--terra);text-decoration:none;
+                border:1px solid var(--terra);border-radius:.35rem;padding:.18rem .5rem;">
+        Full Schedule ↗
+      </a>
+    </div>
+
+    {# Key stats row #}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));
+                gap:.45rem;margin-bottom:.8rem;">
+      {% set sched_pct = (schedule_result.total_scheduled_hrs / schedule_result.total_capacity_hrs * 100) if schedule_result.total_capacity_hrs > 0 else 0 %}
+      {% for lbl, val, unit, bg, fg in [
+        ("Capacity", schedule_result.total_capacity_hrs, "h", "#e0e7ff", "#4338ca"),
+        ("Scheduled", schedule_result.total_scheduled_hrs, "h", "#d1fae5", "#065f46"),
+        ("Idle", schedule_result.total_idle_hrs, "h", "#f3f4f6", "#6b7280"),
+        ("Changeovers", schedule_result.total_changeovers, "", "#fef3c7", "#92400e"),
+        ("Excess kg", schedule_result.total_excess_kg, "kg", "#fee2e2", "#991b1b"),
+        ("Unfinished", schedule_result.unfinished | length, " items", "#ede9fe", "#5b21b6"),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.5rem;padding:.45rem .55rem;">
+        <div style="font-size:.63rem;font-weight:600;color:{{ fg }};
+                    text-transform:uppercase;letter-spacing:.03em;">{{ lbl }}</div>
+        <div style="font-size:.92rem;font-weight:800;color:{{ fg }};margin-top:.1rem;">
+          {{ "{:,.0f}".format(val) }}{{ unit }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Weekly fill table — rows=machines, cols=W1..W4 #}
+    {% set weeks = [1,2,3,4] %}
+    {% set machines = schedule_result.weekly_fill | map(attribute='machine') | unique | sort | list %}
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead>
+          <tr style="background:var(--navy);color:#fff;">
+            <th style="padding:.3rem .45rem;text-align:left;">Machine</th>
+            {% for wk in weeks %}
+            <th style="padding:.3rem .45rem;text-align:center;" colspan="2">W{{ wk }}
+              <span style="font-size:.6rem;font-weight:400;">
+                ({{ schedule_result.week_days[wk-1] }}d)
+              </span>
+            </th>
+            {% endfor %}
+            <th style="padding:.3rem .45rem;text-align:center;">CO</th>
+          </tr>
+          <tr style="background:#1a2f56;color:#c7d2fe;font-size:.66rem;">
+            <th style="padding:.2rem .45rem;"></th>
+            {% for wk in weeks %}
+            <th style="padding:.2rem .3rem;text-align:right;">hrs</th>
+            <th style="padding:.2rem .3rem;text-align:right;">%</th>
+            {% endfor %}
+            <th style="padding:.2rem .3rem;text-align:center;">total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set fill_lookup = {} %}
+          {% for r in schedule_result.weekly_fill %}
+            {% set _ = fill_lookup.update({(r.machine, r.week): r}) %}
+          {% endfor %}
+          {% set total_co = [0] %}
+          {% for mc in machines %}
+          <tr style="border-bottom:1px solid #f3f4f6;">
+            <td style="padding:.28rem .45rem;font-weight:700;color:var(--navy);
+                       font-size:.73rem;white-space:nowrap;">{{ mc }}</td>
+            {% set mc_co = [0] %}
+            {% for wk in weeks %}
+              {% set r = fill_lookup.get((mc, wk)) %}
+              {% if r %}
+                {% set pct = r.utilisation_pct %}
+                {% set bg = "#d1fae5" if pct >= 95 else ("#fef3c7" if pct >= 70 else "#fee2e2") %}
+                {% set _ = mc_co.append(mc_co.pop() + r.changeovers) %}
+            <td style="padding:.28rem .3rem;text-align:right;font-size:.72rem;">
+              {{ "{:.0f}".format(r.scheduled_hrs) }}
+            </td>
+            <td style="padding:.28rem .3rem;text-align:right;
+                       background:{{ bg }};font-weight:600;font-size:.72rem;">
+              {{ "{:.0f}".format(pct) }}%
+            </td>
+              {% else %}
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+              {% endif %}
+            {% endfor %}
+            {% set _ = total_co.append(total_co.pop() + mc_co[0]) %}
+            <td style="padding:.28rem .3rem;text-align:center;font-size:.71rem;
+                       color:{{ '#92400e' if mc_co[0] > 0 else '#6b7280' }};">
+              {{ mc_co[0] if mc_co[0] > 0 else '—' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Unfinished items (collapsed) #}
+    {% if schedule_result.unfinished %}
+    <details style="margin-top:.65rem;">
+      <summary style="font-size:.75rem;font-weight:700;color:#991b1b;cursor:pointer;">
+        ⚠️ {{ schedule_result.unfinished | length }} item{{ 's' if (schedule_result.unfinished | length) > 1 else '' }}
+        not fully scheduled within the month
+      </summary>
+      <div style="overflow-x:auto;margin-top:.4rem;">
+        <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+          <thead>
+            <tr style="background:#fee2e2;color:#991b1b;">
+              <th style="padding:.25rem .4rem;text-align:left;">Item Code</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Mat.</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining h</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining kg</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Req. Week</th>
+              <th style="padding:.25rem .4rem;text-align:left;">Capable M/Cs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in schedule_result.unfinished %}
+            <tr style="border-bottom:1px solid #fee2e2;">
+              <td style="padding:.2rem .4rem;font-weight:600;color:var(--navy);">{{ u.item_code }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">{{ u.material }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:.1f}".format(u.remaining_hours) }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:,.0f}".format(u.remaining_kg) }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">W{{ u.origin_week }}</td>
+              <td style="padding:.2rem .4rem;font-size:.68rem;color:#6b7280;">
+                {{ u.capable_machines | join(", ") }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}{# end schedule_result #}
+
 </div>
 {% endblock %}

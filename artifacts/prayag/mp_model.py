@@ -51,6 +51,9 @@ class MpMachine:
     support_w: int = 0              # support / regular workers
     capacity_hrs_month: float = 500.0
     effective_month: str = ""
+    shifts_per_day: int = 2
+    hours_per_shift: float = 10.0
+    working_days_month: int = 25
 
 
 @dataclasses.dataclass
@@ -109,6 +112,9 @@ class MpParams:
     waste_pct: float = 4.0
     pulverizer_pct: float = 25.0
     effective_month: str = ""
+    min_run_block_hours: float = 5.0
+    night_changeover_allowed: bool = False
+    week_days: str = "[6,6,6,7]"
 
 
 @dataclasses.dataclass
@@ -230,6 +236,12 @@ CREATE TABLE IF NOT EXISTS mp_plan_run (
 _MIGRATIONS = """
 ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS fitting_demand       JSONB;
 ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS uploaded_file_path   TEXT NOT NULL DEFAULT '';
+ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS shifts_per_day       INT     NOT NULL DEFAULT 2;
+ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS hours_per_shift      NUMERIC NOT NULL DEFAULT 10;
+ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS working_days_month   INT     NOT NULL DEFAULT 25;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS min_run_block_hours  NUMERIC NOT NULL DEFAULT 5;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS night_changeover_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS week_days            TEXT NOT NULL DEFAULT '[6,6,6,7]';
 """
 
 
@@ -670,6 +682,9 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
             waste_pct=float(row["waste_pct"]),
             pulverizer_pct=float(row["pulverizer_pct"]),
             effective_month=row["effective_month"],
+            min_run_block_hours=float(row["min_run_block_hours"]) if row.get("min_run_block_hours") is not None else 5.0,
+            night_changeover_allowed=bool(row.get("night_changeover_allowed", False)),
+            week_days=str(row.get("week_days") or "[6,6,6,7]"),
         )
     except Exception:
         return None

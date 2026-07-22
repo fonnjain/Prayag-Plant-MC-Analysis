@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:0 .75rem 5rem; max-width:960px; margin:0 auto;">
+
+  {# ── Header ─────────────────────────────────────────────────────────────── #}
+  <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
+    <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
+      Shift Schedule
+    </h2>
+    <span style="font-size:.75rem;color:#6b7280;background:#f3f4f6;
+                 border-radius:99px;padding:.15rem .6rem;">
+      {{ schedule.effective_month }} · {{ schedule.segment }}
+    </span>
+    <a href="{{ url_for('mp_results') }}"
+       style="margin-left:auto;font-size:.76rem;color:var(--terra);text-decoration:none;
+              border:1px solid var(--terra);border-radius:.35rem;padding:.2rem .5rem;">
+      ↩ Results
+    </a>
+  </div>
+
+  {# ── Summary stat cards ─────────────────────────────────────────────────── #}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(115px,1fr));
+              gap:.5rem;margin-bottom:1rem;">
+    {% set sched_pct = (schedule.total_scheduled_hrs / schedule.total_capacity_hrs * 100) if schedule.total_capacity_hrs > 0 else 0 %}
+    {% for lbl, val, unit, bg, fg in [
+      ("Capacity",     schedule.total_capacity_hrs,   "h",     "#e0e7ff", "#4338ca"),
+      ("Scheduled",    schedule.total_scheduled_hrs,  "h",     "#d1fae5", "#065f46"),
+      ("Utilisation",  sched_pct,                     "%",     "#dbeafe", "#1e40af"),
+      ("Idle",         schedule.total_idle_hrs,       "h",     "#f3f4f6", "#6b7280"),
+      ("Changeovers",  schedule.total_changeovers,    "",      "#fef3c7", "#92400e"),
+      ("Excess kg",    schedule.total_excess_kg,      "kg",    "#fee2e2", "#991b1b"),
+      ("Unfinished",   schedule.unfinished | length,  " items","#ede9fe", "#5b21b6"),
+    ] %}
+    <div style="background:{{ bg }};border-radius:.6rem;padding:.5rem .65rem;">
+      <div style="font-size:.62rem;font-weight:600;color:{{ fg }};
+                  text-transform:uppercase;letter-spacing:.04em;">{{ lbl }}</div>
+      <div style="font-size:.95rem;font-weight:800;color:{{ fg }};margin-top:.1rem;">
+        {{ "{:,.0f}".format(val) }}{{ unit }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── Params strip ───────────────────────────────────────────────────────── #}
+  <p style="font-size:.7rem;color:#6b7280;margin:0 0 .8rem;">
+    Min block {{ schedule.params_used.min_run_block_hours }}h ·
+    Week split [{{ schedule.week_days | join(", ") }}] days
+  </p>
+
+  {# ── Weekly fill table — all machines × W1..W4 ──────────────────────────── #}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.7rem;margin-bottom:1rem;overflow-x:auto;">
+    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .55rem;
+               text-transform:uppercase;letter-spacing:.05em;">Weekly Fill by Machine</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+      <thead>
+        <tr style="background:var(--navy);color:#fff;">
+          <th style="padding:.3rem .45rem;text-align:left;">Machine</th>
+          {% for wk in [1,2,3,4] %}
+          <th colspan="2" style="padding:.3rem .4rem;text-align:center;">
+            W{{ wk }}&nbsp;<span style="font-size:.6rem;font-weight:400;">({{ schedule.week_days[wk-1] }}d)</span>
+          </th>
+          {% endfor %}
+          <th style="padding:.3rem .4rem;text-align:center;">CO</th>
+          <th style="padding:.3rem .4rem;text-align:right;">Excess kg</th>
+        </tr>
+        <tr style="background:#1a2f56;color:#c7d2fe;font-size:.65rem;">
+          <th style="padding:.2rem .45rem;"></th>
+          {% for _ in [1,2,3,4] %}
+          <th style="padding:.2rem .3rem;text-align:right;">hrs</th>
+          <th style="padding:.2rem .3rem;text-align:right;">%</th>
+          {% endfor %}
+          <th style="padding:.2rem .3rem;text-align:center;"></th>
+          <th style="padding:.2rem .3rem;text-align:right;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set total_co = namespace(v=0) %}
+        {% set total_ex = namespace(v=0) %}
+        {% for mc in machines %}
+        <tr style="border-bottom:1px solid #f3f4f6;">
+          <td style="padding:.28rem .45rem;font-weight:700;color:var(--navy);
+                     font-size:.73rem;white-space:nowrap;">{{ mc }}</td>
+          {% set mc_co = namespace(v=0) %}
+          {% set mc_ex = namespace(v=0.0) %}
+          {% for wk in [1,2,3,4] %}
+            {% set r = fill_map.get((mc, wk)) %}
+            {% if r %}
+              {% set pct = r.utilisation_pct %}
+              {% set bg = "#d1fae5" if pct >= 95 else ("#fef3c7" if pct >= 70 else "#fee2e2") %}
+              {% set _ = mc_co.__setattr__('v', mc_co.v + r.changeovers) %}
+              {% set _ = mc_ex.__setattr__('v', mc_ex.v + r.excess_kg) %}
+          <td style="padding:.28rem .3rem;text-align:right;">{{ "{:.0f}".format(r.scheduled_hrs) }}</td>
+          <td style="padding:.28rem .3rem;text-align:right;background:{{ bg }};font-weight:600;">
+            {{ "{:.0f}".format(pct) }}%
+          </td>
+            {% else %}
+          <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+          <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+            {% endif %}
+          {% endfor %}
+          {% set _ = total_co.__setattr__('v', total_co.v + mc_co.v) %}
+          {% set _ = total_ex.__setattr__('v', total_ex.v + mc_ex.v) %}
+          <td style="padding:.28rem .3rem;text-align:center;font-size:.72rem;
+                     color:{{ '#92400e' if mc_co.v > 0 else '#6b7280' }};">
+            {{ mc_co.v if mc_co.v > 0 else '—' }}
+          </td>
+          <td style="padding:.28rem .3rem;text-align:right;font-size:.71rem;color:#6b7280;">
+            {{ "{:,.0f}".format(mc_ex.v) if mc_ex.v > 0 else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ── Per-machine day schedule (collapsible per machine) ──────────────────── #}
+  {% for mc in machines %}
+  {% set mc_blocks = blocks_by_mc.get(mc, []) %}
+  <details style="background:#fff;border-radius:.6rem;
+                  box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:.6rem;">
+    <summary style="padding:.65rem .75rem;font-size:.82rem;font-weight:800;
+                    color:var(--navy);cursor:pointer;user-select:none;
+                    display:flex;align-items:center;gap:.5rem;">
+      {{ mc }}
+      {% set mc_fill = namespace(total_s=0.0, total_c=0.0) %}
+      {% for wk in [1,2,3,4] %}
+        {% set r = fill_map.get((mc, wk)) %}
+        {% if r %}
+          {% set _ = mc_fill.__setattr__('total_s', mc_fill.total_s + r.scheduled_hrs) %}
+          {% set _ = mc_fill.__setattr__('total_c', mc_fill.total_c + r.capacity_hrs) %}
+        {% endif %}
+      {% endfor %}
+      {% if mc_fill.total_c > 0 %}
+      <span style="font-size:.7rem;font-weight:400;background:#f3f4f6;color:#374151;
+                   border-radius:99px;padding:.1rem .5rem;">
+        {{ "{:.0f}".format(mc_fill.total_s) }}h /
+        {{ "{:.0f}".format(mc_fill.total_c) }}h
+        ({{ "{:.0f}".format(mc_fill.total_s / mc_fill.total_c * 100) }}%)
+      </span>
+      {% endif %}
+    </summary>
+    <div style="padding:.5rem .75rem .75rem;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.71rem;">
+        <thead>
+          <tr style="background:#f3f4f6;color:#374151;">
+            <th style="padding:.25rem .35rem;text-align:center;white-space:nowrap;">Wk</th>
+            <th style="padding:.25rem .35rem;text-align:center;white-space:nowrap;">Day</th>
+            <th style="padding:.25rem .35rem;text-align:center;">Shift</th>
+            <th style="padding:.25rem .35rem;text-align:left;">Item</th>
+            <th style="padding:.25rem .35rem;text-align:center;">Mat.</th>
+            <th style="padding:.25rem .35rem;text-align:right;">Planned h</th>
+            <th style="padding:.25rem .35rem;text-align:right;">Excess h</th>
+            <th style="padding:.25rem .35rem;text-align:center;">Req. Wk</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set prev_day = namespace(v=0) %}
+          {% for b in mc_blocks %}
+          {% set row_bg = "#f9fafb" if (b.day % 2 == 0) else "#fff" %}
+          {% if b.is_idle %}{% set row_bg = "#fafafa" %}{% endif %}
+          {% if b.shift == "DAY" and b.day != prev_day.v %}
+          <tr style="height:1px;background:#e5e7eb;">
+            <td colspan="8" style="padding:0;"></td>
+          </tr>
+          {% set _ = prev_day.__setattr__('v', b.day) %}
+          {% endif %}
+          <tr style="background:{{ row_bg }};">
+            <td style="padding:.2rem .35rem;text-align:center;font-weight:600;color:#374151;">
+              W{{ b.week }}
+            </td>
+            <td style="padding:.2rem .35rem;text-align:center;color:#6b7280;">{{ b.day }}</td>
+            <td style="padding:.2rem .35rem;text-align:center;">
+              {% if b.shift == "DAY" %}
+              <span style="font-size:.65rem;background:#dbeafe;color:#1e40af;
+                           border-radius:99px;padding:.05rem .4rem;">DAY</span>
+              {% else %}
+              <span style="font-size:.65rem;background:#1e1b4b;color:#c7d2fe;
+                           border-radius:99px;padding:.05rem .4rem;">NIGHT</span>
+              {% endif %}
+            </td>
+            <td style="padding:.2rem .35rem;font-weight:{{ '700' if not b.is_idle else '400' }};
+                       color:{{ 'var(--navy)' if not b.is_idle else '#9ca3af' }};">
+              {% if b.is_idle %}
+              <em>idle</em>
+              {% else %}
+              {{ b.item_code }}
+              {% endif %}
+            </td>
+            <td style="padding:.2rem .35rem;text-align:center;color:#6b7280;">
+              {{ b.material if not b.is_idle else '—' }}
+            </td>
+            <td style="padding:.2rem .35rem;text-align:right;">
+              {{ "{:.1f}".format(b.planned_hours) }}
+            </td>
+            <td style="padding:.2rem .35rem;text-align:right;
+                       color:{{ '#dc2626' if b.excess_hours > 0.05 else '#6b7280' }};">
+              {{ "{:.1f}".format(b.excess_hours) if b.excess_hours > 0.05 else '—' }}
+            </td>
+            <td style="padding:.2rem .35rem;text-align:center;font-size:.67rem;
+                       color:#6b7280;">
+              {{ 'W' + b.origin_week|string if (not b.is_idle and b.origin_week > 0) else '—' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+
+  {# ── Unfinished items ───────────────────────────────────────────────────── #}
+  {% if schedule.unfinished %}
+  <div style="background:#fff5f5;border:1px solid #fecaca;border-radius:.6rem;
+              padding:.75rem;margin-bottom:1rem;">
+    <h3 style="font-size:.78rem;font-weight:800;color:#991b1b;margin:0 0 .55rem;">
+      ⚠️ {{ schedule.unfinished | length }} Item{{ 's' if (schedule.unfinished | length) > 1 else '' }} Not Fully Scheduled
+    </h3>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.73rem;">
+        <thead>
+          <tr style="background:#fee2e2;color:#991b1b;">
+            <th style="padding:.28rem .4rem;text-align:left;">Item Code</th>
+            <th style="padding:.28rem .4rem;text-align:center;">Material</th>
+            <th style="padding:.28rem .4rem;text-align:right;">Remaining h</th>
+            <th style="padding:.28rem .4rem;text-align:right;">Remaining kg</th>
+            <th style="padding:.28rem .4rem;text-align:center;">Req. Week</th>
+            <th style="padding:.28rem .4rem;text-align:left;">Capable M/Cs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in schedule.unfinished %}
+          <tr style="border-bottom:1px solid #fee2e2;
+                     background:{{ '#fffbfb' if loop.index%2==0 else '#fff' }};">
+            <td style="padding:.22rem .4rem;font-weight:700;color:var(--navy);">{{ u.item_code }}</td>
+            <td style="padding:.22rem .4rem;text-align:center;">{{ u.material }}</td>
+            <td style="padding:.22rem .4rem;text-align:right;">{{ "{:.1f}".format(u.remaining_hours) }}</td>
+            <td style="padding:.22rem .4rem;text-align:right;">{{ "{:,.0f}".format(u.remaining_kg) }}</td>
+            <td style="padding:.22rem .4rem;text-align:center;font-weight:600;color:#92400e;">
+              W{{ u.origin_week }}
+            </td>
+            <td style="padding:.22rem .4rem;font-size:.67rem;color:#6b7280;">
+              {{ u.capable_machines | join(", ") }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

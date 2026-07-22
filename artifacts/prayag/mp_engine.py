@@ -36,6 +36,9 @@ PIPE_TABS: Dict[str, str] = {
 }
 _COL_ITEM = 0   # Col A — Item Code (0-indexed)
 _COL_QTY  = 3   # Col D — Production Plan pcs (0-indexed)
+# Weekly columns E..H → W1..W4 (0-indexed 4..7)
+_COL_W1   = 4
+_COL_W4   = 7
 
 # Default machine-group config for Report-11A–D (overridable via DB later)
 REPORT_11_GROUPS: Dict[str, List[str]] = {
@@ -54,6 +57,11 @@ class DemandItem:
     raw_code: str    # original text from Excel
     material: str    # CPVC / UPVC / SWR / AGRI
     qty_pcs: float
+    # Weekly breakdown (cols E–H). Keys 1..4 = W1..W4.
+    # Empty dict = no weekly split provided (all qty in total col D only).
+    week_qty: Dict[int, float] = dataclasses.field(default_factory=dict)
+    # First week with non-zero qty; 0 = unspecified (treat as W1 in scheduler).
+    first_requested_week: int = 0
 
 
 @dataclasses.dataclass
@@ -246,12 +254,23 @@ def _is_skip_row(cell_a: str, cell_d: str) -> bool:
     return False
 
 
+def _safe_float(val) -> float:
+    """Parse a cell value to float, return 0 on failure."""
+    if val is None:
+        return 0.0
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
     """Parse the weekly release plan Excel and return DemandItem list.
 
     Reads only the four Pipe tabs (CPVC Pipe / UPVC Pipe / SWR Pipe / AGRI Pipe).
-    Col A = Item Code, Col D = Production Plan pcs. Normalises all codes.
-    Skips TOTAL rows, blank rows, and non-item rows.
+    Col A = Item Code, Col D = Production Plan pcs (total).
+    Cols E–H = W1..W4 per-week quantities (optional; zero if column absent).
+    Normalises all codes. Skips TOTAL rows, blank rows, and non-item rows.
     """
     if not _OPENPYXL:
         raise RuntimeError("openpyxl is required for demand upload.")
@@ -283,11 +302,24 @@ def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
             if qty <= 0:
                 continue
 
+            # Read W1..W4 from cols E–H (indices 4–7); zero if column absent
+            week_qty: Dict[int, float] = {}
+            for wk_idx, col in enumerate(range(_COL_W1, _COL_W4 + 1), start=1):
+                v = row[col] if len(row) > col else None
+                wq = _safe_float(v)
+                if wq > 0:
+                    week_qty[wk_idx] = wq
+
+            # First week with non-zero quantity
+            first_week = min(week_qty) if week_qty else 0
+
             items.append(DemandItem(
                 item_code=_norm_code(raw_a),
                 raw_code=raw_a,
                 material=material,
                 qty_pcs=qty,
+                week_qty=week_qty,
+                first_requested_week=first_week,
             ))
 
     return items

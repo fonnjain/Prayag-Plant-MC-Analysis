@@ -5160,6 +5160,7 @@ def mp_reset_section(section: str):
 # ---------------------------------------------------------------------------
 import mp_engine as _mp_engine        # noqa: E402
 import mp_reports as _mp_reports      # noqa: E402
+import mp_scheduler as _mp_scheduler  # noqa: E402
 
 # In-process run cache (fallback when Postgres unavailable).
 # Key = run_id (str); value = {"demand": [...], "fitting_demand": [...], ...}
@@ -5345,6 +5346,40 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
         return None
 
 
+def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
+    """Run shift scheduler from stored pipe demand in session."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return None
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return None
+    demand_dicts = payload.get("demand") or []
+    if not demand_dicts:
+        return None
+    demand = []
+    for d in demand_dicts:
+        d2 = dict(d)
+        wq_raw = d2.get("week_qty") or {}
+        d2["week_qty"] = {int(k): float(v) for k, v in wq_raw.items()}
+        d2.setdefault("first_requested_week", 0)
+        demand.append(_mp_engine.DemandItem(**d2))
+
+    result = _mp2_result_from_session()
+    if result is None:
+        return None
+    try:
+        return _mp_scheduler.run_shift_schedule(
+            engine_items=result.items,
+            demand_items=demand,
+            segment=payload.get("segment", _mp_seed.SEGMENT),
+            effective_month=payload["effective_month"],
+        )
+    except Exception as exc:
+        app.logger.error("mp_shift_schedule failed: %s", exc)
+        return None
+
+
 @app.route("/machine-planning")
 def mp_home():
     """Machine Planning landing — category selector + recent plan runs."""
@@ -5492,6 +5527,8 @@ def mp_results():
         (fitting_result.totals.routable_pulverizer_kg if fitting_result else 0)
     )
 
+    schedule_result = _mp_schedule_from_session()
+
     return render_template(
         "machine_planning_results.html",
         result=result,
@@ -5515,6 +5552,30 @@ def mp_results():
         run_id=run_id,
         frozen=False,
         run_status="pending",
+        schedule_result=schedule_result,
+    )
+
+
+@app.route("/machine-planning/schedule")
+def mp_schedule_view():
+    """Full shift schedule view — day-by-day, per machine."""
+    schedule_result = _mp_schedule_from_session()
+    if schedule_result is None:
+        return redirect(url_for("mp_upload"))
+    # Group blocks by machine for template
+    from collections import defaultdict as _dd
+    blocks_by_mc: dict = _dd(list)
+    for b in schedule_result.blocks:
+        blocks_by_mc[b.machine].append(b)
+    # Weekly fill keyed by (machine, week)
+    fill_map = {(r.machine, r.week): r for r in schedule_result.weekly_fill}
+    machines = sorted(blocks_by_mc.keys())
+    return render_template(
+        "machine_planning_schedule.html",
+        schedule=schedule_result,
+        blocks_by_mc=dict(blocks_by_mc),
+        fill_map=fill_map,
+        machines=machines,
     )
 
 
