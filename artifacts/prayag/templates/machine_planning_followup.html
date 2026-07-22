@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% block title_suffix %} — MP Follow-Up{% endblock %}
+{% block content %}
+<div style="padding:.75rem .75rem 5rem;max-width:700px;margin:0 auto;">
+
+  <!-- Breadcrumb -->
+  <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.9rem;flex-wrap:wrap;">
+    <a href="/" style="text-decoration:none;font-size:.73rem;color:#9ca3af;display:flex;align-items:center;gap:.2rem;">
+      <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+      </svg>
+      Home
+    </a>
+    <span style="color:#e5e7eb;font-size:.73rem;">›</span>
+    <a href="{{ url_for('mp_home') }}" style="text-decoration:none;font-size:.73rem;color:#9ca3af;">Machine Planning</a>
+    <span style="color:#e5e7eb;font-size:.73rem;">›</span>
+    <span style="font-size:.73rem;font-weight:700;color:var(--navy);">Follow-Up</span>
+  </div>
+
+  <!-- Hero -->
+  <div style="background:linear-gradient(135deg,#1F3864 70%,#2d4f8a);border-radius:1rem;
+              padding:1.1rem 1.15rem .95rem;margin-bottom:1rem;
+              box-shadow:0 4px 16px rgba(31,56,100,.18);">
+    <div style="color:#fff;font-size:1.05rem;font-weight:800;letter-spacing:.01em;">
+      Plan Follow-Up
+    </div>
+    <div style="color:rgba(255,255,255,.62);font-size:.73rem;margin-top:.2rem;line-height:1.45;">
+      Plan-to-date vs actual production · RAG adherence · Deviation warnings
+    </div>
+    {% if result %}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem;">
+      <span style="background:rgba(255,255,255,.18);color:#fff;font-size:.7rem;font-weight:700;
+                   padding:.2rem .65rem;border-radius:99px;">
+        📅 {{ result.month }}
+      </span>
+      {% if result.as_of_date %}
+      <span style="background:rgba(255,255,255,.12);color:rgba(255,255,255,.85);font-size:.7rem;
+                   padding:.2rem .65rem;border-radius:99px;">
+        As of {{ result.as_of_date }}
+      </span>
+      {% endif %}
+      <span style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.65);font-size:.7rem;
+                   padding:.2rem .65rem;border-radius:99px;">
+        Day {{ result.elapsed_calendar_days }}/{{ result.days_in_month }}
+        · Plan day {{ result.elapsed_plan_days }}/{{ result.working_days }}
+      </span>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Run selector -->
+  {% if runs %}
+  <div style="background:#fff;border-radius:.75rem;padding:.65rem .85rem;
+              margin-bottom:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.07);">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;">
+      <span style="font-size:.73rem;font-weight:700;color:var(--navy);white-space:nowrap;">Plan run:</span>
+      <div style="display:flex;gap:.35rem;flex-wrap:wrap;">
+        {% for run in runs[:8] %}
+        <a href="{{ url_for('mp_followup_view', run_id=run.id) }}"
+           style="text-decoration:none;font-size:.7rem;font-weight:{% if run_id == run.id %}700{% else %}500{% endif %};
+                  border-radius:99px;padding:.2rem .55rem;
+                  background:{% if run_id == run.id %}var(--navy){% else %}#f3f4f6{% endif %};
+                  color:{% if run_id == run.id %}#fff{% else %}#374151{% endif %};">
+          #{{ run.id }} {{ run.month }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Error / no-data state -->
+  {% if error %}
+  <div style="background:#fef2f2;border-radius:.75rem;padding:1rem 1.1rem;
+              border-left:4px solid #ef4444;margin-bottom:1rem;">
+    <div style="font-size:.82rem;font-weight:700;color:#991b1b;">Error</div>
+    <div style="font-size:.78rem;color:#7f1d1d;margin-top:.25rem;">{{ error }}</div>
+  </div>
+  {% endif %}
+
+  {% if result %}
+
+  <!-- Actuals toolbar -->
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              flex-wrap:wrap;gap:.5rem;margin-bottom:.85rem;">
+    <div style="font-size:.73rem;color:#6b7280;">
+      {% if result.actuals_loaded %}
+        <span style="color:#16a34a;font-weight:700;">✓</span>
+        {{ result.actuals_count }} actual rows loaded
+      {% else %}
+        <span style="color:#d97706;font-weight:700;">⚠</span>
+        No actuals in DB — click Refresh to ingest from sheets
+      {% endif %}
+    </div>
+    <div style="display:flex;gap:.5rem;">
+      <form method="POST"
+            action="{{ url_for('mp_followup_refresh_actuals', run_id=run_id) }}"
+            style="margin:0;">
+        <button type="submit"
+                style="font-size:.72rem;font-weight:700;background:var(--navy);color:#fff;
+                       border:none;border-radius:.45rem;padding:.35rem .8rem;cursor:pointer;">
+          ↻ Refresh Actuals
+        </button>
+      </form>
+      <a href="{{ url_for('mp_followup_download', run_id=run_id) }}"
+         style="font-size:.72rem;font-weight:700;background:#f3f4f6;color:var(--navy);
+                text-decoration:none;border-radius:.45rem;padding:.35rem .8rem;">
+        ↓ XLSX
+      </a>
+    </div>
+  </div>
+
+  <!-- Scoreboard row -->
+  {% set adh = result.overall_adherence_pct %}
+  {% set adh_color = '#16a34a' if adh >= (100 - amber_pct) else ('#d97706' if adh >= (100 - red_pct) else '#dc2626') %}
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.55rem;margin-bottom:.85rem;">
+    <div style="background:#fff;border-radius:.75rem;padding:.75rem .85rem;
+                box-shadow:0 1px 4px rgba(0,0,0,.07);text-align:center;">
+      <div style="font-size:1.35rem;font-weight:800;color:{{ adh_color }};">{{ result.overall_adherence_pct }}%</div>
+      <div style="font-size:.66rem;color:#6b7280;margin-top:.1rem;">Overall Adherence</div>
+    </div>
+    <div style="background:#fff;border-radius:.75rem;padding:.75rem .85rem;
+                box-shadow:0 1px 4px rgba(0,0,0,.07);text-align:center;">
+      <div style="font-size:1.25rem;font-weight:800;color:var(--navy);">{{ result.total_actual_kg | int }}</div>
+      <div style="font-size:.66rem;color:#6b7280;margin-top:.1rem;">Actual kg (to date)</div>
+      <div style="font-size:.6rem;color:#9ca3af;">plan {{ result.total_planned_kg_todate | int }} kg</div>
+    </div>
+    <div style="background:#fff;border-radius:.75rem;padding:.75rem .85rem;
+                box-shadow:0 1px 4px rgba(0,0,0,.07);text-align:center;">
+      {% set warn_crit = result.warnings | selectattr('severity','eq',1) | list | length %}
+      {% set warn_high = result.warnings | selectattr('severity','eq',2) | list | length %}
+      <div style="font-size:1.25rem;font-weight:800;
+                  color:{% if warn_crit > 0 %}#dc2626{% elif warn_high > 0 %}#d97706{% else %}#16a34a{% endif %};">
+        {{ result.warnings | length }}
+      </div>
+      <div style="font-size:.66rem;color:#6b7280;margin-top:.1rem;">Warnings</div>
+      {% if warn_crit > 0 %}
+      <div style="font-size:.6rem;color:#dc2626;font-weight:700;">{{ warn_crit }} critical</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- On / Off plan breakdown -->
+  {% if result.total_actual_kg > 0 %}
+  {% set on_pct = (result.on_plan_kg / result.total_actual_kg * 100) | round(1) %}
+  <div style="background:#fff;border-radius:.75rem;padding:.75rem .9rem;
+              box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:.85rem;">
+    <div style="font-size:.73rem;font-weight:700;color:var(--navy);margin-bottom:.4rem;">Actual KG Breakdown</div>
+    <div style="display:flex;height:8px;border-radius:99px;overflow:hidden;background:#f3f4f6;">
+      <div style="width:{{ on_pct }}%;background:#22c55e;"></div>
+      <div style="width:{{ 100 - on_pct }}%;background:#fca5a5;"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:.35rem;">
+      <span style="font-size:.67rem;color:#16a34a;font-weight:600;">
+        On-plan {{ result.on_plan_kg | int }} kg ({{ on_pct }}%)
+      </span>
+      <span style="font-size:.67rem;color:#dc2626;font-weight:600;">
+        Off-plan {{ result.off_plan_kg | int }} kg
+      </span>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Warnings panel -->
+  {% if result.warnings %}
+  <div style="background:#fff;border-radius:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+              margin-bottom:.85rem;overflow:hidden;">
+    <div style="background:#1F3864;padding:.65rem .9rem;cursor:pointer;"
+         onclick="toggle('s-warnings')">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:.8rem;font-weight:800;color:#fff;">
+          ⚠ Deviation Warnings ({{ result.warnings | length }})
+        </span>
+        <span id="chev-warnings" style="color:rgba(255,255,255,.7);font-size:.9rem;">▾</span>
+      </div>
+    </div>
+    <div id="s-warnings">
+      {% for w in result.warnings %}
+      {% set bg = '#fef2f2' if w.severity == 1 else ('#fffbeb' if w.severity == 2 else '#f9fafb') %}
+      {% set border = '#ef4444' if w.severity == 1 else ('#f59e0b' if w.severity == 2 else '#d1d5db') %}
+      {% set badge_bg = '#fee2e2' if w.severity == 1 else ('#fef3c7' if w.severity == 2 else '#f3f4f6') %}
+      {% set badge_col = '#991b1b' if w.severity == 1 else ('#92400e' if w.severity == 2 else '#6b7280') %}
+      <div style="background:{{ bg }};border-left:3px solid {{ border }};
+                  padding:.55rem .9rem;{% if not loop.last %}border-bottom:1px solid #f3f4f6;{% endif %}">
+        <div style="display:flex;align-items:flex-start;gap:.5rem;">
+          <span style="font-size:.6rem;font-weight:700;border-radius:99px;padding:.1rem .45rem;
+                       background:{{ badge_bg }};color:{{ badge_col }};white-space:nowrap;margin-top:.05rem;">
+            {{ w.warning_type | replace('_',' ') }}
+          </span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:.75rem;color:#111827;line-height:1.45;">{{ w.reason }}</div>
+            {% if w.machine and w.machine != '-' %}
+            <div style="font-size:.65rem;color:#9ca3af;margin-top:.15rem;">Machine: {{ w.machine }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Weekly trend -->
+  {% if result.week_points %}
+  <div style="background:#fff;border-radius:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+              padding:.8rem .9rem;margin-bottom:.85rem;">
+    <div style="font-size:.78rem;font-weight:800;color:var(--navy);margin-bottom:.55rem;">Weekly Cumulative KG</div>
+    {% set max_kg = result.week_points[-1].planned_kg_cumulative %}
+    {% if max_kg == 0 %}{% set max_kg = 1 %}{% endif %}
+    {% for wp in result.week_points %}
+    <div style="margin-bottom:.5rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.2rem;">
+        <span style="font-size:.68rem;font-weight:600;color:var(--navy);">W{{ wp.week }}</span>
+        <span style="font-size:.65rem;color:#6b7280;">
+          Plan {{ wp.planned_kg_cumulative | int }} · Actual {{ wp.actual_kg_cumulative | int }} kg
+        </span>
+      </div>
+      <div style="position:relative;height:10px;background:#f3f4f6;border-radius:99px;overflow:visible;">
+        <!-- Plan bar -->
+        {% set plan_w = [(wp.planned_kg_cumulative / max_kg * 100), 100] | min %}
+        <div style="position:absolute;top:0;left:0;height:10px;width:{{ plan_w }}%;
+                    background:#c7d2fe;border-radius:99px;"></div>
+        <!-- Actual bar -->
+        {% set act_w = [(wp.actual_kg_cumulative / max_kg * 100), 100] | min %}
+        {% set act_col = '#22c55e' if wp.actual_kg_cumulative >= wp.planned_kg_cumulative * 0.9 else '#f97316' %}
+        <div style="position:absolute;top:0;left:0;height:10px;width:{{ act_w }}%;
+                    background:{{ act_col }};border-radius:99px;opacity:.75;"></div>
+      </div>
+    </div>
+    {% endfor %}
+    <div style="display:flex;gap:1rem;margin-top:.45rem;">
+      <span style="font-size:.63rem;color:#818cf8;font-weight:600;">▬ Plan</span>
+      <span style="font-size:.63rem;color:#22c55e;font-weight:600;">▬ Actual</span>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Per-machine table -->
+  {% if result.machine_rows %}
+  <div style="background:#fff;border-radius:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+              margin-bottom:.85rem;overflow:hidden;">
+    <div style="background:#1F3864;padding:.65rem .9rem;cursor:pointer;"
+         onclick="toggle('s-machines')">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:.8rem;font-weight:800;color:#fff;">
+          Machine Adherence ({{ result.machine_rows | length }})
+        </span>
+        <span id="chev-machines" style="color:rgba(255,255,255,.7);font-size:.9rem;">▾</span>
+      </div>
+    </div>
+    <div id="s-machines" style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+        <thead>
+          <tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">
+            <th style="text-align:left;padding:.45rem .7rem;font-weight:700;color:var(--navy);">Machine</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Plan kg</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Actual kg</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Var %</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Adh %</th>
+            <th style="text-align:center;padding:.45rem .5rem;font-weight:700;color:var(--navy);">RAG</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for mv in result.machine_rows %}
+          {% set row_bg = '#f0fdf4' if mv.rag == 'GREEN' else ('#fffbeb' if mv.rag == 'AMBER' else '#fef2f2') %}
+          <tr style="border-bottom:1px solid #f3f4f6;background:{{ row_bg }};">
+            <td style="padding:.45rem .7rem;font-weight:600;color:var(--navy);">{{ mv.machine }}</td>
+            <td style="text-align:right;padding:.45rem .5rem;color:#374151;">{{ mv.planned_kg_todate | int }}</td>
+            <td style="text-align:right;padding:.45rem .5rem;color:#374151;font-weight:600;">{{ mv.actual_kg | int }}</td>
+            <td style="text-align:right;padding:.45rem .5rem;
+                       color:{% if mv.kg_var_pct > 0 %}#16a34a{% elif mv.kg_var_pct < -5 %}#dc2626{% else %}#374151{% endif %};">
+              {{ '%+.1f' % mv.kg_var_pct }}%
+            </td>
+            <td style="text-align:right;padding:.45rem .5rem;font-weight:600;">{{ mv.adherence_pct }}%</td>
+            <td style="text-align:center;padding:.45rem .5rem;">
+              {% set rag_bg = '#dcfce7' if mv.rag == 'GREEN' else ('#fef3c7' if mv.rag == 'AMBER' else '#fee2e2') %}
+              {% set rag_col = '#166534' if mv.rag == 'GREEN' else ('#92400e' if mv.rag == 'AMBER' else '#991b1b') %}
+              <span style="font-size:.62rem;font-weight:800;border-radius:99px;padding:.1rem .45rem;
+                           background:{{ rag_bg }};color:{{ rag_col }};">{{ mv.rag }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Per-item table -->
+  {% if result.item_rows %}
+  <div style="background:#fff;border-radius:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+              margin-bottom:.85rem;overflow:hidden;">
+    <div style="background:#1F3864;padding:.65rem .9rem;cursor:pointer;"
+         onclick="toggle('s-items')">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:.8rem;font-weight:800;color:#fff;">
+          Item Adherence ({{ result.item_rows | length }})
+        </span>
+        <span id="chev-items" style="color:rgba(255,255,255,.7);font-size:.9rem;">▾</span>
+      </div>
+    </div>
+    <div id="s-items" style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.71rem;">
+        <thead>
+          <tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">
+            <th style="text-align:left;padding:.45rem .7rem;font-weight:700;color:var(--navy);">Machine</th>
+            <th style="text-align:left;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Item</th>
+            <th style="text-align:left;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Mat</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Plan kg</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Act kg</th>
+            <th style="text-align:right;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Adh%</th>
+            <th style="text-align:center;padding:.45rem .5rem;font-weight:700;color:var(--navy);">RAG</th>
+            <th style="text-align:center;padding:.45rem .5rem;font-weight:700;color:var(--navy);">Flags</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for iv in result.item_rows %}
+          {% set row_bg = '#f0fdf4' if iv.rag == 'GREEN' else ('#fffbeb' if iv.rag == 'AMBER' else '#fef2f2') %}
+          <tr style="border-bottom:1px solid #f3f4f6;background:{{ row_bg }};">
+            <td style="padding:.4rem .7rem;color:#374151;font-size:.68rem;">{{ iv.machine }}</td>
+            <td style="padding:.4rem .5rem;font-weight:600;color:var(--navy);">{{ iv.item_code }}</td>
+            <td style="padding:.4rem .5rem;color:#6b7280;font-size:.67rem;">{{ iv.material }}</td>
+            <td style="text-align:right;padding:.4rem .5rem;color:#374151;">{{ iv.planned_kg_todate | int }}</td>
+            <td style="text-align:right;padding:.4rem .5rem;font-weight:600;">{{ iv.actual_kg | int }}</td>
+            <td style="text-align:right;padding:.4rem .5rem;font-weight:600;">{{ iv.adherence_pct }}%</td>
+            <td style="text-align:center;padding:.4rem .5rem;">
+              {% set rag_bg = '#dcfce7' if iv.rag == 'GREEN' else ('#fef3c7' if iv.rag == 'AMBER' else '#fee2e2') %}
+              {% set rag_col = '#166534' if iv.rag == 'GREEN' else ('#92400e' if iv.rag == 'AMBER' else '#991b1b') %}
+              <span style="font-size:.6rem;font-weight:800;border-radius:99px;padding:.1rem .4rem;
+                           background:{{ rag_bg }};color:{{ rag_col }};">{{ iv.rag }}</span>
+            </td>
+            <td style="text-align:center;padding:.4rem .5rem;">
+              {% if iv.is_wrong_machine %}
+              <span title="Produced on wrong machine" style="font-size:.65rem;color:#dc2626;">⚡</span>
+              {% endif %}
+              {% if iv.is_unplanned %}
+              <span title="Not in optimised plan" style="font-size:.65rem;color:#d97706;">★</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div style="padding:.5rem .85rem;background:#f9fafb;font-size:.63rem;color:#9ca3af;">
+        ⚡ Wrong machine &nbsp;|&nbsp; ★ Unplanned item (not in optimised plan)
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- No plan lines state -->
+  {% if not result.item_rows and not error %}
+  <div style="background:#f9fafb;border-radius:.85rem;padding:1.5rem;text-align:center;
+              border:1.5px dashed #e5e7eb;margin-bottom:.85rem;">
+    <div style="font-size:.85rem;color:#6b7280;font-weight:600;">No plan lines for this run</div>
+    <div style="font-size:.73rem;color:#9ca3af;margin-top:.3rem;line-height:1.5;">
+      Plan lines are saved when a run is frozen. Re-freeze this run to generate them.
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Thresholds reminder -->
+  <div style="background:#f9fafb;border-radius:.75rem;padding:.65rem .85rem;
+              font-size:.67rem;color:#6b7280;margin-bottom:.5rem;">
+    RAG thresholds: Green ≤ {{ amber_pct }}% deviation · Amber {{ amber_pct }}–{{ red_pct }}% · Red &gt; {{ red_pct }}%
+    · Hours deviation threshold {{ hours_dev_pct }}%
+    · <a href="{{ url_for('mp_data_view') }}#sec-params" style="color:var(--terra);text-decoration:none;font-weight:600;">Edit →</a>
+  </div>
+
+  {% elif not error %}
+  <!-- No result at all (empty plan + no actuals) -->
+  <div style="background:#f9fafb;border-radius:.85rem;padding:2rem;text-align:center;
+              border:1.5px dashed #e5e7eb;">
+    <div style="font-size:.85rem;color:#6b7280;font-weight:600;">Nothing to display yet</div>
+    <div style="font-size:.73rem;color:#9ca3af;margin-top:.3rem;">
+      Select a frozen run above, or click Refresh Actuals after ingesting data.
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+function toggle(id) {
+  const el = document.getElementById(id);
+  const ch = document.getElementById('chev-' + id.replace('s-',''));
+  if (!el) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? '' : 'none';
+  if (ch) ch.textContent = hidden ? '▴' : '▾';
+}
+</script>
+{% endblock %}

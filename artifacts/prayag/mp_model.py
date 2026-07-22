@@ -119,6 +119,52 @@ class MpParams:
     upvc_mat_rate: float = 0.0
     swr_mat_rate: float = 0.0
     agri_mat_rate: float = 0.0
+    # Follow-up RAG thresholds (% deviation from plan-to-date)
+    rag_amber_pct: float = 10.0   # 0-10% = GREEN, 10-25% = AMBER
+    rag_red_pct: float = 25.0     # >25% = RED
+    hours_dev_pct: float = 15.0   # hours deviation warning threshold
+
+
+@dataclasses.dataclass
+class MpPlanLine:
+    """One scheduler block row written at freeze time."""
+    plan_run_id: int
+    segment: str
+    month: str
+    week: int
+    day: int
+    shift: str          # 'DAY' | 'NIGHT'
+    machine: str
+    machine_norm: str
+    item_code: str
+    item_norm: str
+    material: str
+    planned_pcs: float = 0.0
+    planned_kg: float = 0.0
+    planned_hours: float = 0.0
+    net_hours: float = 0.0      # planned_hours − excess_hours
+    rate_used: float = 0.0
+    rate_estimated: bool = False
+    is_excess: bool = False
+    is_idle: bool = False
+
+
+@dataclasses.dataclass
+class MpActualLine:
+    """One production row ingested from Report-11 / Report-12."""
+    segment: str
+    month: str
+    date: str           # ISO date string 'YYYY-MM-DD'
+    machine: str
+    machine_norm: str
+    item_code: str
+    item_norm: str
+    material: str
+    actual_pcs: float = 0.0
+    actual_kg: float = 0.0
+    actual_hours: float = 0.0
+    rejection_kg: float = 0.0
+    source_tab: str = ""
 
 
 @dataclasses.dataclass
@@ -235,6 +281,53 @@ CREATE TABLE IF NOT EXISTS mp_plan_run (
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mp_plan_run_natural UNIQUE (segment, month, created_at)
 );
+
+CREATE TABLE IF NOT EXISTS mp_plan_line (
+    id             BIGSERIAL   PRIMARY KEY,
+    plan_run_id    BIGINT      NOT NULL,
+    segment        TEXT        NOT NULL,
+    month          TEXT        NOT NULL,
+    week           INT         NOT NULL DEFAULT 0,
+    day            INT         NOT NULL DEFAULT 0,
+    shift          TEXT        NOT NULL DEFAULT '',
+    machine        TEXT        NOT NULL DEFAULT '',
+    machine_norm   TEXT        NOT NULL DEFAULT '',
+    item_code      TEXT        NOT NULL DEFAULT '',
+    item_norm      TEXT        NOT NULL DEFAULT '',
+    material       TEXT        NOT NULL DEFAULT '',
+    planned_pcs    NUMERIC     NOT NULL DEFAULT 0,
+    planned_kg     NUMERIC     NOT NULL DEFAULT 0,
+    planned_hours  NUMERIC     NOT NULL DEFAULT 0,
+    net_hours      NUMERIC     NOT NULL DEFAULT 0,
+    rate_used      NUMERIC     NOT NULL DEFAULT 0,
+    rate_estimated BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_excess      BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_idle        BOOLEAN     NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS mp_plan_line_run ON mp_plan_line (plan_run_id);
+CREATE INDEX IF NOT EXISTS mp_plan_line_lookup ON mp_plan_line (segment, month, machine_norm);
+
+CREATE TABLE IF NOT EXISTS mp_actual_line (
+    id             BIGSERIAL   PRIMARY KEY,
+    segment        TEXT        NOT NULL,
+    month          TEXT        NOT NULL,
+    date           DATE        NOT NULL,
+    machine        TEXT        NOT NULL DEFAULT '',
+    machine_norm   TEXT        NOT NULL DEFAULT '',
+    item_code      TEXT        NOT NULL DEFAULT '',
+    item_norm      TEXT        NOT NULL DEFAULT '',
+    material       TEXT        NOT NULL DEFAULT '',
+    actual_pcs     NUMERIC     NOT NULL DEFAULT 0,
+    actual_kg      NUMERIC     NOT NULL DEFAULT 0,
+    actual_hours   NUMERIC     NOT NULL DEFAULT 0,
+    rejection_kg   NUMERIC     NOT NULL DEFAULT 0,
+    source_tab     TEXT        NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT mp_actual_line_natural
+        UNIQUE (segment, month, date, machine_norm, item_norm, source_tab)
+);
+CREATE INDEX IF NOT EXISTS mp_actual_line_month ON mp_actual_line (segment, month);
+CREATE INDEX IF NOT EXISTS mp_actual_line_mc ON mp_actual_line (segment, month, machine_norm);
 """
 
 _MIGRATIONS = """
@@ -250,6 +343,9 @@ ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS cpvc_mat_rate NUMERIC NOT NULL 
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS upvc_mat_rate NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS swr_mat_rate  NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS agri_mat_rate NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_amber_pct  NUMERIC NOT NULL DEFAULT 10;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_red_pct    NUMERIC NOT NULL DEFAULT 25;
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS hours_dev_pct  NUMERIC NOT NULL DEFAULT 15;
 """
 
 
@@ -519,8 +615,9 @@ def upsert_params(row: MpParams) -> int:
             (segment, waste_pct, pulverizer_pct, effective_month,
              min_run_block_hours, night_changeover_allowed, week_days,
              cpvc_mat_rate, upvc_mat_rate, swr_mat_rate, agri_mat_rate,
+             rag_amber_pct, rag_red_pct, hours_dev_pct,
              updated_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
         ON CONFLICT ON CONSTRAINT mp_params_natural
         DO UPDATE SET
             waste_pct               = EXCLUDED.waste_pct,
@@ -532,6 +629,9 @@ def upsert_params(row: MpParams) -> int:
             upvc_mat_rate           = EXCLUDED.upvc_mat_rate,
             swr_mat_rate            = EXCLUDED.swr_mat_rate,
             agri_mat_rate           = EXCLUDED.agri_mat_rate,
+            rag_amber_pct           = EXCLUDED.rag_amber_pct,
+            rag_red_pct             = EXCLUDED.rag_red_pct,
+            hours_dev_pct           = EXCLUDED.hours_dev_pct,
             updated_at              = now()
     """
     try:
@@ -540,6 +640,7 @@ def upsert_params(row: MpParams) -> int:
                 row.segment, row.waste_pct, row.pulverizer_pct, row.effective_month,
                 row.min_run_block_hours, row.night_changeover_allowed, row.week_days,
                 row.cpvc_mat_rate, row.upvc_mat_rate, row.swr_mat_rate, row.agri_mat_rate,
+                row.rag_amber_pct, row.rag_red_pct, row.hours_dev_pct,
             ))
         return 1
     except Exception as e:
@@ -709,6 +810,9 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
             upvc_mat_rate=float(row["upvc_mat_rate"]) if row.get("upvc_mat_rate") is not None else 0.0,
             swr_mat_rate=float(row["swr_mat_rate"])  if row.get("swr_mat_rate")  is not None else 0.0,
             agri_mat_rate=float(row["agri_mat_rate"]) if row.get("agri_mat_rate") is not None else 0.0,
+            rag_amber_pct=float(row["rag_amber_pct"]) if row.get("rag_amber_pct") is not None else 10.0,
+            rag_red_pct=float(row["rag_red_pct"])   if row.get("rag_red_pct")   is not None else 25.0,
+            hours_dev_pct=float(row["hours_dev_pct"]) if row.get("hours_dev_pct") is not None else 15.0,
         )
     except Exception:
         return None
@@ -954,3 +1058,129 @@ def upsert_compound_wastage(
         count = cur.rowcount
         conn.commit()
     return count
+
+
+# ---------------------------------------------------------------------------
+# mp_plan_line helpers
+# ---------------------------------------------------------------------------
+
+def insert_plan_lines(rows: List[MpPlanLine]) -> int:
+    """Bulk-insert plan lines for a run (DELETE existing first for idempotency)."""
+    if not rows or not AVAILABLE:
+        return 0
+    init_mp_tables()
+    run_id = rows[0].plan_run_id
+    sql = """
+        INSERT INTO mp_plan_line
+            (plan_run_id, segment, month, week, day, shift,
+             machine, machine_norm, item_code, item_norm, material,
+             planned_pcs, planned_kg, planned_hours, net_hours,
+             rate_used, rate_estimated, is_excess, is_idle)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM mp_plan_line WHERE plan_run_id=%s", (run_id,))
+            cur.executemany(sql, [
+                (r.plan_run_id, r.segment, r.month, r.week, r.day, r.shift,
+                 r.machine, r.machine_norm, r.item_code, r.item_norm, r.material,
+                 r.planned_pcs, r.planned_kg, r.planned_hours, r.net_hours,
+                 r.rate_used, r.rate_estimated, r.is_excess, r.is_idle)
+                for r in rows
+            ])
+        return len(rows)
+    except Exception as e:
+        raise MpModelError(f"insert_plan_lines: {e}") from e
+
+
+def get_plan_lines(plan_run_id: int) -> List[dict]:
+    """Return all plan lines for a run, ordered by day/machine/shift."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """SELECT * FROM mp_plan_line
+                   WHERE plan_run_id=%s
+                   ORDER BY day, machine, shift""",
+                (plan_run_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# mp_actual_line helpers
+# ---------------------------------------------------------------------------
+
+def upsert_actual_lines(rows: List[MpActualLine]) -> int:
+    """Upsert actual production lines (ON CONFLICT DO UPDATE)."""
+    if not rows or not AVAILABLE:
+        return 0
+    init_mp_tables()
+    sql = """
+        INSERT INTO mp_actual_line
+            (segment, month, date, machine, machine_norm,
+             item_code, item_norm, material,
+             actual_pcs, actual_kg, actual_hours, rejection_kg, source_tab)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT ON CONSTRAINT mp_actual_line_natural
+        DO UPDATE SET
+            actual_pcs   = EXCLUDED.actual_pcs,
+            actual_kg    = EXCLUDED.actual_kg,
+            actual_hours = EXCLUDED.actual_hours,
+            rejection_kg = EXCLUDED.rejection_kg,
+            created_at   = now()
+    """
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.executemany(sql, [
+                (r.segment, r.month, r.date, r.machine, r.machine_norm,
+                 r.item_code, r.item_norm, r.material,
+                 r.actual_pcs, r.actual_kg, r.actual_hours,
+                 r.rejection_kg, r.source_tab)
+                for r in rows
+            ])
+        return len(rows)
+    except Exception as e:
+        raise MpModelError(f"upsert_actual_lines: {e}") from e
+
+
+def get_actual_lines(segment: str, month: str) -> List[dict]:
+    """Return all actual lines for (segment, month), ordered by date/machine."""
+    if not AVAILABLE:
+        return []
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """SELECT * FROM mp_actual_line
+                   WHERE segment=%s AND month=%s
+                   ORDER BY date, machine, item_code""",
+                (segment, month),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def delete_actual_lines(segment: str, month: str) -> int:
+    """Delete all actual lines for (segment, month) — used before full re-ingest."""
+    if not AVAILABLE:
+        return 0
+    try:
+        init_mp_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM mp_actual_line WHERE segment=%s AND month=%s",
+                (segment, month),
+            )
+            return cur.rowcount
+    except Exception:
+        return 0

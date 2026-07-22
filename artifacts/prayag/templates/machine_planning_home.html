@@ -79,6 +79,28 @@
       </svg>
     </a>
 
+    <!-- Follow-Up -->
+    <a href="{{ url_for('mp_followup_index') }}"
+       style="text-decoration:none;display:flex;align-items:center;gap:.9rem;
+              background:#fff;border-radius:.85rem;padding:1rem 1.1rem;
+              box-shadow:0 2px 8px rgba(0,0,0,.07);border-left:4px solid #7c3aed;">
+      <div style="background:#f5f3ff;width:2.6rem;height:2.6rem;border-radius:.55rem;
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#7c3aed" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:.9rem;font-weight:800;color:var(--navy);">Follow-Up</div>
+        <div style="font-size:.71rem;color:#6b7280;margin-top:.1rem;">
+          Plan vs actual · RAG adherence · Deviation warnings
+        </div>
+      </div>
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#d1d5db" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+      </svg>
+    </a>
+
     <!-- Plan Runs -->
     <a href="{{ url_for('mp_run_list') }}"
        style="text-decoration:none;display:flex;align-items:center;gap:.9rem;

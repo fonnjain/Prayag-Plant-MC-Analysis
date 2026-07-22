@@ -4969,6 +4969,9 @@ def mp_save_params():
         upvc_r   = float(data.get("upvc_mat_rate", 0.0) or 0.0)
         swr_r    = float(data.get("swr_mat_rate",  0.0) or 0.0)
         agri_r   = float(data.get("agri_mat_rate", 0.0) or 0.0)
+        rag_amber  = float(data.get("rag_amber_pct",  10.0) or 10.0)
+        rag_red    = float(data.get("rag_red_pct",    25.0) or 25.0)
+        hours_dev  = float(data.get("hours_dev_pct",  15.0) or 15.0)
     except (KeyError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     try:
@@ -4978,6 +4981,8 @@ def mp_save_params():
             min_run_block_hours=minblock,
             cpvc_mat_rate=cpvc_r, upvc_mat_rate=upvc_r,
             swr_mat_rate=swr_r,   agri_mat_rate=agri_r,
+            rag_amber_pct=rag_amber, rag_red_pct=rag_red,
+            hours_dev_pct=hours_dev,
         ))
         return jsonify({"ok": True})
     except Exception as exc:
@@ -5778,6 +5783,28 @@ def mp_freeze():
     except Exception as exc:
         app.logger.error("mp_freeze: %s", exc)
 
+    # Persist plan lines from the scheduler result for follow-up tracking
+    try:
+        import mp_followup as _mp_followup
+        import mp_scheduler as _mp_scheduler
+        import mp_model as _mpm_local
+        demand_dicts   = payload.get("demand") or []
+        fitting_dicts  = payload.get("fitting_demand") or []
+        sched_items    = (result.items if result else [])
+        sched = _mp_scheduler.run_shift_schedule(
+            engine_items=sched_items,
+            demand_items=[_mp_engine.DemandItem(**d) for d in demand_dicts],
+            segment=segment,
+            effective_month=month,
+        )
+        plan_lines = _mp_followup.build_plan_lines_from_schedule(
+            sched, result, int(run_id), segment, month,
+        )
+        _mpm_local.insert_plan_lines(plan_lines)
+        app.logger.info("mp_freeze: persisted %d plan lines for run #%s", len(plan_lines), run_id)
+    except Exception as exc:
+        app.logger.warning("mp_freeze plan_lines (non-fatal): %s", exc)
+
     return redirect(url_for("mp_run_list"))
 
 
@@ -5988,6 +6015,168 @@ def api_key_value(key_id: int):
     if not key_val:
         return jsonify({"key": None}), 404
     return jsonify({"key": key_val})
+
+
+# ===========================================================================
+# Machine Planning — Follow-Up routes
+# ===========================================================================
+
+@app.route("/machine-planning/followup")
+def mp_followup_index():
+    """Redirect to the most recent frozen plan run's follow-up page."""
+    try:
+        from mp_model import list_plan_runs, init_mp_tables
+        init_mp_tables()
+        runs = list_plan_runs(_mp_seed.SEGMENT, limit=20)
+        frozen = [r for r in runs if r.get("status") in ("finalized", "frozen")]
+        if not frozen:
+            frozen = runs  # fall back to all runs
+        if frozen:
+            return redirect(url_for("mp_followup_view", run_id=frozen[0]["id"]))
+        return render_template(
+            "machine_planning_followup.html",
+            run_id=None, result=None, error="No plan runs found. Freeze a run first.",
+            runs=runs,
+        )
+    except Exception as exc:
+        app.logger.error("mp_followup_index: %s", exc)
+        return render_template(
+            "machine_planning_followup.html",
+            run_id=None, result=None, error=str(exc), runs=[],
+        )
+
+
+@app.route("/machine-planning/followup/<int:run_id>")
+def mp_followup_view(run_id: int):
+    """Main follow-up variance page for a specific plan run."""
+    import mp_followup as _mp_followup
+
+    try:
+        from mp_model import get_plan_run_by_id, get_params, list_plan_runs, init_mp_tables
+        init_mp_tables()
+        row  = get_plan_run_by_id(run_id)
+        runs = list_plan_runs(_mp_seed.SEGMENT, limit=20)
+    except Exception as exc:
+        return render_template(
+            "machine_planning_followup.html",
+            run_id=run_id, result=None, runs=[],
+            error=f"DB error: {exc}",
+        )
+
+    if not row:
+        abort(404)
+
+    month   = row.get("month", "")
+    segment = row.get("segment", _mp_seed.SEGMENT) or _mp_seed.SEGMENT
+
+    # Load params for RAG thresholds
+    try:
+        params = get_params(segment, month)
+    except Exception:
+        params = None
+
+    amber_pct   = float(params.rag_amber_pct  if params else 10.0)
+    red_pct     = float(params.rag_red_pct    if params else 25.0)
+    hours_dev   = float(params.hours_dev_pct  if params else 15.0)
+    min_block   = float(params.min_run_block_hours if params else 2.0)
+
+    try:
+        result = _mp_followup.compute_followup(
+            plan_run_id=run_id,
+            segment=segment,
+            month=month,
+            amber_pct=amber_pct,
+            red_pct=red_pct,
+            hours_dev_pct=hours_dev,
+            min_run_block_hours=min_block,
+        )
+    except Exception as exc:
+        app.logger.error("mp_followup_view %d: %s", run_id, exc)
+        result = None
+
+    return render_template(
+        "machine_planning_followup.html",
+        run_id=run_id,
+        run_row=row,
+        result=result,
+        runs=runs,
+        amber_pct=amber_pct,
+        red_pct=red_pct,
+        hours_dev_pct=hours_dev,
+        error=None,
+    )
+
+
+@app.route("/machine-planning/followup/<int:run_id>/refresh-actuals", methods=["POST"])
+def mp_followup_refresh_actuals(run_id: int):
+    """Re-ingest actuals from the PIPE daily workbook, then redirect to followup page."""
+    import mp_followup as _mp_followup
+
+    try:
+        from mp_model import get_plan_run_by_id, init_mp_tables
+        init_mp_tables()
+        row = get_plan_run_by_id(run_id)
+    except Exception as exc:
+        abort(500)
+
+    if not row:
+        abort(404)
+
+    month   = row.get("month", "")
+    segment = row.get("segment", _mp_seed.SEGMENT) or _mp_seed.SEGMENT
+
+    try:
+        summary = _mp_followup.ingest_actuals(month, segment)
+        app.logger.info("mp_followup_refresh_actuals run#%d: %s", run_id, summary)
+    except Exception as exc:
+        app.logger.error("mp_followup_refresh_actuals: %s", exc)
+
+    return redirect(url_for("mp_followup_view", run_id=run_id))
+
+
+@app.route("/machine-planning/followup/<int:run_id>/download")
+def mp_followup_download(run_id: int):
+    """Download follow-up variance report as XLSX."""
+    import mp_followup as _mp_followup
+    from flask import send_file as _sf
+
+    try:
+        from mp_model import get_plan_run_by_id, get_params, init_mp_tables
+        init_mp_tables()
+        row    = get_plan_run_by_id(run_id)
+        params = get_params(
+            row.get("segment", _mp_seed.SEGMENT),
+            row.get("month", ""),
+        ) if row else None
+    except Exception:
+        row = None; params = None
+
+    if not row:
+        abort(404)
+
+    month   = row.get("month", "")
+    segment = row.get("segment", _mp_seed.SEGMENT) or _mp_seed.SEGMENT
+
+    amber_pct = float(params.rag_amber_pct  if params else 10.0)
+    red_pct   = float(params.rag_red_pct    if params else 25.0)
+    hours_dev = float(params.hours_dev_pct  if params else 15.0)
+    min_block = float(params.min_run_block_hours if params else 2.0)
+
+    try:
+        result = _mp_followup.compute_followup(
+            plan_run_id=run_id, segment=segment, month=month,
+            amber_pct=amber_pct, red_pct=red_pct,
+            hours_dev_pct=hours_dev, min_run_block_hours=min_block,
+        )
+        if not result:
+            abort(404)
+        xlsx_bytes = _mp_followup.export_followup_xlsx(result)
+        fname = f"MP_FollowUp_{month}_Run{run_id}.xlsx"
+        return _sf(io.BytesIO(xlsx_bytes), mimetype=_XLSX_MIME,
+                   as_attachment=True, download_name=fname)
+    except Exception as exc:
+        app.logger.error("mp_followup_download: %s", exc)
+        abort(500)
 
 
 if __name__ == "__main__":

@@ -607,6 +607,42 @@
           </div>
         </div>
       </div>
+      <!-- Follow-Up RAG thresholds -->
+      <div style="margin-top:.9rem;padding-top:.75rem;border-top:1px solid #f3f4f6;">
+        <div style="font-size:.75rem;font-weight:700;color:var(--navy);margin-bottom:.5rem;letter-spacing:.02em;">
+          Follow-Up RAG Thresholds
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.55rem;">
+          <div class="machine-card">
+            <h4>Green → Amber (%)</h4>
+            <div class="field">
+              <span>Default 10%</span>
+              <input type="number" step="0.5" min="1" max="50"
+                     class="mp-input" id="param-rag-amber"
+                     value="{{ params.rag_amber_pct if params else 10.0 }}">
+            </div>
+          </div>
+          <div class="machine-card">
+            <h4>Amber → Red (%)</h4>
+            <div class="field">
+              <span>Default 25%</span>
+              <input type="number" step="0.5" min="1" max="100"
+                     class="mp-input" id="param-rag-red"
+                     value="{{ params.rag_red_pct if params else 25.0 }}">
+            </div>
+          </div>
+          <div class="machine-card">
+            <h4>Hours Deviation (%)</h4>
+            <div class="field">
+              <span>Default 15%</span>
+              <input type="number" step="0.5" min="1" max="100"
+                     class="mp-input" id="param-hours-dev"
+                     value="{{ params.hours_dev_pct if params else 15.0 }}">
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div style="margin-top:.75rem;display:flex;gap:.5rem;">
         <button class="save-btn" onclick="saveParams('{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>Save Parameters</button>
         <button class="reset-btn" onclick="mpReset('params','{{ effective_month }}')" {% if not db_available %}disabled{% endif %}>↺ Reset to Defaults</button>
@@ -892,13 +928,18 @@ async function saveParams(em) {
   const upvcRate  = parseFloat(document.getElementById('param-upvc-rate').value);
   const swrRate   = parseFloat(document.getElementById('param-swr-rate').value);
   const agriRate  = parseFloat(document.getElementById('param-agri-rate').value);
-  const allVals   = [waste, pulv, minblock, cpvcRate, upvcRate, swrRate, agriRate];
+  const ragAmber  = parseFloat(document.getElementById('param-rag-amber').value);
+  const ragRed    = parseFloat(document.getElementById('param-rag-red').value);
+  const hoursDev  = parseFloat(document.getElementById('param-hours-dev').value);
+  const allVals   = [waste, pulv, minblock, cpvcRate, upvcRate, swrRate, agriRate, ragAmber, ragRed, hoursDev];
   if (allVals.some(isNaN)) { showToast('Invalid value', false); return; }
+  if (ragAmber >= ragRed) { showToast('Amber threshold must be less than Red threshold', false); return; }
   const res = await mpPost('/machine-planning/data/save/params', {
     segment: _SEG, waste_pct: waste, pulverizer_pct: pulv,
     min_run_block_hours: minblock,
     cpvc_mat_rate: cpvcRate, upvc_mat_rate: upvcRate,
     swr_mat_rate: swrRate,   agri_mat_rate: agriRate,
+    rag_amber_pct: ragAmber, rag_red_pct: ragRed, hours_dev_pct: hoursDev,
     effective_month: em
   });
   showToast(res.ok ? 'Saved' : (res.error || 'Save failed'), res.ok);
