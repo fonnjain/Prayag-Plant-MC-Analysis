@@ -1005,6 +1005,12 @@ def refresh():
 
 
 @app.route("/")
+def hub():
+    """App landing hub — routes to Machine Performance, Planning, or Costing."""
+    return render_template("home.html")
+
+
+@app.route("/performance")
 def overview():
     data = get_data(request.args)
     ctx = _common_ctx(data)

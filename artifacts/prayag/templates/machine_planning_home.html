@@ -1,95 +1,159 @@
 {% extends "base.html" %}
+{% block title_suffix %} — Machine Planning{% endblock %}
 {% block content %}
-<div style="padding:0 .75rem 5rem; max-width:600px; margin:0 auto;">
+<div style="padding:.75rem .75rem 5rem; max-width:600px; margin:0 auto;">
 
-  <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0 0 .25rem;">
-    Machine Planning
-  </h2>
-  <p style="font-size:.73rem;color:#6b7280;margin:0 0 1.1rem;">
-    Upload a weekly release-plan Excel and run the pipe + fitting optimisers.
-  </p>
-
-  {# Category selector #}
-  <div style="display:flex;gap:.65rem;margin-bottom:1.25rem;">
-    <a href="{{ url_for('mp_upload') }}"
-       style="flex:1;background:var(--navy);color:#fff;text-align:center;
-              text-decoration:none;padding:.8rem .5rem;border-radius:.55rem;
-              font-size:.95rem;font-weight:700;letter-spacing:.01em;">
-      🏭 Plumbing
-      <div style="font-size:.68rem;font-weight:400;opacity:.75;margin-top:.15rem;">
-        Pipe + Fitting
-      </div>
+  <!-- Breadcrumb -->
+  <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.9rem;">
+    <a href="/" style="text-decoration:none;font-size:.73rem;color:#9ca3af;display:flex;align-items:center;gap:.25rem;">
+      <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+      </svg>
+      Home
     </a>
-    <div style="flex:1;background:#f3f4f6;color:#9ca3af;text-align:center;
-                padding:.8rem .5rem;border-radius:.55rem;font-size:.95rem;
-                font-weight:700;cursor:not-allowed;user-select:none;">
-      🔩 PTMT
-      <div style="font-size:.68rem;font-weight:400;margin-top:.15rem;">Coming soon</div>
+    <span style="color:#e5e7eb;font-size:.73rem;">›</span>
+    <span style="font-size:.73rem;font-weight:700;color:var(--navy);">Machine Planning</span>
+  </div>
+
+  <!-- Section hero -->
+  <div style="background:var(--navy);border-radius:1rem;padding:1.1rem 1.15rem .95rem;
+              margin-bottom:1rem;box-shadow:0 4px 16px rgba(31,56,100,.18);">
+    <div style="color:#fff;font-size:1.05rem;font-weight:800;letter-spacing:.01em;">
+      Machine Planning
+    </div>
+    <div style="color:rgba(255,255,255,.62);font-size:.73rem;margin-top:.2rem;line-height:1.45;">
+      Upload release plans · Optimise pipe &amp; fitting · Track plan runs
+    </div>
+    <div style="display:flex;gap:.5rem;margin-top:.8rem;">
+      <span style="background:rgba(255,255,255,.18);color:#fff;font-size:.7rem;font-weight:700;
+                   padding:.2rem .65rem;border-radius:99px;">🏭 Plumbing — active</span>
+      <span style="background:rgba(255,255,255,.07);color:rgba(255,255,255,.38);font-size:.7rem;
+                   padding:.2rem .65rem;border-radius:99px;">🔩 PTMT (soon)</span>
     </div>
   </div>
 
-  {# Quick links #}
-  <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;">
-    <a href="{{ url_for('mp_run_list') }}"
-       style="flex:1;background:#eff6ff;color:#1e40af;text-align:center;
-              text-decoration:none;padding:.55rem;border-radius:.4rem;
-              font-size:.82rem;font-weight:600;">
-      📋 Plan Runs{% if runs %} ({{ runs|length }}){% endif %}
+  <!-- 3 main action tiles -->
+  <div style="display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.2rem;">
+
+    <!-- Upload Release Plan -->
+    <a href="{{ url_for('mp_upload') }}"
+       style="text-decoration:none;display:flex;align-items:center;gap:.9rem;
+              background:#fff;border-radius:.85rem;padding:1rem 1.1rem;
+              box-shadow:0 2px 8px rgba(0,0,0,.07);border-left:4px solid var(--terra);">
+      <div style="background:rgba(197,90,17,.1);width:2.6rem;height:2.6rem;border-radius:.55rem;
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:.9rem;font-weight:800;color:var(--navy);">Upload Release Plan</div>
+        <div style="font-size:.71rem;color:#6b7280;margin-top:.1rem;">
+          Upload Excel · Run pipe &amp; fitting optimiser
+        </div>
+      </div>
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#d1d5db" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+      </svg>
     </a>
+
+    <!-- Data Setup -->
     <a href="{{ url_for('mp_data_view') }}"
-       style="flex:1;background:#f0fdf4;color:#065f46;text-align:center;
-              text-decoration:none;padding:.55rem;border-radius:.4rem;
-              font-size:.82rem;font-weight:600;">
-      ⚙️ MP·Data
+       style="text-decoration:none;display:flex;align-items:center;gap:.9rem;
+              background:#fff;border-radius:.85rem;padding:1rem 1.1rem;
+              box-shadow:0 2px 8px rgba(0,0,0,.07);border-left:4px solid var(--navy);">
+      <div style="background:rgba(31,56,100,.1);width:2.6rem;height:2.6rem;border-radius:.55rem;
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--navy)" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 1.657 3.582 3 8 3s8-1.343 8-3V7M4 7c0 1.657 3.582 3 8 3s8-1.343 8-3M4 7c0-1.657 3.582-3 8-3s8 1.343 8 3m0 5c0 1.657-3.582 3-8 3s-8-1.343-8-3"/>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:.9rem;font-weight:800;color:var(--navy);">Data Setup</div>
+        <div style="font-size:.71rem;color:#6b7280;margin-top:.1rem;">
+          BOM · Routing · Per-hour rates · Machine params
+        </div>
+      </div>
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#d1d5db" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+      </svg>
     </a>
+
+    <!-- Plan Runs -->
+    <a href="{{ url_for('mp_run_list') }}"
+       style="text-decoration:none;display:flex;align-items:center;gap:.9rem;
+              background:#fff;border-radius:.85rem;padding:1rem 1.1rem;
+              box-shadow:0 2px 8px rgba(0,0,0,.07);border-left:4px solid #22c55e;">
+      <div style="background:#dcfce7;width:2.6rem;height:2.6rem;border-radius:.55rem;
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#15803d" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7h6m-6 4h3"/>
+        </svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:.9rem;font-weight:800;color:var(--navy);">
+          Plan Runs
+          {% if runs %}
+          <span style="font-size:.75rem;font-weight:600;color:#15803d;margin-left:.35rem;">
+            {{ runs|length }} run{{ 's' if runs|length != 1 }}
+          </span>
+          {% endif %}
+        </div>
+        <div style="font-size:.71rem;color:#6b7280;margin-top:.1rem;">
+          View &amp; manage optimiser outputs
+        </div>
+      </div>
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#d1d5db" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+      </svg>
+    </a>
+
   </div>
 
-  {# Recent runs #}
+  <!-- Recent runs snapshot -->
   {% if runs %}
-  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:.75rem;">
-    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .6rem;">
-      Recent Plan Runs
-    </h3>
-    {% for run in runs[:5] %}
+  <div style="background:#fff;border-radius:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.08);
+              padding:.85rem 1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.65rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">Recent Runs</h3>
+      <a href="{{ url_for('mp_run_list') }}"
+         style="font-size:.72rem;color:var(--terra);text-decoration:none;font-weight:600;">
+        View all →
+      </a>
+    </div>
+    {% for run in runs[:4] %}
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:.45rem 0;{% if not loop.last %}border-bottom:1px solid #f3f4f6;{% endif %}">
+                padding:.42rem 0;{% if not loop.last %}border-bottom:1px solid #f3f4f6;{% endif %}">
       <div>
-        <span style="font-size:.8rem;font-weight:700;color:var(--navy);">
-          {{ run.month }}
-        </span>
-        <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
-          #{{ run.id }} ·
-          {{ run.created_at.strftime('%d-%m-%Y') if run.created_at else '—' }}
+        <span style="font-size:.8rem;font-weight:700;color:var(--navy);">{{ run.month }}</span>
+        <span style="font-size:.68rem;color:#9ca3af;margin-left:.35rem;">
+          #{{ run.id }}{% if run.created_at %} · {{ run.created_at.strftime('%d-%m-%Y') }}{% endif %}
         </span>
       </div>
-      <div style="display:flex;align-items:center;gap:.5rem;">
-        <span style="font-size:.68rem;border-radius:99px;padding:.1rem .45rem;
-                     {% if run.status == 'finalized' %}background:#d1fae5;color:#065f46;
-                     {% elif run.status == 'draft' %}background:#fef3c7;color:#92400e;
-                     {% else %}background:#f3f4f6;color:#6b7280;{% endif %}">
+      <div style="display:flex;align-items:center;gap:.45rem;">
+        <span style="font-size:.64rem;border-radius:99px;padding:.1rem .45rem;font-weight:600;
+             {% if run.status == 'finalized' %}background:#d1fae5;color:#065f46;
+             {% elif run.status == 'draft' %}background:#fef3c7;color:#92400e;
+             {% else %}background:#f3f4f6;color:#6b7280;{% endif %}">
           {{ run.status }}
         </span>
         {% if run.status in ('draft', 'finalized') %}
         <a href="{{ url_for('mp_run_detail', run_id=run.id) }}"
-           style="font-size:.72rem;color:var(--terra);text-decoration:none;">
+           style="font-size:.72rem;color:var(--terra);text-decoration:none;font-weight:600;">
           View →
         </a>
         {% endif %}
       </div>
     </div>
     {% endfor %}
-    {% if runs|length > 5 %}
-    <a href="{{ url_for('mp_run_list') }}"
-       style="display:block;text-align:center;font-size:.76rem;
-              color:var(--terra);margin-top:.6rem;text-decoration:none;">
-      View all {{ runs|length }} runs →
-    </a>
-    {% endif %}
   </div>
   {% else %}
-  <div style="background:#f9fafb;border-radius:.6rem;padding:1.5rem;text-align:center;
-              font-size:.82rem;color:#6b7280;">
-    No plan runs yet — click <strong>Plumbing</strong> above to upload a weekly release plan.
+  <div style="background:#f9fafb;border-radius:.85rem;padding:1.35rem;text-align:center;
+              border:1.5px dashed #e5e7eb;">
+    <div style="font-size:.82rem;color:#9ca3af;">No plan runs yet</div>
+    <div style="font-size:.73rem;color:#d1d5db;margin-top:.25rem;">
+      Upload a release plan above to get started
+    </div>
   </div>
   {% endif %}
 
