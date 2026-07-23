@@ -46,6 +46,78 @@
 .chk-machine { width:1rem; height:1rem; accent-color:var(--terra); }
 .idle-badge { display:inline-block; font-size:.65rem; font-weight:600; background:#f3f4f6; color:#6b7280; padding:.05rem .35rem; border-radius:.2rem; }
 
+/* ── Right sidebar navigation ───────────────────────────────────────────── */
+.mp-sidebar {
+  position: fixed;
+  right: .45rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  background: rgba(255,255,255,.94);
+  border: 1px solid #e5e7eb;
+  border-radius: .75rem;
+  padding: .4rem .35rem;
+  box-shadow: 0 4px 20px rgba(31,56,100,.16);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.mp-sb-item {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .28rem .45rem;
+  border-radius: .4rem;
+  font-size: .67rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #374151;
+  border: none;
+  background: transparent;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+  text-align: left;
+  line-height: 1.2;
+}
+.mp-sb-item:hover { background: #f3f4f6; }
+.mp-sb-item.active { background: var(--navy); color: #fff; }
+.mp-sb-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  font-size: .63rem;
+  font-weight: 800;
+  flex-shrink: 0;
+  background: rgba(31,56,100,.1);
+}
+.mp-sb-item.active .mp-sb-num { background: rgba(255,255,255,.22); }
+.mp-sb-sep { height: 1px; background: #e5e7eb; margin: .15rem 0; }
+.mp-sb-scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: .4rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: .95rem;
+  color: var(--navy);
+  transition: background .12s;
+  align-self: center;
+}
+.mp-sb-scroll:hover { background: #f3f4f6; }
+@media (max-width: 380px) {
+  .mp-sb-label { display: none; }
+  .mp-sb-item { padding: .28rem; }
+}
+
 /* ── Section nav strip ──────────────────────────────────────────────────── */
 .sec-nav {
   position: sticky;
@@ -89,6 +161,40 @@
 </style>
 
 <div class="toast-container" id="toast-container"></div>
+
+<!-- ── Right sidebar navigation (plumbing tab only) ── -->
+{% if tab == 'plumbing' %}
+<aside class="mp-sidebar" id="mp-sidebar" aria-label="Section navigation">
+  <button class="mp-sb-scroll" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Scroll to top">↑</button>
+  <div class="mp-sb-sep"></div>
+  <button class="mp-sb-item active" data-sec="sec-compound" onclick="navJump('sec-compound','s-compound')">
+    <span class="mp-sb-num">1</span>
+    <span class="mp-sb-label">Compound</span>
+  </button>
+  <button class="mp-sb-item" data-sec="sec-bom" onclick="navJump('sec-bom','s-bom')">
+    <span class="mp-sb-num">2</span>
+    <span class="mp-sb-label">BOM</span>
+  </button>
+  <button class="mp-sb-item" data-sec="sec-ph" onclick="navJump('sec-ph','s-ph')">
+    <span class="mp-sb-num">3</span>
+    <span class="mp-sb-label">Per Hr</span>
+  </button>
+  <button class="mp-sb-item" data-sec="sec-pipe" onclick="navJump('sec-pipe','s-pipe')">
+    <span class="mp-sb-num">4</span>
+    <span class="mp-sb-label">Pipe</span>
+  </button>
+  <button class="mp-sb-item" data-sec="sec-fitting" onclick="navJump('sec-fitting','s-fitting')">
+    <span class="mp-sb-num">5</span>
+    <span class="mp-sb-label">Fitting</span>
+  </button>
+  <button class="mp-sb-item" data-sec="sec-params" onclick="navJump('sec-params','s-params')">
+    <span class="mp-sb-num">6</span>
+    <span class="mp-sb-label">Params</span>
+  </button>
+  <div class="mp-sb-sep"></div>
+  <button class="mp-sb-scroll" onclick="window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'})" title="Scroll to bottom">↓</button>
+</aside>
+{% endif %}
 
 <div style="padding:0 .75rem 1rem; max-width:100%;">
 
@@ -678,12 +784,16 @@ const _NAV_SECTIONS = [
 ];
 
 function navSetActive(cardId) {
+  // Top strip pills
   document.querySelectorAll('#sec-nav .sec-pill').forEach(p => {
     p.classList.toggle('active', p.dataset.sec === cardId);
   });
-  // Scroll the active pill into view within the nav strip
   const pill = document.querySelector(`#sec-nav [data-sec="${cardId}"]`);
   if (pill) pill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  // Right sidebar items
+  document.querySelectorAll('#mp-sidebar .mp-sb-item').forEach(p => {
+    p.classList.toggle('active', p.dataset.sec === cardId);
+  });
 }
 
 function navJump(cardId, bodyId) {
