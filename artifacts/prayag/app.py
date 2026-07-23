@@ -4687,8 +4687,9 @@ def segment_input_save():
 # Machine Planning — Data Page (MP-1)
 # Additive / isolated: new routes only, never touches "/", "/data", or "/plan".
 # ---------------------------------------------------------------------------
-import mp_model as _mp_model  # noqa: E402
-import mp_seed as _mp_seed    # noqa: E402
+import mp_model as _mp_model        # noqa: E402
+import mp_rejection as _mp_rejection  # noqa: E402
+import mp_seed as _mp_seed            # noqa: E402
 
 _MP_SEGMENT = "PLUMBING"
 
@@ -4976,6 +4977,85 @@ def mp_data_view():
     )
 
 
+# ---------------------------------------------------------------------------
+# Machine Planning — Settings page (MP-Settings)
+# Rejection % summary, Breakdown panel, Maintenance panel.
+# ---------------------------------------------------------------------------
+@app.route("/machine-planning/settings")
+def mp_settings_view():
+    """Machine Planning settings page — rejection stats + downtime panels."""
+    import datetime as _dt_s
+    import sources as _src
+    _mp_model.init_mp_tables()
+    _mp_rejection.init_rejection_tables()
+
+    tab = request.args.get("tab", "plumbing")
+
+    available_months = _mp_model.get_available_months(_MP_SEGMENT)
+    em = _mp_seed.current_month()
+    if not available_months:
+        available_months = [em]
+
+    fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months, em)
+
+    rej_summary = _mp_rejection.get_rejection_summary(_MP_SEGMENT)
+    rej_meta    = _mp_rejection.get_rejection_meta(_MP_SEGMENT)
+
+    rej_search     = request.args.get("rej_search", "").strip()
+    rej_page       = max(1, int(request.args.get("rej_page", 1) or 1))
+    rej_items, rej_total = _mp_rejection.get_rejection_items(
+        _MP_SEGMENT, search=rej_search, page=rej_page, per_page=50)
+    rej_total_pages = max(1, (rej_total + 49) // 50)
+
+    sources_pipe_months = len([
+        ym for ym in _src.DAILY_SOURCES.get("PIPE", {}).get("files", {})
+        if ("PIPE", ym) not in _src.EMPTY_SOURCES
+    ])
+
+    all_incl    = _mp_model.get_downtime_records(_MP_SEGMENT, include_deleted=True) if _mp_model.AVAILABLE else []
+    downtime_records = [r for r in all_incl if not r.get("deleted", False)]
+    deleted_downtime_records = [r for r in all_incl if r.get("deleted", False)]
+    downtime_open   = [r for r in downtime_records if not r.get("resolved", False)]
+    downtime_closed = [r for r in downtime_records if r.get("resolved", False)]
+    today_iso = _dt_s.date.today().isoformat()
+    all_machine_names = sorted(set(
+        r.get("machine", "") for r in all_incl if r.get("machine", "")
+    )) or _ALL_PIPE_MACHINES
+
+    return render_template(
+        "machine_planning_settings.html",
+        segment=_MP_SEGMENT,
+        effective_month=em,
+        available_months=available_months,
+        fy_groups=fy_groups,
+        effective_fy=effective_fy,
+        all_month_opts=all_month_opts,
+        tab=tab,
+        db_available=_mp_model.AVAILABLE,
+        rej_summary=rej_summary,
+        rej_meta=rej_meta,
+        rej_items=rej_items,
+        rej_total=rej_total,
+        rej_total_pages=rej_total_pages,
+        rej_page=rej_page,
+        rej_search=rej_search,
+        sources_pipe_months=sources_pipe_months,
+        downtime_open=downtime_open,
+        downtime_closed=downtime_closed,
+        all_downtime_records=downtime_records,
+        deleted_downtime_records=deleted_downtime_records,
+        all_machine_names=all_machine_names,
+        today_iso=today_iso,
+    )
+
+
+@app.route("/machine-planning/settings/recompute-rejection", methods=["POST"])
+def mp_settings_recompute_rejection():
+    """Trigger a full rejection-stats recompute from source workbooks."""
+    result = _mp_rejection.recompute_rejection(_MP_SEGMENT)
+    return jsonify(result)
+
+
 @app.route("/machine-planning/data/reset/all", methods=["POST"])
 def mp_reset_all_sections():
     """Seed every PLUMBING data table (compound+BOM+per-hour+routing+fitting+params) in one call."""
@@ -5015,12 +5095,17 @@ def mp_downtime_list():
 
 @app.route("/machine-planning/data/downtime/open", methods=["POST"])
 def mp_downtime_open():
-    """Create a new downtime (breakdown/maintenance) record."""
+    """Create a new downtime (breakdown/maintenance) record.
+
+    Breakdown: start_date only (end unknown at log time).
+    Maintenance: start_date + end_date both provided upfront (planned window).
+    """
     _mp_model.init_mp_tables()
     data = request.get_json(force=True) or {}
     machine   = (data.get("machine") or "").strip()
     kind      = (data.get("kind") or "").strip()
     start_raw = (data.get("start_date") or "").strip()
+    end_raw   = (data.get("end_date") or "").strip()
     reason    = (data.get("reason") or "").strip()
     if not machine or not kind or not start_raw:
         return jsonify({"ok": False, "error": "machine, kind and start_date are required"}), 400
@@ -5029,12 +5114,19 @@ def mp_downtime_open():
         start_date = _dt_local.date.fromisoformat(start_raw)
     except ValueError:
         return jsonify({"ok": False, "error": f"Invalid start_date: {start_raw!r}"}), 400
+    end_date = None
+    if end_raw:
+        try:
+            end_date = _dt_local.date.fromisoformat(end_raw)
+        except ValueError:
+            return jsonify({"ok": False, "error": f"Invalid end_date: {end_raw!r}"}), 400
     try:
         rec = _mp_model.MpMachineDowntime(
             segment=_MP_SEGMENT,
             machine=machine,
             kind=kind,
             start_date=start_date,
+            end_date=end_date,
             reason=reason,
         )
         new_id = _mp_model.insert_downtime(rec)

@@ -1,0 +1,687 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.mp-tab { padding:.5rem 1rem; border-radius:.5rem; font-size:.85rem; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
+.mp-tab.active { background:var(--terra); color:#fff; }
+.mp-tab:not(.active) { background:#f3f4f6; color:#374151; }
+.section-card { background:#fff; border-radius:.75rem; box-shadow:0 1px 4px rgba(0,0,0,.08); margin-bottom:1rem; overflow:hidden; }
+.section-header { display:flex; align-items:center; justify-content:space-between; padding:.75rem 1rem; background:#f9fafb; border-bottom:1px solid #e5e7eb; flex-wrap:wrap; gap:.5rem; }
+.section-title { font-weight:700; font-size:.9rem; color:var(--navy); }
+.section-body { padding:.75rem 1rem; }
+.tbl { width:100%; border-collapse:collapse; font-size:.8rem; }
+.tbl th { background:var(--navy); color:#fff; padding:.4rem .5rem; text-align:left; white-space:nowrap; font-weight:600; }
+.tbl td { padding:.35rem .5rem; border-bottom:1px solid #f3f4f6; vertical-align:middle; }
+.tbl tr:nth-child(even) td { background:#fafafa; }
+.tbl tr:hover td { background:#fef9f5; }
+.tbl td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.tbl tr.subtotal td { background:#eef3fa; font-weight:700; border-top:2px solid #cbd5e1; }
+.tbl tr.subtotal-fit td { background:#f0fdf4; font-weight:700; border-top:2px solid #bbf7d0; }
+.action-btn { font-size:.75rem; padding:.28rem .7rem; border-radius:.3rem; border:none; cursor:pointer; font-weight:600; }
+.btn-primary { background:var(--terra); color:#fff; }
+.btn-primary:hover { opacity:.87; }
+.btn-secondary { background:#f3f4f6; color:#374151; border:1px solid #d1d5db; }
+.btn-secondary:hover { background:#e5e7eb; }
+.btn-danger  { background:#fee2e2; color:#991b1b; border:none; }
+.btn-danger:hover { background:#fecaca; }
+.btn-sm { font-size:.68rem; padding:.18rem .5rem; border-radius:.25rem; border:none; cursor:pointer; font-weight:600; }
+.dt-form { background:#f9fafb; border:1px solid #e5e7eb; border-radius:.5rem; padding:.75rem; margin:.5rem 0; }
+.dt-form label { font-size:.75rem; font-weight:600; color:#374151; display:block; margin-bottom:.15rem; }
+.dt-form input, .dt-form select, .dt-form textarea { width:100%; border:1px solid #d1d5db; border-radius:.3rem; padding:.3rem .5rem; font-size:.82rem; margin-bottom:.5rem; box-sizing:border-box; }
+.dt-form input:focus, .dt-form select:focus { outline:none; border-color:var(--navy); }
+.dt-open-card { border:1px solid #e5e7eb; border-radius:.5rem; margin-bottom:.5rem; padding:.55rem .75rem; background:#fff; position:relative; }
+.dt-open-card .mc-name { font-weight:700; font-size:.85rem; color:var(--navy); }
+.dt-open-card .mc-meta { font-size:.73rem; color:#6b7280; margin-top:.1rem; }
+.dt-open-card .mc-actions { display:flex; align-items:center; gap:.5rem; margin-top:.4rem; flex-wrap:wrap; }
+.dt-chk { width:1rem; height:1rem; accent-color:#059669; cursor:pointer; }
+.dt-resolve-row { display:none; margin-top:.35rem; padding:.35rem .5rem; background:#f0fdf4; border-radius:.3rem; border:1px solid #bbf7d0; }
+.dt-hist-section { margin-top:.75rem; border-top:1px solid #e5e7eb; padding-top:.5rem; }
+.dt-hist-controls { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; margin-bottom:.4rem; }
+.dt-hist-controls select, .dt-hist-controls input { font-size:.75rem; padding:.2rem .4rem; border:1px solid #d1d5db; border-radius:.25rem; max-width:140px; }
+.dt-deleted-row td { opacity:.55; text-decoration:line-through; }
+.badge { display:inline-block; padding:.1rem .45rem; border-radius:.25rem; font-size:.7rem; font-weight:600; }
+.badge-open { background:#fee2e2; color:#991b1b; }
+.badge-resolved { background:#d1fae5; color:#065f46; }
+.badge-deleted { background:#f3f4f6; color:#6b7280; }
+.toast-container { position:fixed; top:4.5rem; right:.75rem; z-index:9999; display:flex; flex-direction:column; gap:.35rem; }
+.toast { padding:.45rem .9rem; border-radius:.4rem; font-size:.78rem; font-weight:600; color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.18); animation:fadeInOut 2.8s forwards; }
+.toast.ok { background:#059669; }
+.toast.err { background:#dc2626; }
+@keyframes fadeInOut { 0%{opacity:0;transform:translateY(-8px)} 10%{opacity:1;transform:translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+.rej-pipe { color:#1e40af; }
+.rej-fitting { color:#065f46; }
+.rej-pct-high { color:#c55a11; font-weight:700; }
+.meta-chip { display:inline-block; font-size:.7rem; background:#f3f4f6; border-radius:.25rem; padding:.1rem .4rem; color:#6b7280; }
+</style>
+
+<div class="toast-container" id="toast-box"></div>
+
+<!-- ── Page header ─────────────────────────────────────────────────────── -->
+<div style="background:var(--navy);color:#fff;padding:.65rem 1rem;margin:0 -.75rem .85rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;">
+  <div>
+    <div style="font-size:.7rem;opacity:.7;letter-spacing:.04em;text-transform:uppercase;">Machine Planning</div>
+    <div style="font-size:1rem;font-weight:800;">Settings</div>
+  </div>
+  <a href="/machine-planning" style="font-size:.75rem;color:rgba(255,255,255,.75);text-decoration:none;">← Back to Planning</a>
+</div>
+
+<!-- ── Category tabs ────────────────────────────────────────────────────── -->
+<div style="display:flex;gap:.5rem;margin-bottom:.85rem;">
+  <a href="?tab=plumbing" class="mp-tab {{ 'active' if tab=='plumbing' else '' }}">🔧 Plumbing</a>
+  <a href="?tab=ptmt" class="mp-tab {{ 'active' if tab=='ptmt' else '' }}">⚙️ PTMT</a>
+</div>
+
+{% if tab == 'plumbing' %}
+
+{# ── Aggregate pipe_total and fitting_total ───────────────────────────── #}
+{% set ns = namespace(pipe_prod=0, pipe_rej=0, fit_prod=0, fit_rej=0) %}
+{% for r in rej_summary %}
+  {% if r.plant_type == 'PIPE' %}
+    {% set ns.pipe_prod = ns.pipe_prod + r.prod_kg %}
+    {% set ns.pipe_rej  = ns.pipe_rej  + r.rej_kg  %}
+  {% else %}
+    {% set ns.fit_prod = ns.fit_prod + r.prod_kg %}
+    {% set ns.fit_rej  = ns.fit_rej  + r.rej_kg  %}
+  {% endif %}
+{% endfor %}
+
+<!-- ════ SECTION 1: REJECTION % ════════════════════════════════════════════ -->
+<div class="section-card" id="sec-rejection">
+  <div class="section-header">
+    <div style="flex:1;">
+      <span class="section-title">📊 Rejection % — Historical Summary</span>
+      {% if rej_meta %}
+        <span class="meta-chip" style="margin-left:.5rem;">
+          {{ rej_meta.pipe_months }} pipe months · {{ rej_meta.fitting_months }} fitting months
+        </span>
+        {% if rej_meta.last_recomputed %}
+          <span class="meta-chip">Last recomputed: {{ rej_meta.last_recomputed.strftime('%d-%m-%Y %H:%M') }}</span>
+        {% endif %}
+      {% else %}
+        <span class="meta-chip" style="color:#c55a11;">Not yet computed</span>
+      {% endif %}
+    </div>
+    <button class="action-btn btn-secondary" id="rej-btn" onclick="doRecompute()">⟳ Recompute</button>
+  </div>
+  <div class="section-body" style="padding:.5rem .75rem;">
+    {% if rej_summary %}
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:90px;">Type</th>
+          <th>Material</th>
+          <th class="num" style="min-width:120px;">Production (kg)</th>
+          <th class="num" style="min-width:110px;">Rejection (kg)</th>
+          <th class="num" style="min-width:70px;">Rej %</th>
+          <th class="num" style="min-width:60px;">Months</th>
+        </tr>
+      </thead>
+      <tbody>
+        {# PIPE rows #}
+        {% for r in rej_summary if r.plant_type == 'PIPE' %}
+        <tr>
+          <td><span style="font-size:.7rem;font-weight:700;color:#1e40af;background:#dbeafe;padding:.05rem .35rem;border-radius:.2rem;">PIPE</span></td>
+          <td style="font-weight:600;">{{ r.material }}</td>
+          <td class="num">{{ "{:,.0f}".format(r.prod_kg) }}</td>
+          <td class="num">{{ "{:,.0f}".format(r.rej_kg) }}</td>
+          <td class="num {{ 'rej-pct-high' if r.pct and r.pct > 10 else '' }}">
+            {{ "{:.2f}%".format(r.pct) if r.pct is not none else '—' }}
+          </td>
+          <td class="num">{{ r.n_months }}</td>
+        </tr>
+        {% endfor %}
+        {# PIPE subtotal #}
+        {% if ns.pipe_prod > 0 %}
+        <tr class="subtotal">
+          <td colspan="2" style="font-size:.78rem;">PIPE — Total</td>
+          <td class="num">{{ "{:,.0f}".format(ns.pipe_prod) }}</td>
+          <td class="num">{{ "{:,.0f}".format(ns.pipe_rej) }}</td>
+          <td class="num {{ 'rej-pct-high' if ns.pipe_prod > 0 and (ns.pipe_rej/ns.pipe_prod*100) > 10 else '' }}">
+            {% if ns.pipe_prod > 0 %}{{ "{:.2f}%".format(ns.pipe_rej/ns.pipe_prod*100) }}{% else %}—{% endif %}
+          </td>
+          <td class="num">—</td>
+        </tr>
+        {% endif %}
+        {# FITTING rows #}
+        {% for r in rej_summary if r.plant_type == 'FITTING' %}
+        <tr>
+          <td><span style="font-size:.7rem;font-weight:700;color:#065f46;background:#d1fae5;padding:.05rem .35rem;border-radius:.2rem;">FITTING</span></td>
+          <td style="font-weight:600;">{{ r.material if r.material != 'ALL' else '— all —' }}</td>
+          <td class="num">{{ "{:,.0f}".format(r.prod_kg) }}</td>
+          <td class="num">{{ "{:,.0f}".format(r.rej_kg) }}</td>
+          <td class="num">{{ "{:.2f}%".format(r.pct) if r.pct is not none else '—' }}</td>
+          <td class="num">{{ r.n_months }}</td>
+        </tr>
+        {% endfor %}
+        {# FITTING subtotal (only if multiple material rows) #}
+        {% if (rej_summary | selectattr('plant_type','equalto','FITTING') | list | length) > 1 and ns.fit_prod > 0 %}
+        <tr class="subtotal-fit">
+          <td colspan="2" style="font-size:.78rem;">FITTING — Total</td>
+          <td class="num">{{ "{:,.0f}".format(ns.fit_prod) }}</td>
+          <td class="num">{{ "{:,.0f}".format(ns.fit_rej) }}</td>
+          <td class="num">
+            {% if ns.fit_prod > 0 %}{{ "{:.2f}%".format(ns.fit_rej/ns.fit_prod*100) }}{% else %}—{% endif %}
+          </td>
+          <td class="num">—</td>
+        </tr>
+        {% endif %}
+        {# Overall total #}
+        {% set all_prod = ns.pipe_prod + ns.fit_prod %}
+        {% set all_rej  = ns.pipe_rej  + ns.fit_rej  %}
+        {% if all_prod > 0 %}
+        <tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #94a3b8;">
+          <td colspan="2" style="font-size:.78rem;">Overall — Plumbing</td>
+          <td class="num">{{ "{:,.0f}".format(all_prod) }}</td>
+          <td class="num">{{ "{:,.0f}".format(all_rej) }}</td>
+          <td class="num" style="color:var(--terra);">{{ "{:.2f}%".format(all_rej/all_prod*100) }}</td>
+          <td class="num">—</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:1.5rem;color:#6b7280;">
+      <div style="font-size:1.5rem;margin-bottom:.5rem;">📊</div>
+      <div style="font-weight:600;margin-bottom:.3rem;">No rejection data computed yet</div>
+      <div style="font-size:.8rem;">Click <strong>Recompute</strong> to calculate from the source workbooks
+        ({{ (sources_pipe_months | default(0)) }} PIPE months available).</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% set breakdown_open  = downtime_open | selectattr('kind','equalto','breakdown')   | list %}
+{% set maintenance_open = downtime_open | selectattr('kind','equalto','maintenance') | list %}
+{% set breakdown_hist  = all_downtime_records | selectattr('kind','equalto','breakdown')   | list %}
+{% set maintenance_hist = all_downtime_records | selectattr('kind','equalto','maintenance') | list %}
+{% set breakdown_del   = deleted_downtime_records | selectattr('kind','equalto','breakdown')   | list %}
+{% set maintenance_del = deleted_downtime_records | selectattr('kind','equalto','maintenance') | list %}
+
+<!-- ════ SECTION 2: BREAKDOWN ═══════════════════════════════════════════════ -->
+<div class="section-card" id="sec-breakdown">
+  <div class="section-header">
+    <span class="section-title">⚡ Machine Breakdown</span>
+    <div style="display:flex;align-items:center;gap:.5rem;">
+      {% if breakdown_open %}
+        <span class="badge badge-open">{{ breakdown_open|length }} down</span>
+      {% endif %}
+      {% if db_available %}
+        <button class="action-btn btn-primary" onclick="dtOpenForm('breakdown')">+ Log Breakdown</button>
+      {% endif %}
+    </div>
+  </div>
+  <div class="section-body">
+    {% if db_available %}
+    <!-- Add breakdown form -->
+    <div id="dt-form-breakdown" class="dt-form" style="display:none;">
+      <div style="font-size:.8rem;font-weight:700;color:var(--navy);margin-bottom:.5rem;">Log Machine Breakdown</div>
+      <label>Machine *</label>
+      <select id="dt-mc-breakdown">
+        <option value="">— select machine —</option>
+        {% for m in all_machine_names %}
+        <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+      <label>Start Date * <span style="font-size:.68rem;color:#6b7280;">(first day the machine was down)</span></label>
+      <input type="date" id="dt-start-breakdown" value="{{ today_iso }}" max="{{ today_iso }}">
+      <label>Reason <span style="font-size:.68rem;color:#6b7280;">(optional)</span></label>
+      <input type="text" id="dt-reason-breakdown" placeholder="e.g. motor failure, bearing seized…">
+      <div style="display:flex;gap:.5rem;margin-top:.25rem;">
+        <button class="action-btn btn-primary" onclick="dtSubmitOpen('breakdown')">Save</button>
+        <button class="action-btn btn-secondary" onclick="dtOpenForm('breakdown')">Cancel</button>
+      </div>
+    </div>
+
+    {% if breakdown_open %}
+    <!-- Open breakdown records -->
+    <div style="margin-bottom:.5rem;font-size:.75rem;font-weight:600;color:#374151;">Currently down ({{ breakdown_open|length }})</div>
+    {% for r in breakdown_open %}
+    <div class="dt-open-card">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+        <div>
+          <div class="mc-name">{{ r.machine }}</div>
+          <div class="mc-meta">
+            Down since {{ r.start_date | string | truncate(10, True, '') }}
+            · {{ r.days_down }} day{{ 's' if r.days_down != 1 else '' }} down
+            {% if r.reason %} · {{ r.reason }}{% endif %}
+          </div>
+        </div>
+        <div class="mc-actions">
+          <button class="btn-sm btn-danger" onclick="dtDelete({{ r.id }})">✕</button>
+          <label style="display:flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:600;color:#059669;cursor:pointer;">
+            <input type="checkbox" class="dt-chk" id="dt-chk-{{ r.id }}"
+                   onchange="dtCheckboxChange({{ r.id }}, 'breakdown', '')">
+            Back in planning
+          </label>
+        </div>
+      </div>
+      <div id="dt-end-row-{{ r.id }}" class="dt-resolve-row">
+        <label style="font-size:.72rem;font-weight:600;color:#059669;margin-bottom:.2rem;display:block;">Last day down (inclusive)</label>
+        <div style="display:flex;gap:.4rem;align-items:center;">
+          <input type="date" id="dt-end-{{ r.id }}" value="{{ today_iso }}" max="{{ today_iso }}"
+                 style="border:1px solid #bbf7d0;border-radius:.25rem;padding:.2rem .4rem;font-size:.78rem;flex:1;">
+          <button class="action-btn btn-primary" onclick="dtSubmitResolve({{ r.id }})" style="font-size:.72rem;padding:.2rem .55rem;">✓ Confirm</button>
+          <button class="action-btn btn-secondary" onclick="dtCancelResolve({{ r.id }})" style="font-size:.72rem;padding:.2rem .55rem;">Cancel</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% elif not breakdown_del %}
+    <div style="text-align:center;padding:.75rem;color:#6b7280;font-size:.8rem;">No active breakdowns. ✓</div>
+    {% endif %}
+
+    <!-- Breakdown history -->
+    {% if breakdown_hist or breakdown_del %}
+    <div class="dt-hist-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;">
+        <div style="font-size:.75rem;font-weight:700;color:#374151;">
+          📋 Breakdown History
+          <span style="font-size:.7rem;font-weight:400;color:#6b7280;">
+            · {{ breakdown_hist|length }} record{{ 's' if breakdown_hist|length!=1 else '' }}
+          </span>
+        </div>
+        {% if breakdown_del %}
+        <label style="font-size:.7rem;display:flex;align-items:center;gap:.3rem;cursor:pointer;">
+          <input type="checkbox" onchange="dtToggleDeleted('breakdown', this.checked)">
+          Show deleted ({{ breakdown_del|length }})
+        </label>
+        {% endif %}
+      </div>
+      {% set bh_total = namespace(n=0) %}
+      {% for r in breakdown_hist %}{% set bh_total.n = bh_total.n + r.days_down %}{% endfor %}
+      {% if breakdown_hist %}
+      <div style="font-size:.7rem;color:#6b7280;margin-bottom:.4rem;">
+        <strong>{{ bh_total.n }}</strong> total machine-days lost
+      </div>
+      {% endif %}
+      <div class="dt-hist-controls">
+        <select id="bh-status" onchange="dtFilterHist('breakdown')">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+        </select>
+      </div>
+      <table class="tbl" id="bh-table">
+        <thead>
+          <tr>
+            <th>Machine</th>
+            <th>Start</th>
+            <th>End / Resolved</th>
+            <th class="num">Days</th>
+            <th>Reason</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in breakdown_hist %}
+          <tr class="bh-row" data-status="{{ 'resolved' if r.resolved else 'open' }}">
+            <td>{{ r.machine }}</td>
+            <td>{{ r.start_date | string | truncate(10, True, '') }}</td>
+            <td>{{ r.end_date | string | truncate(10, True, '') if r.end_date else '—' }}</td>
+            <td class="num">{{ r.days_down }}</td>
+            <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.reason or '—' }}</td>
+            <td><span class="badge {{ 'badge-resolved' if r.resolved else 'badge-open' }}">{{ 'Resolved' if r.resolved else 'Open' }}</span></td>
+            <td><button class="btn-sm btn-danger" onclick="dtDelete({{ r.id }})" title="Soft-delete">✕</button></td>
+          </tr>
+          {% endfor %}
+          {% for r in breakdown_del %}
+          <tr class="bh-row bh-del-row" style="display:none;" data-status="deleted">
+            <td>{{ r.machine }}</td>
+            <td>{{ r.start_date | string | truncate(10, True, '') }}</td>
+            <td>{{ r.end_date | string | truncate(10, True, '') if r.end_date else '—' }}</td>
+            <td class="num">{{ r.days_down }}</td>
+            <td>{{ r.reason or '—' }}</td>
+            <td><span class="badge badge-deleted">Deleted</span></td>
+            <td><button class="btn-sm btn-secondary" onclick="dtRestore({{ r.id }})" title="Restore">↩</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% else %}
+    <p style="color:#6b7280;font-size:.8rem;padding:.5rem 0;">Database unavailable — breakdown logging requires a connected database.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ════ SECTION 3: MAINTENANCE ═════════════════════════════════════════════ -->
+<div class="section-card" id="sec-maintenance">
+  <div class="section-header">
+    <span class="section-title">🔧 Scheduled Maintenance</span>
+    <div style="display:flex;align-items:center;gap:.5rem;">
+      {% if maintenance_open %}
+        <span class="badge badge-open">{{ maintenance_open|length }} scheduled</span>
+      {% endif %}
+      {% if db_available %}
+        <button class="action-btn btn-primary" onclick="dtOpenForm('maintenance')">+ Log Maintenance</button>
+      {% endif %}
+    </div>
+  </div>
+  <div class="section-body">
+    {% if db_available %}
+    <!-- Add maintenance form (includes end_date upfront) -->
+    <div id="dt-form-maintenance" class="dt-form" style="display:none;">
+      <div style="font-size:.8rem;font-weight:700;color:var(--navy);margin-bottom:.5rem;">Log Scheduled Maintenance</div>
+      <label>Machine *</label>
+      <select id="dt-mc-maintenance">
+        <option value="">— select machine —</option>
+        {% for m in all_machine_names %}
+        <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+        <div>
+          <label>Start Date *</label>
+          <input type="date" id="dt-start-maintenance" value="{{ today_iso }}">
+        </div>
+        <div>
+          <label>End Date * <span style="font-size:.68rem;color:#6b7280;">(scheduled return)</span></label>
+          <input type="date" id="dt-end-maintenance">
+        </div>
+      </div>
+      <label>Reason <span style="font-size:.68rem;color:#6b7280;">(optional)</span></label>
+      <input type="text" id="dt-reason-maintenance" placeholder="e.g. annual service, part replacement…">
+      <div style="display:flex;gap:.5rem;margin-top:.25rem;">
+        <button class="action-btn btn-primary" onclick="dtSubmitOpen('maintenance')">Save</button>
+        <button class="action-btn btn-secondary" onclick="dtOpenForm('maintenance')">Cancel</button>
+      </div>
+    </div>
+
+    {% if maintenance_open %}
+    <div style="margin-bottom:.5rem;font-size:.75rem;font-weight:600;color:#374151;">Scheduled ({{ maintenance_open|length }})</div>
+    {% for r in maintenance_open %}
+    <div class="dt-open-card" style="border-color:#1F3864;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+        <div>
+          <div class="mc-name">{{ r.machine }}</div>
+          <div class="mc-meta">
+            {{ r.start_date | string | truncate(10, True, '') }}
+            {% if r.end_date %} → {{ r.end_date | string | truncate(10, True, '') }} (scheduled){% endif %}
+            · {{ r.days_down }} day{{ 's' if r.days_down != 1 else '' }} elapsed
+            {% if r.reason %} · {{ r.reason }}{% endif %}
+          </div>
+        </div>
+        <div class="mc-actions">
+          <button class="btn-sm btn-danger" onclick="dtDelete({{ r.id }})">✕</button>
+          <label style="display:flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:600;color:#1F3864;cursor:pointer;">
+            <input type="checkbox" class="dt-chk" id="dt-chk-{{ r.id }}"
+                   onchange="dtCheckboxChange({{ r.id }}, 'maintenance', '{{ r.end_date | string | truncate(10, True, '') if r.end_date else today_iso }}')">
+            Maintenance complete
+          </label>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% elif not maintenance_del %}
+    <div style="text-align:center;padding:.75rem;color:#6b7280;font-size:.8rem;">No active maintenance scheduled. ✓</div>
+    {% endif %}
+
+    <!-- Maintenance history -->
+    {% if maintenance_hist or maintenance_del %}
+    <div class="dt-hist-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;">
+        <div style="font-size:.75rem;font-weight:700;color:#374151;">
+          📋 Maintenance History
+          <span style="font-size:.7rem;font-weight:400;color:#6b7280;">
+            · {{ maintenance_hist|length }} record{{ 's' if maintenance_hist|length!=1 else '' }}
+          </span>
+        </div>
+        {% if maintenance_del %}
+        <label style="font-size:.7rem;display:flex;align-items:center;gap:.3rem;cursor:pointer;">
+          <input type="checkbox" onchange="dtToggleDeleted('maintenance', this.checked)">
+          Show deleted ({{ maintenance_del|length }})
+        </label>
+        {% endif %}
+      </div>
+      <div class="dt-hist-controls">
+        <select id="mh-status" onchange="dtFilterHist('maintenance')">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+        </select>
+      </div>
+      <table class="tbl" id="mh-table">
+        <thead>
+          <tr>
+            <th>Machine</th>
+            <th>Start</th>
+            <th>Planned End</th>
+            <th>Resolved</th>
+            <th class="num">Days</th>
+            <th>Reason</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in maintenance_hist %}
+          <tr class="mh-row" data-status="{{ 'resolved' if r.resolved else 'open' }}">
+            <td>{{ r.machine }}</td>
+            <td>{{ r.start_date | string | truncate(10, True, '') }}</td>
+            <td>{{ r.end_date | string | truncate(10, True, '') if r.end_date else '—' }}</td>
+            <td>{{ r.resolved_at | string | truncate(10, True, '') if r.resolved_at else '—' }}</td>
+            <td class="num">{{ r.days_down }}</td>
+            <td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.reason or '—' }}</td>
+            <td><span class="badge {{ 'badge-resolved' if r.resolved else 'badge-open' }}">{{ 'Done' if r.resolved else 'Active' }}</span></td>
+            <td><button class="btn-sm btn-danger" onclick="dtDelete({{ r.id }})" title="Soft-delete">✕</button></td>
+          </tr>
+          {% endfor %}
+          {% for r in maintenance_del %}
+          <tr class="mh-row mh-del-row" style="display:none;" data-status="deleted">
+            <td>{{ r.machine }}</td>
+            <td>{{ r.start_date | string | truncate(10, True, '') }}</td>
+            <td>{{ r.end_date | string | truncate(10, True, '') if r.end_date else '—' }}</td>
+            <td>{{ r.resolved_at | string | truncate(10, True, '') if r.resolved_at else '—' }}</td>
+            <td class="num">{{ r.days_down }}</td>
+            <td>{{ r.reason or '—' }}</td>
+            <td><span class="badge badge-deleted">Deleted</span></td>
+            <td><button class="btn-sm btn-secondary" onclick="dtRestore({{ r.id }})" title="Restore">↩</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% else %}
+    <p style="color:#6b7280;font-size:.8rem;padding:.5rem 0;">Database unavailable.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% else %}
+<!-- PTMT tab -->
+<div class="section-card">
+  <div class="section-header"><span class="section-title">⚙️ PTMT Settings</span></div>
+  <div class="section-body" style="text-align:center;padding:2rem;color:#6b7280;">
+    <div style="font-size:1.5rem;margin-bottom:.5rem;">🚧</div>
+    <div style="font-weight:600;">PTMT settings — coming soon</div>
+  </div>
+</div>
+{% endif %}
+
+<div style="height:5rem;"></div>
+
+<script>
+/* ── Toast helper ─────────────────────────────────────────────────────── */
+function showToast(msg, isErr) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (isErr ? 'err' : 'ok');
+  el.textContent = msg;
+  document.getElementById('toast-box').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+/* ── Rejection recompute ──────────────────────────────────────────────── */
+async function doRecompute() {
+  const btn = document.getElementById('rej-btn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⟳ Computing…';
+  try {
+    const r = await fetch('/machine-planning/settings/recompute-rejection', {method:'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('Recomputed — ' + j.pipe_months + ' pipe months, ' + j.fitting_months + ' fitting months', false);
+      setTimeout(() => location.reload(), 900);
+    } else {
+      showToast('Error: ' + (j.error || 'recompute failed'), true);
+    }
+  } catch(e) {
+    showToast('Network error', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+/* ── Downtime add form toggle ─────────────────────────────────────────── */
+function dtOpenForm(kind) {
+  const el = document.getElementById('dt-form-' + kind);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+/* ── Submit new downtime record ───────────────────────────────────────── */
+async function dtSubmitOpen(kind) {
+  const mc       = (document.getElementById('dt-mc-'+kind)?.value || '').trim();
+  const start    = (document.getElementById('dt-start-'+kind)?.value || '').trim();
+  const reason   = (document.getElementById('dt-reason-'+kind)?.value || '').trim();
+  const endEl    = document.getElementById('dt-end-'+kind);
+  const end_date = endEl ? (endEl.value || '').trim() : '';
+
+  if (!mc)    { showToast('Select a machine', true); return; }
+  if (!start) { showToast('Start date is required', true); return; }
+  if (kind === 'maintenance' && !end_date) {
+    showToast('End date is required for maintenance', true); return;
+  }
+  if (kind === 'maintenance' && end_date && end_date < start) {
+    showToast('End date must be on or after start date', true); return;
+  }
+
+  const body = { machine: mc, kind, start_date: start, reason };
+  if (end_date) body.end_date = end_date;
+
+  try {
+    const r = await fetch('/machine-planning/data/downtime/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast(kind.charAt(0).toUpperCase()+kind.slice(1)+' logged', false);
+      setTimeout(() => location.reload(), 700);
+    } else {
+      showToast('Error: ' + j.error, true);
+    }
+  } catch(e) {
+    showToast('Network error', true);
+  }
+}
+
+/* ── Checkbox change (kind-aware) ─────────────────────────────────────── */
+async function dtCheckboxChange(id, kind, origEndDate) {
+  const chk = document.getElementById('dt-chk-'+id);
+  if (chk.checked) {
+    if (kind === 'breakdown') {
+      // Show "last day down" date picker; resolve happens on Confirm click
+      const row = document.getElementById('dt-end-row-'+id);
+      if (row) row.style.display = '';
+    } else {
+      // Maintenance: resolve immediately, keep original end_date
+      const today = new Date().toISOString().slice(0, 10);
+      const resolveEnd = origEndDate || today;
+      const r = await fetch('/machine-planning/data/downtime/'+id+'/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ end_date: resolveEnd }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        showToast('Maintenance complete — machine back in planning', false);
+        setTimeout(() => location.reload(), 700);
+      } else {
+        showToast('Error: ' + j.error, true);
+        chk.checked = false;
+      }
+    }
+  } else {
+    if (kind === 'breakdown') {
+      const row = document.getElementById('dt-end-row-'+id);
+      if (row) row.style.display = 'none';
+    } else {
+      // Unresolve maintenance
+      const r = await fetch('/machine-planning/data/downtime/'+id+'/unresolve', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) { location.reload(); }
+      else { showToast('Error: ' + j.error, true); chk.checked = true; }
+    }
+  }
+}
+
+/* ── Submit breakdown resolve via date picker ─────────────────────────── */
+async function dtSubmitResolve(id) {
+  const end = (document.getElementById('dt-end-'+id)?.value || '').trim();
+  if (!end) { showToast('Select the last day down', true); return; }
+  const r = await fetch('/machine-planning/data/downtime/'+id+'/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ end_date: end }),
+  });
+  const j = await r.json();
+  if (j.ok) {
+    showToast('Resolved — machine back in planning', false);
+    setTimeout(() => location.reload(), 700);
+  } else {
+    showToast('Error: ' + j.error, true);
+  }
+}
+
+/* ── Cancel resolve (hide date picker) ───────────────────────────────── */
+function dtCancelResolve(id) {
+  const row = document.getElementById('dt-end-row-'+id);
+  if (row) row.style.display = 'none';
+  const chk = document.getElementById('dt-chk-'+id);
+  if (chk) chk.checked = false;
+}
+
+/* ── Soft-delete ──────────────────────────────────────────────────────── */
+async function dtDelete(id) {
+  if (!confirm('Delete this record?\n\nIt is kept in the audit trail (visible under "Show deleted") and can be restored.')) return;
+  const r = await fetch('/machine-planning/data/downtime/'+id, { method: 'DELETE' });
+  const j = await r.json();
+  if (j.ok) { location.reload(); }
+  else { showToast('Error: ' + j.error, true); }
+}
+
+/* ── Restore soft-deleted record ──────────────────────────────────────── */
+async function dtRestore(id) {
+  const r = await fetch('/machine-planning/data/downtime/'+id+'/restore', { method: 'POST' });
+  const j = await r.json();
+  if (j.ok) { location.reload(); }
+  else { showToast('Error: ' + j.error, true); }
+}
+
+/* ── Toggle deleted rows visibility ──────────────────────────────────── */
+function dtToggleDeleted(kind, show) {
+  const cls = kind === 'breakdown' ? 'bh-del-row' : 'mh-del-row';
+  document.querySelectorAll('.' + cls).forEach(row => {
+    row.style.display = show ? '' : 'none';
+  });
+}
+
+/* ── Filter history tables ────────────────────────────────────────────── */
+function dtFilterHist(kind) {
+  const tableId = kind === 'breakdown' ? 'bh-table' : 'mh-table';
+  const statusId = kind === 'breakdown' ? 'bh-status' : 'mh-status';
+  const rowCls   = kind === 'breakdown' ? 'bh-row' : 'mh-row';
+  const delCls   = kind === 'breakdown' ? 'bh-del-row' : 'mh-del-row';
+  const status = (document.getElementById(statusId)?.value || '');
+  document.querySelectorAll('#'+tableId+' .'+rowCls+':not(.'+delCls+')').forEach(row => {
+    const match = !status || row.dataset.status === status;
+    row.style.display = match ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

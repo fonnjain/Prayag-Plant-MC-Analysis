@@ -552,6 +552,23 @@ def read_values(file_id: str, tab: str, token: str) -> List[list]:
     return _api_get(url, token).get("values", []) or []
 
 
+def get_raw_values(file_id: str, tab: str) -> List[list]:
+    """Read raw cell values from a specific tab using the internal auth token.
+
+    Wraps ``read_values`` with error handling.  Returns ``[]`` if the tab
+    cannot be read (network error, tab absent, token unavailable).  Intended
+    for modules (e.g. mp_rejection) that need raw sheet access without
+    managing the token themselves.
+    """
+    try:
+        tok = _get_access_token()
+        if not tok:
+            return []
+        return read_values(file_id, tab, tok) or []
+    except Exception:
+        return []
+
+
 def drive_file_meta(file_id: str, token: str) -> dict:
     """Fetch file metadata (modifiedTime, size, name) via Drive API v3.
 

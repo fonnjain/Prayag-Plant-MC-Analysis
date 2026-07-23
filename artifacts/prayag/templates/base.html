@@ -392,10 +392,10 @@
 
     {% elif _in_planning %}
       {# Machine Planning section #}
-      {{ _nb('/', 'Home', _i_home, false) }}
       {{ _nb('/machine-planning', 'Planning', _i_plan, _path == '/machine-planning') }}
       {{ _nb('/machine-planning/upload', 'Upload', _i_upload, _path.startswith('/machine-planning/upload') or _path.startswith('/machine-planning/results')) }}
       {{ _nb('/machine-planning/data', 'Data', _i_data, _path.startswith('/machine-planning/data')) }}
+      {{ _nb('/machine-planning/settings', 'Settings', _i_mach, _path.startswith('/machine-planning/settings')) }}
       {{ _nb('/machine-planning/runs', 'Runs', _i_runs, _path.startswith('/machine-planning/runs') or _path.startswith('/machine-planning/report') or _path.startswith('/machine-planning/freeze')) }}
 
     {% elif _in_costing %}
