@@ -36,15 +36,28 @@ def _r11_vals(data_rows):
     return [R11_HEADER] + data_rows
 
 
-# R12: Report-12 moulding production journal
+# R12: Report-12 moulding/fitting production journal — FY2025-26 layout
+# (header-text-based parser; item column required for row identification)
 R12_HEADER = [
-    "DATE", "MOULDING MACHINE", "Pcs", "WT IN KGS", "ACTUAL REJECTION WEIGHT"
+    "DATE", "MOULDING MACHINE", "Item", "Material",
+    "Weight of Total Production",
+    "Actual Rejection Weight (in Kgs)",
 ]
 
+# FY2026-27 layout: extra "SAP Code" shifts columns; sub-header row added below header
+R12_HEADER_FY27 = [
+    "DATE", "MOULDING MACHINE", "Item Code", "SAP Code", "Material",
+    "Weight of Total Production",
+    "Actual Rejection Weight (in Kgs)",
+]
 
-def _r12_row(date, mc, pcs, wt, rej_wt):
-    return [date, mc, str(pcs), str(wt), str(rej_wt)]
+# Row for FY2025-26 fixture: (date, mc, wt, rej, item="ITEM001", mat="CPVC")
+def _r12_row(date, mc, wt, rej_wt, item="ITEM001", mat="CPVC"):
+    return [date, mc, item, mat, str(wt), str(rej_wt)]
 
+# Row for FY2026-27 fixture: one extra column (SAP Code) after Item Code
+def _r12_row_fy27(date, mc, wt, rej_wt, item="ITEM001", sap="SAP001", mat="CPVC"):
+    return [date, mc, item, sap, mat, str(wt), str(rej_wt)]
 
 def _r12_vals(data_rows):
     return [R12_HEADER] + data_rows
@@ -176,9 +189,9 @@ class TestParseR12Stats(unittest.TestCase):
 
     def test_basic_aggregation(self):
         rows = [
-            _r12_row(_DATE,  "MOULDING MACHINE 1", 10, 200, 2),
-            _r12_row(_DATE2, "MOULDING MACHINE 1", 10, 300, 3),
-            _r12_row(_DATE,  "MOULDING MACHINE 2",  5, 100, 1),
+            _r12_row(_DATE,  "MOULDING MACHINE 1", 200, 2),
+            _r12_row(_DATE2, "MOULDING MACHINE 1", 300, 3),
+            _r12_row(_DATE,  "MOULDING MACHINE 2", 100, 1),
         ]
         out, rej_val, _ = rej._parse_r12_stats(_r12_vals(rows), "2026-04")
         self.assertAlmostEqual(out, 600.0)
@@ -186,22 +199,22 @@ class TestParseR12Stats(unittest.TestCase):
 
     def test_zero_rows_skipped(self):
         rows = [
-            _r12_row(_DATE,  "MOULDING MACHINE 1", 0, 0, 0),
-            _r12_row(_DATE2, "MOULDING MACHINE 1", 5, 100, 1),
+            _r12_row(_DATE,  "MOULDING MACHINE 1", 0, 0),
+            _r12_row(_DATE2, "MOULDING MACHINE 1", 100, 1),
         ]
         out, rej_val, _ = rej._parse_r12_stats(_r12_vals(rows), "2026-04")
         self.assertAlmostEqual(out, 100.0)
         self.assertAlmostEqual(rej_val, 1.0)
 
     def test_rejection_rate(self):
-        rows = [_r12_row(_DATE, "MOULDING MACHINE 1", 100, 1000, 10)]
+        rows = [_r12_row(_DATE, "MOULDING MACHINE 1", 1000, 10)]
         out, rej_val, _ = rej._parse_r12_stats(_r12_vals(rows), "2026-04")
         self.assertAlmostEqual(rej_val / out * 100, 1.0, places=5)
 
     def test_non_date_rows_skipped(self):
         rows = [
-            ["TOTAL", "MOULDING MACHINE 1", "999", "9000", "90"],
-            _r12_row(_DATE, "MOULDING MACHINE 1", 10, 200, 2),
+            ["TOTAL", "MOULDING MACHINE 1", "ITEM001", "CPVC", "9000", "90"],
+            _r12_row(_DATE, "MOULDING MACHINE 1", 200, 2),
         ]
         out, _, _ = rej._parse_r12_stats(_r12_vals(rows), "2026-04")
         self.assertAlmostEqual(out, 200.0)
@@ -326,6 +339,219 @@ class TestRecomputeRejection(unittest.TestCase):
             result = rej.recompute_rejection("PLUMBING")
         self.assertEqual(result["pipe_months"], 0)
         self.assertEqual(result["fitting_months"], 0)
+
+
+# ─── _parse_r12_stats — layout-specific (FY2025-26 and FY2026-27) ─────────────
+
+class TestParseR12StatsLayouts(unittest.TestCase):
+    """Verify header-text-based column detection across both financial-year layouts.
+
+    FY2025-26  Item col = "Item"       prod col = L ("Weight of Total Production")
+               rej col  = Y ("Actual Rejection Weight (in Kgs)")
+    FY2026-27  Item col = "Item Code"  SAP Code shifts cols right by one
+               prod col = M ("Weight of Total Production")
+               rej col  = Z ("Actual Rejection Weight (in Kgs)")
+               Sub-header at row 5 has no valid date → skipped automatically
+    """
+
+    # ── FY2025-26 ──────────────────────────────────────────────────────────
+
+    def _fy26_values(self, data_rows, include_ideal=False):
+        """Build a minimal FY2025-26 R12 sheet with optional Ideal Rejection col."""
+        if include_ideal:
+            hdr = [
+                "DATE", "MOULDING MACHINE", "Item", "Material",
+                "Weight of Total Production",
+                "Ideal Rejection Weight (in Kgs)",
+                "Actual Rejection Weight (in Kgs)",
+            ]
+            data = [row[:6] + [row[6]] for row in data_rows]
+        else:
+            hdr = R12_HEADER  # DATE, MOULDING MACHINE, Item, Material, WtOfTotProd, ActRej
+            data = data_rows
+        preamble = [
+            ["", "REPORT 12 — MOULDING PRODUCTION"],
+            [],
+            ["", "For the Month of April 2025"],
+            [],
+        ]
+        return preamble + [hdr] + data
+
+    def test_fy26_layout_basic(self):
+        """FY2025-26: finds correct production and rejection totals."""
+        values = self._fy26_values([
+            _r12_row(_DATE,  "MC-1", 500, 5,  item="FIT001", mat="CPVC"),
+            _r12_row(_DATE,  "MC-1", 300, 3,  item="FIT002", mat="UPVC"),
+            _r12_row(_DATE2, "MC-1", 200, 2,  item="FIT001", mat="CPVC"),
+        ])
+        out, rej_val, by_mat = rej._parse_r12_stats(values, "2025-04")
+        self.assertAlmostEqual(out, 1000.0)
+        self.assertAlmostEqual(rej_val, 10.0)
+        self.assertAlmostEqual(by_mat["CPVC"]["out"], 700.0)
+        self.assertAlmostEqual(by_mat["UPVC"]["rej"],   3.0)
+
+    def test_fy26_item_col_is_item_not_item_code(self):
+        """FY2025-26: header 'Item' (not 'Item Code') is detected as the item column."""
+        values = self._fy26_values([
+            _r12_row(_DATE, "MC-1", 400, 4, item="FIT003", mat="SWR"),
+        ])
+        out, rej_val, _ = rej._parse_r12_stats(values, "2025-06")
+        self.assertAlmostEqual(out, 400.0)
+        self.assertAlmostEqual(rej_val, 4.0)
+
+    def test_fy26_total_rows_skipped(self):
+        """Rows where item is 'TOTAL' or 'GRAND TOTAL' are not counted."""
+        values = self._fy26_values([
+            _r12_row(_DATE,  "MC-1",    500, 5, item="FIT001", mat="CPVC"),
+            _r12_row(_DATE,  "MC-1",  9_000, 90, item="TOTAL",  mat=""),
+            _r12_row(_DATE,  "MC-1", 15_000, 150, item="GRAND TOTAL", mat=""),
+        ])
+        out, rej_val, _ = rej._parse_r12_stats(values, "2025-04")
+        self.assertAlmostEqual(out, 500.0)
+        self.assertAlmostEqual(rej_val, 5.0)
+
+    def test_fy26_ideal_rejection_not_used(self):
+        """The 'Ideal Rejection Weight' column is NEVER used; only 'Actual Rejection'."""
+        # Header has both Ideal and Actual columns; Ideal has huge values.
+        hdr_with_ideal = [
+            "DATE", "MOULDING MACHINE", "Item", "Material",
+            "Weight of Total Production",
+            "Ideal Rejection Weight (in Kgs)",   # col 5 — must NOT be used
+            "Actual Rejection Weight (in Kgs)",  # col 6 — must be used
+        ]
+        data_row = [_DATE, "MC-1", "FIT001", "CPVC", "1000", "999", "7"]
+        values = [hdr_with_ideal, data_row]
+        out, rej_val, _ = rej._parse_r12_stats(values, "2025-04")
+        self.assertAlmostEqual(out, 1000.0)
+        # Ideal rej = 999; actual rej = 7 — parser must pick 7
+        self.assertAlmostEqual(rej_val, 7.0, msg="Parser used 'Ideal Rejection' instead of 'Actual'")
+
+    def test_fy26_by_material_breakdown(self):
+        """Material breakdown is correct across CPVC / UPVC / SWR / AGRI."""
+        rows = [
+            _r12_row(_DATE, "MC-1", 1000, 8,  item="F1", mat="CPVC"),
+            _r12_row(_DATE, "MC-1",  800, 9,  item="F2", mat="UPVC"),
+            _r12_row(_DATE, "MC-2",  600, 7,  item="F3", mat="SWR"),
+            _r12_row(_DATE, "MC-2",  400, 5,  item="F4", mat="AGRI"),
+        ]
+        values = self._fy26_values(rows)
+        _, _, by_mat = rej._parse_r12_stats(values, "2025-05")
+        for mat in ("CPVC", "UPVC", "SWR", "AGRI"):
+            self.assertIn(mat, by_mat, msg=f"{mat} missing from material breakdown")
+        self.assertAlmostEqual(by_mat["CPVC"]["out"], 1000.0)
+        self.assertAlmostEqual(by_mat["AGRI"]["rej"],    5.0)
+
+    # ── FY2026-27 ──────────────────────────────────────────────────────────
+
+    def _fy27_values(self, data_rows):
+        """Build a minimal FY2026-27 R12 sheet with sub-header row after the main header."""
+        # Main header row (row 4 in real sheet)
+        header = R12_HEADER_FY27  # includes "Item Code" and "SAP Code"
+        # Sub-header row (row 5 in real sheet) — date cell is a label, not a date
+        sub_header = ["Output Production", "Wt in Kgs", "", "", "", "", ""]
+        preamble = [
+            ["", "REPORT 12 — MOULDING PRODUCTION"],
+            [],
+            ["", "For the Month of April 2026"],
+            [],
+        ]
+        return preamble + [header, sub_header] + data_rows
+
+    def test_fy27_layout_sub_header_skipped(self):
+        """FY2026-27: sub-header row (row 5) has no valid date and is skipped."""
+        values = self._fy27_values([
+            _r12_row_fy27(_DATE,  "MC-1", 600, 6, item="FIT001", mat="CPVC"),
+            _r12_row_fy27(_DATE2, "MC-1", 400, 4, item="FIT002", mat="UPVC"),
+        ])
+        out, rej_val, by_mat = rej._parse_r12_stats(values, "2026-04")
+        self.assertAlmostEqual(out, 1000.0)
+        self.assertAlmostEqual(rej_val, 10.0)
+        self.assertIn("CPVC", by_mat)
+        self.assertIn("UPVC", by_mat)
+
+    def test_fy27_item_code_col_used(self):
+        """FY2026-27: 'Item Code' column is preferred over 'Item' for row detection."""
+        values = self._fy27_values([
+            _r12_row_fy27(_DATE, "MC-1", 800, 8, item="FIT010", sap="S001", mat="SWR"),
+        ])
+        out, rej_val, _ = rej._parse_r12_stats(values, "2026-05")
+        self.assertAlmostEqual(out, 800.0)
+        self.assertAlmostEqual(rej_val, 8.0)
+
+    def test_fy27_sap_code_not_used_as_item(self):
+        """FY2026-27: 'SAP Code' column must NOT be identified as the item column.
+
+        A row whose SAP Code is blank but Item Code is set must still be processed.
+        A row with both blank means no item → should be skipped.
+        """
+        values = self._fy27_values([
+            _r12_row_fy27(_DATE, "MC-1", 500, 5, item="FIT020", sap="", mat="AGRI"),
+            _r12_row_fy27(_DATE, "MC-1", 0,   0, item="",       sap="X", mat="AGRI"),
+        ])
+        out, rej_val, _ = rej._parse_r12_stats(values, "2026-06")
+        # Only first row counts (has Item Code); second row has blank Item Code → skip
+        self.assertAlmostEqual(out, 500.0)
+        self.assertAlmostEqual(rej_val, 5.0)
+
+    def test_fy27_weight_of_total_production_col_used(self):
+        """FY2026-27: 'Weight of Total Production' at col M is used, not 'Wt in Kgs' at col J."""
+        # Build a header where 'Wt in Kgs' appears BEFORE 'Weight of Total Production'
+        hdr = [
+            "DATE", "MOULDING MACHINE", "Item Code", "SAP Code", "Material",
+            "Wt in Kgs",                      # col 5 — sub-group header, must NOT be used
+            "Weight of Total Production",     # col 6 — correct production column
+            "Actual Rejection Weight (in Kgs)",  # col 7
+        ]
+        data_row = [_DATE, "MC-1", "FIT001", "SAP1", "CPVC", "9999", "1200", "12"]
+        values = [hdr, data_row]
+        out, rej_val, _ = rej._parse_r12_stats(values, "2026-04")
+        # "Wt in Kgs" = 9999; "Weight of Total Production" = 1200
+        self.assertAlmostEqual(out, 1200.0, msg="Parser used 'Wt in Kgs' instead of 'Weight of Total Production'")
+        self.assertAlmostEqual(rej_val, 12.0)
+
+    def test_fy27_ideal_rejection_not_used(self):
+        """FY2026-27: 'Ideal Rejection Weight' col is never used."""
+        hdr = [
+            "DATE", "MOULDING MACHINE", "Item Code", "SAP Code", "Material",
+            "Weight of Total Production",
+            "Ideal Rejection Weight (in Kgs)",  # must NOT be used
+            "Actual Rejection Weight (in Kgs)",
+        ]
+        data_row = [_DATE, "MC-1", "FIT001", "SAP1", "CPVC", "2000", "888", "15"]
+        values = [hdr, data_row]
+        out, rej_val, _ = rej._parse_r12_stats(values, "2026-05")
+        self.assertAlmostEqual(out, 2000.0)
+        self.assertAlmostEqual(rej_val, 15.0, msg="Parser used 'Ideal Rejection' instead of 'Actual'")
+
+    # ── Zero-month safeguard (feeds template warning) ──────────────────────
+
+    def test_recompute_returns_zero_fitting_months_when_r12_empty(self):
+        """When all R12 reads yield no data, fitting_months == 0 in the result dict.
+
+        This feeds the template warning banner so it must be accurate.
+        """
+        with patch.object(rej.store, "AVAILABLE", False), \
+             patch("sheets.get_raw_values", return_value=[]):
+            result = rej.recompute_rejection("PLUMBING")
+        self.assertEqual(result["fitting_months"], 0,
+                         "fitting_months must be 0 when R12 yields no rows")
+
+    def test_recompute_returns_positive_fitting_months_when_r12_has_data(self):
+        """When R12 yields data for at least one workbook, fitting_months > 0."""
+        # Build a minimal valid R12 sheet
+        r12_sheet = [R12_HEADER,
+                     _r12_row(_DATE, "MC-1", 500, 5, item="FIT001", mat="CPVC")]
+
+        def _mock_raw(file_id, tab_name):
+            if tab_name == "Report-12":
+                return r12_sheet
+            return []  # R11 returns nothing → pipe_months stays 0
+
+        with patch.object(rej.store, "AVAILABLE", False), \
+             patch("sheets.get_raw_values", side_effect=_mock_raw):
+            result = rej.recompute_rejection("PLUMBING")
+        self.assertGreater(result["fitting_months"], 0,
+                           "fitting_months must be > 0 when R12 has data rows")
 
 
 if __name__ == "__main__":

@@ -143,75 +143,101 @@ def _parse_r11_by_type(values: list, year_month: str) -> Dict[str, Dict[str, flo
 def _parse_r12_stats(
     values: list, year_month: str
 ) -> Tuple[float, float, Dict[str, Dict[str, float]]]:
-    """Parse Report-12 rows → ``(total_out, total_rej, {material: {out, rej}})``.
+    """Parse Report-12 → ``(total_out, total_rej, {material: {out, rej}})``.
 
-    Aggregates all MOULDING MACHINE rows.  If a material/type column is
-    detected between the machine column and the output column it is used to
-    produce a per-material breakdown; otherwise ``by_material`` is empty.
+    Handles BOTH FY layouts by locating columns via header text — never fixed
+    column indices.  Layout differences:
+
+    FY2025-26  header row 4, data row 5
+        C = "Item"  ·  L = "Weight of Total Production"  ·  Y = "Actual Rejection Weight…"
+    FY2026-27  header row 4, sub-headers row 5, data row 6
+        C = "Item Code"  ·  D = "SAP Code"  ·  M = "Weight of Total Production"
+        Z = "Actual Rejection Weight…"   (J = "Wt in Kgs" is NOT used)
+
+    Production column: header must contain "WEIGHT OF TOTAL PRODUCTION".
+        – Do NOT match "WEIGHT PER PC", "RUNNER" or "WT IN KGS".
+    Rejection column:  header must contain "ACTUAL REJECTION".
+        – Do NOT match "IDEAL REJECTION WEIGHT" — the "ACTUAL" requirement
+          already excludes it.
+    Item column: header exactly "ITEM CODE" (preferred) or exactly "ITEM".
+        – Do NOT match "SAP CODE".
+
+    The sub-header row in FY2026-27 has no valid date in its date cell, so
+    ``_long_date_day`` returns None and it is skipped automatically.
     """
     if not values:
         return 0.0, 0.0, {}
 
-    _MC_SPEC  = ("startswith", "MOULDING MACHI")
-    _OUT_SPEC = ("contains", "WT IN KGS")
-    _REJ_SPEC = ("contains", "ACTUAL REJECTION")
-    _DATE_SPEC = ("eq", "DATE")
+    _H_DATE      = ("eq",       "DATE")
+    _H_ITEM_CODE = ("eq",       "ITEM CODE")
+    _H_ITEM      = ("eq",       "ITEM")
+    _H_PROD      = ("contains", "WEIGHT OF TOTAL PRODUCTION")
+    # "ACTUAL REJECTION" matches "Actual Rejection Weight (in Kgs)"
+    # but NOT "Ideal Rejection Weight (in Kgs)" — the ACTUAL prefix is the guard.
+    _H_REJ       = ("contains", "ACTUAL REJECTION")
+    _H_MAT       = ("contains", "MATERIAL")
 
-    header_idx = -1
-    date_c = -1
-    for i, row in enumerate(values[:20]):
-        for c, val in enumerate(row):
-            if _parsers._match_header(val, _DATE_SPEC):
-                header_idx, date_c = i, c
-                break
-        if header_idx >= 0:
+    # ── Locate header row: must contain DATE + (ITEM CODE or ITEM) ────────
+    hdr = -1
+    for i, row in enumerate(values[:12]):
+        has_date = any(_parsers._match_header(c, _H_DATE) for c in row)
+        has_item = any(
+            _parsers._match_header(c, _H_ITEM_CODE) or _parsers._match_header(c, _H_ITEM)
+            for c in row
+        )
+        if has_date and has_item:
+            hdr = i
             break
-    if header_idx < 0:
+    if hdr < 0:
         return 0.0, 0.0, {}
 
-    def find_col(spec: tuple) -> int:
-        for c, val in enumerate(values[header_idx]):
+    band = values[hdr]
+
+    def _find(spec: tuple) -> int:
+        for c, val in enumerate(band):
             if _parsers._match_header(val, spec):
                 return c
         return -1
 
-    mc_c  = find_col(_MC_SPEC)
-    out_c = find_col(_OUT_SPEC)
-    rej_c = find_col(_REJ_SPEC)
+    date_c = _find(_H_DATE)
+    prod_c = _find(_H_PROD)
+    rej_c  = _find(_H_REJ)
+    mat_c  = _find(_H_MAT)
 
-    if mc_c < 0 or out_c < 0:
+    # Item column: "ITEM CODE" preferred (FY2026-27); fall back to "ITEM" (FY2025-26)
+    item_c = _find(_H_ITEM_CODE)
+    if item_c < 0:
+        item_c = _find(_H_ITEM)
+
+    if date_c < 0 or prod_c < 0:
         return 0.0, 0.0, {}
 
-    mat_c = -1
-    for mat_spec in [("eq", "TYPES"), ("eq", "TYPE"), ("eq", "MATERIAL"),
-                     ("eq", "MATL"), ("contains", "TYPE")]:
-        c = find_col(mat_spec)
-        if 0 <= c != mc_c and c != out_c:
-            mat_c = c
-            break
-
-    total_out = 0.0
-    total_rej = 0.0
+    total_out    = 0.0
+    total_rej    = 0.0
     by_material: Dict[str, Dict[str, float]] = {}
 
-    carry_mc = ""
-    for row in values[header_idx + 1:]:
+    for row in values[hdr + 1:]:
         if not row:
             continue
+        # Date must parse — skips sub-header rows (e.g. the FY2026-27 row 5
+        # whose date cell contains a group label, not a date).
         day = _parsers._long_date_day(row[date_c] if date_c < len(row) else "")
         if day is None:
             continue
-        mc = str(row[mc_c]).strip() if mc_c < len(row) else ""
-        if mc:
-            carry_mc = mc
-        if not carry_mc or "TOTAL" in carry_mc.upper():
+        # Skip blank or total item rows
+        item   = str(row[item_c]).strip() if 0 <= item_c < len(row) else ""
+        item_u = item.upper()
+        if not item or "TOTAL" in item_u or "GRAND" in item_u:
             continue
-        out = _parsers.num(row[out_c]) if 0 <= out_c < len(row) else 0.0
-        rej = _parsers.num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
+
+        out = _parsers.num(row[prod_c]) if 0 <= prod_c < len(row) else 0.0
+        rej = _parsers.num(row[rej_c])  if 0 <= rej_c  < len(row) else 0.0
         if out <= 0 and rej <= 0:
             continue
+
         total_out += out
         total_rej += rej
+
         if mat_c >= 0:
             mat = str(row[mat_c]).strip().upper() if mat_c < len(row) else ""
             if mat and "TOTAL" not in mat:

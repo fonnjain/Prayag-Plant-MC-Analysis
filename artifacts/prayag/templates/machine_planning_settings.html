@@ -103,6 +103,26 @@
     <button class="action-btn btn-secondary" id="rej-btn" onclick="doRecompute()">⟳ Recompute</button>
   </div>
   <div class="section-body" style="padding:.5rem .75rem;">
+    {# ── Warning when one type is entirely missing ───────────────────────── #}
+    {% if rej_meta and rej_meta.fitting_months == 0 and rej_meta.pipe_months > 0 %}
+    <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.4rem;padding:.5rem .75rem;margin-bottom:.6rem;font-size:.78rem;display:flex;align-items:flex-start;gap:.5rem;">
+      <span style="font-size:1rem;flex-shrink:0;">⚠️</span>
+      <div>
+        <strong>Fittings not captured</strong> — the overall figure covers <em>pipes only</em>.
+        Click <strong>Recompute</strong> to re-read Report-12 from all workbooks.
+        If fitting months remains 0 after recomputing, the Report-12 tab header layout
+        may have changed; check the first workbook manually.
+      </div>
+    </div>
+    {% elif rej_meta and rej_meta.pipe_months == 0 and rej_meta.fitting_months > 0 %}
+    <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.4rem;padding:.5rem .75rem;margin-bottom:.6rem;font-size:.78rem;display:flex;align-items:flex-start;gap:.5rem;">
+      <span style="font-size:1rem;flex-shrink:0;">⚠️</span>
+      <div>
+        <strong>Pipes not captured</strong> — the overall figure covers <em>fittings only</em>.
+        Click <strong>Recompute</strong> to re-read Report-11 from all workbooks.
+      </div>
+    </div>
+    {% endif %}
     {% if rej_summary %}
     <table class="tbl">
       <thead>
@@ -164,12 +184,19 @@
           <td class="num">—</td>
         </tr>
         {% endif %}
-        {# Overall total #}
+        {# Overall total — label reflects what is actually included #}
         {% set all_prod = ns.pipe_prod + ns.fit_prod %}
         {% set all_rej  = ns.pipe_rej  + ns.fit_rej  %}
+        {% set fit_months_ok = rej_meta and rej_meta.fitting_months > 0 %}
+        {% set pipe_months_ok = rej_meta and rej_meta.pipe_months > 0 %}
         {% if all_prod > 0 %}
         <tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #94a3b8;">
-          <td colspan="2" style="font-size:.78rem;">Overall — Plumbing</td>
+          <td colspan="2" style="font-size:.78rem;">
+            {% if fit_months_ok and pipe_months_ok %}Overall — Plumbing
+            {% elif pipe_months_ok %}Overall — Pipes only ⚠️
+            {% elif fit_months_ok %}Overall — Fittings only ⚠️
+            {% else %}Overall{% endif %}
+          </td>
           <td class="num">{{ "{:,.0f}".format(all_prod) }}</td>
           <td class="num">{{ "{:,.0f}".format(all_rej) }}</td>
           <td class="num" style="color:var(--terra);">{{ "{:.2f}%".format(all_rej/all_prod*100) }}</td>
