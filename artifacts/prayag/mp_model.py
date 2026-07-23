@@ -184,6 +184,8 @@ class MpMachineDowntime:
     reason: str = ""
     resolved: bool = False                          # True once "back in planning" ticked
     resolved_at: Optional[datetime.datetime] = None # when the checkbox was ticked
+    deleted: bool = False                           # soft-deleted (wrong entry); hidden from UI
+    deleted_at: Optional[datetime.datetime] = None  # when the record was soft-deleted
     id: Optional[int] = None
     created_at: Optional[datetime.datetime] = None
     updated_at: Optional[datetime.datetime] = None
@@ -361,6 +363,8 @@ CREATE TABLE IF NOT EXISTS mp_machine_downtime (
     reason      TEXT        NOT NULL DEFAULT '',
     resolved    BOOLEAN     NOT NULL DEFAULT false,
     resolved_at TIMESTAMPTZ,
+    deleted     BOOLEAN     NOT NULL DEFAULT false,
+    deleted_at  TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -390,6 +394,8 @@ ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS hours_dev_pct  NUMERIC NOT NULL
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved    BOOLEAN     NOT NULL DEFAULT false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS mp_machine_downtime_resolved ON mp_machine_downtime (segment, resolved) WHERE resolved = false;
+ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted     BOOLEAN     NOT NULL DEFAULT false;
+ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted_at  TIMESTAMPTZ;
 """
 
 # Backfill: old records closed via close_downtime have end_date set but resolved=false.
@@ -1280,12 +1286,14 @@ def insert_downtime(record: MpMachineDowntime) -> int:
                 )
             cur.execute(
                 """INSERT INTO mp_machine_downtime
-                       (segment, machine, kind, start_date, end_date, reason, resolved, resolved_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                       (segment, machine, kind, start_date, end_date, reason,
+                        resolved, resolved_at, deleted, deleted_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    RETURNING id""",
                 (record.segment, record.machine, record.kind,
                  record.start_date, record.end_date, record.reason or "",
-                 record.resolved, record.resolved_at),
+                 record.resolved, record.resolved_at,
+                 record.deleted, record.deleted_at),
             )
             return cur.fetchone()[0]
     except DowntimeValidationError:
@@ -1353,13 +1361,48 @@ def close_downtime(record_id: int, end_date: datetime.date) -> bool:
 
 
 def delete_downtime(record_id: int) -> bool:
-    """DEPRECATED — records are never deleted; kept for test isolation only.
+    """Soft-delete a downtime record (sets deleted=true, deleted_at=now).
 
-    Returns False always (no-op) to enforce append-only semantics.
-    Test suites that need a clean slate should use a dedicated test DB schema
-    or insert records with a test-scoped segment name.
+    The row is preserved in the DB for audit but excluded from all calculations:
+    machine availability, capacity math, follow-up suppression, and UI panels.
+    Returns True if a row was updated; False if not found or already deleted.
+    Use restore_downtime() to undo.
     """
-    return False
+    if not AVAILABLE:
+        return False
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE mp_machine_downtime
+                   SET deleted=true, deleted_at=now(), updated_at=now()
+                   WHERE id=%s AND NOT deleted""",
+                (record_id,),
+            )
+            return cur.rowcount > 0
+    except Exception as e:
+        raise MpModelError(f"delete_downtime: {e}") from e
+
+
+def restore_downtime(record_id: int) -> bool:
+    """Undo a soft delete — re-activates the downtime record in all calculations.
+
+    Returns True if a row was updated; False if not found or not currently deleted.
+    """
+    if not AVAILABLE:
+        return False
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE mp_machine_downtime
+                   SET deleted=false, deleted_at=NULL, updated_at=now()
+                   WHERE id=%s AND deleted""",
+                (record_id,),
+            )
+            return cur.rowcount > 0
+    except Exception as e:
+        raise MpModelError(f"restore_downtime: {e}") from e
 
 
 def count_downtime_records(segment: str) -> int:
@@ -1382,9 +1425,12 @@ def get_downtime_records(
     machine: Optional[str] = None,
     kind: Optional[str] = None,
     only_open: bool = False,
+    include_deleted: bool = False,
 ) -> List[dict]:
-    """Return ALL downtime records for the segment (open and closed), permanently retained.
+    """Return downtime records for the segment (permanently retained).
 
+    By default excludes soft-deleted records.  Pass include_deleted=True to
+    retrieve everything (e.g. for the "Show deleted" history toggle).
     Open records (resolved=false) are pinned first, then sorted by start_date DESC.
     Each returned dict also carries a computed 'days_down' int (inclusive).
     """
@@ -1403,6 +1449,8 @@ def get_downtime_records(
                 clauses.append("kind=%s"); params.append(kind)
             if only_open:
                 clauses.append("resolved=false")
+            if not include_deleted:
+                clauses.append("NOT deleted")
             cur.execute(
                 f"SELECT * FROM mp_machine_downtime WHERE {' AND '.join(clauses)} "
                 f"ORDER BY resolved ASC, start_date DESC, id DESC",
@@ -1444,6 +1492,7 @@ def get_downtime_affecting_month(segment: str, month: str) -> List[dict]:
             cur.execute(
                 """SELECT * FROM mp_machine_downtime
                    WHERE segment=%s
+                     AND NOT deleted
                      AND start_date <= %s
                      AND (end_date IS NULL OR end_date >= %s)
                    ORDER BY start_date""",
@@ -1459,8 +1508,13 @@ def machine_down_on_date(
     date: datetime.date,
     downtime_records: List[dict],
 ) -> bool:
-    """Pure helper: return True if *machine* is down on *date* per the records list."""
+    """Pure helper: return True if *machine* is down on *date* per the records list.
+
+    Soft-deleted records (deleted=True) are always skipped.
+    """
     for rec in downtime_records:
+        if rec.get("deleted", False):
+            continue
         if rec.get("machine") != machine:
             continue
         sd = rec.get("start_date")

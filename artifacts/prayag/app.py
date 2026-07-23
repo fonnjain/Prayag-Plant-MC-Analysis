@@ -4842,7 +4842,9 @@ def mp_data_view():
 
     if tab != "plumbing":
         import datetime as _dt_now2
-        _all_dt  = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
+        _all_incl  = _mp_model.get_downtime_records(_MP_SEGMENT, include_deleted=True) if _mp_model.AVAILABLE else []
+        _all_dt    = [r for r in _all_incl if not r.get("deleted", False)]
+        _del_dt    = [r for r in _all_incl if r.get("deleted", False)]
         _dt_open   = [r for r in _all_dt if not r.get("resolved", False)]
         _dt_closed = [r for r in _all_dt if r.get("resolved", False)]
         return render_template(
@@ -4863,6 +4865,7 @@ def mp_data_view():
             downtime_open=_dt_open,
             downtime_closed=_dt_closed,
             all_downtime_records=_all_dt,
+            deleted_downtime_records=_del_dt,
             all_machine_names=_ALL_PIPE_MACHINES,
             today_iso=_dt_now2.date.today().isoformat(),
         )
@@ -4923,9 +4926,11 @@ def mp_data_view():
     for m in fitting_machines_data:
         m["capacity_hrs_month"] = float(m.get("capacity_hrs_month") or 500)
 
-    # Load ALL downtime records (permanently retained, open + closed)
+    # Load ALL downtime records (including soft-deleted for "Show deleted" toggle)
     import datetime as _dt_now
-    downtime_records = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
+    _all_dt_incl = _mp_model.get_downtime_records(_MP_SEGMENT, include_deleted=True) if _mp_model.AVAILABLE else []
+    downtime_records        = [r for r in _all_dt_incl if not r.get("deleted", False)]
+    deleted_downtime_records = [r for r in _all_dt_incl if r.get("deleted", False)]
     downtime_open   = [r for r in downtime_records if not r.get("resolved", False)]
     downtime_closed = [r for r in downtime_records if r.get("resolved", False)]
     today_iso = _dt_now.date.today().isoformat()
@@ -4965,6 +4970,7 @@ def mp_data_view():
         downtime_open=downtime_open,
         downtime_closed=downtime_closed,
         all_downtime_records=downtime_records,
+        deleted_downtime_records=deleted_downtime_records,
         all_machine_names=all_machine_names,
         today_iso=today_iso,
     )
@@ -5089,11 +5095,35 @@ def mp_downtime_unresolve(rec_id: int):
 
 @app.route("/machine-planning/data/downtime/<int:rec_id>", methods=["DELETE"])
 def mp_downtime_delete(rec_id: int):
-    """Downtime records are permanently retained — DELETE is not permitted."""
-    return jsonify({
-        "ok": False,
-        "error": "Downtime records are permanent history and cannot be deleted.",
-    }), 405
+    """Soft-delete a downtime record.
+
+    Sets deleted=true + deleted_at=now in the DB; the row is retained for audit
+    but excluded from all capacity, availability, and follow-up calculations.
+    Use POST /<id>/restore to undo.
+    """
+    _mp_model.init_mp_tables()
+    try:
+        deleted = _mp_model.delete_downtime(rec_id)
+        if not deleted:
+            return jsonify({"ok": False, "error": "Record not found or already deleted"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        app.logger.error("mp_downtime_delete %d: %s", rec_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/downtime/<int:rec_id>/restore", methods=["POST"])
+def mp_downtime_restore(rec_id: int):
+    """Restore a soft-deleted downtime record — re-activates it in all calculations."""
+    _mp_model.init_mp_tables()
+    try:
+        restored = _mp_model.restore_downtime(rec_id)
+        if not restored:
+            return jsonify({"ok": False, "error": "Record not found or not deleted"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        app.logger.error("mp_downtime_restore %d: %s", rec_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ── Save endpoints (return JSON) ────────────────────────────────────────────

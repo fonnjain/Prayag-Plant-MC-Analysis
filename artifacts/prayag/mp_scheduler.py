@@ -299,6 +299,8 @@ def _build_down_days(
 
     down: Dict[str, Set[int]] = defaultdict(set)
     for rec in downtime_records:
+        if rec.get("deleted", False):
+            continue   # soft-deleted records never block capacity
         mc = str(rec.get("machine") or "")
         if mc not in mc_params:
             continue

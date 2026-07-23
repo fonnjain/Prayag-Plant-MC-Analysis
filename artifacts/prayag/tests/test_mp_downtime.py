@@ -100,21 +100,51 @@ class TestInsertDowntimeValidation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# delete_downtime is a no-op (records are never deleted)
+# Soft delete — delete_downtime is now a soft delete, not a hard removal
 # ---------------------------------------------------------------------------
 
-class TestDeleteDowntimeNoOp(unittest.TestCase):
+class TestSoftDelete(unittest.TestCase):
 
-    def test_delete_returns_false(self):
-        """delete_downtime must be a no-op — records are permanently retained."""
+    def test_soft_delete_without_db_returns_false(self):
+        """When DB is unavailable, delete_downtime returns False gracefully."""
         result = _mm.delete_downtime(9999)
-        self.assertFalse(result)
+        self.assertFalse(result)   # AVAILABLE=False in unit tests without DB
 
-    def test_delete_does_not_raise(self):
+    def test_soft_delete_does_not_raise(self):
         try:
             _mm.delete_downtime(1)
         except Exception as e:
             self.fail(f"delete_downtime raised unexpectedly: {e}")
+
+    def test_restore_without_db_returns_false(self):
+        """When DB is unavailable, restore_downtime returns False gracefully."""
+        result = _mm.restore_downtime(9999)
+        self.assertFalse(result)
+
+    def test_restore_does_not_raise(self):
+        try:
+            _mm.restore_downtime(1)
+        except Exception as e:
+            self.fail(f"restore_downtime raised unexpectedly: {e}")
+
+    def test_dataclass_deleted_default_false(self):
+        rec = _mm.MpMachineDowntime(
+            segment="PLUMBING", machine="M/C-1", kind="breakdown",
+            start_date=datetime.date(2026, 7, 1),
+        )
+        self.assertFalse(rec.deleted)
+        self.assertIsNone(rec.deleted_at)
+
+    def test_dataclass_can_be_marked_deleted(self):
+        import datetime as _dt
+        rec = _mm.MpMachineDowntime(
+            segment="PLUMBING", machine="M/C-1", kind="breakdown",
+            start_date=datetime.date(2026, 7, 1),
+            deleted=True,
+            deleted_at=_dt.datetime(2026, 7, 15, 12, 0, 0),
+        )
+        self.assertTrue(rec.deleted)
+        self.assertIsNotNone(rec.deleted_at)
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +153,14 @@ class TestDeleteDowntimeNoOp(unittest.TestCase):
 
 class TestMachineDownOnDate(unittest.TestCase):
 
-    def _recs(self, sd_str, ed_str=None, resolved=False):
+    def _recs(self, sd_str, ed_str=None, resolved=False, deleted=False):
         return [{
             "machine": "M/C-1",
             "kind": "breakdown",
             "start_date": datetime.date.fromisoformat(sd_str),
             "end_date": (datetime.date.fromisoformat(ed_str) if ed_str else None),
             "resolved": resolved,
+            "deleted": deleted,
             "reason": "",
         }]
 
@@ -173,9 +204,21 @@ class TestMachineDownOnDate(unittest.TestCase):
     def test_string_dates_still_parse(self):
         recs = [{"machine": "M/C-1", "kind": "breakdown",
                  "start_date": "2026-07-01", "end_date": "2026-07-31",
-                 "resolved": True, "reason": ""}]
+                 "resolved": True, "deleted": False, "reason": ""}]
         self.assertTrue(_mm.machine_down_on_date(
             "M/C-1", datetime.date(2026, 7, 15), recs))
+
+    def test_soft_deleted_record_skipped(self):
+        """A soft-deleted record must NOT mark the machine as down."""
+        recs = self._recs("2026-07-01", deleted=True)
+        self.assertFalse(_mm.machine_down_on_date(
+            "M/C-1", datetime.date(2026, 7, 15), recs))
+
+    def test_soft_deleted_record_does_not_block_alongside_active(self):
+        """Deleted record mixed with active record: active still blocks, deleted doesn't add."""
+        active  = self._recs("2026-07-01")[0]
+        deleted = {**self._recs("2026-07-01", "2026-07-10")[0], "deleted": True, "machine": "M/C-1"}
+        self.assertTrue(_mm.machine_down_on_date("M/C-1", datetime.date(2026, 7, 15), [active, deleted]))
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +293,10 @@ class TestBuildDownDays(unittest.TestCase):
     def _mc_params(self, machines=("M/C-1", "M/C-2")):
         return {mc: {"hours_per_shift": 10.0, "capacity_hrs_month": 500.0} for mc in machines}
 
-    def _recs(self, machine, sd_str, ed_str=None, resolved=False):
+    def _recs(self, machine, sd_str, ed_str=None, resolved=False, deleted=False):
         return [{
             "machine": machine, "kind": "breakdown", "resolved": resolved,
+            "deleted": deleted,
             "start_date": datetime.date.fromisoformat(sd_str),
             "end_date": (datetime.date.fromisoformat(ed_str) if ed_str else None),
             "reason": "",

@@ -906,6 +906,8 @@ def _generate_warnings(
     downtime_machine_norms: set = set()   # any machine with downtime in month
     if downtime_records and elapsed_plan_days > 0:
         for rec in downtime_records:
+            if rec.get("deleted", False):
+                continue   # soft-deleted records do not suppress warnings
             mc_raw = str(rec.get("machine") or "")
             mc_n   = norm_machine(mc_raw)
             sd = rec.get("start_date")
