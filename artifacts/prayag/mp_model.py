@@ -169,13 +169,21 @@ class MpActualLine:
 
 @dataclasses.dataclass
 class MpMachineDowntime:
-    """Planned or unplanned machine unavailability (breakdown or maintenance)."""
+    """Planned or unplanned machine unavailability (breakdown or maintenance).
+
+    Records are APPEND-ONLY and permanently retained.  Status lifecycle:
+      open   → resolved=False, end_date=None  (machine currently unavailable)
+      closed → resolved=True,  end_date set   (machine back in planning)
+    Un-ticking "back in planning" resets to open state.
+    """
     segment: str
     machine: str
     kind: str               # 'breakdown' | 'maintenance'
     start_date: datetime.date
-    end_date: Optional[datetime.date] = None   # None = machine CURRENTLY down
+    end_date: Optional[datetime.date] = None       # last day of downtime (inclusive); None = indefinite
     reason: str = ""
+    resolved: bool = False                          # True once "back in planning" ticked
+    resolved_at: Optional[datetime.datetime] = None # when the checkbox was ticked
     id: Optional[int] = None
     created_at: Optional[datetime.datetime] = None
     updated_at: Optional[datetime.datetime] = None
@@ -351,6 +359,8 @@ CREATE TABLE IF NOT EXISTS mp_machine_downtime (
     start_date  DATE        NOT NULL,
     end_date    DATE,
     reason      TEXT        NOT NULL DEFAULT '',
+    resolved    BOOLEAN     NOT NULL DEFAULT false,
+    resolved_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -377,6 +387,17 @@ ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS agri_mat_rate NUMERIC NOT NULL 
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_amber_pct  NUMERIC NOT NULL DEFAULT 10;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_red_pct    NUMERIC NOT NULL DEFAULT 25;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS hours_dev_pct  NUMERIC NOT NULL DEFAULT 15;
+ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved    BOOLEAN     NOT NULL DEFAULT false;
+ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS mp_machine_downtime_resolved ON mp_machine_downtime (segment, resolved) WHERE resolved = false;
+"""
+
+# Backfill: old records closed via close_downtime have end_date set but resolved=false.
+# This UPDATE runs at init time and is idempotent.
+_BACKFILL_DOWNTIME_RESOLVED = """
+UPDATE mp_machine_downtime
+   SET resolved=true, resolved_at=COALESCE(updated_at, now())
+ WHERE end_date IS NOT NULL AND resolved=false
 """
 
 
@@ -392,6 +413,8 @@ def init_mp_tables() -> None:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+            # Backfill: any record closed before resolved column existed
+            cur.execute(_BACKFILL_DOWNTIME_RESOLVED)
         _INITIALISED = True
     except Exception as e:
         raise MpModelError(f"init_mp_tables failed: {e}") from e
@@ -1243,10 +1266,10 @@ def insert_downtime(record: MpMachineDowntime) -> int:
     init_mp_tables()
     try:
         with _conn() as conn, conn.cursor() as cur:
-            # Check for overlapping open record on same (segment, machine, kind)
+            # Check for overlapping open (unresolved) record on same (segment, machine, kind)
             cur.execute(
                 """SELECT id FROM mp_machine_downtime
-                   WHERE segment=%s AND machine=%s AND kind=%s AND end_date IS NULL""",
+                   WHERE segment=%s AND machine=%s AND kind=%s AND resolved=false""",
                 (record.segment, record.machine, record.kind),
             )
             existing = cur.fetchone()
@@ -1257,11 +1280,12 @@ def insert_downtime(record: MpMachineDowntime) -> int:
                 )
             cur.execute(
                 """INSERT INTO mp_machine_downtime
-                       (segment, machine, kind, start_date, end_date, reason)
-                   VALUES (%s,%s,%s,%s,%s,%s)
+                       (segment, machine, kind, start_date, end_date, reason, resolved, resolved_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                    RETURNING id""",
                 (record.segment, record.machine, record.kind,
-                 record.start_date, record.end_date, record.reason or ""),
+                 record.start_date, record.end_date, record.reason or "",
+                 record.resolved, record.resolved_at),
             )
             return cur.fetchone()[0]
     except DowntimeValidationError:
@@ -1270,14 +1294,18 @@ def insert_downtime(record: MpMachineDowntime) -> int:
         raise MpModelError(f"insert_downtime: {e}") from e
 
 
-def close_downtime(record_id: int, end_date: datetime.date) -> bool:
-    """Set end_date on an open downtime record.  Returns True if a row was updated."""
+def resolve_downtime(record_id: int, end_date: datetime.date) -> bool:
+    """Mark a downtime record as resolved (machine back in planning).
+
+    Sets resolved=true, resolved_at=now(), end_date=end_date.
+    Records are NEVER deleted — this is the only "close" path.
+    Returns True if a row was updated.
+    """
     if not AVAILABLE:
         return False
     init_mp_tables()
     try:
         with _conn() as conn, conn.cursor() as cur:
-            # Validate end_date >= start_date
             cur.execute("SELECT start_date FROM mp_machine_downtime WHERE id=%s", (record_id,))
             row = cur.fetchone()
             if not row:
@@ -1286,28 +1314,67 @@ def close_downtime(record_id: int, end_date: datetime.date) -> bool:
                 raise DowntimeValidationError("end_date must be >= start_date")
             cur.execute(
                 """UPDATE mp_machine_downtime
-                   SET end_date=%s, updated_at=now()
-                   WHERE id=%s AND end_date IS NULL""",
+                   SET resolved=true, resolved_at=now(), end_date=%s, updated_at=now()
+                   WHERE id=%s""",
                 (end_date, record_id),
             )
             return cur.rowcount > 0
     except DowntimeValidationError:
         raise
     except Exception as e:
-        raise MpModelError(f"close_downtime: {e}") from e
+        raise MpModelError(f"resolve_downtime: {e}") from e
 
 
-def delete_downtime(record_id: int) -> bool:
-    """Delete a downtime record by id.  Returns True if deleted."""
+def unresolve_downtime(record_id: int) -> bool:
+    """Re-open a resolved downtime record (un-tick 'back in planning').
+
+    Clears resolved, resolved_at, and end_date so the machine is
+    unavailable from start_date onward again.  Returns True if updated.
+    """
     if not AVAILABLE:
         return False
     init_mp_tables()
     try:
         with _conn() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM mp_machine_downtime WHERE id=%s", (record_id,))
+            cur.execute(
+                """UPDATE mp_machine_downtime
+                   SET resolved=false, resolved_at=NULL, end_date=NULL, updated_at=now()
+                   WHERE id=%s""",
+                (record_id,),
+            )
             return cur.rowcount > 0
     except Exception as e:
-        raise MpModelError(f"delete_downtime: {e}") from e
+        raise MpModelError(f"unresolve_downtime: {e}") from e
+
+
+def close_downtime(record_id: int, end_date: datetime.date) -> bool:
+    """Backward-compat alias for resolve_downtime."""
+    return resolve_downtime(record_id, end_date)
+
+
+def delete_downtime(record_id: int) -> bool:
+    """DEPRECATED — records are never deleted; kept for test isolation only.
+
+    Returns False always (no-op) to enforce append-only semantics.
+    Test suites that need a clean slate should use a dedicated test DB schema
+    or insert records with a test-scoped segment name.
+    """
+    return False
+
+
+def count_downtime_records(segment: str) -> int:
+    """Return the total number of downtime records for the segment (for tests)."""
+    if not AVAILABLE:
+        return 0
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM mp_machine_downtime WHERE segment=%s", (segment,)
+            )
+            return cur.fetchone()[0]
+    except Exception:
+        return 0
 
 
 def get_downtime_records(
@@ -1316,7 +1383,11 @@ def get_downtime_records(
     kind: Optional[str] = None,
     only_open: bool = False,
 ) -> List[dict]:
-    """Return downtime records for the segment, sorted by start_date DESC."""
+    """Return ALL downtime records for the segment (open and closed), permanently retained.
+
+    Open records (resolved=false) are pinned first, then sorted by start_date DESC.
+    Each returned dict also carries a computed 'days_down' int (inclusive).
+    """
     if not AVAILABLE:
         return []
     init_mp_tables()
@@ -1331,13 +1402,25 @@ def get_downtime_records(
             if kind:
                 clauses.append("kind=%s"); params.append(kind)
             if only_open:
-                clauses.append("end_date IS NULL")
+                clauses.append("resolved=false")
             cur.execute(
                 f"SELECT * FROM mp_machine_downtime WHERE {' AND '.join(clauses)} "
-                f"ORDER BY start_date DESC, id DESC",
+                f"ORDER BY resolved ASC, start_date DESC, id DESC",
                 params,
             )
-            return [dict(r) for r in cur.fetchall()]
+            today = datetime.date.today()
+            rows = []
+            for r in cur.fetchall():
+                d = dict(r)
+                sd = d.get("start_date")
+                ed = d.get("end_date")
+                if sd:
+                    ref = ed if ed else today
+                    d["days_down"] = max(1, (ref - sd).days + 1)
+                else:
+                    d["days_down"] = 0
+                rows.append(d)
+            return rows
     except Exception:
         return []
 

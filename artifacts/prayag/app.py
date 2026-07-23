@@ -4841,9 +4841,10 @@ def mp_data_view():
     fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months, em)
 
     if tab != "plumbing":
-        _dt_open   = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
-        _dt_closed = [r for r in _dt_open if r.get("end_date") is not None]
-        _dt_open   = [r for r in _dt_open if r.get("end_date") is None]
+        import datetime as _dt_now2
+        _all_dt  = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
+        _dt_open   = [r for r in _all_dt if not r.get("resolved", False)]
+        _dt_closed = [r for r in _all_dt if r.get("resolved", False)]
         return render_template(
             "machine_planning_data.html",
             segment=_MP_SEGMENT,
@@ -4861,7 +4862,9 @@ def mp_data_view():
             seeding_needed=False,
             downtime_open=_dt_open,
             downtime_closed=_dt_closed,
+            all_downtime_records=_all_dt,
             all_machine_names=_ALL_PIPE_MACHINES,
+            today_iso=_dt_now2.date.today().isoformat(),
         )
 
     # Load data for plumbing tab
@@ -4920,10 +4923,12 @@ def mp_data_view():
     for m in fitting_machines_data:
         m["capacity_hrs_month"] = float(m.get("capacity_hrs_month") or 500)
 
-    # Load downtime records (segment-level, not per-month)
+    # Load ALL downtime records (permanently retained, open + closed)
+    import datetime as _dt_now
     downtime_records = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
-    downtime_open = [r for r in downtime_records if r.get("end_date") is None]
-    downtime_closed = [r for r in downtime_records if r.get("end_date") is not None]
+    downtime_open   = [r for r in downtime_records if not r.get("resolved", False)]
+    downtime_closed = [r for r in downtime_records if r.get("resolved", False)]
+    today_iso = _dt_now.date.today().isoformat()
 
     # All machine names for the downtime dropdowns (extrusion + moulding)
     all_machine_names = sorted(set(
@@ -4959,7 +4964,9 @@ def mp_data_view():
         seeding_needed=seeding_needed,
         downtime_open=downtime_open,
         downtime_closed=downtime_closed,
+        all_downtime_records=downtime_records,
         all_machine_names=all_machine_names,
+        today_iso=today_iso,
     )
 
 
@@ -4979,11 +4986,12 @@ def mp_reset_all_sections():
 
 @app.route("/machine-planning/data/downtime", methods=["GET"])
 def mp_downtime_list():
-    """List all downtime records for the segment (JSON)."""
+    """List all downtime records for the segment (JSON) — open and closed, permanently retained."""
     _mp_model.init_mp_tables()
     recs = _mp_model.get_downtime_records(_MP_SEGMENT)
     out = []
     for r in recs:
+        resolved_at = r.get("resolved_at")
         out.append({
             "id": r["id"],
             "machine": r["machine"],
@@ -4991,7 +4999,10 @@ def mp_downtime_list():
             "start_date": str(r["start_date"])[:10] if r.get("start_date") else None,
             "end_date": str(r["end_date"])[:10] if r.get("end_date") else None,
             "reason": r.get("reason", ""),
-            "is_open": r.get("end_date") is None,
+            "resolved": bool(r.get("resolved", False)),
+            "resolved_at": str(resolved_at)[:19] if resolved_at else None,
+            "days_down": r.get("days_down", 0),
+            "is_open": not bool(r.get("resolved", False)),
         })
     return jsonify({"ok": True, "records": out})
 
@@ -5029,44 +5040,60 @@ def mp_downtime_open():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/machine-planning/data/downtime/close", methods=["POST"])
-def mp_downtime_close():
-    """Set end_date on an open downtime record."""
+@app.route("/machine-planning/data/downtime/<int:rec_id>/resolve", methods=["POST"])
+def mp_downtime_resolve(rec_id: int):
+    """Mark a downtime record as resolved (machine back in planning).
+
+    Body JSON: { "end_date": "YYYY-MM-DD" }
+    Sets resolved=true, resolved_at=now(), end_date.
+    Records are NEVER deleted — permanent history.
+    """
     _mp_model.init_mp_tables()
-    data     = request.get_json(force=True) or {}
-    rec_id   = data.get("id")
-    end_raw  = (data.get("end_date") or "").strip()
-    if not rec_id or not end_raw:
-        return jsonify({"ok": False, "error": "id and end_date are required"}), 400
+    data    = request.get_json(force=True) or {}
+    end_raw = (data.get("end_date") or "").strip()
+    if not end_raw:
+        return jsonify({"ok": False, "error": "end_date is required"}), 400
     try:
         import datetime as _dt_local
         end_date = _dt_local.date.fromisoformat(end_raw)
     except ValueError:
         return jsonify({"ok": False, "error": f"Invalid end_date: {end_raw!r}"}), 400
     try:
-        updated = _mp_model.close_downtime(int(rec_id), end_date)
+        updated = _mp_model.resolve_downtime(rec_id, end_date)
         if not updated:
-            return jsonify({"ok": False, "error": "Record not found or already closed"}), 404
+            return jsonify({"ok": False, "error": "Record not found"}), 404
         return jsonify({"ok": True})
     except _mp_model.DowntimeValidationError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 409
     except Exception as exc:
-        app.logger.error("mp_downtime_close: %s", exc)
+        app.logger.error("mp_downtime_resolve %d: %s", rec_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/downtime/<int:rec_id>/unresolve", methods=["POST"])
+def mp_downtime_unresolve(rec_id: int):
+    """Re-open a resolved downtime record (un-tick 'back in planning').
+
+    Clears resolved, resolved_at, end_date — machine is unavailable again.
+    """
+    _mp_model.init_mp_tables()
+    try:
+        updated = _mp_model.unresolve_downtime(rec_id)
+        if not updated:
+            return jsonify({"ok": False, "error": "Record not found"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        app.logger.error("mp_downtime_unresolve %d: %s", rec_id, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/machine-planning/data/downtime/<int:rec_id>", methods=["DELETE"])
 def mp_downtime_delete(rec_id: int):
-    """Delete a downtime record."""
-    _mp_model.init_mp_tables()
-    try:
-        deleted = _mp_model.delete_downtime(rec_id)
-        if not deleted:
-            return jsonify({"ok": False, "error": "Record not found"}), 404
-        return jsonify({"ok": True})
-    except Exception as exc:
-        app.logger.error("mp_downtime_delete: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+    """Downtime records are permanently retained — DELETE is not permitted."""
+    return jsonify({
+        "ok": False,
+        "error": "Downtime records are permanent history and cannot be deleted.",
+    }), 405
 
 
 # ── Save endpoints (return JSON) ────────────────────────────────────────────
