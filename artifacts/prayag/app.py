@@ -4687,9 +4687,11 @@ def segment_input_save():
 # Machine Planning — Data Page (MP-1)
 # Additive / isolated: new routes only, never touches "/", "/data", or "/plan".
 # ---------------------------------------------------------------------------
-import mp_model as _mp_model        # noqa: E402
-import mp_rejection as _mp_rejection  # noqa: E402
-import mp_seed as _mp_seed            # noqa: E402
+import mp_model as _mp_model               # noqa: E402
+import mp_rejection as _mp_rejection       # noqa: E402
+import mp_rejection_plan as _mp_rej_plan   # noqa: E402
+import mp_seed as _mp_seed                 # noqa: E402
+import mp_wastage as _mp_wastage           # noqa: E402
 
 _MP_SEGMENT = "PLUMBING"
 
@@ -5000,6 +5002,8 @@ def mp_settings_view():
 
     rej_summary = _mp_rejection.get_rejection_summary(_MP_SEGMENT)
     rej_meta    = _mp_rejection.get_rejection_meta(_MP_SEGMENT)
+    wst_summary = _mp_wastage.get_wastage_summary(_MP_SEGMENT)
+    wst_meta    = _mp_wastage.get_wastage_meta(_MP_SEGMENT)
 
     rej_search     = request.args.get("rej_search", "").strip()
     rej_page       = max(1, int(request.args.get("rej_page", 1) or 1))
@@ -5034,6 +5038,8 @@ def mp_settings_view():
         db_available=_mp_model.AVAILABLE,
         rej_summary=rej_summary,
         rej_meta=rej_meta,
+        wst_summary=wst_summary,
+        wst_meta=wst_meta,
         rej_items=rej_items,
         rej_total=rej_total,
         rej_total_pages=rej_total_pages,
@@ -5054,6 +5060,85 @@ def mp_settings_recompute_rejection():
     """Trigger a full rejection-stats recompute from source workbooks."""
     result = _mp_rejection.recompute_rejection(_MP_SEGMENT)
     return jsonify(result)
+
+
+@app.route("/machine-planning/settings/recompute-wastage", methods=["POST"])
+def mp_settings_recompute_wastage():
+    """Trigger a full wastage-stats recompute from Report-15 across all PIPE months."""
+    result = _mp_wastage.recompute_wastage(_MP_SEGMENT)
+    return jsonify(result)
+
+
+@app.route("/machine-planning/report/revised-plan")
+def mp_report_revised_plan():
+    """FILE 1 — Revised Production Plan (.xlsx) showing rejection + waste per item."""
+    import mp_reports as _mp_reports
+    result         = _mp2_result_from_session()
+    fitting_result = _mp3_fitting_result_from_session()
+    if not result and not fitting_result:
+        return "No plan in session — upload a demand file first.", 400
+    payload = _mp2_load_run(session.get("mp2_run_id") or "") or {}
+    month   = payload.get("effective_month", "unknown")
+    try:
+        data = _mp_reports.revised_production_plan_bytes(result, fitting_result, month)
+    except Exception as exc:
+        app.logger.error("revised_plan generation failed: %s", exc)
+        return f"Report generation failed: {exc}", 500
+    fname = f"revised_production_plan_{month}.xlsx"
+    return current_app.response_class(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@app.route("/machine-planning/report/machine-plan-comparison")
+def mp_report_machine_plan_comparison():
+    """FILE 2 — Machine Plan Comparison (.xlsx): without vs with rejection+waste."""
+    import mp_reports as _mp_reports
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return "No plan in session — upload a demand file first.", 400
+    payload = _mp2_load_run(run_id) or {}
+    month = payload.get("effective_month", "unknown")
+    seg   = payload.get("segment", _mp_seed.SEGMENT)
+    em    = payload.get("effective_month", _mp_seed.current_month())
+
+    # WITH: rejection + measured waste (same as results page)
+    result_with  = _mp2_result_from_session()
+    fitting_with = _mp3_fitting_result_from_session()
+
+    # WITHOUT: no rejection, flat waste from params (or 0% if already 0)
+    params_row   = _mp_model.get_params(seg, em)
+    old_waste    = float(params_row.waste_pct) if params_row else 0.0
+    # Build "flat" lookups — no rejection, use waste_pct as-is
+    import mp_engine as _mp_engine_mod
+    demand      = [_mp_engine_mod.DemandItem(**d) for d in payload.get("demand", [])]
+    fit_dicts   = payload.get("fitting_demand") or []
+    fitting_dm  = [_mp_engine_mod.FittingDemandItem(**d) for d in fit_dicts]
+    try:
+        result_flat  = _mp_engine_mod.run_engine(demand, em, seg)
+        fitting_flat = _mp_engine_mod.run_fitting_engine(fitting_dm, em, seg) if fitting_dm else None
+    except Exception as exc:
+        app.logger.error("comparison flat run failed: %s", exc)
+        result_flat  = None
+        fitting_flat = None
+
+    try:
+        data = _mp_reports.machine_plan_comparison_bytes(
+            result_with, result_flat, fitting_with, fitting_flat, month,
+            old_waste_pct=old_waste,
+        )
+    except Exception as exc:
+        app.logger.error("machine_plan_comparison generation failed: %s", exc)
+        return f"Report generation failed: {exc}", 500
+
+    fname = f"machine_plan_comparison_{month}.xlsx"
+    return current_app.response_class(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
 
 
 @app.route("/machine-planning/data/reset/all", methods=["POST"])
@@ -5579,20 +5664,39 @@ def _mp2_load_run(run_id: str) -> dict | None:
     return None
 
 
+def _build_plan_lookups(segment: str, effective_month: str) -> tuple:
+    """Build (rej_lookup, wastage_lookup) for a plan run.
+
+    Both lookups are always built; they contain 'has_data': False when the DB
+    is not yet populated, in which case the engine falls back to SAFE defaults.
+    """
+    rej_lookup = _mp_rej_plan.build_rejection_lookup(segment)
+    params_row = _mp_model.get_params(segment, effective_month)
+    override_pct = float(params_row.waste_pct) if params_row else 0.0
+    wastage_lookup = _mp_wastage.build_wastage_lookup(segment, override_pct=override_pct)
+    return rej_lookup, wastage_lookup
+
+
 def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
-    """Re-run pipe engine from stored demand in session."""
+    """Re-run pipe engine from stored demand in session.
+
+    Builds rejection and wastage lookups on every call so the result always
+    reflects the latest DB state (rejection recomputes and wastage recomputes
+    are picked up without re-uploading the demand file).
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
     payload = _mp2_load_run(run_id)
     if not payload:
         return None
-    demand = [
-        _mp_engine.DemandItem(**d) for d in payload["demand"]
-    ]
+    demand = [_mp_engine.DemandItem(**d) for d in payload["demand"]]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
     try:
         return _mp_engine.run_engine(
-            demand, payload["effective_month"], payload.get("segment", _mp_seed.SEGMENT)
+            demand, payload["effective_month"], seg,
+            rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
     except Exception as exc:
         app.logger.error("mp2 re-run failed: %s", exc)
@@ -5600,7 +5704,10 @@ def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
 
 
 def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None":
-    """Re-run fitting engine from stored fitting demand in session."""
+    """Re-run fitting engine from stored fitting demand in session.
+
+    Both rejection and wastage lookups are always passed.
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -5610,14 +5717,13 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
     fit_dicts = payload.get("fitting_demand") or []
     if not fit_dicts:
         return None
-    fitting_demand = [
-        _mp_engine.FittingDemandItem(**d) for d in fit_dicts
-    ]
+    fitting_demand = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
     try:
         return _mp_engine.run_fitting_engine(
-            fitting_demand,
-            payload["effective_month"],
-            payload.get("segment", _mp_seed.SEGMENT),
+            fitting_demand, payload["effective_month"], seg,
+            rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
     except Exception as exc:
         app.logger.error("mp3 fitting re-run failed: %s", exc)

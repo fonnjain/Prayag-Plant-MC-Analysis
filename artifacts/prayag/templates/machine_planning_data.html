@@ -647,12 +647,13 @@
       </p>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.75rem;">
         <div class="machine-card">
-          <h4>Waste %</h4>
+          <h4>Waste % Override</h4>
           <div class="field">
-            <span>Default 4%</span>
-            <input type="number" step="0.1" min="0" max="100"
+            <span style="font-size:.75rem;color:#6b7280;">0 = use measured rate from Report-15</span>
+            <input type="number" step="0.01" min="0" max="100"
                    class="mp-input" id="param-waste"
-                   value="{{ params.waste_pct if params else 4.0 }}">
+                   value="{{ params.waste_pct if params else 0.0 }}"
+                   title="Set to 0 to use the auto-measured rate from Report-15 (currently ~0.51% overall). Non-zero overrides that rate for all materials.">
           </div>
         </div>
         <div class="machine-card">

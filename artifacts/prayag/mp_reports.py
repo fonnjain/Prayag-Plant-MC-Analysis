@@ -1375,4 +1375,424 @@ def consolidated_plan_bytes(
         ws7.cell(row=r7, column=1).value = "(not available)"
         r7 += 1
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FILE 1 — Revised Production Plan (rejection + waste shown per item)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NAV = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+_NAV_FILL = PatternFill("solid", fgColor="1F3864")
+
+def _hdr(ws, row: int, col: int, value: str, width: int = 14) -> None:
+    """Write a dark-navy header cell."""
+    c = ws.cell(row=row, column=col, value=value)
+    c.font = _NAV
+    c.fill = _NAV_FILL
+    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.column_dimensions[get_column_letter(col)].width = max(
+        ws.column_dimensions[get_column_letter(col)].width or 0, width
+    )
+
+
+def _val(ws, row: int, col: int, value, fmt: str = "General", align: str = "center") -> None:
+    c = ws.cell(row=row, column=col, value=value)
+    c.number_format = fmt
+    c.alignment = Alignment(horizontal=align, vertical="center")
+
+
+def revised_production_plan_bytes(
+    pipe_result,        # mp_engine.EngineResult | None
+    fitting_result,     # mp_engine.FittingEngineResult | None
+    month: str,
+) -> bytes:
+    """Return .xlsx bytes for the Revised Production Plan.
+
+    Shows net demand, rejection gross-up, and waste separately per item so
+    planners can see the two effects independently.
+
+    Sheets:
+      1. Summary    — per-material totals (pipe + fitting separately)
+      2. Pipe Items — per routable pipe demand item
+      3. Fitting Items — per routable fitting demand item
+    """
+    wb = Workbook()
+    wb.remove(wb.active)  # remove default sheet
+
+    # ── Sheet 1: Summary ─────────────────────────────────────────────────────
+    ws1 = wb.create_sheet("Summary")
+    ws1.sheet_view.showGridLines = False
+
+    # Title
+    ws1.merge_cells("A1:J1")
+    t = ws1["A1"]
+    t.value = f"Revised Production Plan — {month}"
+    t.font = Font(name="Calibri", bold=True, size=14, color="FFFFFF")
+    t.fill = PatternFill("solid", fgColor="1F3864")
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 30
+    ws1.row_dimensions[2].height = 5
+
+    _hdr(ws1, 3, 1, "Type",          16)
+    _hdr(ws1, 3, 2, "Material",      12)
+    _hdr(ws1, 3, 3, "Net Pieces",    13)
+    _hdr(ws1, 3, 4, "Rej %",         10)
+    _hdr(ws1, 3, 5, "Gross Pieces",  13)
+    _hdr(ws1, 3, 6, "Extra Pieces",  12)
+    _hdr(ws1, 3, 7, "Waste %",       10)
+    _hdr(ws1, 3, 8, "Waste Basis",   12)
+    _hdr(ws1, 3, 9, "Material kg",   13)
+    _hdr(ws1, 3, 10, "Machine Hrs",  12)
+
+    row = 4
+    COL_FMT = "#,##0"
+
+    def _summary_rows(result, label: str):
+        nonlocal row
+        if not result:
+            return
+        # Aggregate by material
+        mat_acc: dict = {}
+        for it in result.items:
+            if not getattr(it, "has_weight", False):
+                continue
+            mat = it.material
+            if mat not in mat_acc:
+                mat_acc[mat] = {"net": 0.0, "gross": 0.0, "kg": 0.0, "hrs": 0.0,
+                                "rej_sum": 0.0, "waste_sum": 0.0, "n": 0}
+            a = mat_acc[mat]
+            a["net"]   += it.qty_pcs
+            a["gross"] += getattr(it, "gross_qty_pcs", it.qty_pcs)
+            a["kg"]    += it.material_kg
+            a["hrs"]   += it.machine_hrs
+            a["rej_sum"]   += getattr(it, "rej_rate", 0.0)
+            a["waste_sum"] += getattr(it, "waste_pct_used", 0.0)
+            a["n"] += 1
+
+        for mat, a in sorted(mat_acc.items()):
+            net   = a["net"]
+            gross = a["gross"]
+            extra = gross - net
+            avg_rej   = a["rej_sum"]   / a["n"] if a["n"] else 0
+            avg_waste = a["waste_sum"] / a["n"] if a["n"] else 0
+            waste_basis = "measured"
+            _val(ws1, row, 1, label, align="left")
+            _val(ws1, row, 2, mat)
+            _val(ws1, row, 3, round(net, 0),   COL_FMT)
+            _val(ws1, row, 4, round(avg_rej, 3),  "0.000%")
+            _val(ws1, row, 5, round(gross, 0), COL_FMT)
+            _val(ws1, row, 6, round(extra, 0), COL_FMT)
+            _val(ws1, row, 7, round(avg_waste / 100, 4), "0.000%")
+            _val(ws1, row, 8, waste_basis)
+            _val(ws1, row, 9, round(a["kg"], 0), COL_FMT)
+            _val(ws1, row, 10, round(a["hrs"], 1), "0.0")
+            row += 1
+
+    _summary_rows(pipe_result,    "PIPE")
+    _summary_rows(fitting_result, "FITTING")
+
+    # ── Sheet 2: Pipe Items ───────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Pipe Items")
+    ws2.sheet_view.showGridLines = False
+    PCOLS = [
+        ("Item Code", 16, "left"),
+        ("Material",  11, "center"),
+        ("Net Pcs",   11, "right"),
+        ("Rej %",     9,  "center"),
+        ("Rej Basis", 10, "center"),
+        ("Gross Pcs", 11, "right"),
+        ("Extra Pcs", 10, "right"),
+        ("Waste %",   9,  "center"),
+        ("Waste Basis", 11, "center"),
+        ("Material kg", 12, "right"),
+        ("Wt/pc (kg)", 11, "right"),
+        ("Mach Hrs",  10, "right"),
+    ]
+    for ci, (name, w, _) in enumerate(PCOLS, 1):
+        _hdr(ws2, 1, ci, name, w)
+    pr = 2
+    if pipe_result:
+        for it in sorted(pipe_result.items, key=lambda x: (x.material, x.item_code)):
+            if not it.has_weight:
+                continue
+            gross = getattr(it, "gross_qty_pcs", it.qty_pcs)
+            rej_r = getattr(it, "rej_rate", 0.0)
+            rej_b = getattr(it, "rej_basis", "")
+            wst_r = getattr(it, "waste_pct_used", 0.0)
+            wst_b = getattr(it, "waste_basis", "")
+            row_data = [
+                it.item_code, it.material,
+                round(it.qty_pcs, 0), round(rej_r / 100, 4), rej_b,
+                round(gross, 0), round(gross - it.qty_pcs, 0),
+                round(wst_r / 100, 4), wst_b,
+                round(it.material_kg, 1),
+                round(it.weight_per_pc_kg, 4) if it.weight_per_pc_kg else "",
+                round(it.machine_hrs, 2),
+            ]
+            fmts = ["", "", COL_FMT, "0.00%", "", COL_FMT, COL_FMT, "0.00%", "", "0.0", "0.0000", "0.00"]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, PCOLS), 1):
+                c = ws2.cell(row=pr, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+            pr += 1
+
+    # ── Sheet 3: Fitting Items ────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Fitting Items")
+    ws3.sheet_view.showGridLines = False
+    for ci, (name, w, _) in enumerate(PCOLS, 1):
+        _hdr(ws3, 1, ci, name, w)
+    fr = 2
+    if fitting_result:
+        for it in sorted(fitting_result.items, key=lambda x: (x.material, x.item_code)):
+            if not it.has_weight:
+                continue
+            gross = getattr(it, "gross_qty_pcs", it.qty_pcs)
+            rej_r = getattr(it, "rej_rate", 0.0)
+            rej_b = getattr(it, "rej_basis", "")
+            wst_r = getattr(it, "waste_pct_used", 0.0)
+            wst_b = getattr(it, "waste_basis", "")
+            row_data = [
+                it.item_code, it.material,
+                round(it.qty_pcs, 0), round(rej_r / 100, 4), rej_b,
+                round(gross, 0), round(gross - it.qty_pcs, 0),
+                round(wst_r / 100, 4), wst_b,
+                round(it.material_kg, 1),
+                round(it.weight_per_pc_kg, 4) if it.weight_per_pc_kg else "",
+                round(it.machine_hrs, 2),
+            ]
+            fmts = ["", "", COL_FMT, "0.00%", "", COL_FMT, COL_FMT, "0.00%", "", "0.0", "0.0000", "0.00"]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, PCOLS), 1):
+                c = ws3.cell(row=fr, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+            fr += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FILE 2 — Machine Plan Comparison (without rej/waste vs with both)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def machine_plan_comparison_bytes(
+    result_with,     # EngineResult — with rejection + measured waste
+    result_flat,     # EngineResult — without rejection, flat waste (old behaviour)
+    fitting_with,    # FittingEngineResult | None — with
+    fitting_flat,    # FittingEngineResult | None — without
+    month: str,
+    old_waste_pct: float = 0.0,   # the flat waste % used in result_flat
+) -> bytes:
+    """Return .xlsx bytes for the Machine Plan Comparison.
+
+    Shows WITHOUT (old flat waste, no rejection) vs WITH (rejection + measured
+    waste) side-by-side so planners can see the impact of the correction.
+
+    Sheets:
+      1. Summary Comparison  — headline totals + per-machine hours
+      2. Pipe Machine Loads  — per-machine, without vs with
+      3. Pipe Item Detail    — per item: rejection and waste separately
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    _W_FILL  = PatternFill("solid", fgColor="E2EFDA")  # green-ish "without" baseline
+    _WI_FILL = PatternFill("solid", fgColor="1F3864")  # navy header
+    _D_FILL  = PatternFill("solid", fgColor="FFF2CC")  # amber delta
+
+    def _title(ws, text: str) -> None:
+        ws.merge_cells("A1:K1")
+        c = ws["A1"]
+        c.value = text
+        c.font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F3864")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 28
+        ws.row_dimensions[2].height = 4
+
+    def _hdr2(ws, row, col, txt, w=14):
+        c = ws.cell(row=row, column=col, value=txt)
+        c.font = _NAV
+        c.fill = _NAV_FILL
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(col)].width = max(
+            ws.column_dimensions[get_column_letter(col)].width or 0, w
+        )
+
+    def _safe_total_hrs(res) -> float:
+        if not res:
+            return 0.0
+        return sum(it.machine_hrs for it in res.items if getattr(it, "has_weight", False))
+
+    def _safe_mat_kg(res) -> float:
+        if not res:
+            return 0.0
+        return sum(it.material_kg for it in res.items if getattr(it, "has_weight", False))
+
+    def _safe_peak(res):
+        if not res or not res.machine_loads:
+            return ("—", 0.0)
+        top = max(res.machine_loads, key=lambda ml: ml.total_hours)
+        return (top.machine, top.total_hours)
+
+    def _fleet_util(res) -> float:
+        if not res or not res.machine_loads:
+            return 0.0
+        cap = sum(ml.capacity_hours for ml in res.machine_loads if ml.capacity_hours > 0)
+        load = sum(ml.total_hours for ml in res.machine_loads)
+        return load / cap * 100 if cap > 0 else 0.0
+
+    # ── Sheet 1: Summary ─────────────────────────────────────────────────────
+    ws1 = wb.create_sheet("Summary Comparison")
+    ws1.sheet_view.showGridLines = False
+    _title(ws1, f"Machine Plan Comparison — {month}")
+
+    note = (
+        f"WITHOUT = net demand × weight × (1 + {old_waste_pct:.1f}% flat waste), no rejection gross-up\n"
+        "WITH    = gross_qty = net / (1 - rejection%), material_kg = gross × wt × (1 + measured waste%)"
+    )
+    ws1.merge_cells("A3:K3")
+    c3 = ws1["A3"]
+    c3.value = note
+    c3.font = Font(name="Calibri", italic=True, size=9, color="555555")
+    c3.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws1.row_dimensions[3].height = 28
+
+    COLS_S = ["Category", "WITHOUT", "WITH", "Delta (±)", "Delta (%)"]
+    for ci, h in enumerate(COLS_S, 1):
+        _hdr2(ws1, 4, ci, h, 18)
+
+    # Pipe totals
+    with_pipe_kg   = _safe_mat_kg(result_with)
+    flat_pipe_kg   = _safe_mat_kg(result_flat)
+    with_pipe_hrs  = _safe_total_hrs(result_with)
+    flat_pipe_hrs  = _safe_total_hrs(result_flat)
+    with_peak_mc,  with_peak_h  = _safe_peak(result_with)
+    flat_peak_mc,  flat_peak_h  = _safe_peak(result_flat)
+    with_fleet = _fleet_util(result_with)
+    flat_fleet = _fleet_util(result_flat)
+
+    # Fitting totals
+    with_fit_kg  = _safe_mat_kg(fitting_with)
+    flat_fit_kg  = _safe_mat_kg(fitting_flat)
+    with_fit_hrs = _safe_total_hrs(fitting_with)
+    flat_fit_hrs = _safe_total_hrs(fitting_flat)
+
+    S_ROWS = [
+        ("Pipe — Material kg",  flat_pipe_kg,  with_pipe_kg),
+        ("Pipe — Machine Hrs",  flat_pipe_hrs, with_pipe_hrs),
+        ("Pipe — Fleet Util %", flat_fleet,    with_fleet),
+        ("Pipe — Peak Hrs",     flat_peak_h,   with_peak_h),
+        ("Fitting — Material kg", flat_fit_kg, with_fit_kg),
+        ("Fitting — Machine Hrs", flat_fit_hrs, with_fit_hrs),
+    ]
+    fill_even = PatternFill("solid", fgColor="F5F5F5")
+    r = 5
+    for i, (cat, wout, wi) in enumerate(S_ROWS):
+        delta = wi - wout
+        dpct  = (delta / wout * 100) if wout else 0.0
+        row_fill = fill_even if i % 2 == 0 else None
+        for ci, v in enumerate([cat, round(wout, 1), round(wi, 1),
+                                  round(delta, 1), f"{dpct:+.1f}%"], 1):
+            c = ws1.cell(row=r, column=ci, value=v)
+            c.alignment = Alignment(horizontal="left" if ci == 1 else "right", vertical="center")
+            if row_fill:
+                c.fill = row_fill
+        r += 1
+
+    # Peak machine row
+    ws1.cell(row=r, column=1).value = "Pipe — Peak Machine"
+    ws1.cell(row=r, column=2).value = flat_peak_mc
+    ws1.cell(row=r, column=3).value = with_peak_mc
+    for ci in range(1, 4):
+        ws1.cell(row=r, column=ci).alignment = Alignment(horizontal="left" if ci == 1 else "center", vertical="center")
+    r += 1
+
+    # ── Sheet 2: Machine Load ─────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Pipe Machine Loads")
+    ws2.sheet_view.showGridLines = False
+    _title(ws2, f"Pipe Machine Load Comparison — {month}")
+
+    ML_COLS = ["Machine", "Without Hrs", "With Hrs", "Extra Hrs", "Capacity Hrs", "Util % (With)"]
+    for ci, h in enumerate(ML_COLS, 1):
+        _hdr2(ws2, 3, ci, h, 15)
+
+    flat_ml = {ml.machine: ml for ml in (result_flat.machine_loads if result_flat else [])}
+    with_ml = {ml.machine: ml for ml in (result_with.machine_loads if result_with else [])}
+    all_mcs = sorted(set(flat_ml) | set(with_ml))
+
+    r2 = 4
+    for mc in all_mcs:
+        f_hrs = flat_ml[mc].total_hours if mc in flat_ml else 0.0
+        w_hrs = with_ml[mc].total_hours if mc in with_ml else 0.0
+        cap   = (with_ml[mc].capacity_hours if mc in with_ml else
+                 flat_ml[mc].capacity_hours if mc in flat_ml else 0.0)
+        util  = w_hrs / cap * 100 if cap > 0 else 0.0
+        for ci, v in enumerate([mc, round(f_hrs, 1), round(w_hrs, 1),
+                                  round(w_hrs - f_hrs, 1), round(cap, 1),
+                                  f"{util:.1f}%"], 1):
+            c = ws2.cell(row=r2, column=ci, value=v)
+            c.alignment = Alignment(horizontal="left" if ci == 1 else "right", vertical="center")
+        r2 += 1
+
+    # ── Sheet 3: Pipe Item Detail ─────────────────────────────────────────────
+    ws3 = wb.create_sheet("Pipe Item Detail")
+    ws3.sheet_view.showGridLines = False
+    _title(ws3, f"Pipe Item Detail — Rejection + Waste — {month}")
+
+    ID_COLS = [
+        ("Item Code", 16, "left"),
+        ("Material",  11, "center"),
+        ("Net Pcs",   11, "right"),
+        ("Rej %",     9,  "center"),
+        ("Rej Basis", 10, "center"),
+        ("Gross Pcs", 11, "right"),
+        ("Waste % (meas)", 13, "center"),
+        ("Waste Basis", 12, "center"),
+        ("Material kg (flat)", 16, "right"),
+        ("Material kg (with)", 16, "right"),
+        ("Delta kg",  11, "right"),
+        ("Mach Hrs (flat)", 14, "right"),
+        ("Mach Hrs (with)", 14, "right"),
+    ]
+    for ci, (h, w, _) in enumerate(ID_COLS, 1):
+        _hdr2(ws3, 3, ci, h, w)
+
+    flat_items = {it.item_code: it for it in (result_flat.items if result_flat else [])}
+    r3 = 4
+    if result_with:
+        for it in sorted(result_with.items, key=lambda x: (x.material, x.item_code)):
+            if not it.has_weight:
+                continue
+            flat_it = flat_items.get(it.item_code)
+            gross = getattr(it, "gross_qty_pcs", it.qty_pcs)
+            rej_r = getattr(it, "rej_rate", 0.0)
+            rej_b = getattr(it, "rej_basis", "")
+            wst_r = getattr(it, "waste_pct_used", 0.0)
+            wst_b = getattr(it, "waste_basis", "")
+            flat_kg  = flat_it.material_kg if flat_it else 0.0
+            flat_hrs = flat_it.machine_hrs if flat_it else 0.0
+            vals = [
+                it.item_code, it.material,
+                round(it.qty_pcs, 0), round(rej_r / 100, 4), rej_b,
+                round(gross, 0), round(wst_r / 100, 4), wst_b,
+                round(flat_kg, 1), round(it.material_kg, 1),
+                round(it.material_kg - flat_kg, 1),
+                round(flat_hrs, 2), round(it.machine_hrs, 2),
+            ]
+            fmts = ["", "", "#,##0", "0.00%", "", "#,##0", "0.00%", "",
+                    "0.0", "0.0", "0.0", "0.00", "0.00"]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(vals, fmts, ID_COLS), 1):
+                c = ws3.cell(row=r3, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+            r3 += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
     return _wb_bytes(wb)

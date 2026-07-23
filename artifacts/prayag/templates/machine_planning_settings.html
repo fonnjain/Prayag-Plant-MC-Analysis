@@ -216,6 +216,74 @@
   </div>
 </div>
 
+<!-- ════ SECTION 1b: MATERIAL WASTAGE ═════════════════════════════════════ -->
+<div class="section-card" id="sec-wastage" style="margin-top:.75rem;">
+  <div class="section-header">
+    <div style="flex:1;">
+      <span class="section-title">♻️ Material Wastage % — Report-15 Measurement</span>
+      {% if wst_meta %}
+        <span class="meta-chip" style="margin-left:.5rem;">
+          {{ wst_meta.n_months }} months · last: {{ wst_meta.last_recomputed }}
+        </span>
+      {% else %}
+        <span class="meta-chip" style="color:#c55a11;">Not yet computed</span>
+      {% endif %}
+    </div>
+    <button class="action-btn btn-secondary" id="wst-btn" onclick="doRecomputeWastage()">⟳ Recompute from Report-15</button>
+  </div>
+  <div class="section-body" style="padding:.5rem .75rem;">
+    <p style="font-size:.78rem;color:#6b7280;margin:0 0 .6rem;">
+      Measured from Report-15 (Wastage Register) across all available PIPE months.
+      Used as <strong>material_kg = gross_qty × weight × (1 + waste%)</strong> — applied after the rejection gross-up.
+      Override via the <em>Waste % Override</em> parameter on the Settings → Parameters page; set to 0 to revert to these measured rates.
+    </p>
+    {% if wst_summary %}
+    <table class="rej-table" style="width:100%;border-collapse:collapse;font-size:.78rem;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:.3rem .5rem;background:#f1f5f9;border-bottom:2px solid #e2e8f0;">Type</th>
+          <th style="text-align:right;padding:.3rem .5rem;background:#f1f5f9;border-bottom:2px solid #e2e8f0;">Production kg</th>
+          <th style="text-align:right;padding:.3rem .5rem;background:#f1f5f9;border-bottom:2px solid #e2e8f0;">Wastage kg</th>
+          <th style="text-align:right;padding:.3rem .5rem;background:#f1f5f9;border-bottom:2px solid #e2e8f0;">Waste %</th>
+          <th style="text-align:right;padding:.3rem .5rem;background:#f1f5f9;border-bottom:2px solid #e2e8f0;">Months</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set wns = namespace(tot_prod=0, tot_waste=0) %}
+        {% for r in wst_summary %}
+          {% set wns.tot_prod  = wns.tot_prod  + r.prod_kg %}
+          {% set wns.tot_waste = wns.tot_waste + r.wastage_kg %}
+        <tr>
+          <td style="padding:.3rem .5rem;border-bottom:1px solid #e5e7eb;font-weight:600;">{{ r.type_key }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;border-bottom:1px solid #e5e7eb;font-family:monospace;">{{ "{:,.0f}".format(r.prod_kg) }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;border-bottom:1px solid #e5e7eb;font-family:monospace;">{{ "{:,.0f}".format(r.wastage_kg) }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;border-bottom:1px solid #e5e7eb;color:var(--terra);font-weight:700;">
+            {% if r.pct is not none %}{{ "%.3f%%"|format(r.pct) }}{% else %}—{% endif %}
+          </td>
+          <td style="text-align:right;padding:.3rem .5rem;border-bottom:1px solid #e5e7eb;">{{ r.n_months }}</td>
+        </tr>
+        {% endfor %}
+        {% if wns.tot_prod > 0 %}
+        <tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #94a3b8;">
+          <td style="padding:.3rem .5rem;">Overall</td>
+          <td style="text-align:right;padding:.3rem .5rem;font-family:monospace;">{{ "{:,.0f}".format(wns.tot_prod) }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;font-family:monospace;">{{ "{:,.0f}".format(wns.tot_waste) }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;color:var(--terra);">{{ "%.3f%%"|format(wns.tot_waste/wns.tot_prod*100) }}</td>
+          <td style="text-align:right;padding:.3rem .5rem;">—</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:1.5rem;color:#6b7280;">
+      <div style="font-size:1.5rem;margin-bottom:.5rem;">♻️</div>
+      <div style="font-weight:600;margin-bottom:.3rem;">No wastage data computed yet</div>
+      <div style="font-size:.8rem;">Click <strong>Recompute from Report-15</strong> to calculate from the source workbooks.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
 {% set breakdown_open  = downtime_open | selectattr('kind','equalto','breakdown')   | list %}
 {% set maintenance_open = downtime_open | selectattr('kind','equalto','maintenance') | list %}
 {% set breakdown_hist  = all_downtime_records | selectattr('kind','equalto','breakdown')   | list %}
@@ -540,6 +608,28 @@ function showToast(msg, isErr) {
 }
 
 /* ── Rejection recompute ──────────────────────────────────────────────── */
+async function doRecomputeWastage() {
+  const btn = document.getElementById('wst-btn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⟳ Computing…';
+  try {
+    const r = await fetch('/machine-planning/settings/recompute-wastage', {method:'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      showToast('Wastage recomputed — ' + j.n_months + ' months read', false);
+      setTimeout(() => location.reload(), 900);
+    } else {
+      showToast('Error: ' + (j.error || 'recompute failed'), true);
+    }
+  } catch(e) {
+    showToast('Network error', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
 async function doRecompute() {
   const btn = document.getElementById('rej-btn');
   const orig = btn.textContent;

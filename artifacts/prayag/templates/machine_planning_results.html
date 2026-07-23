@@ -364,6 +364,26 @@
         📊 Consolidated Plan Report (7 tabs — Summary · Machine Load · Weekly Fill · Shift Schedule · Item Assignment · Material &amp; Cost · Coverage)
       </a>
     </div>
+    {# ── Rejection + Waste reports ─────────────────────────────────────── #}
+    <div style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+      <span style="font-size:.73rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">
+        Rejection &amp; Wastage:
+      </span>
+      <a href="{{ url_for('mp_report_revised_plan') }}"
+         style="background:#7c3aed;color:#fff;text-decoration:none;
+                padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;"
+         title="FILE 1 — Shows net demand, rejection gross-up and waste fraction per item">
+        📋 Revised Production Plan
+      </a>
+      <a href="{{ url_for('mp_report_machine_plan_comparison') }}"
+         style="background:#b45309;color:#fff;text-decoration:none;
+                padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;"
+         title="FILE 2 — Side-by-side: old flat-waste vs new rejection+measured-waste">
+        📊 Machine Plan Comparison
+      </a>
+    </div>
   </div>
   {% endif %}
 

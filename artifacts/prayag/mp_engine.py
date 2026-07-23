@@ -26,6 +26,8 @@ except ImportError:
 # ── local imports (all mp_* — never production pipeline) ────────────────────
 from mp_seed import norm_code as _norm_code, SEGMENT as _DEFAULT_SEGMENT
 import mp_model as _mp
+import mp_rejection_plan as _mp_rej
+import mp_wastage as _mp_wst
 
 # ── Constants ────────────────────────────────────────────────────────────────
 PIPE_TABS: Dict[str, str] = {
@@ -92,6 +94,13 @@ class ItemResult:
     # "item" = seeded per-item rate; "mat_avg" = per-material average;
     # "overall_avg" = overall pipe average (last-resort fallback)
     rate_fallback_tier: str = "item"
+    # Rejection + waste factors (both always applied when data is available)
+    gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
+    rej_rate: float = 0.0         # rejection % applied (e.g. 12.0 for 12%)
+    rej_basis: str = ""           # "item" | "material" | "overall" | "none"
+    rej_capped: bool = False      # True if rate hit the 50% cap
+    waste_pct_used: float = 0.0   # waste % actually applied (e.g. 0.51)
+    waste_basis: str = ""         # "measured" | "override" | "default"
 
 
 @dataclasses.dataclass
@@ -547,18 +556,22 @@ def run_engine(
     demand: List[DemandItem],
     effective_month: str,
     segment: str = _DEFAULT_SEGMENT,
+    rej_lookup: Optional[dict] = None,
+    wastage_lookup: Optional[dict] = None,
 ) -> EngineResult:
     """
     Run the full MP-2 engine:
     1. Load mp_* inputs from DB for (segment, effective_month).
-    2. Apply per-item chain math.
+    2. Apply per-item chain math — both rejection and waste always applied:
+         gross_qty   = net_demand / (1 − rejection_rate)   [quality: more pieces]
+         material_kg = gross_qty × wt × (1 + waste_pct)   [process: more material]
     3. LPT + parallel-split optimisation.
     4. Unbalanced baseline.
     5. Return EngineResult with all outputs.
     """
     # ── Load all inputs from DB ──────────────────────────────────────────────
     params_row = _mp.get_params(segment, effective_month)
-    waste_pct     = float(params_row.waste_pct)     if params_row else 4.0
+    waste_pct     = float(params_row.waste_pct)      if params_row else 0.0
     pulv_pct      = float(params_row.pulverizer_pct) if params_row else 25.0
 
     bom_rows   = _mp.get_bom_weight_rows(segment, effective_month)
@@ -625,7 +638,25 @@ def run_engine(
             ))
             continue
 
-        material_kg = qty * wt * (1.0 + waste_pct / 100.0)
+        # ── Step 1: Rejection gross-up (quality: more pieces) ───────────────
+        if rej_lookup is not None:
+            rej_rate_frac, rej_basis, rej_capped = _mp_rej.get_item_rate(
+                rej_lookup, ic, "PIPE", mat
+            )
+        else:
+            rej_rate_frac, rej_basis, rej_capped = 0.0, "none", False
+        g_qty = _mp_rej.gross_qty(qty, rej_rate_frac) if rej_rate_frac > 0 else qty
+
+        # ── Step 2: Waste on material (process: extra compound at machine) ──
+        if wastage_lookup is not None:
+            waste_frac, waste_basis = _mp_wst.get_waste_frac(
+                wastage_lookup, mat, is_fitting=False
+            )
+        else:
+            waste_frac = (waste_pct / 100.0) if waste_pct > 0 else _mp_wst.SAFE_DEFAULT
+            waste_basis = "param" if waste_pct > 0 else "default"
+
+        material_kg = g_qty * wt * (1.0 + waste_frac)
         fresh       = material_kg * (1.0 - pulv_pct / 100.0)
         pulv        = material_kg - fresh
 
@@ -655,6 +686,12 @@ def run_engine(
             capable_machines=sorted(caps),
             assignments=[],
             has_weight=True, has_machine=has_mc,
+            gross_qty_pcs=round(g_qty, 4),
+            rej_rate=round(rej_rate_frac * 100, 4),
+            rej_basis=rej_basis,
+            rej_capped=rej_capped,
+            waste_pct_used=round(waste_frac * 100, 4),
+            waste_basis=waste_basis,
         ))
 
     # Routable items only (has_weight=True AND has_machine=True)
@@ -801,6 +838,13 @@ class FittingItemResult:
     assignments: List[FittingAssignedPortion]
     has_weight: bool
     has_machine: bool
+    # Rejection + waste factors (both always applied when data is available)
+    gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
+    rej_rate: float = 0.0         # rejection % applied (e.g. 0.9 for 0.9%)
+    rej_basis: str = ""           # "item" | "material" | "overall" | "none"
+    rej_capped: bool = False      # True if rate hit the 50% cap
+    waste_pct_used: float = 0.0   # waste % actually applied (e.g. 0.51)
+    waste_basis: str = ""         # "measured" | "override" | "default"
 
 
 @dataclasses.dataclass
@@ -1173,11 +1217,16 @@ def run_fitting_engine(
     demand: List[FittingDemandItem],
     effective_month: str,
     segment: str = _DEFAULT_SEGMENT,
+    rej_lookup: Optional[dict] = None,
+    wastage_lookup: Optional[dict] = None,
 ) -> FittingEngineResult:
     """
     Run the MP-3 fitting engine:
     1. Load mp_* inputs from DB.
-    2. Per-item chain math (material_kg, fresh, pulverizer).
+    2. Per-item chain math — both rejection and waste always applied:
+         gross_qty   = net_demand / (1 − rejection_rate)   [quality: more pieces]
+         material_kg = gross_qty × wt × (1 + waste_pct)   [process: more material]
+         machine_hrs = gross_qty / pcs_per_hr              [machine time on gross pcs]
     3. Rate: fitting_std cavity/cycle → per_hour cycle → mat avg → overall avg.
     4. Routing: fitting_std history → material-level fallback.
     5. LPT + parallel-split optimisation.
@@ -1186,7 +1235,7 @@ def run_fitting_engine(
     """
     # ── Load inputs ──────────────────────────────────────────────────────────
     params_row = _mp.get_params(segment, effective_month)
-    waste_pct  = float(params_row.waste_pct)      if params_row else 4.0
+    waste_pct  = float(params_row.waste_pct)      if params_row else 0.0
     pulv_pct   = float(params_row.pulverizer_pct) if params_row else 25.0
 
     bom_rows     = _mp.get_bom_weight_rows(segment, effective_month)
@@ -1240,7 +1289,25 @@ def run_fitting_engine(
             ))
             continue
 
-        material_kg = qty * wt * (1.0 + waste_pct / 100.0)
+        # ── Step 1: Rejection gross-up (quality: more pieces) ───────────────
+        if rej_lookup is not None:
+            rej_rate_frac, rej_basis, rej_capped = _mp_rej.get_item_rate(
+                rej_lookup, ic, "FITTING", mat
+            )
+        else:
+            rej_rate_frac, rej_basis, rej_capped = 0.0, "none", False
+        g_qty = _mp_rej.gross_qty(qty, rej_rate_frac) if rej_rate_frac > 0 else qty
+
+        # ── Step 2: Waste on material (process: extra compound at machine) ──
+        if wastage_lookup is not None:
+            waste_frac, waste_basis = _mp_wst.get_waste_frac(
+                wastage_lookup, mat, is_fitting=True
+            )
+        else:
+            waste_frac = (waste_pct / 100.0) if waste_pct > 0 else _mp_wst.SAFE_DEFAULT
+            waste_basis = "param" if waste_pct > 0 else "default"
+
+        material_kg = g_qty * wt * (1.0 + waste_frac)
         fresh       = material_kg * (1.0 - pulv_pct / 100.0)
         pulv        = material_kg - fresh
 
@@ -1250,10 +1317,11 @@ def run_fitting_engine(
         if pps <= 0:
             pps = overall_avg
             rate_est = True
-        machine_hrs = qty / pps if pps > 0 else 0.0
+        # Machine hours based on gross pieces (machine must produce g_qty including rejects)
+        machine_hrs = g_qty / pps if pps > 0 else 0.0
 
         # Num cycles
-        num_cycles = round(qty / cavity) if (cavity and cavity > 0) else None
+        num_cycles = round(g_qty / cavity) if (cavity and cavity > 0) else None
 
         # Route resolution
         caps = item_routes.get(ic, [])
@@ -1287,6 +1355,12 @@ def run_fitting_engine(
             assignments=[],
             has_weight=True,
             has_machine=has_mc,
+            gross_qty_pcs=round(g_qty, 4),
+            rej_rate=round(rej_rate_frac * 100, 4),
+            rej_basis=rej_basis,
+            rej_capped=rej_capped,
+            waste_pct_used=round(waste_frac * 100, 4),
+            waste_basis=waste_basis,
         ))
 
     routable = [it for it in items if it.has_weight and it.has_machine]

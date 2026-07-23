@@ -109,7 +109,7 @@ class MpCompoundRecipe:
 @dataclasses.dataclass
 class MpParams:
     segment: str
-    waste_pct: float = 4.0
+    waste_pct: float = 0.0   # 0 = use auto-measured rate from Report-15; >0 = manual override (%)
     pulverizer_pct: float = 25.0
     effective_month: str = ""
     min_run_block_hours: float = 2.0
@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS mp_compound_recipe (
 CREATE TABLE IF NOT EXISTS mp_params (
     id              BIGSERIAL   PRIMARY KEY,
     segment         TEXT        NOT NULL,
-    waste_pct       NUMERIC     NOT NULL DEFAULT 4,
+    waste_pct       NUMERIC     NOT NULL DEFAULT 0,
     pulverizer_pct  NUMERIC     NOT NULL DEFAULT 25,
     effective_month TEXT        NOT NULL,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -373,6 +373,21 @@ CREATE INDEX IF NOT EXISTS mp_machine_downtime_lookup
 CREATE INDEX IF NOT EXISTS mp_machine_downtime_open
     ON mp_machine_downtime (segment, start_date)
     WHERE end_date IS NULL;
+
+CREATE TABLE IF NOT EXISTS mp_wastage_summary (
+    segment     TEXT        NOT NULL,
+    type_key    TEXT        NOT NULL,
+    prod_kg     NUMERIC(18,3) NOT NULL DEFAULT 0,
+    wastage_kg  NUMERIC(18,3) NOT NULL DEFAULT 0,
+    n_months    INT         NOT NULL DEFAULT 0,
+    CONSTRAINT mp_wastage_summary_natural UNIQUE (segment, type_key)
+);
+
+CREATE TABLE IF NOT EXISTS mp_wastage_meta (
+    segment          TEXT        NOT NULL PRIMARY KEY,
+    n_months         INT         NOT NULL DEFAULT 0,
+    last_recomputed  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 _MIGRATIONS = """
@@ -391,6 +406,7 @@ ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS agri_mat_rate NUMERIC NOT NULL 
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_amber_pct  NUMERIC NOT NULL DEFAULT 10;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS rag_red_pct    NUMERIC NOT NULL DEFAULT 25;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS hours_dev_pct  NUMERIC NOT NULL DEFAULT 15;
+UPDATE mp_params SET waste_pct = 0 WHERE waste_pct = 4;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved    BOOLEAN     NOT NULL DEFAULT false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS mp_machine_downtime_resolved ON mp_machine_downtime (segment, resolved) WHERE resolved = false;
