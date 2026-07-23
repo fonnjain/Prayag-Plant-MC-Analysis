@@ -168,6 +168,20 @@ class MpActualLine:
 
 
 @dataclasses.dataclass
+class MpMachineDowntime:
+    """Planned or unplanned machine unavailability (breakdown or maintenance)."""
+    segment: str
+    machine: str
+    kind: str               # 'breakdown' | 'maintenance'
+    start_date: datetime.date
+    end_date: Optional[datetime.date] = None   # None = machine CURRENTLY down
+    reason: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime.datetime] = None
+    updated_at: Optional[datetime.datetime] = None
+
+
+@dataclasses.dataclass
 class MpPlanRun:
     segment: str
     month: str
@@ -328,6 +342,23 @@ CREATE TABLE IF NOT EXISTS mp_actual_line (
 );
 CREATE INDEX IF NOT EXISTS mp_actual_line_month ON mp_actual_line (segment, month);
 CREATE INDEX IF NOT EXISTS mp_actual_line_mc ON mp_actual_line (segment, month, machine_norm);
+
+CREATE TABLE IF NOT EXISTS mp_machine_downtime (
+    id          BIGSERIAL   PRIMARY KEY,
+    segment     TEXT        NOT NULL,
+    machine     TEXT        NOT NULL,
+    kind        TEXT        NOT NULL,
+    start_date  DATE        NOT NULL,
+    end_date    DATE,
+    reason      TEXT        NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mp_machine_downtime_lookup
+    ON mp_machine_downtime (segment, machine, kind);
+CREATE INDEX IF NOT EXISTS mp_machine_downtime_open
+    ON mp_machine_downtime (segment, start_date)
+    WHERE end_date IS NULL;
 """
 
 _MIGRATIONS = """
@@ -1184,3 +1215,185 @@ def delete_actual_lines(segment: str, month: str) -> int:
             return cur.rowcount
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Downtime CRUD helpers
+# ---------------------------------------------------------------------------
+
+class DowntimeValidationError(Exception):
+    """Raised on invalid downtime data before any DB write."""
+
+
+def insert_downtime(record: MpMachineDowntime) -> int:
+    """Insert a new downtime record.  Returns the new id.
+
+    Validates:
+      - kind in ('breakdown', 'maintenance')
+      - end_date >= start_date when provided
+      - no overlapping OPEN record for the same (segment, machine, kind)
+    """
+    if record.kind not in ("breakdown", "maintenance"):
+        raise DowntimeValidationError(f"kind must be 'breakdown' or 'maintenance', got {record.kind!r}")
+    if record.end_date is not None and record.end_date < record.start_date:
+        raise DowntimeValidationError("end_date must be >= start_date")
+
+    if not AVAILABLE:
+        raise MpModelError("DATABASE_URL not configured")
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            # Check for overlapping open record on same (segment, machine, kind)
+            cur.execute(
+                """SELECT id FROM mp_machine_downtime
+                   WHERE segment=%s AND machine=%s AND kind=%s AND end_date IS NULL""",
+                (record.segment, record.machine, record.kind),
+            )
+            existing = cur.fetchone()
+            if existing:
+                raise DowntimeValidationError(
+                    f"Machine '{record.machine}' already has an open {record.kind} record (id={existing[0]}). "
+                    "Close it before opening another of the same kind."
+                )
+            cur.execute(
+                """INSERT INTO mp_machine_downtime
+                       (segment, machine, kind, start_date, end_date, reason)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   RETURNING id""",
+                (record.segment, record.machine, record.kind,
+                 record.start_date, record.end_date, record.reason or ""),
+            )
+            return cur.fetchone()[0]
+    except DowntimeValidationError:
+        raise
+    except Exception as e:
+        raise MpModelError(f"insert_downtime: {e}") from e
+
+
+def close_downtime(record_id: int, end_date: datetime.date) -> bool:
+    """Set end_date on an open downtime record.  Returns True if a row was updated."""
+    if not AVAILABLE:
+        return False
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            # Validate end_date >= start_date
+            cur.execute("SELECT start_date FROM mp_machine_downtime WHERE id=%s", (record_id,))
+            row = cur.fetchone()
+            if not row:
+                return False
+            if end_date < row[0]:
+                raise DowntimeValidationError("end_date must be >= start_date")
+            cur.execute(
+                """UPDATE mp_machine_downtime
+                   SET end_date=%s, updated_at=now()
+                   WHERE id=%s AND end_date IS NULL""",
+                (end_date, record_id),
+            )
+            return cur.rowcount > 0
+    except DowntimeValidationError:
+        raise
+    except Exception as e:
+        raise MpModelError(f"close_downtime: {e}") from e
+
+
+def delete_downtime(record_id: int) -> bool:
+    """Delete a downtime record by id.  Returns True if deleted."""
+    if not AVAILABLE:
+        return False
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM mp_machine_downtime WHERE id=%s", (record_id,))
+            return cur.rowcount > 0
+    except Exception as e:
+        raise MpModelError(f"delete_downtime: {e}") from e
+
+
+def get_downtime_records(
+    segment: str,
+    machine: Optional[str] = None,
+    kind: Optional[str] = None,
+    only_open: bool = False,
+) -> List[dict]:
+    """Return downtime records for the segment, sorted by start_date DESC."""
+    if not AVAILABLE:
+        return []
+    init_mp_tables()
+    try:
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            clauses = ["segment=%s"]
+            params: List[Any] = [segment]
+            if machine:
+                clauses.append("machine=%s"); params.append(machine)
+            if kind:
+                clauses.append("kind=%s"); params.append(kind)
+            if only_open:
+                clauses.append("end_date IS NULL")
+            cur.execute(
+                f"SELECT * FROM mp_machine_downtime WHERE {' AND '.join(clauses)} "
+                f"ORDER BY start_date DESC, id DESC",
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_downtime_affecting_month(segment: str, month: str) -> List[dict]:
+    """Return records that overlap with the given month (YYYY-MM).
+
+    A record overlaps if: start_date <= month_last_day AND (end_date IS NULL OR end_date >= month_first_day).
+    """
+    if not AVAILABLE:
+        return []
+    init_mp_tables()
+    try:
+        import calendar as _cal
+        year, mnum = int(month[:4]), int(month[5:7])
+        first = datetime.date(year, mnum, 1)
+        last  = datetime.date(year, mnum, _cal.monthrange(year, mnum)[1])
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """SELECT * FROM mp_machine_downtime
+                   WHERE segment=%s
+                     AND start_date <= %s
+                     AND (end_date IS NULL OR end_date >= %s)
+                   ORDER BY start_date""",
+                (segment, last, first),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def machine_down_on_date(
+    machine: str,
+    date: datetime.date,
+    downtime_records: List[dict],
+) -> bool:
+    """Pure helper: return True if *machine* is down on *date* per the records list."""
+    for rec in downtime_records:
+        if rec.get("machine") != machine:
+            continue
+        sd = rec.get("start_date")
+        ed = rec.get("end_date")
+        if isinstance(sd, str):
+            try:
+                sd = datetime.date.fromisoformat(str(sd))
+            except Exception:
+                continue
+        if isinstance(ed, str) and ed:
+            try:
+                ed = datetime.date.fromisoformat(str(ed))
+            except Exception:
+                ed = None
+        if sd is None:
+            continue
+        if date >= sd and (ed is None or date <= ed):
+            return True
+    return False

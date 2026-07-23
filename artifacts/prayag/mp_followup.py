@@ -144,15 +144,17 @@ class Warning:
 
 
 # Warning type constants (used in templates too)
-WTYPE_WRONG_MACHINE   = "WRONG_MACHINE"
-WTYPE_UNPLANNED       = "UNPLANNED"
-WTYPE_NOT_STARTED     = "NOT_STARTED"
-WTYPE_QTY_OVER        = "QTY_OVERRUN"
-WTYPE_QTY_SHORT       = "QTY_SHORTFALL"
-WTYPE_HOURS_DEV       = "HOURS_DEVIATION"
-WTYPE_IDLE_VS_PLAN    = "IDLE_VS_PLAN"
+WTYPE_WRONG_MACHINE    = "WRONG_MACHINE"
+WTYPE_UNPLANNED        = "UNPLANNED"
+WTYPE_NOT_STARTED      = "NOT_STARTED"
+WTYPE_QTY_OVER         = "QTY_OVERRUN"
+WTYPE_QTY_SHORT        = "QTY_SHORTFALL"
+WTYPE_HOURS_DEV        = "HOURS_DEVIATION"
+WTYPE_IDLE_VS_PLAN     = "IDLE_VS_PLAN"
 WTYPE_NIGHT_CHANGEOVER = "NIGHT_CHANGEOVER"
-WTYPE_SHORT_BLOCK     = "SHORT_BLOCK"
+WTYPE_SHORT_BLOCK      = "SHORT_BLOCK"
+WTYPE_DOWNTIME         = "DOWNTIME"            # informational — machine was down
+WTYPE_PROD_DURING_DOWN = "PROD_DURING_DOWNTIME"  # integrity — actuals recorded while down
 
 
 @dataclasses.dataclass
@@ -589,8 +591,15 @@ def compute_followup(
     red_pct: float = 25.0,
     hours_dev_pct: float = 15.0,
     min_run_block_hours: float = 2.0,
+    downtime_records: Optional[list] = None,  # from mp_model.get_downtime_affecting_month
 ) -> Optional[FollowUpResult]:
-    """Main variance engine. Returns FollowUpResult or None on failure."""
+    """Main variance engine. Returns FollowUpResult or None on failure.
+
+    downtime_records: list of dicts from mp_model.get_downtime_affecting_month.
+    Used to suppress false IDLE_VS_PLAN / NOT_STARTED warnings for machines
+    that were down, and to add DOWNTIME informational + PROD_DURING_DOWNTIME
+    integrity entries.
+    """
     import mp_model as _mm
 
     # ── Load plan lines ────────────────────────────────────────────────────
@@ -813,6 +822,7 @@ def compute_followup(
         red_pct=red_pct,
         hours_dev_pct=hours_dev_pct,
         min_run_block_hours=min_run_block_hours,
+        downtime_records=downtime_records or [],
     )
 
     # ── Scoreboard ─────────────────────────────────────────────────────────
@@ -851,6 +861,7 @@ def compute_followup(
 
 _SEVERITY = {
     WTYPE_WRONG_MACHINE:    1,
+    WTYPE_PROD_DURING_DOWN: 1,   # data integrity — actuals during downtime
     WTYPE_NIGHT_CHANGEOVER: 1,
     WTYPE_SHORT_BLOCK:      2,
     WTYPE_UNPLANNED:        2,
@@ -859,6 +870,7 @@ _SEVERITY = {
     WTYPE_QTY_OVER:         3,
     WTYPE_HOURS_DEV:        3,
     WTYPE_IDLE_VS_PLAN:     4,
+    WTYPE_DOWNTIME:         5,   # informational only
 }
 
 
@@ -872,6 +884,7 @@ def _generate_warnings(
     red_pct: float,
     hours_dev_pct: float,
     min_run_block_hours: float,
+    downtime_records: Optional[list] = None,
 ) -> List[Warning]:
     warnings: List[Warning] = []
 
@@ -886,6 +899,42 @@ def _generate_warnings(
             magnitude=round(magnitude, 1),
             reason=reason,
         ))
+
+    # ── Build downtime lookup ─────────────────────────────────────────────
+    # down_machine_dates: {machine_norm: {date}} for calendar dates in elapsed period
+    down_machine_dates: Dict[str, set] = {}
+    downtime_machine_norms: set = set()   # any machine with downtime in month
+    if downtime_records and elapsed_plan_days > 0:
+        for rec in downtime_records:
+            mc_raw = str(rec.get("machine") or "")
+            mc_n   = norm_machine(mc_raw)
+            sd = rec.get("start_date")
+            ed = rec.get("end_date")
+            if isinstance(sd, str):
+                try:
+                    sd = datetime.date.fromisoformat(str(sd))
+                except Exception:
+                    continue
+            if not isinstance(sd, datetime.date):
+                continue
+            if isinstance(sd, datetime.datetime):
+                sd = sd.date()
+            if isinstance(ed, str) and ed:
+                try:
+                    ed = datetime.date.fromisoformat(str(ed))
+                except Exception:
+                    ed = None
+            if isinstance(ed, datetime.datetime):
+                ed = ed.date()
+            downtime_machine_norms.add(mc_n)
+            dates = down_machine_dates.setdefault(mc_n, set())
+            # Iterate in steps of 1 day — records are at most a month long
+            cur = sd
+            while True:
+                dates.add(cur)
+                if ed is None or cur >= ed:
+                    break
+                cur += datetime.timedelta(days=1)
 
     # ── 1. WRONG MACHINE — produced on a machine not in its routing ─────────
     for iv in item_rows:
@@ -905,6 +954,9 @@ def _generate_warnings(
     # ── 3. NOT STARTED / BEHIND — planned item with zero actual ────────────
     for iv in item_rows:
         if iv.planned_kg_todate > 0 and iv.actual_kg == 0 and elapsed_plan_days > 0:
+            mc_n = iv.machine_norm if hasattr(iv, "machine_norm") else norm_machine(iv.machine)
+            if mc_n in downtime_machine_norms:
+                continue  # suppress — machine was down during this period
             _add(WTYPE_NOT_STARTED, iv.machine, iv.item_code, iv.material,
                  iv.planned_kg_todate,
                  f"{iv.item_code} on {iv.machine}: {iv.planned_kg_todate:.0f} kg planned by day {elapsed_plan_days} — no production recorded")
@@ -936,6 +988,9 @@ def _generate_warnings(
     # ── 6. IDLE VS PLAN — machine had planned work but no actual ───────────
     for mv in machine_rows:
         if mv.had_planned_work and not mv.had_actual_work and elapsed_plan_days > 0:
+            mc_n = norm_machine(mv.machine)
+            if mc_n in downtime_machine_norms:
+                continue  # suppress — machine was down; idleness is expected
             _add(WTYPE_IDLE_VS_PLAN, mv.machine, "-", "",
                  mv.planned_kg_todate,
                  f"{mv.machine}: {mv.planned_kg_todate:.0f} kg planned to date but zero production recorded")
@@ -995,6 +1050,42 @@ def _generate_warnings(
             _add(WTYPE_SHORT_BLOCK, mc_n, "-", "",
                  hrs,
                  f"{mc_n} on {date_s}: {hrs:.1f} h recorded — shorter than min block {min_run_block_hours:.1f} h")
+
+    # ── 8. DOWNTIME — informational entries for machines that were down ─────
+    if downtime_records:
+        for rec in downtime_records:
+            mc_raw = str(rec.get("machine") or "")
+            kind   = str(rec.get("kind") or "")
+            sd_raw = rec.get("start_date")
+            ed_raw = rec.get("end_date")
+            sd_s = str(sd_raw)[:10] if sd_raw else "?"
+            ed_s = str(ed_raw)[:10] if ed_raw else "ongoing"
+            reason_txt = str(rec.get("reason") or "").strip()
+            reason_suffix = f" — {reason_txt}" if reason_txt else ""
+            _add(
+                WTYPE_DOWNTIME, mc_raw, "-", "",
+                0.0,
+                f"{mc_raw} {kind} from {sd_s} to {ed_s}{reason_suffix}",
+            )
+
+    # ── 9. PROD DURING DOWNTIME — actuals on a down machine ─────────────
+    if downtime_records and down_machine_dates:
+        for r in actual_lines:
+            mc_n   = str(r.get("machine_norm") or norm_machine(str(r.get("machine") or "")))
+            date_s = str(r.get("date") or "")[:10]
+            if not date_s:
+                continue
+            try:
+                cal_date = datetime.date.fromisoformat(date_s)
+            except Exception:
+                continue
+            if mc_n in down_machine_dates and cal_date in down_machine_dates[mc_n]:
+                mc_raw = str(r.get("machine") or mc_n)
+                _add(
+                    WTYPE_PROD_DURING_DOWN, mc_raw, "-", "",
+                    float(r.get("actual_hours") or 0),
+                    f"{mc_raw} recorded production on {date_s} but is marked as down (breakdown/maintenance)",
+                )
 
     # Sort by severity, then magnitude descending
     warnings.sort(key=lambda w: (w.severity, -w.magnitude))

@@ -4841,6 +4841,9 @@ def mp_data_view():
     fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months, em)
 
     if tab != "plumbing":
+        _dt_open   = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
+        _dt_closed = [r for r in _dt_open if r.get("end_date") is not None]
+        _dt_open   = [r for r in _dt_open if r.get("end_date") is None]
         return render_template(
             "machine_planning_data.html",
             segment=_MP_SEGMENT,
@@ -4856,6 +4859,9 @@ def mp_data_view():
             fitting_machines=[], fitting_std_rows=[],
             params=None, estimated_count=0,
             seeding_needed=False,
+            downtime_open=_dt_open,
+            downtime_closed=_dt_closed,
+            all_machine_names=_ALL_PIPE_MACHINES,
         )
 
     # Load data for plumbing tab
@@ -4914,6 +4920,17 @@ def mp_data_view():
     for m in fitting_machines_data:
         m["capacity_hrs_month"] = float(m.get("capacity_hrs_month") or 500)
 
+    # Load downtime records (segment-level, not per-month)
+    downtime_records = _mp_model.get_downtime_records(_MP_SEGMENT) if _mp_model.AVAILABLE else []
+    downtime_open = [r for r in downtime_records if r.get("end_date") is None]
+    downtime_closed = [r for r in downtime_records if r.get("end_date") is not None]
+
+    # All machine names for the downtime dropdowns (extrusion + moulding)
+    all_machine_names = sorted(set(
+        [m["machine"] for m in pipe_machines_data] +
+        [m["machine"] for m in fitting_machines_data]
+    )) or _ALL_PIPE_MACHINES
+
     return render_template(
         "machine_planning_data.html",
         segment=_MP_SEGMENT,
@@ -4940,6 +4957,9 @@ def mp_data_view():
         ],
         params=params,
         seeding_needed=seeding_needed,
+        downtime_open=downtime_open,
+        downtime_closed=downtime_closed,
+        all_machine_names=all_machine_names,
     )
 
 
@@ -4952,6 +4972,100 @@ def mp_reset_all_sections():
         _mp_seed.seed_all(em)
         return jsonify({"ok": True, "effective_month": em, "section": "all"})
     except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ── Downtime CRUD endpoints ──────────────────────────────────────────────────
+
+@app.route("/machine-planning/data/downtime", methods=["GET"])
+def mp_downtime_list():
+    """List all downtime records for the segment (JSON)."""
+    _mp_model.init_mp_tables()
+    recs = _mp_model.get_downtime_records(_MP_SEGMENT)
+    out = []
+    for r in recs:
+        out.append({
+            "id": r["id"],
+            "machine": r["machine"],
+            "kind": r["kind"],
+            "start_date": str(r["start_date"])[:10] if r.get("start_date") else None,
+            "end_date": str(r["end_date"])[:10] if r.get("end_date") else None,
+            "reason": r.get("reason", ""),
+            "is_open": r.get("end_date") is None,
+        })
+    return jsonify({"ok": True, "records": out})
+
+
+@app.route("/machine-planning/data/downtime/open", methods=["POST"])
+def mp_downtime_open():
+    """Create a new downtime (breakdown/maintenance) record."""
+    _mp_model.init_mp_tables()
+    data = request.get_json(force=True) or {}
+    machine   = (data.get("machine") or "").strip()
+    kind      = (data.get("kind") or "").strip()
+    start_raw = (data.get("start_date") or "").strip()
+    reason    = (data.get("reason") or "").strip()
+    if not machine or not kind or not start_raw:
+        return jsonify({"ok": False, "error": "machine, kind and start_date are required"}), 400
+    try:
+        import datetime as _dt_local
+        start_date = _dt_local.date.fromisoformat(start_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": f"Invalid start_date: {start_raw!r}"}), 400
+    try:
+        rec = _mp_model.MpMachineDowntime(
+            segment=_MP_SEGMENT,
+            machine=machine,
+            kind=kind,
+            start_date=start_date,
+            reason=reason,
+        )
+        new_id = _mp_model.insert_downtime(rec)
+        return jsonify({"ok": True, "id": new_id})
+    except _mp_model.DowntimeValidationError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+    except Exception as exc:
+        app.logger.error("mp_downtime_open: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/downtime/close", methods=["POST"])
+def mp_downtime_close():
+    """Set end_date on an open downtime record."""
+    _mp_model.init_mp_tables()
+    data     = request.get_json(force=True) or {}
+    rec_id   = data.get("id")
+    end_raw  = (data.get("end_date") or "").strip()
+    if not rec_id or not end_raw:
+        return jsonify({"ok": False, "error": "id and end_date are required"}), 400
+    try:
+        import datetime as _dt_local
+        end_date = _dt_local.date.fromisoformat(end_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": f"Invalid end_date: {end_raw!r}"}), 400
+    try:
+        updated = _mp_model.close_downtime(int(rec_id), end_date)
+        if not updated:
+            return jsonify({"ok": False, "error": "Record not found or already closed"}), 404
+        return jsonify({"ok": True})
+    except _mp_model.DowntimeValidationError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+    except Exception as exc:
+        app.logger.error("mp_downtime_close: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/data/downtime/<int:rec_id>", methods=["DELETE"])
+def mp_downtime_delete(rec_id: int):
+    """Delete a downtime record."""
+    _mp_model.init_mp_tables()
+    try:
+        deleted = _mp_model.delete_downtime(rec_id)
+        if not deleted:
+            return jsonify({"ok": False, "error": "Record not found"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        app.logger.error("mp_downtime_delete: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -5383,12 +5497,19 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
     result = _mp2_result_from_session()
     if result is None:
         return None
+    em = payload["effective_month"]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    try:
+        dt_recs = _mp_model.get_downtime_affecting_month(seg, em)
+    except Exception:
+        dt_recs = []
     try:
         return _mp_scheduler.run_shift_schedule(
             engine_items=result.items,
             demand_items=demand,
-            segment=payload.get("segment", _mp_seed.SEGMENT),
-            effective_month=payload["effective_month"],
+            segment=seg,
+            effective_month=em,
+            downtime_records=dt_recs,
         )
     except Exception as exc:
         app.logger.error("mp_shift_schedule failed: %s", exc)
@@ -5791,11 +5912,16 @@ def mp_freeze():
         demand_dicts   = payload.get("demand") or []
         fitting_dicts  = payload.get("fitting_demand") or []
         sched_items    = (result.items if result else [])
+        try:
+            _freeze_dt = _mp_model.get_downtime_affecting_month(segment, month)
+        except Exception:
+            _freeze_dt = []
         sched = _mp_scheduler.run_shift_schedule(
             engine_items=sched_items,
             demand_items=[_mp_engine.DemandItem(**d) for d in demand_dicts],
             segment=segment,
             effective_month=month,
+            downtime_records=_freeze_dt,
         )
         plan_lines = _mp_followup.build_plan_lines_from_schedule(
             sched, result, int(run_id), segment, month,
@@ -6081,6 +6207,11 @@ def mp_followup_view(run_id: int):
     min_block   = float(params.min_run_block_hours if params else 2.0)
 
     try:
+        _followup_dt = _mp_model.get_downtime_affecting_month(segment, month)
+    except Exception:
+        _followup_dt = []
+
+    try:
         result = _mp_followup.compute_followup(
             plan_run_id=run_id,
             segment=segment,
@@ -6089,6 +6220,7 @@ def mp_followup_view(run_id: int):
             red_pct=red_pct,
             hours_dev_pct=hours_dev,
             min_run_block_hours=min_block,
+            downtime_records=_followup_dt,
         )
     except Exception as exc:
         app.logger.error("mp_followup_view %d: %s", run_id, exc)
@@ -6163,10 +6295,15 @@ def mp_followup_download(run_id: int):
     min_block = float(params.min_run_block_hours if params else 2.0)
 
     try:
+        _dl_dt = _mp_model.get_downtime_affecting_month(segment, month)
+    except Exception:
+        _dl_dt = []
+    try:
         result = _mp_followup.compute_followup(
             plan_run_id=run_id, segment=segment, month=month,
             amber_pct=amber_pct, red_pct=red_pct,
             hours_dev_pct=hours_dev, min_run_block_hours=min_block,
+            downtime_records=_dl_dt,
         )
         if not result:
             abort(404)

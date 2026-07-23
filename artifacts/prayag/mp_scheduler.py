@@ -18,9 +18,10 @@ ADDITIVE / ISOLATED: reads only mp_* tables; never touches the headline pipeline
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
 import json
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import mp_model as _mp
 
@@ -51,6 +52,7 @@ class UnfinishedItem:
     remaining_kg: float
     capable_machines: List[str]
     origin_week: int
+    downtime_reason: str = ""   # set when the only capable machines are down
 
 
 @dataclasses.dataclass
@@ -80,6 +82,8 @@ class ScheduleResult:
     total_changeovers: int
     week_days: List[int]      # e.g. [6,6,6,7] — days per week
     params_used: dict
+    downtime_machine_days: int = 0    # total machine-days lost to downtime
+    downtime_hours_lost: float = 0.0  # machine-hours lost to downtime
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -106,6 +110,8 @@ class ScheduleResult:
             total_changeovers=d.get("total_changeovers", 0),
             week_days=d.get("week_days", [6, 6, 6, 7]),
             params_used=d.get("params_used", {}),
+            downtime_machine_days=d.get("downtime_machine_days", 0),
+            downtime_hours_lost=d.get("downtime_hours_lost", 0.0),
         )
 
 
@@ -270,6 +276,57 @@ def _schedule_machine_day(
         ))
 
 
+# ── Downtime helper ───────────────────────────────────────────────────────────
+
+def _build_down_days(
+    downtime_records: list,
+    mc_params: Dict[str, dict],
+    month: str,
+    total_days: int,
+) -> Dict[str, Set[int]]:
+    """Return {machine: {day_idx, ...}} for calendar days that fall inside a downtime record.
+
+    Working day indices are 1-based consecutive calendar days from month start.
+    e.g. if month = '2026-07', day_idx 1 = 2026-07-01, day_idx 5 = 2026-07-05.
+    """
+    if not downtime_records:
+        return {}
+    try:
+        year, mnum = int(month[:4]), int(month[5:7])
+        month_start = _dt.date(year, mnum, 1)
+    except Exception:
+        return {}
+
+    down: Dict[str, Set[int]] = defaultdict(set)
+    for rec in downtime_records:
+        mc = str(rec.get("machine") or "")
+        if mc not in mc_params:
+            continue
+        sd = rec.get("start_date")
+        ed = rec.get("end_date")
+        if isinstance(sd, str):
+            try:
+                sd = _dt.date.fromisoformat(str(sd))
+            except Exception:
+                continue
+        if not isinstance(sd, _dt.date):
+            continue
+        if isinstance(sd, _dt.datetime):
+            sd = sd.date()
+        if isinstance(ed, str) and ed:
+            try:
+                ed = _dt.date.fromisoformat(str(ed))
+            except Exception:
+                ed = None
+        if isinstance(ed, _dt.datetime):
+            ed = ed.date()
+        for day_idx in range(1, total_days + 1):
+            cal_date = month_start + _dt.timedelta(days=day_idx - 1)
+            if cal_date >= sd and (ed is None or cal_date <= ed):
+                down[mc].add(day_idx)
+    return dict(down)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run_shift_schedule(
@@ -277,6 +334,7 @@ def run_shift_schedule(
     demand_items: list,     # List[DemandItem] from parse_demand_excel (with week_qty)
     segment: str,
     effective_month: str,
+    downtime_records: Optional[list] = None,  # from mp_model.get_downtime_affecting_month
 ) -> ScheduleResult:
     """
     Build a day-by-day, shift-level schedule from EngineResult items.
@@ -285,6 +343,11 @@ def run_shift_schedule(
     the highest-priority eligible item from a shared work list.  Priority
     is (first_requested_week ASC, remaining_hrs DESC), so W1 demand fills
     W1 machine-days before W2 demand gets a turn; overflow cascades ahead.
+
+    downtime_records: list of dicts from mp_model.get_downtime_affecting_month.
+    Machines that are down on a given day have their capacity set to zero (the
+    day is skipped and two DOWN marker blocks are recorded).  Items routed ONLY
+    to down machines for the entire month end up in unfinished with a reason.
     """
     # ── Load DB params ────────────────────────────────────────────────────────
     params_row = _mp.get_params(segment, effective_month)
@@ -349,6 +412,12 @@ def run_shift_schedule(
     work_items = [w for w in work_items if w.capable_machines]
     work_items.sort(key=lambda w: w.sort_key())
 
+    # ── Downtime map ─────────────────────────────────────────────────────────
+    # {machine: {day_idx}} — days the machine is completely unavailable.
+    down_days = _build_down_days(downtime_records or [], mc_params, effective_month, total_days)
+    downtime_machine_days_count = sum(len(v) for v in down_days.values())
+    downtime_hours_lost_total = 0.0
+
     # ── Day plan ──────────────────────────────────────────────────────────────
     # day_to_week: list index = day-1 (1-indexed), value = week number
     day_to_week: List[int] = []
@@ -366,6 +435,20 @@ def run_shift_schedule(
             if mc not in mc_params:
                 continue
             hps = _hps(mc_params[mc])
+            if day_idx in down_days.get(mc, set()):
+                # Machine is down this day — record DOWN marker blocks and skip scheduling
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="DAY",
+                    item_code="DOWN", raw_code="DOWN", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="NIGHT",
+                    item_code="DOWN", raw_code="DOWN", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                downtime_hours_lost_total += 2 * hps
+                continue
             _schedule_machine_day(
                 machine=mc,
                 day=day_idx,
@@ -380,6 +463,12 @@ def run_shift_schedule(
             )
 
     # ── Unfinished items ──────────────────────────────────────────────────────
+    # Determine which machines were down for the ENTIRE month (no available days)
+    all_down_machines: Set[str] = {
+        mc for mc, days in down_days.items()
+        if len(days) >= total_days
+    }
+
     unfinished: List[UnfinishedItem] = [
         UnfinishedItem(
             item_code=w.item_code,
@@ -389,6 +478,11 @@ def run_shift_schedule(
             remaining_kg=round(w.remaining_hrs * w.rate_kg_per_hr, 1),
             capable_machines=w.capable_machines,
             origin_week=w.first_requested_week,
+            downtime_reason=(
+                "only capable machine(s) are down (breakdown/maintenance)"
+                if w.capable_machines and all(mc in all_down_machines for mc in w.capable_machines)
+                else ""
+            ),
         )
         for w in work_items if w.remaining_hrs > 0.01
     ]
@@ -457,4 +551,6 @@ def run_shift_schedule(
             "min_run_block_hours": min_run_block,
             "week_days": week_days,
         },
+        downtime_machine_days=downtime_machine_days_count,
+        downtime_hours_lost=round(downtime_hours_lost_total, 1),
     )

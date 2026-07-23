@@ -238,6 +238,145 @@
   </div>
 
   {% if tab == 'plumbing' %}
+
+  <!-- ══ Breakdown / Maintenance panels ══════════════════════════════════ -->
+  <div id="dt-panels" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.85rem;">
+
+    {% for dt_kind, dt_label, dt_color in [('breakdown','Breakdown','#c55a11'), ('maintenance','Maintenance','#1F3864')] %}
+    <div style="border:2px solid {{ dt_color }};border-radius:.6rem;overflow:hidden;">
+      <!-- Panel header -->
+      <div style="background:{{ dt_color }};color:#fff;padding:.45rem .7rem;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:.82rem;font-weight:800;">
+          {% if dt_kind == 'breakdown' %}⚡{% else %}🔧{% endif %}
+          {{ dt_label }}
+          {% set open_count = downtime_open | selectattr('kind','equalto',dt_kind) | list | length %}
+          {% if open_count > 0 %}
+          <span style="background:#fff;color:{{ dt_color }};border-radius:9999px;font-size:.72rem;font-weight:900;padding:.05rem .45rem;margin-left:.35rem;">{{ open_count }} open</span>
+          {% endif %}
+        </span>
+        <button onclick="dtOpenForm('{{ dt_kind }}')"
+                style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:.35rem;padding:.2rem .55rem;font-size:.78rem;font-weight:700;cursor:pointer;">
+          + Log {{ dt_label }}
+        </button>
+      </div>
+
+      <!-- Add form (hidden by default) -->
+      <div id="dt-form-{{ dt_kind }}" style="display:none;background:#f9fafb;padding:.6rem .7rem;border-bottom:1px solid #e5e7eb;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem;">
+          <div>
+            <label style="font-size:.72rem;font-weight:600;color:{{ dt_color }};">Machine *</label>
+            <select id="dt-mc-{{ dt_kind }}"
+                    style="width:100%;border:1px solid #d1d5db;border-radius:.3rem;padding:.3rem .45rem;font-size:.8rem;">
+              <option value="">— select —</option>
+              {% for mc in all_machine_names %}
+              <option value="{{ mc }}">{{ mc }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:.72rem;font-weight:600;color:{{ dt_color }};">Start Date *</label>
+            <input type="date" id="dt-start-{{ dt_kind }}"
+                   style="width:100%;border:1px solid #d1d5db;border-radius:.3rem;padding:.3rem .45rem;font-size:.8rem;">
+          </div>
+        </div>
+        <div style="margin-bottom:.4rem;">
+          <label style="font-size:.72rem;font-weight:600;color:{{ dt_color }};">Reason (optional)</label>
+          <input type="text" id="dt-reason-{{ dt_kind }}" placeholder="e.g. motor failure, planned service…"
+                 style="width:100%;border:1px solid #d1d5db;border-radius:.3rem;padding:.3rem .45rem;font-size:.8rem;box-sizing:border-box;">
+        </div>
+        <div style="display:flex;gap:.4rem;">
+          <button onclick="dtSubmitOpen('{{ dt_kind }}')"
+                  style="background:{{ dt_color }};color:#fff;border:none;border-radius:.35rem;padding:.3rem .75rem;font-size:.8rem;font-weight:700;cursor:pointer;">Save</button>
+          <button onclick="dtOpenForm('{{ dt_kind }}',true)"
+                  style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:.35rem;padding:.3rem .75rem;font-size:.8rem;cursor:pointer;">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Open records -->
+      <div style="padding:.5rem .7rem;">
+        {% set open_recs = downtime_open | selectattr('kind','equalto',dt_kind) | list %}
+        {% if open_recs %}
+        <p style="font-size:.7rem;font-weight:700;color:#dc2626;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.05em;">Currently Down</p>
+        {% for r in open_recs %}
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:.4rem;padding:.4rem .55rem;margin-bottom:.35rem;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+          <div>
+            <span style="font-size:.82rem;font-weight:800;color:#991b1b;">{{ r.machine }}</span>
+            <span style="font-size:.72rem;color:#6b7280;margin-left:.35rem;">since {{ r.start_date|string|truncate(10,False,'') }}</span>
+            {% if r.reason %}<div style="font-size:.7rem;color:#6b7280;font-style:italic;">{{ r.reason }}</div>{% endif %}
+          </div>
+          <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;">
+            <input type="date" id="dt-end-{{ r.id }}"
+                   style="border:1px solid #d1d5db;border-radius:.3rem;padding:.2rem .4rem;font-size:.75rem;width:130px;">
+            <button onclick="dtClose({{ r.id }})"
+                    style="background:#16a34a;color:#fff;border:none;border-radius:.3rem;padding:.25rem .55rem;font-size:.75rem;font-weight:700;cursor:pointer;">✓ Close</button>
+            <button onclick="dtDelete({{ r.id }})"
+                    style="background:#dc2626;color:#fff;border:none;border-radius:.3rem;padding:.25rem .45rem;font-size:.75rem;cursor:pointer;" title="Delete">✕</button>
+          </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p style="font-size:.75rem;color:#9ca3af;margin:.2rem 0;font-style:italic;">No machines currently down.</p>
+        {% endif %}
+
+        <!-- Closed history (collapsed) -->
+        {% set closed_recs = downtime_closed | selectattr('kind','equalto',dt_kind) | list %}
+        {% if closed_recs %}
+        <details style="margin-top:.4rem;">
+          <summary style="font-size:.72rem;color:#6b7280;cursor:pointer;font-weight:600;">History ({{ closed_recs|length }} closed)</summary>
+          <div style="margin-top:.35rem;">
+          {% for r in closed_recs[:10] %}
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.25rem .4rem;border-radius:.3rem;background:#f9fafb;margin-bottom:.2rem;font-size:.73rem;color:#374151;">
+            <span style="font-weight:700;">{{ r.machine }}</span>
+            <span style="color:#6b7280;">{{ r.start_date|string|truncate(10,False,'') }} → {{ r.end_date|string|truncate(10,False,'') }}</span>
+            {% if r.reason %}<span style="font-style:italic;color:#9ca3af;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ r.reason }}">{{ r.reason }}</span>{% endif %}
+            <button onclick="dtDelete({{ r.id }})"
+                    style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:.8rem;" title="Delete">✕</button>
+          </div>
+          {% endfor %}
+          {% if closed_recs|length > 10 %}<p style="font-size:.7rem;color:#9ca3af;margin:.25rem 0 0;">… and {{ closed_recs|length - 10 }} more.</p>{% endif %}
+          </div>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div><!-- /dt-panels -->
+
+  <script>
+  function dtOpenForm(kind, close) {
+    const f = document.getElementById('dt-form-'+kind);
+    f.style.display = close ? 'none' : (f.style.display === 'none' ? 'block' : 'none');
+  }
+  async function dtSubmitOpen(kind) {
+    const mc     = document.getElementById('dt-mc-'+kind).value.trim();
+    const start  = document.getElementById('dt-start-'+kind).value.trim();
+    const reason = document.getElementById('dt-reason-'+kind).value.trim();
+    if (!mc || !start) { alert('Machine and start date are required.'); return; }
+    const r = await fetch('/machine-planning/data/downtime/open', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({machine:mc, kind:kind, start_date:start, reason:reason})
+    });
+    const j = await r.json();
+    if (j.ok) { location.reload(); } else { alert('Error: '+j.error); }
+  }
+  async function dtClose(id) {
+    const end = document.getElementById('dt-end-'+id).value.trim();
+    if (!end) { alert('Please enter an end date.'); return; }
+    const r = await fetch('/machine-planning/data/downtime/close', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id:id, end_date:end})
+    });
+    const j = await r.json();
+    if (j.ok) { location.reload(); } else { alert('Error: '+j.error); }
+  }
+  async function dtDelete(id) {
+    if (!confirm('Delete this downtime record?')) return;
+    const r = await fetch('/machine-planning/data/downtime/'+id, {method:'DELETE'});
+    const j = await r.json();
+    if (j.ok) { location.reload(); } else { alert('Error: '+j.error); }
+  }
+  </script>
+
   <!-- Section nav strip -->
   <nav class="sec-nav" id="sec-nav" aria-label="Jump to section">
     <button class="sec-pill active" data-sec="sec-compound" onclick="navJump('sec-compound','s-compound')">1 · Compound</button>
