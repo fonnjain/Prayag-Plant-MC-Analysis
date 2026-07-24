@@ -4469,6 +4469,21 @@ def costing_hub():
     if category != "PTMT":
         labour_view = _cl.get_labour_view(category, fy)
 
+        # Auto-refresh stale R12 rows: old code stored WTP as total_fitting_kg
+        # and left wt_in_kgs_total=0 / r12_rejection_kg=NULL.  That combination
+        # is impossible with the current WIK+REJ formula, so it is a reliable
+        # staleness signal.  Refresh only for non-frozen FYs (live data anyway).
+        if labour_view.get("loaded") and not fy_frozen:
+            _monthly = labour_view.get("monthly", [])
+            _stale = any(
+                r.get("fitting_kg_source") == "report12"
+                and not r.get("wt_in_kgs_total")
+                for r in _monthly
+            )
+            if _stale:
+                _cl.load_labour_fy(category, fy, force=False)
+                labour_view = _cl.get_labour_view(category, fy)
+
     # ── RM view ──────────────────────────────────────────────────────────────
     rm_recipes   = []
     planned_rm   = {}

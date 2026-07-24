@@ -1470,6 +1470,113 @@ class TestR12SourceRouting:
 
 
 # ---------------------------------------------------------------------------
+# 12b. parse_r12_fittings_kg — column-location and fail-loud tests
+# ---------------------------------------------------------------------------
+
+class TestParseR12FittingsKgColumnGuard:
+    """Tests that parse_r12_fittings_kg (a) fails loudly when 'Wt in Kgs'
+    is not found rather than silently returning 0, and (b) correctly reads
+    the sub-header-row column introduced in FY2627."""
+
+    def _parse(self, values):
+        return _import_labour().parse_r12_fittings_kg(values)
+
+    def _build_fy2627_values(self, data_rows):
+        """Minimal FY2627 layout: name / dept / TOTAL / main-header / sub-header / data."""
+        main_hdr = [
+            "DATE", "MATERIAL", "Item Code", "SAP Code", "Moulding Machine",
+            "Run Cavity", "Mould Cavity (F)", "Cycle Time Per Pcs Standard (F)",
+            "Output Production", "",               # col 8-9 group header (main)
+            "Weight per Pc", "",                   # 10-11
+            "Weight of Total Production",          # 12
+            "Runner Produce",                      # 13
+            "Ideal Cycle Time", "Actual Cycle Time",           # 14-15
+            "M/C Run Hour (Ideal)", "Mould Changing Hours",    # 16-17
+            "Hour Consume for Production(Actual)", "Cycle Time Efficiency",  # 18-19
+            "Loss in Hours", "Mould Efficiency",               # 20-21
+            "Rejection", "",                                   # 22-23
+            "Ideal Rejection Weight (in Kgs)",                 # 24
+            "Actual Rejection Weight (in Kgs)",                # 25
+            "Rejection %age", "Runner %age",                   # 26-27
+        ]
+        sub_hdr = [""] * 9 + [" Wt in Kgs "] + [""] * 18   # col 9 = Wt in Kgs
+        return [
+            ["Mr. Jitendra"],            # row 0: name
+            ["Mould M/C"],               # row 1: dept
+            ["TOTAL"] + [""] * 27,       # row 2: pre-header TOTAL (skipped)
+            main_hdr,                    # row 3: main header
+            sub_hdr,                     # row 4: sub-header
+        ] + data_rows
+
+    @staticmethod
+    def _row(wik, rej, wtp, n_cols=28):
+        r = [""] * n_cols
+        r[9]  = wik   # Wt in Kgs (sub-header col)
+        r[12] = wtp   # Weight of Total Production (main-header col)
+        r[25] = rej   # Actual Rejection Weight (in Kgs)
+        return r
+
+    def test_wik_column_not_found_returns_error(self):
+        """When neither main nor sub-row has 'Wt in Kgs', parser must error — not return 0."""
+        main_hdr = [
+            "Item Name", "Machine", "Date", "Pcs",
+            "Actual Rejection Weight (in Kgs)",
+            "Weight of Total Production",
+        ]
+        sub_hdr = ["", "", "", "", "", ""]   # 'Wt in Kgs' absent everywhere
+        values  = [[], main_hdr, sub_hdr,
+                   ["TEE", "M/C-1", "2026-04-01", 100, 0.80, 78.16]]
+        result = self._parse(values)
+        assert result.get("error"), (
+            "parser must set 'error' key when 'Wt in Kgs' column is absent"
+        )
+        assert result["total_fitting_kg"] == 0.0, (
+            "total_fitting_kg must be 0 when WIK column is missing"
+        )
+
+    def test_wik_not_found_does_not_use_wtp(self):
+        """Absent WIK must not silently return the WTP value as the headline."""
+        # Layout has WTP at col 5 but no WIK anywhere
+        main_hdr = [
+            "Item", "Machine",
+            "Actual Rejection Weight (in Kgs)",
+            "", "", "Weight of Total Production",
+        ]
+        values = [[], main_hdr, [""] * 6,
+                  ["TEE", "M/C-1", 0.5, "", "", 90_000.0]]
+        result = self._parse(values)
+        assert result["total_fitting_kg"] == 0.0, (
+            "WTP must NOT be used as fallback when 'Wt in Kgs' is absent"
+        )
+
+    def test_fy2627_sub_header_acceptance(self):
+        """FY2627 real layout: sub-header 'Wt in Kgs' at col 9 + rejection at col 25
+        produces total_fitting_kg = WIK + REJ matching the APR-2026 oracle (90,038.43)."""
+        # Two data rows summing to APR oracle: WIK=89,151.74, REJ=886.69
+        d1 = self._row(wik=50_000.00, rej=500.00, wtp=52_000.00)
+        d2 = self._row(wik=39_151.74, rej=386.69, wtp=41_839.26)
+        values = self._build_fy2627_values([d1, d2])
+
+        result = self._parse(values)
+        assert result.get("error") is None, f"unexpected parse error: {result.get('error')}"
+        assert result["wt_in_kgs"]            == pytest.approx(89_151.74, rel=1e-5)
+        assert result["rejection_kg"]          == pytest.approx(886.69,    rel=1e-4)
+        assert result["total_fitting_kg"]      == pytest.approx(90_038.43, rel=1e-5)
+        # WTP is present but must NOT be the headline
+        assert result["weight_of_total_prod"]  == pytest.approx(93_839.26, rel=1e-5)
+        assert result["total_fitting_kg"] != pytest.approx(
+            result["weight_of_total_prod"], abs=1.0
+        ), "total_fitting_kg must differ from WTP — WTP overestimates"
+
+    def test_fy2627_rejection_not_counted_via_main_header(self):
+        """Rejection is read from col 25 (main hdr), independent of sub-header layout."""
+        d1 = self._row(wik=10_000.0, rej=150.0, wtp=11_000.0)
+        values = self._build_fy2627_values([d1])
+        result = self._parse(values)
+        assert result["rejection_kg"] == pytest.approx(150.0, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # 13. _fy_month_to_ym — acceptance figures math check (no live data needed)
 # ---------------------------------------------------------------------------
 

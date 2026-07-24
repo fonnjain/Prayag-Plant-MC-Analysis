@@ -390,6 +390,20 @@ def parse_r12_fittings_kg(
     rej_col  = col_map["rejection_kg"]
     wtp_col  = col_map.get("weight_of_total_prod", -1)
     wik_col  = col_map.get("wt_in_kgs", -1)
+
+    # HARD STOP: "Wt in Kgs" must be found — either on the main header row
+    # (FY2526 single-row layout) or on the sub-header row immediately beneath
+    # it (FY2627 two-row layout, "Output Production" group).
+    # Do NOT silently fall back to "Weight of Total Production" (formula-driven,
+    # pcs × std weight) — it overestimates by 4-5% when hand-keyed weights differ.
+    if wik_col < 0:
+        logger.error(
+            "parse_r12_fittings_kg: 'Wt in Kgs' column not found in main or "
+            "sub-header row — refusing to fall back to 'Weight of Total "
+            "Production'. col_map=%s", col_map
+        )
+        return {**_EMPTY, "error": "'Wt in Kgs' column not found in Report-12 header"}
+
     item_col = col_map.get("item", -1)
     mc_col   = col_map.get("machine", -1)
     pc_col   = col_map.get("pc", -1)
@@ -867,9 +881,14 @@ def load_labour_fy(
         }
 
     # ── Source fittings kg from Report-12 (NOT the labour sheet) ─────────────
-    # The labour sheet "Fittings Production" column is MISLABELLED in FY2026-27
-    # (contains gross PIECES, not kg).  Report-12 "Weight of Total Production"
-    # is formula-driven and authoritative for all FYs.
+    # AUTHORITATIVE FIGURE:
+    #   fitting_prod_kg = SUM("Wt in Kgs") + SUM("Actual Rejection Weight (in Kgs)")
+    #   (gross actual = good output + rejected weight — same convention as pipe).
+    #
+    # "Wt in Kgs" is a SUB-HEADER on the row immediately below the main header row
+    # (under the "Output Production" group); _r12_find_header scans both rows.
+    # DO NOT use "Weight of Total Production" (formula-driven, pcs × std weight)
+    # as the costing figure — it is kept only for the data-quality variance check.
     month_labels = [r["month_label"] for r in monthly_rows]
 
     # ── Auto sources: employee data (hours/headcount) + KH-1 wages files ─────
