@@ -1,14 +1,49 @@
 """costing_labour.py — Labour costing for Plumbing (PTMT stubbed).
 
-Reads the "Annual <FY> Segment Wise Labour Cost, Solar Cost & Power Cost"
-workbook, tab "Plumbing".
+LABOUR SHEET — WAGES AND HOURS ONLY
+-------------------------------------
+The "Annual <FY> Segment Wise Labour Cost, Solar Cost & Power Cost" workbook,
+tab "Plumbing", is used for: No. of Labour, Contractor Labour, Paid/Actual Hours,
+Paid Wages, Contractor Wages, and per-hour costs.
 
-TWO COLUMN LAYOUTS
-------------------
-FY2026-27 adds "Contractor Labour" and "Paid Wages for Contractor" columns
-(right of "No. Of Labour" and "Paid Wages" respectively).  FY2025-26 has a
-"Per KG Labour Cost" column that FY2026-27 omits (we recompute it either way).
+PIPE production (kg) is ALSO taken from this sheet's "Pipe Production" column —
+verified correct for all FYs (that column IS genuinely kilograms).
+
+FITTINGS PRODUCTION — SOURCED FROM REPORT-12 (NOT the labour sheet)
+----------------------------------------------------------------------
+The labour sheet's "Fittings Production (KGS)" column is MISLABELLED in
+FY2026-27: it actually contains gross PIECES, not kilograms.
+
+Proof: Apr/May/Jun 2026 labour-sheet reads ≈ 1,342,290 / 1,164,889 / 1,384,394.
+Report-12 PIECE counts for the same months: 1,340,117 / 1,163,032 / 1,382,048
+(gap = rejected pieces exactly).  Actual kg from Report-12: 93,839 / 79,875 /
+101,512.
+
+Fix: load_labour_fy() reads Report-12 "Weight of Total Production" from each
+month's PIPE workbook (DAILY_SOURCES["PIPE"]) and stores that as the
+authoritative fitting_prod_kg.  The labour sheet figure for fittings is never
+stored.
+
+TWO COLUMN LAYOUTS (labour sheet)
+----------------------------------
+FY2026-27 adds "Contractor Labour" and "Paid Wages for Contractor" columns.
+FY2025-26 has a "Per KG Labour Cost" column that FY2026-27 omits (recomputed).
 The parser is fully header-based and handles both layouts without branching.
+
+REPORT-12 COLUMN LAYOUTS
+-------------------------
+FY2026-27: SAP Code | Item Name | Machine | Date | Pc | Wt in Kgs |
+           Weight per Pc | Weight of Total Production | Runner Produce | ...
+FY2025-26: no SAP Code column (everything shifts one column left).
+Header-based parsing handles both layouts automatically.
+
+DATA-QUALITY FLAG (J-vs-M)
+---------------------------
+For each month, if |Weight of Total Production − Wt in Kgs| / W-T-P > 2%,
+a variance warning is raised naming the divergent rows (item, machine, pcs,
+both weights).  "Wt in Kgs" is hand-keyed; "Weight of Total Production" is
+formula-driven (pcs × standard weight / 1000).  June 2026 shows 4.4% total
+divergence with 81 bad hand-entries — that is the design case.
 
 FREEZE RULE
 -----------
@@ -21,13 +56,6 @@ REPORT-22 MACHINE ALLOCATION
 Report-22 (A) in the monthly Pipe & Fitting workbook allocates plant-level
 manpower to machines vs departments.  parse_report22_tab() splits them and
 returns labour cost per machine = total_hours × per_hour_cost.
-
-DATA MISMATCH FLAG
-------------------
-The FY2026-27 labour sheet's fittings production (tab-reported ≈3.89M kg for
-3 months) is irreconcilable with Report-12 actuals (≈1.2M kg across 15 months).
-Both figures are surfaced side-by-side as a data_mismatch warning; we never
-silently pick one.
 """
 from __future__ import annotations
 
@@ -46,6 +74,8 @@ MONTH_LABELS = [
     "OCT", "NOV", "DEC", "JAN", "FEB", "MAR",
 ]
 _MONTH_NUM = {lbl: i + 1 for i, lbl in enumerate(MONTH_LABELS)}
+# 0-based index within the FY (APR=0 … MAR=11) — used for DAILY_SOURCES lookup
+_MONTH_IDX = {lbl: i for i, lbl in enumerate(MONTH_LABELS)}
 
 # ── Header normalisation ───────────────────────────────────────────────────────
 
@@ -211,6 +241,213 @@ def parse_ideal_rates(values: list) -> dict:
         "pipe":    pipe_rate    or defaults["pipe"],
         "fitting": fitting_rate or defaults["fitting"],
     }
+
+
+# ── Report-12 fittings kg parser ──────────────────────────────────────────────
+#
+# Header that identifies the authoritative weight column:
+_R12_HDR_WTP   = "WEIGHT OF TOTAL PRODUCTION"
+# Hand-keyed column (used only for the data-quality variance check):
+_R12_HDR_WIK   = "WT IN KGS"
+# Per-row divergence threshold for naming individual bad entries:
+_R12_ROW_VARIANCE_PCT = 5.0
+# Total-month divergence threshold for the UI warning card:
+R12_TOTAL_VARIANCE_WARN_PCT = 2.0
+
+
+def _fy_month_to_ym(fy: str, month_label: str) -> str:
+    """Convert a 4-char FY code + month label to a YYYY-MM DAILY_SOURCES key.
+
+    FY "2627" starts April 2026 → APR-SEP map to 2026-04…09,
+    OCT-DEC to 2026-10…12, JAN-MAR to 2027-01…03.
+    """
+    start_year = 2000 + int(fy[:2])
+    idx = _MONTH_IDX.get(month_label.upper(), 0)   # APR=0 … MAR=11
+    if idx <= 8:           # APR(0)…DEC(8) → same calendar year as FY start
+        return f"{start_year}-{idx + 4:02d}"
+    else:                  # JAN(9)…MAR(11) → next calendar year
+        return f"{start_year + 1}-{idx - 8:02d}"
+
+
+def _r12_find_header(values: list) -> tuple:
+    """Scan the first 10 rows for the Report-12 header row.
+
+    Returns (hdr_idx, col_map) where col_map maps field names to column
+    indices.  hdr_idx is -1 if the header cannot be found.
+
+    Works for both FY2025-26 (no SAP Code) and FY2026-27 (with SAP Code)
+    layouts because we search by header text, not by position.
+    """
+    # All keys upper-stripped.  First match wins per field.
+    _WANT = {
+        _R12_HDR_WTP:    "weight_of_total_prod",
+        _R12_HDR_WIK:    "wt_in_kgs",
+        "ITEM NAME":      "item",
+        "ITEM":           "item",
+        "MACHINE":        "machine",
+        "M/C":            "machine",
+        "PCS":            "pc",
+        "PC":             "pc",
+        "PIECES":         "pc",
+    }
+
+    for ri, row in enumerate(values[:10]):
+        col_map: dict[str, int] = {}
+        for ci, cell in enumerate(row):
+            key = _norm_hdr(cell)
+            for pattern, field in _WANT.items():
+                if key == pattern and field not in col_map:
+                    col_map[field] = ci
+                    break
+        if "weight_of_total_prod" in col_map:
+            return ri, col_map
+    return -1, {}
+
+
+def parse_r12_fittings_kg(
+    values: list,
+    *,
+    row_variance_pct: float = _R12_ROW_VARIANCE_PCT,
+) -> dict:
+    """Parse Report-12 tab for total fittings weight (for costing purposes).
+
+    Returns the sum of "Weight of Total Production" (authoritative, formula-
+    driven = pcs × std_weight / 1000) and "Wt in Kgs" (hand-keyed, for the
+    data-quality J-vs-M variance check).
+
+    Works for both FY layouts (FY2025-26 no SAP Code; FY2026-27 with SAP Code)
+    because column positions are detected by header text.
+
+    ``row_variance_pct`` (default 5%): flag a row in ``divergent_rows`` when
+    ``|weight_of_total_prod − wt_in_kgs| / weight_of_total_prod > threshold``.
+
+    Returns::
+
+        {
+            "weight_of_total_prod": float,   # authoritative R12 total kg
+            "wt_in_kgs":           float,   # hand-keyed total kg
+            "variance_pct":        float|None,
+            "divergent_rows":      list[dict],  # {item, machine, pcs, w_tot, w_kgs, diff_pct}
+            "n_rows":              int,
+        }
+    """
+    _EMPTY = {
+        "weight_of_total_prod": 0.0, "wt_in_kgs": 0.0,
+        "variance_pct": None, "divergent_rows": [], "n_rows": 0,
+    }
+    if not values:
+        return _EMPTY
+
+    hdr_idx, col_map = _r12_find_header(values)
+    if hdr_idx < 0 or "weight_of_total_prod" not in col_map:
+        logger.warning("parse_r12_fittings_kg: 'Weight of Total Production' header not found")
+        return _EMPTY
+
+    wtp_col  = col_map["weight_of_total_prod"]
+    wik_col  = col_map.get("wt_in_kgs", -1)
+    item_col = col_map.get("item", -1)
+    mc_col   = col_map.get("machine", -1)
+    pc_col   = col_map.get("pc", -1)
+
+    total_wtp = 0.0
+    total_wik = 0.0
+    divergent: list = []
+    n_rows = 0
+    row_thr = row_variance_pct / 100.0
+
+    for row in values[hdr_idx + 1:]:
+        if not row or len(row) <= wtp_col:
+            continue
+
+        # Skip TOTAL / sub-header rows (non-numeric weight cell)
+        wtp = _num(row[wtp_col])
+        if wtp is None:
+            continue
+
+        # Skip rows where the first cell is a TOTAL indicator
+        first = _norm_hdr(row[0]) if row else ""
+        if any(t in first for t in ("TOTAL", "GRAND", "SUM", "SR NO", "S.NO")):
+            continue
+
+        n_rows += 1
+        total_wtp += wtp
+
+        wik = _num(row[wik_col] if wik_col >= 0 and wik_col < len(row) else None) or 0.0
+        total_wik += wik
+
+        # Flag per-row divergence
+        if wtp > 0 and wik_col >= 0 and abs(wtp - wik) / wtp > row_thr:
+            item = str(row[item_col]).strip() if item_col >= 0 and item_col < len(row) else "?"
+            mc   = str(row[mc_col]).strip()   if mc_col   >= 0 and mc_col   < len(row) else "?"
+            pc   = _num(row[pc_col] if pc_col >= 0 and pc_col < len(row) else None)
+            divergent.append({
+                "item": item, "machine": mc, "pcs": pc,
+                "w_tot": round(wtp, 2), "w_kgs": round(wik, 2),
+                "diff_pct": round(abs(wtp - wik) / wtp * 100, 1),
+            })
+
+    variance_pct = None
+    if total_wtp > 0 and wik_col >= 0:
+        variance_pct = round(abs(total_wtp - total_wik) / total_wtp * 100, 2)
+
+    return {
+        "weight_of_total_prod": round(total_wtp, 2),
+        "wt_in_kgs":           round(total_wik, 2),
+        "variance_pct":        variance_pct,
+        "divergent_rows":      divergent,
+        "n_rows":              n_rows,
+    }
+
+
+def load_r12_for_fy(
+    fy: str,
+    month_labels: list,
+    token: str,
+) -> dict:
+    """Read Report-12 from each month's PIPE workbook and parse fittings kg.
+
+    Returns a dict keyed by month_label (e.g. "APR") with the result of
+    parse_r12_fittings_kg() for that month, plus "source_ym" and "ok".
+
+    Months whose PIPE workbook is not registered in DAILY_SOURCES get an empty
+    result with ok=False so the caller can fall back gracefully.
+    """
+    import sheets as _sh          # lazy — avoid circular at module level
+    import sources as _src        # lazy — avoid pulling real store in tests
+
+    pipe_files = _src.DAILY_SOURCES.get("PIPE", {}).get("files", {})
+    results: dict = {}
+
+    for month_label in month_labels:
+        ym = _fy_month_to_ym(fy, month_label)
+        fid = pipe_files.get(ym)
+
+        if not fid:
+            results[month_label] = {
+                "weight_of_total_prod": 0.0, "wt_in_kgs": 0.0,
+                "variance_pct": None, "divergent_rows": [], "n_rows": 0,
+                "source_ym": ym, "ok": False, "error": "no workbook registered",
+            }
+            logger.debug("load_r12_for_fy: no PIPE workbook for %s (%s)", ym, month_label)
+            continue
+
+        try:
+            matrices = _sh.batch_get(fid, ["Report-12"], token)
+            r12_vals = matrices.get("Report-12", [])
+            parsed   = parse_r12_fittings_kg(r12_vals)
+            parsed.update({"source_ym": ym, "ok": parsed["n_rows"] > 0})
+            if not parsed["ok"]:
+                parsed["error"] = "Report-12 tab empty or unparseable"
+            results[month_label] = parsed
+        except Exception as exc:
+            logger.warning("load_r12_for_fy: %s %s failed: %s", month_label, ym, exc)
+            results[month_label] = {
+                "weight_of_total_prod": 0.0, "wt_in_kgs": 0.0,
+                "variance_pct": None, "divergent_rows": [], "n_rows": 0,
+                "source_ym": ym, "ok": False, "error": str(exc),
+            }
+
+    return results
 
 
 # ── FY-level computations ──────────────────────────────────────────────────────
@@ -478,7 +715,7 @@ def load_labour_fy(
 
     errors: list = []
 
-    # Read both tabs in one batch call
+    # Read both tabs in one batch call (labour sheet: wages + hours + pipe kg)
     try:
         matrices = _sh.batch_get(file_id, ["Plumbing", "Ideal Labour Cost"], token)
     except Exception as exc:
@@ -502,6 +739,65 @@ def load_labour_fy(
             "errors": errors,
             "ideal_rates": ideal_rates,
         }
+
+    # ── Source fittings kg from Report-12 (NOT the labour sheet) ─────────────
+    # The labour sheet "Fittings Production" column is MISLABELLED in FY2026-27
+    # (contains gross PIECES, not kg).  Report-12 "Weight of Total Production"
+    # is formula-driven and authoritative for all FYs.
+    month_labels = [r["month_label"] for r in monthly_rows]
+    r12_by_month = {}
+    r12_errors: list[str] = []
+    try:
+        r12_by_month = load_r12_for_fy(fy, month_labels, token)
+    except Exception as exc:
+        r12_errors.append(f"R12 load failed: {exc}")
+        logger.warning("load_labour_fy: R12 load exception: %s", exc)
+
+    r12_months_ok = 0
+    for row in monthly_rows:
+        ml = row["month_label"]
+        r12 = r12_by_month.get(ml, {})
+        r12_kg = float(r12.get("weight_of_total_prod") or 0)
+
+        if r12_kg > 0:
+            # Authoritative R12 value available — use it
+            row["fitting_r12_kg"]        = r12_kg
+            row["wt_in_kgs_total"]       = float(r12.get("wt_in_kgs") or 0)
+            row["fitting_kg_source"]     = "report12"
+            row["fitting_variance_pct"]  = r12.get("variance_pct")
+            row["fitting_divergent_n"]   = len(r12.get("divergent_rows") or [])
+            row["fitting_divergent_rows"] = r12.get("divergent_rows") or []
+            # Overwrite the (potentially wrong) labour-sheet figure
+            row["fitting_prod_kg"]       = r12_kg
+            r12_months_ok += 1
+        else:
+            # No R12 data — keep labour-sheet figure with a source flag
+            row["fitting_r12_kg"]        = None
+            row["wt_in_kgs_total"]       = None
+            row["fitting_kg_source"]     = "labour_sheet"
+            row["fitting_variance_pct"]  = None
+            row["fitting_divergent_n"]   = 0
+            row["fitting_divergent_rows"] = []
+            if r12.get("error"):
+                r12_errors.append(f"{ml}: {r12['error']}")
+
+        # Recompute total_prod_kg and per_kg_labour_cost from corrected figures
+        pipe_kg    = float(row.get("pipe_prod_kg") or 0)
+        fit_kg     = float(row.get("fitting_prod_kg") or 0)
+        total_wages = float(row.get("paid_wages") or 0) + float(row.get("contractor_wages") or 0)
+        row["total_prod_kg"]       = round(pipe_kg + fit_kg, 2) if (pipe_kg + fit_kg) > 0 else None
+        row["per_kg_labour_cost"]  = (
+            round(total_wages / row["total_prod_kg"], 4)
+            if row.get("total_prod_kg") and row["total_prod_kg"] > 0 else None
+        )
+
+    if r12_errors:
+        errors.extend(r12_errors)
+    if r12_months_ok < len(monthly_rows):
+        errors.append(
+            f"R12 data unavailable for {len(monthly_rows) - r12_months_ok} month(s)"
+            f" — labour-sheet fitting_prod_kg used as fallback."
+        )
 
     # Persist to DB
     try:

@@ -10,9 +10,17 @@ CATEGORIES
 ----------
 "PLUMBING"  — built now (pipe + fittings, both labour and RM costing)
 "PTMT"      — stubbed (shows "coming soon")
+
+FITTINGS PRODUCTION SOURCE
+---------------------------
+fitting_prod_kg = Report-12 "Weight of Total Production" (formula-driven).
+The labour sheet's "Fittings Production" column is MISLABELLED in FY2026-27
+(contains PIECES, not kg).  The R12 figure is authoritative for all FYs.
+The old labour-sheet value is never stored; the correct R12 value replaces it.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Optional
@@ -55,7 +63,7 @@ def is_frozen(fy: str) -> bool:
 
 # ── Labour workbook file IDs ──────────────────────────────────────────────────
 # Source: "Annual <FY> Segment Wise Labour Cost, Solar Cost & Power Cost"
-# Tab parsed: "Plumbing"
+# Tab parsed: "Plumbing" (wages + hours ONLY — production from Report-12)
 
 LABOUR_SOURCES: dict[str, dict[str, str]] = {
     "PLUMBING": {
@@ -112,6 +120,18 @@ CREATE TABLE IF NOT EXISTS costing_labour_meta (
 );
 """
 
+# Idempotent migrations — run each ALTER separately so one failure doesn't
+# block the others.  Postgres ADD COLUMN IF NOT EXISTS is safe to re-run.
+_DDL_MIGRATION_STMTS = [
+    # R12 fittings source columns
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_r12_kg        NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS wt_in_kgs_total       NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_kg_source      TEXT",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_variance_pct   NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_divergent_n    INT",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_divergent_rows JSONB",
+]
+
 _INITIALISED = False
 
 
@@ -132,13 +152,19 @@ def _coerce_row(row: dict) -> dict:
 
 
 def init_costing_tables() -> None:
-    """Create costing_ tables idempotently (lazy, once per process)."""
+    """Create costing_ tables and run idempotent column migrations."""
     global _INITIALISED
     if _INITIALISED or not AVAILABLE:
         return
     try:
         with store._conn() as conn, conn.cursor() as cur:
             cur.execute(_DDL)
+            for stmt in _DDL_MIGRATION_STMTS:
+                try:
+                    cur.execute(stmt)
+                except Exception:
+                    conn.rollback()
+                    logger.warning("costing migration skipped (non-fatal): %s", stmt[:80])
         _INITIALISED = True
     except Exception as e:
         raise CostingModelError(f"init_costing_tables failed: {e}") from e
@@ -183,7 +209,13 @@ def get_labour_monthly(segment: str, fy: str) -> list:
 
 
 def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
-    """Insert/replace all monthly rows for (segment, fy). Returns count."""
+    """Insert/replace all monthly rows for (segment, fy). Returns count.
+
+    Rows may carry the following R12 source fields (populated by load_r12_for_fy
+    before this call):
+      fitting_r12_kg, wt_in_kgs_total, fitting_kg_source,
+      fitting_variance_pct, fitting_divergent_n, fitting_divergent_rows (dict list).
+    """
     if not rows or not AVAILABLE:
         return 0
     init_costing_tables()
@@ -194,6 +226,11 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                 (segment, fy),
             )
             for r in rows:
+                divergent_json = None
+                dv = r.get("fitting_divergent_rows")
+                if dv is not None:
+                    divergent_json = json.dumps(dv)
+
                 cur.execute(
                     """INSERT INTO costing_labour_monthly
                        (segment, fy, month_label, month_num, no_of_labour,
@@ -202,8 +239,12 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         paid_wages, contractor_wages,
                         per_hour_cost_paid, per_hour_cost_actual,
                         pipe_prod_kg, fitting_prod_kg, total_prod_kg,
-                        per_kg_labour_cost)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        per_kg_labour_cost,
+                        fitting_r12_kg, wt_in_kgs_total, fitting_kg_source,
+                        fitting_variance_pct, fitting_divergent_n,
+                        fitting_divergent_rows)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (segment, fy, month_label) DO UPDATE SET
                            month_num             = EXCLUDED.month_num,
                            no_of_labour          = EXCLUDED.no_of_labour,
@@ -219,7 +260,13 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                            pipe_prod_kg          = EXCLUDED.pipe_prod_kg,
                            fitting_prod_kg       = EXCLUDED.fitting_prod_kg,
                            total_prod_kg         = EXCLUDED.total_prod_kg,
-                           per_kg_labour_cost    = EXCLUDED.per_kg_labour_cost
+                           per_kg_labour_cost    = EXCLUDED.per_kg_labour_cost,
+                           fitting_r12_kg        = EXCLUDED.fitting_r12_kg,
+                           wt_in_kgs_total       = EXCLUDED.wt_in_kgs_total,
+                           fitting_kg_source     = EXCLUDED.fitting_kg_source,
+                           fitting_variance_pct  = EXCLUDED.fitting_variance_pct,
+                           fitting_divergent_n   = EXCLUDED.fitting_divergent_n,
+                           fitting_divergent_rows = EXCLUDED.fitting_divergent_rows
                     """,
                     (
                         segment, fy,
@@ -231,6 +278,10 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         r.get("per_hour_cost_paid"), r.get("per_hour_cost_actual"),
                         r.get("pipe_prod_kg"), r.get("fitting_prod_kg"),
                         r.get("total_prod_kg"), r.get("per_kg_labour_cost"),
+                        r.get("fitting_r12_kg"), r.get("wt_in_kgs_total"),
+                        r.get("fitting_kg_source"),
+                        r.get("fitting_variance_pct"), r.get("fitting_divergent_n"),
+                        divergent_json,
                     ),
                 )
         return len(rows)

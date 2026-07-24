@@ -4492,12 +4492,9 @@ def costing_hub():
         # Actual RM cost from labour monthly rows (production volumes)
         monthly = labour_view.get("monthly", []) if labour_view.get("loaded") else []
         if monthly:
-            # FY2026-27 fittings mismatch: Report-12 reference figure
-            r12_kg = 1_200_000.0 if fy == "2627" else None
-            actual_rm = _cr.compute_actual_rm(
-                monthly, cost_map,
-                fitting_r12_kg=r12_kg,
-            )
+            # fitting_prod_kg is already the R12 corrected value (or labour-sheet
+            # fallback) after the costing load fix — no override needed here.
+            actual_rm = _cr.compute_actual_rm(monthly, cost_map)
 
     # ── Derived pipe labour (top-down; pipe M/C rows empty in Report-22) ────
     pipe_derived_labour = None

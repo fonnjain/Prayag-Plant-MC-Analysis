@@ -44,3 +44,4 @@
 - [MP-2 engine design](prayag-mp2-engine.md) — LPT+parallel-split optimiser, rate-fallback (SWR/AGRI→mat-avg→overall), persistence via mp_plan_run+in-process cache, Report-11 exact col order + 11A-D groups.
 - [MP-3 fitting engine design](prayag-mp3-fitting-engine.md) — fitting routing from mp_routing non-M/C rows + fitting_std; material-level fallback maps demand-item material to historical machines; per_hour basis='cycle' is disjoint fallback tier.
 - [MP Follow-Up engine](prayag-mp-followup.md) — plan_lines frozen at freeze time (scheduler blocks→MpPlanLine); actuals from R-11/R-12 via header-based parser; join key = norm_machine()×norm_item(); plan-to-date = elapsed_plan_days slice; 9 warning types severity-sorted.
+- [Report-12 fittings source fix](prayag-r12-fittings-source.md) — fitting_prod_kg from R12 W-T-P column (not labour sheet); J-vs-M variance flag; lazy sources import in load_r12_for_fy.

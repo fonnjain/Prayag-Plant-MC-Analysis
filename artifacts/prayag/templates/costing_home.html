@@ -350,6 +350,38 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
   {% if labour_view.monthly %}
   <div class="cost-card" style="margin-bottom:.75rem;">
     <div class="section-hdr">📅 Monthly Labour Detail</div>
+
+    {# ── J-vs-M variance warning: months where R-12 vs Wt-in-Kgs diverge >2% ── #}
+    {% set ns_v = namespace(warn_months=[]) %}
+    {% for r in labour_view.monthly %}
+      {% if r.fitting_variance_pct is not none and r.fitting_variance_pct > 2 %}
+        {% set ns_v.warn_months = ns_v.warn_months + [r.month_label ~ " " ~ "%.1f"|format(r.fitting_variance_pct) ~ "%"] %}
+      {% endif %}
+    {% endfor %}
+    {% if ns_v.warn_months %}
+    <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:.5rem;padding:.6rem .85rem;margin-bottom:.65rem;">
+      <div style="font-weight:800;font-size:.82rem;color:#92400e;margin-bottom:.25rem;">
+        ⚠️ J-vs-M Weight Variance &gt;2% — hand-keyed "Wt in Kgs" differs from formula "Weight of Total Production"
+      </div>
+      <div style="font-size:.78rem;color:#374151;">
+        Affected months: <strong>{{ ns_v.warn_months | join(" · ") }}</strong>.
+        Production figures use the formula-driven column (Report-12 authoritative).
+        Wt-in-Kgs column needs manual correction in the Moulding Report-12.
+      </div>
+      {% for r in labour_view.monthly %}
+        {% if r.fitting_divergent_n and r.fitting_divergent_n > 0 and r.fitting_variance_pct is not none and r.fitting_variance_pct > 2 %}
+        <div style="font-size:.74rem;color:#6b7280;margin-top:.3rem;">
+          {{ r.month_label }}: {{ r.fitting_divergent_n }} row(s) with &gt;5% per-row divergence
+          {% if r.fitting_divergent_rows %}
+            — e.g. {{ r.fitting_divergent_rows[0].item|default("?") }}
+            ({{ "%.1f"|format(r.fitting_divergent_rows[0].diff_pct|default(0)) }}% off)
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <div style="overflow-x:auto;">
     <table class="cost-tbl">
       <thead>
@@ -363,8 +395,8 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
           {% if labour_view.monthly[0].contractor_wages is not none %}<th>Contr. Wages ₹</th>{% endif %}
           <th>₹/hr (paid)</th>
           <th>₹/hr (actual)</th>
-          <th>Pipe kg</th>
-          <th>Fittings kg</th>
+          <th>Pipe kg <span style="font-weight:400;font-size:.7em;opacity:.6;">LS</span></th>
+          <th>Fittings kg <span style="font-weight:400;font-size:.7em;opacity:.6;">R-12</span></th>
           <th>Total kg</th>
           <th>₹/kg</th>
         </tr>
@@ -379,6 +411,7 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
           {% set ns.tot_pipe = ns.tot_pipe + (r.pipe_prod_kg or 0) %}
           {% set ns.tot_fit  = ns.tot_fit  + (r.fitting_prod_kg or 0) %}
           {% set ns.tot_kg   = ns.tot_kg   + (r.total_prod_kg or 0) %}
+          {% set fit_warn = r.fitting_variance_pct is not none and r.fitting_variance_pct > 2 %}
         <tr>
           <td style="font-weight:600;">{{ r.month_label }}</td>
           <td>{{ "{:,.0f}".format(r.no_of_labour or 0)|replace(",","") if r.no_of_labour else "—" }}</td>
@@ -394,7 +427,17 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
           <td>{{ "%.2f"|format(r.per_hour_cost_paid) if r.per_hour_cost_paid else "—" }}</td>
           <td>{{ "%.2f"|format(r.per_hour_cost_actual) if r.per_hour_cost_actual else "—" }}</td>
           <td>{{ "{:,.0f}".format(r.pipe_prod_kg) if r.pipe_prod_kg else "—" }}</td>
-          <td>{{ "{:,.0f}".format(r.fitting_prod_kg) if r.fitting_prod_kg else "—" }}</td>
+          <td{% if fit_warn %} style="background:#fef9c3;"{% endif %}>
+            {{ "{:,.0f}".format(r.fitting_prod_kg) if r.fitting_prod_kg else "—" }}
+            {% if r.fitting_kg_source == "report12" %}
+              <span style="font-size:.68em;font-weight:700;color:#059669;margin-left:.25em;" title="Source: Report-12 Weight of Total Production">R12</span>
+            {% elif r.fitting_kg_source == "labour_sheet" %}
+              <span style="font-size:.68em;font-weight:700;color:#d97706;margin-left:.25em;" title="Source: Labour workbook (Report-12 unavailable)">LS</span>
+            {% endif %}
+            {% if fit_warn %}
+              <span style="font-size:.68em;color:#b45309;margin-left:.15em;" title="J-vs-M divergence: {{ '%.1f'|format(r.fitting_variance_pct) }}%">⚠{{ "%.1f"|format(r.fitting_variance_pct) }}%</span>
+            {% endif %}
+          </td>
           <td>{{ "{:,.0f}".format(r.total_prod_kg) if r.total_prod_kg else "—" }}</td>
           <td>{{ "%.3f"|format(r.per_kg_labour_cost) if r.per_kg_labour_cost else "—" }}</td>
         </tr>
