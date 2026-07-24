@@ -855,9 +855,20 @@ def load_labour_fy(
 
     errors: list = []
 
+    # Per-FY tab name overrides (older workbooks use different tab names)
+    _tab_cfg       = costing_model.LABOUR_TAB_OVERRIDES.get(fy, {})
+    plumbing_tab   = _tab_cfg.get("plumbing_tab", "Plumbing")
+    # ideal_rates_tab=None means the tab does not exist in that FY's workbook
+    _ideal_key     = "ideal_rates_tab"
+    ideal_tab: Optional[str] = (
+        _tab_cfg[_ideal_key] if _ideal_key in _tab_cfg else "Ideal Labour Cost"
+    )
+
+    tabs_to_fetch = [plumbing_tab] + ([ideal_tab] if ideal_tab else [])
+
     # Read both tabs in one batch call (labour sheet: wages + hours + pipe kg)
     try:
-        matrices = _sh.batch_get(file_id, ["Plumbing", "Ideal Labour Cost"], token)
+        matrices = _sh.batch_get(file_id, tabs_to_fetch, token)
     except Exception as exc:
         return {
             "ok": False, "error": str(exc),
@@ -865,8 +876,8 @@ def load_labour_fy(
             "errors": [str(exc)],
         }
 
-    plumbing_vals     = matrices.get("Plumbing", [])
-    ideal_vals        = matrices.get("Ideal Labour Cost", [])
+    plumbing_vals = matrices.get(plumbing_tab, [])
+    ideal_vals    = matrices.get(ideal_tab, []) if ideal_tab else []
 
     monthly_rows = parse_plumbing_tab(plumbing_vals)
     ideal_rates  = parse_ideal_rates(ideal_vals)

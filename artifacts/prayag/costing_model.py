@@ -119,6 +119,19 @@ WAGES_SOURCES: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
+# ── Per-FY tab name overrides ──────────────────────────────────────────────────
+# Older workbooks use different tab names for the same data.
+# "plumbing_tab": name of the Plumbing wages/hours tab (default "Plumbing")
+# "ideal_rates_tab": name of the Ideal Labour Cost tab (default "Ideal Labour Cost");
+#   set to None when the tab does not exist in that FY workbook.
+LABOUR_TAB_OVERRIDES: dict[str, dict] = {
+    # FY2023-24 workbook uses "Plumbing & Garden Pipe" instead of "Plumbing"
+    "2324": {"plumbing_tab": "Plumbing & Garden Pipe"},
+    # FY2022-23 workbook uses "KEHRANI PLANT" and has no Ideal Labour Cost tab
+    "2223": {"plumbing_tab": "KEHRANI PLANT", "ideal_rates_tab": None},
+}
+
+
 def labour_file_id(category: str, fy: str) -> Optional[str]:
     return LABOUR_SOURCES.get(category, {}).get(fy)
 
