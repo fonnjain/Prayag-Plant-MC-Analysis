@@ -161,6 +161,46 @@ CREATE TABLE IF NOT EXISTS costing_labour_meta (
     loaded_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT costing_labour_meta_nat UNIQUE (segment, fy)
 );
+
+CREATE TABLE IF NOT EXISTS costing_power_monthly (
+    id                        BIGSERIAL   PRIMARY KEY,
+    segment                   TEXT        NOT NULL,
+    fy                        TEXT        NOT NULL,
+    month_label               TEXT        NOT NULL,
+    month_num                 INT         NOT NULL,
+    pvc_prod_kg               NUMERIC,
+    total_prod_kg_u2          NUMERIC,
+    headcount_u2              NUMERIC,
+    contractor_count_u2       NUMERIC,
+    paid_wages_u2             NUMERIC,
+    contractor_wages_u2       NUMERIC,
+    total_wages_u2            NUMERIC,
+    jvvl_amount               NUMERIC,
+    elec_gen_kwh              NUMERIC,
+    per_unit_cost             NUMERIC,
+    solar1_kwh                NUMERIC,
+    solar2_kwh                NUMERIC,
+    total_kwh                 NUMERIC,
+    kwh_per_kg                NUMERIC,
+    rate_708_rs               NUMERIC,
+    rate_1150_rs              NUMERIC,
+    total_power_708           NUMERIC,
+    total_power_1150          NUMERIC,
+    per_kg_power_708          NUMERIC,
+    per_kg_power_1150         NUMERIC,
+    per_kg_labour_u2          NUMERIC,
+    total_cost_708            NUMERIC,
+    new_total_cost            NUMERIC,
+    ideal_power_total         NUMERIC,
+    actual_power_total        NUMERIC,
+    ideal_kg_power            NUMERIC,
+    actual_kg_power           NUMERIC,
+    pipe_ideal_power_rate     NUMERIC,
+    fitting_ideal_power_rate  NUMERIC,
+    pipe_ideal_labour_rate    NUMERIC,
+    fitting_ideal_labour_rate NUMERIC,
+    CONSTRAINT costing_power_monthly_nat UNIQUE (segment, fy, month_label)
+);
 """
 
 # Idempotent migrations — run each ALTER separately so one failure doesn't

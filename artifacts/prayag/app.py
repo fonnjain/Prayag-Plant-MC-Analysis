@@ -4591,6 +4591,105 @@ def costing_load_labour():
     return jsonify(result), status
 
 
+def _costing_analysis_imports():
+    """Lazy import of Costing Analysis modules (power + analysis)."""
+    import costing_model    as _cm
+    import costing_power    as _cp
+    import costing_analysis as _ca
+    return _cm, _cp, _ca
+
+
+@app.route("/costing/analysis")
+def costing_analysis_route():
+    """Costing Analysis — Labour + Power cross-pillar analytics."""
+    _cm, _cp, _ca = _costing_analysis_imports()
+
+    category = request.args.get("category", "PLUMBING").upper()
+    if category not in _cm.CATEGORIES:
+        category = "PLUMBING"
+
+    fy = request.args.get("fy", _cm.LIVE_FY)
+    if fy not in _cm.FY_CONFIG:
+        fy = _cm.LIVE_FY
+
+    incl_contractor = request.args.get("incl_contractor", "1") not in ("0", "false", "no")
+
+    fy_label = _cm.FY_CONFIG.get(fy, {}).get("label", f"FY{fy}")
+
+    if category == "PTMT":
+        return render_template(
+            "costing_analysis.html",
+            category=category, fy=fy, fy_label=fy_label,
+            incl_contractor=incl_contractor,
+            ptmt_stub=True,
+            categories=_cm.CATEGORIES,
+            cat_labels=_cm.CATEGORY_LABELS,
+            fy_order=_cm.FY_ORDER,
+            fy_configs=_cm.FY_CONFIG,
+            fy_count=len(_cm.FY_ORDER),
+            view=None,
+            load_error=None,
+        )
+
+    # Auto-load power data if not yet in DB for this FY
+    power_rows = _cp.get_power_monthly(category, fy)
+    load_error = None
+    if not power_rows:
+        result = _cp.load_power_fy(category, fy)
+        if not result.get("ok"):
+            load_error = result.get("error")
+        else:
+            power_rows = _cp.get_power_monthly(category, fy)
+
+    try:
+        view = _ca.get_analysis_view(category, fy, incl_contractor=incl_contractor)
+    except Exception as exc:
+        logger.exception("costing_analysis_route: get_analysis_view failed")
+        view = None
+        load_error = load_error or str(exc)
+
+    return render_template(
+        "costing_analysis.html",
+        category=category, fy=fy, fy_label=fy_label,
+        incl_contractor=incl_contractor,
+        ptmt_stub=False,
+        categories=_cm.CATEGORIES,
+        cat_labels=_cm.CATEGORY_LABELS,
+        fy_order=_cm.FY_ORDER,
+        fy_configs=_cm.FY_CONFIG,
+        fy_count=len(_cm.FY_ORDER),
+        view=view,
+        load_error=load_error,
+    )
+
+
+@app.route("/costing/api/load-power", methods=["POST"])
+def costing_load_power():
+    """Load (or refresh) UNIT-2 / Ideal Power Cost data for a category + FY.
+
+    Body JSON: {"category": "PLUMBING", "fy": "2627", "force": false}
+    Returns JSON: {"ok": bool, "n_months": int, "skipped": bool, "errors": [...]}
+    """
+    from flask import jsonify
+    _cm, _cp, _ca = _costing_analysis_imports()
+
+    body     = request.get_json(silent=True) or {}
+    category = str(body.get("category", "PLUMBING")).upper()
+    fy       = str(body.get("fy", _cm.LIVE_FY))
+    force    = bool(body.get("force", False))
+
+    if category not in _cm.CATEGORIES:
+        return jsonify({"ok": False, "error": f"Unknown category: {category}"}), 400
+    if fy not in _cm.FY_CONFIG:
+        return jsonify({"ok": False, "error": f"Unknown FY: {fy}"}), 400
+    if category == "PTMT":
+        return jsonify({"ok": False, "error": "PTMT power costing not yet implemented."}), 400
+
+    result = _cp.load_power_fy(category, fy, force=force)
+    status = 200 if result.get("ok") else 502
+    return jsonify(result), status
+
+
 # ---------------------------------------------------------------------------
 # Group B — Segment Labour / Solar / Power manual monthly inputs
 # ---------------------------------------------------------------------------

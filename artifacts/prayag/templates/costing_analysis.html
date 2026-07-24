@@ -1,0 +1,609 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Costing Analysis{% endblock %}
+{% block content %}
+<style>
+.cost-tab{padding:.45rem .9rem;border-radius:.5rem;font-size:.82rem;font-weight:700;cursor:pointer;text-decoration:none;}
+.cost-tab.active{background:var(--terra);color:#fff;}
+.cost-tab:not(.active){background:#f3f4f6;color:#374151;}
+.ctgl{display:inline-flex;border-radius:.5rem;overflow:hidden;border:1px solid #d1d5db;font-size:.8rem;font-weight:700;}
+.ctgl a{padding:.3rem .75rem;text-decoration:none;color:#374151;background:#fff;}
+.ctgl a.on{background:#059669;color:#fff;}
+.cost-card{background:#fff;border-radius:.65rem;box-shadow:0 1px 4px rgba(0,0,0,.07);padding:.8rem 1rem;margin-bottom:.85rem;}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.6rem;margin-bottom:1rem;}
+.kpi-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:.5rem;padding:.6rem .8rem;}
+.kpi-box.red{background:#fef2f2;border-color:#fca5a5;}
+.kpi-box.amber{background:#fffbeb;border-color:#fcd34d;}
+.kpi-box.green{background:#f0fdf4;border-color:#86efac;}
+.kpi-lbl{font-size:.66rem;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+.kpi-val{font-size:1.05rem;font-weight:800;color:var(--navy);margin-top:.15rem;}
+.kpi-val.red{color:#dc2626;}
+.kpi-val.amber{color:#d97706;}
+.kpi-val.green{color:#059669;}
+.kpi-sub{font-size:.68rem;color:#9ca3af;margin-top:.08rem;}
+.warn-box{background:#fffbeb;border:1px solid #fcd34d;border-radius:.5rem;padding:.65rem .85rem;margin-bottom:.6rem;}
+.err-box{background:#fef2f2;border:1px solid #fca5a5;border-radius:.5rem;padding:.65rem .85rem;margin-bottom:.6rem;}
+.info-box{background:#eff6ff;border:1px solid #93c5fd;border-radius:.5rem;padding:.65rem .85rem;margin-bottom:.6rem;}
+.section-hdr{font-size:.82rem;font-weight:800;color:var(--navy);margin-bottom:.5rem;letter-spacing:.02em;}
+.note{font-size:.69rem;color:#9ca3af;margin-top:.35rem;}
+table.cost-tbl{width:100%;border-collapse:collapse;font-size:.76rem;}
+table.cost-tbl th{background:#f1f5f9;padding:.3rem .45rem;text-align:right;font-weight:700;border-bottom:2px solid #e2e8f0;white-space:nowrap;}
+table.cost-tbl th:first-child{text-align:left;}
+table.cost-tbl td{padding:.3rem .45rem;border-bottom:1px solid #f1f5f9;text-align:right;}
+table.cost-tbl td:first-child{text-align:left;font-weight:700;}
+table.cost-tbl tr.total-row{background:#f0fdf4;font-weight:800;border-top:2px solid #94a3b8;}
+.vbar{display:inline-block;height:8px;border-radius:4px;vertical-align:middle;margin-right:3px;}
+.va-cell{white-space:nowrap;}
+.ptmt-stub{text-align:center;padding:2.5rem;color:#9ca3af;font-size:.88rem;}
+summary{cursor:pointer;font-size:.82rem;font-weight:800;color:var(--navy);padding:.5rem 0;letter-spacing:.02em;list-style:none;}
+summary::before{content:"▶ ";font-size:.75rem;}
+details[open] summary::before{content:"▼ ";}
+details{border:1px solid #e2e8f0;border-radius:.65rem;padding:.5rem 1rem;margin-bottom:.85rem;background:#fff;}
+.bridge-row{display:flex;align-items:center;gap:.5rem;padding:.25rem 0;font-size:.8rem;}
+.bridge-bar{height:12px;border-radius:3px;min-width:3px;}
+</style>
+
+<!-- ── Page header ───────────────────────────────────────────────────────── -->
+<div style="background:var(--navy);color:#fff;border-radius:.75rem;padding:.85rem 1rem;
+            margin-bottom:.85rem;display:flex;align-items:center;gap:.75rem;">
+  <div style="flex:1;">
+    <div style="font-size:.7rem;opacity:.7;letter-spacing:.04em;text-transform:uppercase;">Prayag Production</div>
+    <div style="font-size:1rem;font-weight:800;">Costing Analysis</div>
+  </div>
+  <a href="/" style="font-size:.75rem;color:rgba(255,255,255,.75);text-decoration:none;">← Home</a>
+</div>
+
+<!-- ── Selectors ─────────────────────────────────────────────────────────── -->
+<div style="background:#fff;border-radius:.65rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+            padding:.7rem 1rem;margin-bottom:.8rem;display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;">
+  <div style="display:flex;gap:.4rem;align-items:center;">
+    <span style="font-size:.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Category</span>
+    {% for cat in categories %}
+    <a href="?category={{ cat }}&fy={{ fy }}&incl_contractor={{ '1' if incl_contractor else '0' }}"
+       class="cost-tab {{ 'active' if cat == category else '' }}">{{ cat_labels[cat] }}</a>
+    {% endfor %}
+  </div>
+  <div style="display:flex;gap:.4rem;align-items:center;margin-left:auto;">
+    <span style="font-size:.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">FY</span>
+    {% for f in fy_order %}{% if loop.index <= fy_count %}
+    <a href="?category={{ category }}&fy={{ f }}&incl_contractor={{ '1' if incl_contractor else '0' }}"
+       class="cost-tab {{ 'active' if f == fy else '' }}"
+       style="{% if f != fy %}font-size:.72rem;padding:.35rem .65rem;{% endif %}">
+      {{ fy_configs[f].label if f in fy_configs else f }}
+    </a>
+    {% endif %}{% endfor %}
+  </div>
+  <div style="display:flex;gap:.4rem;align-items:center;">
+    <span style="font-size:.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Contractor</span>
+    <div class="ctgl">
+      <a href="?category={{ category }}&fy={{ fy }}&incl_contractor=1" class="{{ 'on' if incl_contractor else '' }}">Incl</a>
+      <a href="?category={{ category }}&fy={{ fy }}&incl_contractor=0" class="{{ '' if incl_contractor else 'on' }}">Excl</a>
+    </div>
+  </div>
+</div>
+
+{% if ptmt_stub %}
+<div class="ptmt-stub">
+  <div style="font-size:2rem;margin-bottom:.5rem;">🔧</div>
+  PTMT Costing Analysis — coming soon
+</div>
+
+{% elif load_error %}
+<div class="err-box">
+  <strong>Data load error:</strong> {{ load_error }}
+  <div class="note">Check Google Sheets connection or refresh the page.</div>
+</div>
+
+{% elif not view %}
+<div class="err-box">No data available for {{ category }} / {{ fy_label }}.</div>
+
+{% else %}
+
+{% set tot = view.fy_total %}
+{% set hrs = view.hours %}
+
+<!-- ── Power not loaded notice ──────────────────────────────────────────── -->
+{% if not view.power_loaded %}
+<div class="warn-box" style="display:flex;align-items:center;gap:.75rem;">
+  <span style="font-size:.82rem;flex:1;"><strong>Power data not loaded</strong> — UNIT-2 tab not yet fetched for {{ fy_label }}.</span>
+  <form method="post" action="/costing/api/load-power" id="frmLoadPwr" style="display:inline;">
+    <button type="button" onclick="loadPower()"
+            style="background:#d97706;color:#fff;border:none;padding:.3rem .7rem;border-radius:.4rem;font-size:.78rem;font-weight:700;cursor:pointer;">
+      Load Now
+    </button>
+  </form>
+</div>
+<script>
+function loadPower(){
+  fetch('/costing/api/load-power',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({category:'{{ category }}',fy:'{{ fy }}'})})
+    .then(r=>r.json()).then(d=>{if(d.ok){location.reload();}else{alert('Error: '+d.error);}})
+    .catch(e=>alert('Network error: '+e));
+}
+</script>
+{% endif %}
+
+<!-- ── Warnings ─────────────────────────────────────────────────────────── -->
+{% if view.warnings %}
+<div class="cost-card" style="padding:.7rem .9rem;margin-bottom:.85rem;">
+  <div class="section-hdr">⚠ Warnings &amp; Alerts</div>
+  {% for w in view.warnings %}
+  <div class="{{ 'err-box' if w.severity == 'red' else ('warn-box' if w.severity == 'amber' else 'info-box') }}"
+       style="margin-bottom:.4rem;">
+    <div style="font-weight:700;font-size:.8rem;">{{ w.title }}</div>
+    <div style="font-size:.75rem;margin-top:.2rem;">{{ w.detail }}</div>
+    {% if w.rec %}
+    <div style="font-size:.72rem;color:#6b7280;margin-top:.2rem;">→ {{ w.rec }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ── Summary KPIs ──────────────────────────────────────────────────────── -->
+{% if tot %}
+{% macro kpi_pct(pct) %}
+  {% if pct is not none %}
+    {% if pct > 50 %}red{% elif pct > 20 %}amber{% else %}green{% endif %}
+  {% else %}{% endif %}
+{% endmacro %}
+<div class="cost-card">
+  <div class="section-hdr">{{ view.n_data_months }}-month snapshot · {{ fy_label }}
+    {% if view.incl_contractor %}<span style="font-size:.7rem;color:#6b7280;">(incl contractor)</span>{% endif %}
+  </div>
+  <div class="kpi-grid">
+    {% if tot.labour_actual_kg is not none %}
+    {% set cls = kpi_pct(tot.labour_variance_pct) %}
+    <div class="kpi-box {{ cls }}">
+      <div class="kpi-lbl">Labour Actual</div>
+      <div class="kpi-val {{ cls }}">Rs {{ "%.2f"|format(tot.labour_actual_kg) }}/kg</div>
+      <div class="kpi-sub">Plumbing denom · {{ "{:,.0f}".format(tot.total_kg) }} kg</div>
+    </div>
+    {% endif %}
+    {% if tot.labour_ideal_kg is not none %}
+    <div class="kpi-box green">
+      <div class="kpi-lbl">Labour Ideal</div>
+      <div class="kpi-val green">Rs {{ "%.2f"|format(tot.labour_ideal_kg) }}/kg</div>
+      <div class="kpi-sub">Pipe × Rs {{ "%.2f"|format(view.pipe_labour_rate) }} + Fit × Rs {{ "%.2f"|format(view.fitting_labour_rate) }}</div>
+    </div>
+    {% endif %}
+    {% if tot.labour_variance_pct is not none %}
+    {% set cls = kpi_pct(tot.labour_variance_pct) %}
+    <div class="kpi-box {{ cls }}">
+      <div class="kpi-lbl">Labour Δ vs Ideal</div>
+      <div class="kpi-val {{ cls }}">{{ "%+.0f"|format(tot.labour_variance_pct) }}%</div>
+      <div class="kpi-sub">Rs {{ "%+.2f"|format(tot.labour_variance_kg) }}/kg over ideal</div>
+    </div>
+    {% endif %}
+    {% if tot.power_actual_kg is not none %}
+    {% set cls = kpi_pct(tot.power_variance_pct) %}
+    <div class="kpi-box {{ cls }}">
+      <div class="kpi-lbl">Power Actual</div>
+      <div class="kpi-val {{ cls }}">Rs {{ "%.2f"|format(tot.power_actual_kg) }}/kg</div>
+      <div class="kpi-sub">All-plant denom</div>
+    </div>
+    {% endif %}
+    {% if tot.power_ideal_kg is not none %}
+    <div class="kpi-box green">
+      <div class="kpi-lbl">Power Ideal</div>
+      <div class="kpi-val green">Rs {{ "%.2f"|format(tot.power_ideal_kg) }}/kg</div>
+      <div class="kpi-sub">Pipe × Rs {{ "%.2f"|format(view.pipe_power_rate) }} + Fit × Rs {{ "%.2f"|format(view.fitting_power_rate) }}</div>
+    </div>
+    {% endif %}
+    {% if tot.combined_variance_pct is not none %}
+    {% set cls = kpi_pct(tot.combined_variance_pct) %}
+    <div class="kpi-box {{ cls }}">
+      <div class="kpi-lbl">Combined Δ vs Ideal</div>
+      <div class="kpi-val {{ cls }}">{{ "%+.0f"|format(tot.combined_variance_pct) }}%</div>
+      <div class="kpi-sub">Rs {{ "%.2f"|format(tot.combined_actual_kg) }} vs Rs {{ "%.2f"|format(tot.combined_ideal_kg) }} ideal</div>
+    </div>
+    {% endif %}
+  </div>
+  {% if tot.combined_actual_kg is not none %}
+  <div class="note">⚠ Combined = Labour (Plumbing denominator) + Power (all-plant denominator). These use different production bases and cannot be directly summed to a single-denominator figure.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ── Monthly Cost Stack ────────────────────────────────────────────────── -->
+{% if view.stack %}
+<details open>
+  <summary>Monthly Cost Stack</summary>
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead>
+      <tr>
+        <th>Month</th><th>Prod (kg)</th>
+        <th>Labour Act.</th><th>Labour Ideal</th><th>Lab Δ%</th>
+        <th>Power Act.</th><th>Power Ideal</th><th>Pwr Δ%</th>
+        <th>Combined</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in view.stack %}
+    <tr>
+      <td>{{ r.month }}</td>
+      <td>{{ "{:,.0f}".format(r.total_kg) }}</td>
+      <td>{% if r.labour_actual_kg is not none %}Rs {{ "%.2f"|format(r.labour_actual_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if r.labour_ideal_kg  is not none %}Rs {{ "%.2f"|format(r.labour_ideal_kg) }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.labour_variance_pct is not none %}
+        {% if r.labour_variance_pct > 50 %}<span style="color:#dc2626;font-weight:700;">
+        {% elif r.labour_variance_pct > 20 %}<span style="color:#d97706;font-weight:700;">
+        {% else %}<span style="color:#059669;font-weight:700;">{% endif %}
+        {{ "%+.0f"|format(r.labour_variance_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>{% if r.power_actual_kg is not none %}Rs {{ "%.2f"|format(r.power_actual_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if r.power_ideal_kg  is not none %}Rs {{ "%.2f"|format(r.power_ideal_kg)  }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.power_variance_pct is not none %}
+        {% if r.power_variance_pct > 60 %}<span style="color:#dc2626;font-weight:700;">
+        {% elif r.power_variance_pct > 25 %}<span style="color:#d97706;font-weight:700;">
+        {% else %}<span style="color:#059669;font-weight:700;">{% endif %}
+        {{ "%+.0f"|format(r.power_variance_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>{% if r.combined_actual_kg is not none %}Rs {{ "%.2f"|format(r.combined_actual_kg) }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    {% if tot %}
+    <tfoot>
+      <tr class="total-row">
+        <td>FY Total</td>
+        <td>{{ "{:,.0f}".format(tot.total_kg) }}</td>
+        <td>{% if tot.labour_actual_kg is not none %}Rs {{ "%.2f"|format(tot.labour_actual_kg) }}{% else %}—{% endif %}</td>
+        <td>{% if tot.labour_ideal_kg  is not none %}Rs {{ "%.2f"|format(tot.labour_ideal_kg)  }}{% else %}—{% endif %}</td>
+        <td class="va-cell">
+          {% if tot.labour_variance_pct is not none %}
+          {% if tot.labour_variance_pct > 50 %}<span style="color:#dc2626;font-weight:700;">
+          {% elif tot.labour_variance_pct > 20 %}<span style="color:#d97706;font-weight:700;">
+          {% else %}<span style="color:#059669;font-weight:700;">{% endif %}
+          {{ "%+.0f"|format(tot.labour_variance_pct) }}%</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if tot.power_actual_kg is not none %}Rs {{ "%.2f"|format(tot.power_actual_kg) }}{% else %}—{% endif %}</td>
+        <td>{% if tot.power_ideal_kg  is not none %}Rs {{ "%.2f"|format(tot.power_ideal_kg)  }}{% else %}—{% endif %}</td>
+        <td class="va-cell">
+          {% if tot.power_variance_pct is not none %}
+          {% if tot.power_variance_pct > 60 %}<span style="color:#dc2626;font-weight:700;">
+          {% elif tot.power_variance_pct > 25 %}<span style="color:#d97706;font-weight:700;">
+          {% else %}<span style="color:#059669;font-weight:700;">{% endif %}
+          {{ "%+.0f"|format(tot.power_variance_pct) }}%</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if tot.combined_actual_kg is not none %}Rs {{ "%.2f"|format(tot.combined_actual_kg) }}{% else %}—{% endif %}</td>
+      </tr>
+    </tfoot>
+    {% endif %}
+  </table>
+  </div>
+  <div class="note">Labour denom = Plumbing (pipe + fitting). Power denom = all plants (Plumbing + Garden + HDPE + Tank). Source: UNIT-2 tab + Ideal Power Cost tab, {{ fy_label }} workbook.</div>
+</details>
+{% endif %}
+
+<!-- ── Labour detail ─────────────────────────────────────────────────────── -->
+{% if view.stack and tot %}
+<details>
+  <summary>Labour Detail</summary>
+  <div class="kpi-grid" style="margin-bottom:.75rem;">
+    {% if tot.paid_wages is not none %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Paid Wages (KH-1)</div>
+      <div class="kpi-val">Rs {{ "{:,.0f}".format(tot.paid_wages) }}</div>
+      <div class="kpi-sub">Excl contractor</div>
+    </div>
+    {% endif %}
+    {% if tot.contractor_wages %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Contractor Wages (UNIT-2)</div>
+      <div class="kpi-val">Rs {{ "{:,.0f}".format(tot.contractor_wages) }}</div>
+    </div>
+    {% endif %}
+    {% if tot.total_wages is not none %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Total Wages (incl contractor)</div>
+      <div class="kpi-val">Rs {{ "{:,.0f}".format(tot.total_wages) }}</div>
+    </div>
+    {% endif %}
+    {% if tot.labour_excl_kg is not none %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Labour Excl Contractor</div>
+      <div class="kpi-val">Rs {{ "%.2f"|format(tot.labour_excl_kg) }}/kg</div>
+    </div>
+    {% endif %}
+    {% if tot.pipe_kg is not none %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Pipe Production</div>
+      <div class="kpi-val">{{ "{:,.0f}".format(tot.pipe_kg) }} kg</div>
+    </div>
+    {% endif %}
+    {% if tot.fitting_kg is not none %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Fitting Production</div>
+      <div class="kpi-val">{{ "{:,.0f}".format(tot.fitting_kg) }} kg</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Hours analysis -->
+  {% if hrs %}
+  <div class="section-hdr" style="margin-top:.5rem;">Paid vs Actual Hours</div>
+  {% if hrs.warning %}
+  <div class="warn-box" style="margin-bottom:.5rem;">
+    <strong>{{ "%.1f"|format(hrs.hours_diff_pct) }}% of paid hours not worked</strong> —
+    {{ "{:,}".format(hrs.hours_diff) }} hrs gap (paid {{ "{:,}".format(hrs.paid_hours_fy) }} vs actual {{ "{:,}".format(hrs.actual_hours_fy) }})
+  </div>
+  {% endif %}
+  {% if hrs.monthly %}
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead><tr><th>Month</th><th>Paid Hrs</th><th>Actual Hrs</th><th>Gap (hrs)</th><th>Gap %</th></tr></thead>
+    <tbody>
+    {% for m in hrs.monthly %}
+    <tr>
+      <td>{{ m.month }}</td>
+      <td>{{ "{:,.0f}".format(m.paid_hours) }}</td>
+      <td>{{ "{:,.0f}".format(m.actual_hours) }}</td>
+      <td>{{ "{:,.0f}".format(m.diff) }}</td>
+      <td class="va-cell">
+        {% if m.diff_pct > 15 %}<span style="color:#dc2626;font-weight:700;">
+        {% elif m.diff_pct > 8 %}<span style="color:#d97706;font-weight:700;">
+        {% else %}<span style="color:#059669;">{% endif %}
+        {{ "%.1f"|format(m.diff_pct) }}%</span>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% endif %}
+</details>
+{% endif %}
+
+<!-- ── Power deep-dive ───────────────────────────────────────────────────── -->
+{% if view.stack and view.power_loaded %}
+<details>
+  <summary>Power Deep-Dive (UNIT-2)</summary>
+  <div class="note" style="margin-bottom:.6rem;">UNIT-2 tab · per-kg power uses Plumbing denominator. "All-plant" column from Ideal Power Cost tab uses all-plants denominator.</div>
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead>
+      <tr>
+        <th>Month</th>
+        <th>JVVL (Rs)</th>
+        <th>kWh cons.</th>
+        <th>Rs/kWh</th>
+        <th>Solar (kWh)</th>
+        <th>kWh/kg</th>
+        <th>Power/kg (7.08)</th>
+        <th>Power/kg (11.5)</th>
+        <th>Power/kg (all-plant)</th>
+        <th>Ideal/kg (all-plant)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in view.stack %}
+    {% if r.jvvl_amount is not none %}
+    <tr>
+      <td>{{ r.month }}</td>
+      <td>{{ "{:,.0f}".format(r.jvvl_amount) }}</td>
+      <td>{% if r.total_kwh %}{{ "{:,.0f}".format(r.total_kwh) }}{% else %}—{% endif %}</td>
+      <td>{% if r.per_unit_cost %}Rs {{ "%.2f"|format(r.per_unit_cost) }}{% else %}—{% endif %}</td>
+      <td>{% if r.solar1_kwh %}{{ "{:,.0f}".format(r.solar1_kwh) }}{% else %}—{% endif %}</td>
+      <td>{% if r.kwh_per_kg %}{{ "%.2f"|format(r.kwh_per_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if r.per_kg_power_708 %}Rs {{ "%.2f"|format(r.per_kg_power_708) }}{% else %}—{% endif %}</td>
+      <td>{% if r.per_kg_power_1150 %}Rs {{ "%.2f"|format(r.per_kg_power_1150) }}{% else %}—{% endif %}</td>
+      <td>{% if r.power_actual_kg %}Rs {{ "%.2f"|format(r.power_actual_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if r.power_ideal_kg %}Rs {{ "%.2f"|format(r.power_ideal_kg) }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+    {% if tot.jvvl_total %}
+    <tfoot>
+      <tr class="total-row">
+        <td>FY Total</td>
+        <td>{{ "{:,.0f}".format(tot.jvvl_total) }}</td>
+        <td>{{ "{:,.0f}".format(tot.kwh_total) if tot.kwh_total else "—" }}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>{% if tot.power708_total %}Rs {{ "{:,.0f}".format(tot.power708_total) }}{% else %}—{% endif %}</td>
+        <td>{% if tot.power1150_total %}Rs {{ "{:,.0f}".format(tot.power1150_total) }}{% else %}—{% endif %}</td>
+        <td>{% if tot.power_actual_kg %}Rs {{ "%.2f"|format(tot.power_actual_kg) }}{% else %}—{% endif %}</td>
+        <td>{% if tot.power_ideal_kg %}Rs {{ "%.2f"|format(tot.power_ideal_kg) }}{% else %}—{% endif %}</td>
+      </tr>
+    </tfoot>
+    {% endif %}
+  </table>
+  </div>
+  {% if tot.total_ideal_power and tot.total_actual_power %}
+  <div class="note">Ideal total power (all plants): Rs {{ "{:,.0f}".format(tot.total_ideal_power) }} · Actual: Rs {{ "{:,.0f}".format(tot.total_actual_power) }}</div>
+  {% endif %}
+</details>
+{% endif %}
+
+<!-- ── MoM / YoY trends ──────────────────────────────────────────────────── -->
+{% if view.mom and view.mom|length > 1 %}
+<details>
+  <summary>Month-over-Month Trends</summary>
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead><tr><th>Month</th><th>Labour Act. Rs/kg</th><th>MoM Δ</th><th>Power Act. Rs/kg</th><th>MoM Δ</th><th>Combined Rs/kg</th><th>MoM Δ</th></tr></thead>
+    <tbody>
+    {% for r in view.mom %}
+    <tr>
+      <td>{{ r.month }}</td>
+      <td>{% if r.labour_actual_kg is not none %}{{ "%.2f"|format(r.labour_actual_kg) }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.mom_labour_pct is defined and r.mom_labour_pct is not none %}
+        {% if r.mom_labour_pct > 10 %}<span style="color:#dc2626;">
+        {% elif r.mom_labour_pct < -5 %}<span style="color:#059669;">
+        {% else %}<span style="color:#6b7280;">{% endif %}
+        {{ "%+.1f"|format(r.mom_labour_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>{% if r.power_actual_kg is not none %}{{ "%.2f"|format(r.power_actual_kg) }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.mom_power_pct is defined and r.mom_power_pct is not none %}
+        {% if r.mom_power_pct > 10 %}<span style="color:#dc2626;">
+        {% elif r.mom_power_pct < -5 %}<span style="color:#059669;">
+        {% else %}<span style="color:#6b7280;">{% endif %}
+        {{ "%+.1f"|format(r.mom_power_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>{% if r.combined_actual_kg is not none %}{{ "%.2f"|format(r.combined_actual_kg) }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.mom_combined_pct is defined and r.mom_combined_pct is not none %}
+        {% if r.mom_combined_pct > 10 %}<span style="color:#dc2626;">
+        {% elif r.mom_combined_pct < -5 %}<span style="color:#059669;">
+        {% else %}<span style="color:#6b7280;">{% endif %}
+        {{ "%+.1f"|format(r.mom_combined_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+
+{% if view.yoy %}
+<details>
+  <summary>Year-over-Year vs {{ view.prev_fy_label or "Prior FY" }}</summary>
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead><tr><th>Month</th><th>Metric</th><th>{{ fy_label }}</th><th>{{ view.prev_fy_label or "Prior FY" }}</th><th>YoY Δ%</th></tr></thead>
+    <tbody>
+    {% for r in view.yoy %}
+    <tr>
+      <td>{{ r.month }}</td>
+      <td style="text-align:left;font-weight:normal;">{{ r.metric }}</td>
+      <td>{% if r.curr_val is not none %}{{ "%.2f"|format(r.curr_val) }}{% else %}—{% endif %}</td>
+      <td>{% if r.prev_val is not none %}{{ "%.2f"|format(r.prev_val) }}{% else %}—{% endif %}</td>
+      <td class="va-cell">
+        {% if r.change_pct is not none %}
+        {% if r.direction == "up" and "ideal" not in r.metric.lower() %}<span style="color:#dc2626;font-weight:700;">
+        {% elif r.direction == "down" %}<span style="color:#059669;font-weight:700;">
+        {% else %}<span style="color:#6b7280;">{% endif %}
+        {{ "%+.1f"|format(r.change_pct) }}%</span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if not view.yoy %}<div class="note">Prior FY data not loaded — no YoY comparison available.</div>{% endif %}
+</details>
+{% endif %}
+
+<!-- ── Cost bridge ────────────────────────────────────────────────────────── -->
+{% set cb = view.cost_bridge %}
+{% if cb and cb.available %}
+<details>
+  <summary>Cost Bridge — {{ view.prev_fy_label or "Prior FY" }} → {{ fy_label }}</summary>
+  <div class="note" style="margin-bottom:.7rem;">
+    Decomposition of change in Labour Rs/kg.<br>
+    Rate = wage-rate change holding volume constant.<br>
+    Volume = volume change holding wages constant.<br>
+    Mix = structural shift in product mix (ideal Rs/kg change).
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.75rem;font-size:.8rem;">
+    <div>
+      <div class="kpi-lbl">{{ view.prev_fy_label }}</div>
+      <div style="font-weight:700;">Rs {{ "%.2f"|format(cb.prev_cost_kg) }}/kg · {{ "{:,.0f}".format(cb.prev_vol) }} kg</div>
+    </div>
+    <div>
+      <div class="kpi-lbl">{{ fy_label }}</div>
+      <div style="font-weight:700;">Rs {{ "%.2f"|format(cb.curr_cost_kg) }}/kg · {{ "{:,.0f}".format(cb.curr_vol) }} kg</div>
+    </div>
+  </div>
+  {% set max_abs = [cb.rate_effect|abs if cb.rate_effect else 0,
+                   cb.volume_effect|abs if cb.volume_effect else 0,
+                   cb.mix_effect|abs if cb.mix_effect else 0,
+                   cb.total_change|abs if cb.total_change else 0.01] | max %}
+  {% macro bridge_bar(val, label) %}
+  {% if val is not none %}
+  <div class="bridge-row">
+    <div style="width:100px;flex-shrink:0;font-size:.78rem;">{{ label }}</div>
+    <div class="bridge-bar"
+         style="width:{{ [(val|abs / max_abs * 120)|int, 4]|max }}px;
+                background:{{ '#dc2626' if val > 0 else '#059669' }};"></div>
+    <div style="font-size:.8rem;font-weight:700;color:{{ '#dc2626' if val > 0 else '#059669' }};">
+      {{ "%+.2f"|format(val) }} Rs/kg
+    </div>
+  </div>
+  {% endif %}
+  {% endmacro %}
+  {{ bridge_bar(cb.rate_effect,   "Rate effect") }}
+  {{ bridge_bar(cb.volume_effect, "Volume effect") }}
+  {{ bridge_bar(cb.mix_effect,    "Mix effect") }}
+  <div class="bridge-row" style="border-top:1px solid #e2e8f0;margin-top:.3rem;padding-top:.5rem;">
+    <div style="width:100px;flex-shrink:0;font-size:.78rem;font-weight:700;">Total Δ</div>
+    <div class="bridge-bar"
+         style="width:{{ [(cb.total_change|abs / max_abs * 120)|int, 4]|max }}px;
+                background:{{ '#dc2626' if cb.total_change > 0 else '#059669' }};"></div>
+    <div style="font-size:.8rem;font-weight:800;color:{{ '#dc2626' if cb.total_change > 0 else '#059669' }};">
+      {{ "%+.2f"|format(cb.total_change) }} Rs/kg
+    </div>
+  </div>
+  {% if cb.residual is not none and cb.residual|abs > 0.05 %}
+  <div class="note">Residual: Rs {{ "%.4f"|format(cb.residual) }}/kg (rounding artefact).</div>
+  {% endif %}
+</details>
+{% elif cb and not cb.available %}
+<details>
+  <summary>Cost Bridge — {{ view.prev_fy_label or "Prior FY" }} → {{ fy_label }}</summary>
+  <div class="info-box">Prior FY labour data not loaded — cost bridge not available. Load {{ view.prev_fy_label }} from the Costing hub first.</div>
+</details>
+{% endif %}
+
+<!-- ── Volume sensitivity ─────────────────────────────────────────────────── -->
+{% set vs = view.vol_sensitivity %}
+{% if vs and vs.scenarios %}
+<details>
+  <summary>Volume Sensitivity (Labour + Power)</summary>
+  <div class="note" style="margin-bottom:.6rem;">
+    Based on {{ view.n_data_months }}-month actuals ({{ "{:,.0f}".format(vs.base_vol_kg) }} kg).
+    Labour modelled {{ vs.labour_fixed_pct }}% fixed / {{ 100 - vs.labour_fixed_pct }}% variable.
+    Power modelled {{ vs.power_fixed_pct }}% fixed (demand charges) / {{ 100 - vs.power_fixed_pct }}% variable.
+  </div>
+  <div style="overflow-x:auto;">
+  <table class="cost-tbl">
+    <thead><tr><th>Scenario</th><th>Volume (kg)</th><th>Labour Rs/kg</th><th>Power Rs/kg</th><th>Combined Rs/kg</th></tr></thead>
+    <tbody>
+    {% for s in vs.scenarios %}
+    <tr {% if loop.first %}style="background:#f0fdf4;font-weight:700;"{% endif %}>
+      <td>{{ s.label }}</td>
+      <td>{{ "{:,.0f}".format(s.volume_kg) }}</td>
+      <td>{% if s.labour_kg %}{{ "%.2f"|format(s.labour_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if s.power_kg %}{{ "%.2f"|format(s.power_kg) }}{% else %}—{% endif %}</td>
+      <td>{% if s.combined_kg %}{{ "%.2f"|format(s.combined_kg) }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="note">Sensitivity model assumes wages and JVVL demand charges are largely fixed in the short term. For production increases beyond current infrastructure, incremental capex costs are not captured here.</div>
+</details>
+{% endif %}
+
+<!-- ── Data notes ─────────────────────────────────────────────────────────── -->
+<details>
+  <summary>Data Sources &amp; Methodology</summary>
+  <div style="font-size:.76rem;line-height:1.65;color:#374151;">
+    <p><strong>Labour wages</strong> — KH-1 monthly wage files (department CPVC), authoritative for regular payroll. Contractor wages from UNIT-2 tab ("Paid Wages for Contractor Labour") — not separately verified against KH-1.</p>
+    <p><strong>Fittings production (kg)</strong> — Report-12 (Wt in Kgs + Rejection), not the labour sheet which carries piece counts (mislabelled FY2026-27).</p>
+    <p><strong>Ideal rates</strong> — Pipe Labour Rs {{ "%.2f"|format(view.pipe_labour_rate) }}/kg, Fitting Labour Rs {{ "%.2f"|format(view.fitting_labour_rate) }}/kg (from Ideal Labour Cost TOTAL row); Pipe Power Rs {{ "%.2f"|format(view.pipe_power_rate) }}/kg, Fitting Power Rs {{ "%.2f"|format(view.fitting_power_rate) }}/kg (from Ideal Power Cost TOTAL row). Verify with engineering if capacity norms have changed.</p>
+    <p><strong>Power actuals</strong> — UNIT-2 tab of the annual workbook; per-kg cost uses Plumbing-only denominator. The "All-plant" per-kg (from Ideal Power Cost tab) uses Plumbing + Garden Pipe + HDPE + Tank denominator — the JVVL bill is a shared facility cost spread by volume.</p>
+    <p><strong>Cost bridge</strong> — Labour only; uses 2-factor decomposition (Rate + Volume + Mix). Power bridge deferred pending prior-FY power tab loading.</p>
+    <p><strong>Volume sensitivity</strong> — simplified model; actual Rs/kg at higher volumes depends on whether additional labour is required.</p>
+  </div>
+</details>
+
+{% endif %}{# end view not none #}
+{% endblock %}
