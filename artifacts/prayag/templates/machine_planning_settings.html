@@ -213,6 +213,14 @@
         ({{ (sources_pipe_months | default(0)) }} PIPE months available).</div>
     </div>
     {% endif %}
+    <div style="font-size:.74rem;color:#6b7280;margin-top:.55rem;padding:.35rem .5rem;
+                background:#f8fafc;border-radius:.3rem;border-left:2px solid #94a3b8;">
+      <strong>Rejection basis: Gross</strong> —
+      Rate = rej_kg ÷ (prod_kg + rej_kg), matching Prayag's own "REJECTION &amp; PRODUCTION" tab.
+      Gross-up: <code style="font-size:.72rem;">gross_qty = net_demand / (1 − rate)</code>.
+      Stored on each plan run as <code style="font-size:.72rem;">rej_basis_formula = "gross"</code>
+      so frozen runs remain reproducible.
+    </div>
   </div>
 </div>
 

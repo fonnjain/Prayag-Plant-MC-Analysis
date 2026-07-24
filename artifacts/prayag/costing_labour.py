@@ -274,11 +274,11 @@ def compute_ideal_comparison(
 
     Returns dict with actual, ideal (per kg), variance (Rs + %).
     """
-    total_pipe = sum((r.get("pipe_prod_kg") or 0) for r in monthly_rows)
-    total_fit  = sum((r.get("fitting_prod_kg") or 0) for r in monthly_rows)
+    total_pipe = sum(float(r.get("pipe_prod_kg") or 0) for r in monthly_rows)
+    total_fit  = sum(float(r.get("fitting_prod_kg") or 0) for r in monthly_rows)
     total_kg   = total_pipe + total_fit
     total_wages = sum(
-        (r.get("paid_wages") or 0) + (r.get("contractor_wages") or 0)
+        float(r.get("paid_wages") or 0) + float(r.get("contractor_wages") or 0)
         for r in monthly_rows
     )
 

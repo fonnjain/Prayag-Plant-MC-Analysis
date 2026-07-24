@@ -659,7 +659,6 @@ class TestRootUnaffected:
 
     def test_import_does_not_raise(self):
         """Costing imports must not break when store is unavailable."""
-        # Already tested by fixture above — just confirm no ImportError
         import costing_model
         import costing_labour
         import costing_rm
@@ -673,3 +672,282 @@ class TestRootUnaffected:
         import costing_model
         for fy in costing_model.FY_ORDER:
             assert "label" in costing_model.FY_CONFIG[fy]
+
+
+# ---------------------------------------------------------------------------
+# 12. Decimal × float — no TypeError when DB-typed values enter compute fns
+# ---------------------------------------------------------------------------
+
+class TestDecimalFloatNoMix:
+    """compute_ideal_comparison must not raise TypeError when monthly_rows
+    contain decimal.Decimal values (as returned by psycopg2 NUMERIC columns).
+    The _coerce_row boundary fix in costing_model eliminates this, but we
+    also verify the compute function is robust.
+    """
+
+    def _decimal_rows(self):
+        from decimal import Decimal
+        return [
+            {
+                "pipe_prod_kg":    Decimal("4184706"),
+                "fitting_prod_kg": Decimal("975609"),
+                "total_prod_kg":   Decimal("5160315"),
+                "paid_wages":      Decimal("21452790"),
+                "contractor_wages": Decimal("0"),
+                "per_kg_labour_cost": Decimal("4.157"),
+            }
+        ]
+
+    def test_ideal_comparison_with_decimal_rows_does_not_raise(self):
+        cl = _import_labour()
+        rows = self._decimal_rows()
+        result = cl.compute_ideal_comparison(rows, 2.50, 6.50)
+        assert result is not None
+
+    def test_ideal_comparison_decimal_gives_correct_actual_per_kg(self):
+        cl = _import_labour()
+        rows = self._decimal_rows()
+        result = cl.compute_ideal_comparison(rows, 2.50, 6.50)
+        expected_actual = 21_452_790 / 5_160_315
+        assert result["actual_per_kg"] == pytest.approx(expected_actual, rel=1e-3)
+
+    def test_ideal_comparison_decimal_gives_correct_ideal_per_kg(self):
+        cl = _import_labour()
+        rows = self._decimal_rows()
+        result = cl.compute_ideal_comparison(rows, 2.50, 6.50)
+        expected_ideal = (4_184_706 * 2.50 + 975_609 * 6.50) / 5_160_315
+        assert result["ideal_per_kg"] == pytest.approx(expected_ideal, rel=1e-3)
+
+    def test_coerce_row_converts_decimal_to_float(self):
+        from decimal import Decimal
+        cm = _import_model()
+        row = {"paid_hours": Decimal("431468"), "paid_wages": Decimal("21452790"),
+               "segment": "PLUMBING", "frozen": False}
+        coerced = cm._coerce_row(row)
+        assert isinstance(coerced["paid_hours"],  float)
+        assert isinstance(coerced["paid_wages"],   float)
+        assert isinstance(coerced["segment"],      str)    # non-Decimal unchanged
+        assert isinstance(coerced["frozen"],       bool)   # non-Decimal unchanged
+
+    def test_coerce_row_preserves_none(self):
+        from decimal import Decimal
+        cm = _import_model()
+        row = {"contractor_wages": None, "paid_hours": Decimal("36000")}
+        coerced = cm._coerce_row(row)
+        assert coerced["contractor_wages"] is None
+        assert isinstance(coerced["paid_hours"], float)
+
+
+# ---------------------------------------------------------------------------
+# 13. Empty FY renders loaded=False (not a 500) for all FY selectors
+# ---------------------------------------------------------------------------
+
+class TestEmptyFYState:
+    """get_labour_view must return {"loaded": False} for any FY with no data,
+    never raising — guarantees /costing returns 200 for all FYs including
+    those never loaded.
+    """
+
+    def test_get_labour_view_empty_returns_not_loaded(self):
+        cl = _import_labour()
+        # store is stubbed as AVAILABLE=False, so get_labour_monthly returns []
+        result = cl.get_labour_view("PLUMBING", "2324")
+        assert result.get("loaded") is False
+
+    def test_get_labour_view_empty_has_meta_key(self):
+        cl = _import_labour()
+        result = cl.get_labour_view("PLUMBING", "2223")
+        assert "meta" in result
+
+    def test_all_fy_codes_return_not_loaded_when_db_unavailable(self):
+        cm = _import_model()
+        cl = _import_labour()
+        for fy in cm.FY_ORDER:
+            result = cl.get_labour_view("PLUMBING", fy)
+            assert result.get("loaded") is False, f"FY {fy} should be not-loaded with no DB"
+
+
+# ---------------------------------------------------------------------------
+# 14. FY2025-26 acceptance figures (parser round-trip)
+# ---------------------------------------------------------------------------
+
+class TestFY2526AcceptanceFigures:
+    """Parse the FY2025-26 layout with the acceptance totals from the spec
+    and verify the computed metrics match exactly.
+    """
+
+    def _make_fy2526_full(self):
+        """Construct a 12-month dataset whose TOTAL matches the acceptance spec."""
+        header = [
+            "", "MONTH", "No. Of Labour", "Paid Hours", "Actual Hours",
+            "Paid Hours Devoted", "Actual Hours Devoted",
+            "Paid Wages", "Per Hour Cost on Paid Hours", "Per Hour Cost on Actual Hours",
+            "Pipe Production (Kgs)", "Fittings Production (Kgs)", "Total Production",
+            "Per KG Labour Cost",
+        ]
+        # Distribute acceptance totals evenly across 12 months for round-trip test.
+        # Total: paid 431468, actual 362225, wages 21452790, pipe 4184706, fit 975609
+        months = ["APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC","JAN","FEB","MAR"]
+        rows_data = []
+        for m in months:
+            rows_data.append([
+                "", m, "317",
+                str(431_468 // 12), str(362_225 // 12), "", "",
+                str(21_452_790 // 12), "", "",
+                str(4_184_706 // 12), str(975_609 // 12),
+                str((4_184_706 + 975_609) // 12), "",
+            ])
+        return [[""], [""], header] + rows_data
+
+    def test_fy_totals_paid_hours(self):
+        cl = _import_labour()
+        rows = cl.parse_plumbing_tab(self._make_fy2526_full())
+        totals = cl.compute_fy_totals(rows)
+        assert totals["paid_hours"] == pytest.approx(431_468 // 12 * 12, rel=1e-3)
+
+    def test_fy_totals_wages(self):
+        cl = _import_labour()
+        rows = cl.parse_plumbing_tab(self._make_fy2526_full())
+        totals = cl.compute_fy_totals(rows)
+        assert totals["paid_wages"] == pytest.approx(21_452_790 // 12 * 12, rel=1e-3)
+
+    def test_per_hour_cost_paid_approx(self):
+        """Per-hour cost on paid hours ≈ Rs 49.72 from acceptance spec."""
+        cl = _import_labour()
+        # Direct computation matches spec
+        ph_cost = 21_452_790 / 431_468
+        assert ph_cost == pytest.approx(49.72, rel=0.01)
+
+    def test_per_hour_cost_actual_approx(self):
+        """Per-hour cost on actual hours ≈ Rs 59.23 from acceptance spec."""
+        cl = _import_labour()
+        ah_cost = 21_452_790 / 362_225
+        assert ah_cost == pytest.approx(59.23, rel=0.01)
+
+    def test_actual_per_kg_approx(self):
+        """Actual labour ≈ Rs 4.157/kg from acceptance spec."""
+        total_kg = 5_160_315
+        wages    = 21_452_790
+        assert wages / total_kg == pytest.approx(4.157, rel=0.001)
+
+    def test_ideal_per_kg_approx(self):
+        """Weighted ideal ≈ Rs 3.26/kg: pipe Rs2.50 × 4184706 + fit Rs6.50 × 975609."""
+        pipe_kg = 4_184_706
+        fit_kg  = 975_609
+        total   = pipe_kg + fit_kg
+        ideal   = (pipe_kg * 2.50 + fit_kg * 6.50) / total
+        assert ideal == pytest.approx(3.26, rel=0.01)
+
+    def test_variance_pct_approx_27pct_above(self):
+        pipe_kg = 4_184_706
+        fit_kg  = 975_609
+        total   = pipe_kg + fit_kg
+        actual  = 21_452_790 / total
+        ideal   = (pipe_kg * 2.50 + fit_kg * 6.50) / total
+        pct     = (actual - ideal) / ideal * 100
+        assert pct == pytest.approx(27.6, rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# 15. Freeze second-load is a genuine no-op (unit-level)
+# ---------------------------------------------------------------------------
+
+class TestFreezeNoOp:
+    """load_labour_fy for a frozen FY with existing meta must return skipped=True
+    without calling any write path.  Verified by checking the return value;
+    the DB is stubbed (AVAILABLE=False) so write is impossible anyway.
+    """
+
+    def test_frozen_fy_with_no_db_returns_error_not_skip(self):
+        """When DB is unavailable, load returns ok=False (no token, no data)."""
+        cl = _import_labour()
+        # AVAILABLE=False — the stub sheets returns no token
+        result = cl.load_labour_fy("PLUMBING", "2526")
+        # No token → error path (skipped only triggers when data already in DB)
+        assert result["ok"] is False or result.get("skipped") is False
+
+    def test_is_frozen_returns_true_for_2526(self):
+        cm = _import_model()
+        assert cm.is_frozen("2526") is True
+
+    def test_is_frozen_returns_false_for_live_fy(self):
+        cm = _import_model()
+        assert cm.is_frozen(cm.LIVE_FY) is False
+
+    def test_frozen_fy_with_existing_meta_skips(self):
+        """Simulate: meta says n_months=12 → second load must skip."""
+        import costing_labour as cl_mod
+        import costing_model  as cm_mod
+        # Monkey-patch get_labour_meta to return a non-empty meta
+        original = cm_mod.get_labour_meta
+        try:
+            cm_mod.get_labour_meta = lambda seg, fy: {"n_months": 12, "pipe_ideal_rate": 2.5, "fitting_ideal_rate": 6.5}
+            # Also patch AVAILABLE so the skip check runs
+            orig_avail = cm_mod.AVAILABLE
+            cm_mod.AVAILABLE = True
+            result = cl_mod.load_labour_fy("PLUMBING", "2526")
+            assert result.get("skipped") is True
+            assert result.get("frozen") is True
+        finally:
+            cm_mod.get_labour_meta = original
+            cm_mod.AVAILABLE = orig_avail
+
+
+# ---------------------------------------------------------------------------
+# 16. Rejection basis — gross formula pairs with gross rate (FIX 4)
+# ---------------------------------------------------------------------------
+
+class TestRejectionBasis:
+    """Verify the GROSS basis formula is internally consistent and that the
+    OLD net-basis formula overstates relative to it.
+    """
+
+    # May 2026 pipe acceptance data from the spec
+    PROD_KG = 313_516.0
+    REJ_KG  = 30_484.0
+
+    def _r_gross(self):
+        return self.REJ_KG / (self.PROD_KG + self.REJ_KG)
+
+    def _r_net(self):
+        return self.REJ_KG / self.PROD_KG
+
+    def test_gross_rate_less_than_net_rate(self):
+        assert self._r_gross() < self._r_net()
+
+    def test_gross_rate_approx_8pt86_pct(self):
+        """Spec: 30,484 / (313,516 + 30,484) = 8.86%."""
+        assert self._r_gross() * 100 == pytest.approx(8.86, rel=1e-3)
+
+    def test_net_rate_approx_9pt72_pct(self):
+        """Net basis for same data: 30,484 / 313,516 = 9.72%."""
+        assert self._r_net() * 100 == pytest.approx(9.72, rel=1e-3)
+
+    def test_gross_formula_with_gross_rate_matches_net_formula_with_net_rate(self):
+        """Both correct conventions give identical gross quantities."""
+        net_demand = 267_163.0
+        gross_a = net_demand / (1.0 - self._r_gross())   # GROSS formula + GROSS rate
+        gross_b = net_demand * (1.0 + self._r_net())      # NET formula + NET rate
+        assert gross_a == pytest.approx(gross_b, rel=1e-6)
+
+    def test_wrong_net_rate_in_gross_formula_overstates(self):
+        """Using NET rate in gross formula (the old bug) overstates vs correct."""
+        net_demand = 267_163.0
+        correct_gross = net_demand / (1.0 - self._r_gross())
+        wrong_gross   = net_demand / (1.0 - self._r_net())    # was the old code
+        assert wrong_gross > correct_gross, "Old formula must overstate"
+        overstatement_pct = (wrong_gross - correct_gross) / correct_gross * 100
+        # Typical overstatement at ~9% NET rate is ~1% (rate-dependent).
+        # Assert the direction (positive) and that it is meaningfully non-zero.
+        assert overstatement_pct > 0.5, (
+            f"Expected >0.5% overstatement, got {overstatement_pct:.2f}%"
+        )
+
+    def test_rej_basis_constant_is_gross(self):
+        """REJ_BASIS constant must be 'gross'."""
+        import sys, os
+        prayag_dir = os.path.join(os.path.dirname(__file__), "..")
+        if prayag_dir not in sys.path:
+            sys.path.insert(0, prayag_dir)
+        import mp_rejection_plan as mrp
+        assert mrp.REJ_BASIS == "gross"

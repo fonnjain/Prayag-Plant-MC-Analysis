@@ -204,8 +204,8 @@ def compute_actual_rm(
     When fitting_r12_kg is provided (from Report-12 actuals), a data_mismatch
     flag is set if the two figures diverge significantly.
     """
-    total_pipe_kg    = sum((r.get("pipe_prod_kg") or 0) for r in monthly_rows)
-    total_fitting_kg = sum((r.get("fitting_prod_kg") or 0) for r in monthly_rows)
+    total_pipe_kg    = sum(float(r.get("pipe_prod_kg") or 0) for r in monthly_rows)
+    total_fitting_kg = sum(float(r.get("fitting_prod_kg") or 0) for r in monthly_rows)
 
     # Cost estimates: use overall CPVC (most common) as a proxy when we don't
     # have per-material breakdown from actuals.  This is clearly approximate

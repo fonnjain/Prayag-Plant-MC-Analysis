@@ -4539,6 +4539,7 @@ def costing_hub():
         # data
         labour_meta=labour_meta,
         labour_view=labour_view,
+        pipe_derived_labour=pipe_derived_labour,
         rm_recipes=rm_recipes,
         planned_rm=planned_rm,
         actual_rm=actual_rm,
