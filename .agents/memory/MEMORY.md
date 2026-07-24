@@ -1,4 +1,5 @@
 - [Replit connector API filter bug](prayag-connector-api-filter.md) — connector_names= filter is silently ignored; fetch all then pick by id prefix; use X-Replit-Token (hyphens) not underscores.
+- [Costing module design](prayag-costing-module.md) — costing_model/labour/rm.py; freeze rule (FY<2627 immutable); header-based dual-layout parser; FY2627 fittings mismatch is a display flag, never silently reconciled.
 - [Prayag daily-first figures](prayag-daily-first.md) — monthly/FY headline totals summed from daily tabs, not the summary grid; never reconcile down; daily read must survive per-file 429s.
 - [M/C Efficiency idle-machine denominator](prayag-mc-eff-idle-denominator.md) — TOTAL M/C Eff den must come from R5 directly (sheets.pipe_run5_parsed), not records accumulator; idle machines have no records but still count in denominator.
 - [PIPE Report-5↔Report-11 reconcile](prayag-pipe-reconcile.md) — PIPE headline out/rej = date-wise MAX over union of both sources (not R5-only); header-based readers handle both FY layouts; type split pro-rata + untyped pickup, audit-only.

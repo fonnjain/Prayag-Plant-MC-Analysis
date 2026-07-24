@@ -4430,6 +4430,141 @@ def labour_view():
 
 
 # ---------------------------------------------------------------------------
+# Costing module — /costing hub + sub-sections (Labour + RM)
+# Isolated from "/" — never touches the performance pipeline.
+# ---------------------------------------------------------------------------
+
+def _costing_imports():
+    """Lazy import of costing modules to avoid cold-start overhead."""
+    import costing_model  as _cm
+    import costing_labour as _cl
+    import costing_rm     as _cr
+    return _cm, _cl, _cr
+
+
+@app.route("/costing")
+def costing_hub():
+    """Costing module hub — Labour Costing + Raw Material Costing."""
+    _cm, _cl, _cr = _costing_imports()
+
+    category = request.args.get("category", "PLUMBING").upper()
+    if category not in _cm.CATEGORIES:
+        category = "PLUMBING"
+
+    fy = request.args.get("fy", _cm.LIVE_FY)
+    if fy not in _cm.FY_CONFIG:
+        fy = _cm.LIVE_FY
+
+    tab = request.args.get("tab", "labour")
+    if tab not in ("labour", "rm"):
+        tab = "labour"
+
+    fy_frozen = _cm.is_frozen(fy)
+    fy_label  = _cm.FY_CONFIG[fy]["label"]
+
+    # ── Labour view ──────────────────────────────────────────────────────────
+    labour_view  = {}
+    labour_meta  = _cm.get_labour_meta(category, fy)
+
+    if category != "PTMT":
+        labour_view = _cl.get_labour_view(category, fy)
+
+    # ── RM view ──────────────────────────────────────────────────────────────
+    rm_recipes   = []
+    planned_rm   = {}
+    actual_rm    = {}
+
+    if category != "PTMT" and tab == "rm":
+        # Derive effective_month from FY (use last month of FY for recipe lookup)
+        _fy_to_em = {
+            "2627": "2027-03", "2526": "2026-03",
+            "2324": "2024-03", "2223": "2023-03",
+        }
+        effective_month = _fy_to_em.get(fy, "2027-03")
+
+        cost_map = _cr.get_recipe_cost_map("Plumbing", effective_month)
+        # Build display list of recipes
+        rm_recipes = [
+            {"material": mat, "type": typ, "cost_rs_per_kg": crs}
+            for (mat, typ), crs in sorted(cost_map.items())
+        ]
+
+        # Actual RM cost from labour monthly rows (production volumes)
+        monthly = labour_view.get("monthly", []) if labour_view.get("loaded") else []
+        if monthly:
+            # FY2026-27 fittings mismatch: Report-12 reference figure
+            r12_kg = 1_200_000.0 if fy == "2627" else None
+            actual_rm = _cr.compute_actual_rm(
+                monthly, cost_map,
+                fitting_r12_kg=r12_kg,
+            )
+
+    # ── Combined summary ─────────────────────────────────────────────────────
+    summary = {}
+    if labour_view.get("loaded") and labour_view.get("totals"):
+        summary = _cr.combined_cost_summary(
+            labour_view["totals"],
+            planned_rm,
+            actual_rm,
+        )
+
+    return render_template(
+        "costing_home.html",
+        # selectors
+        category=category,
+        fy=fy,
+        tab=tab,
+        # FY config
+        fy_frozen=fy_frozen,
+        fy_label=fy_label,
+        fy_order=_cm.FY_ORDER,
+        fy_count=len(_cm.FY_ORDER),
+        fy_configs=_cm.FY_CONFIG,
+        categories=_cm.CATEGORIES,
+        cat_labels=_cm.CATEGORY_LABELS,
+        # data
+        labour_meta=labour_meta,
+        labour_view=labour_view,
+        rm_recipes=rm_recipes,
+        planned_rm=planned_rm,
+        actual_rm=actual_rm,
+        summary=summary,
+        # base
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/costing/api/load-labour", methods=["POST"])
+def costing_load_labour():
+    """Load (or refresh) labour data for a given category + FY.
+
+    Body JSON: {"category": "PLUMBING", "fy": "2627", "force": false}
+
+    FREEZE RULE: frozen FYs are skipped unless force=true.
+    Returns JSON: {"ok": bool, "n_months": int, "skipped": bool, "errors": [...]}
+    """
+    from flask import jsonify
+    _cm, _cl, _cr = _costing_imports()
+
+    body     = request.get_json(silent=True) or {}
+    category = str(body.get("category", "PLUMBING")).upper()
+    fy       = str(body.get("fy", _cm.LIVE_FY))
+    force    = bool(body.get("force", False))
+
+    if category not in _cm.CATEGORIES:
+        return jsonify({"ok": False, "error": f"Unknown category: {category}"}), 400
+    if fy not in _cm.FY_CONFIG:
+        return jsonify({"ok": False, "error": f"Unknown FY: {fy}"}), 400
+    if category == "PTMT":
+        return jsonify({"ok": False, "error": "PTMT costing not yet implemented."}), 400
+
+    result = _cl.load_labour_fy(category, fy, force=force)
+    status = 200 if result.get("ok") else 502
+    return jsonify(result), status
+
+
+# ---------------------------------------------------------------------------
 # Group B — Segment Labour / Solar / Power manual monthly inputs
 # ---------------------------------------------------------------------------
 _SEG_PLANT_TO_UNIT = {

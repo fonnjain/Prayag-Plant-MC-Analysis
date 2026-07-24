@@ -1,0 +1,597 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.cost-tab { padding:.45rem .9rem; border-radius:.5rem; font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; }
+.cost-tab.active { background:var(--terra); color:#fff; }
+.cost-tab:not(.active) { background:#f3f4f6; color:#374151; }
+.freeze-badge { display:inline-flex; align-items:center; gap:.35rem; background:#f1f5f9; border:1px solid #94a3b8; border-radius:.4rem; padding:.2rem .55rem; font-size:.72rem; font-weight:700; color:#475569; }
+.live-badge { display:inline-flex; align-items:center; gap:.35rem; background:#dcfce7; border:1px solid #86efac; border-radius:.4rem; padding:.2rem .55rem; font-size:.72rem; font-weight:700; color:#166534; }
+.cost-card { background:#fff; border-radius:.65rem; box-shadow:0 1px 4px rgba(0,0,0,.07); padding:.8rem 1rem; }
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:.6rem; margin-bottom:1rem; }
+.kpi-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:.5rem; padding:.6rem .8rem; }
+.kpi-lbl { font-size:.68rem; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.kpi-val { font-size:1.1rem; font-weight:800; color:var(--navy); margin-top:.15rem; }
+.kpi-sub { font-size:.7rem; color:#9ca3af; margin-top:.1rem; }
+.warn-box { background:#fef3c7; border:1px solid #fbbf24; border-radius:.5rem; padding:.65rem .85rem; margin-bottom:.75rem; }
+.err-box  { background:#fee2e2; border:1px solid #fca5a5; border-radius:.5rem; padding:.65rem .85rem; margin-bottom:.75rem; }
+.info-box { background:#eff6ff; border:1px solid #93c5fd; border-radius:.5rem; padding:.65rem .85rem; margin-bottom:.75rem; }
+.section-hdr { font-size:.82rem; font-weight:800; color:var(--navy); margin-bottom:.5rem; }
+table.cost-tbl { width:100%; border-collapse:collapse; font-size:.78rem; }
+table.cost-tbl th { background:#f1f5f9; padding:.3rem .5rem; text-align:right; font-weight:700; border-bottom:2px solid #e2e8f0; }
+table.cost-tbl th:first-child { text-align:left; }
+table.cost-tbl td { padding:.3rem .5rem; border-bottom:1px solid #f1f5f9; text-align:right; }
+table.cost-tbl td:first-child { text-align:left; }
+table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2px solid #94a3b8; }
+.ptmt-stub { text-align:center; padding:2rem; color:#9ca3af; }
+</style>
+
+<!-- ── Page header ─────────────────────────────────────────────────────── -->
+<div style="background:var(--navy);color:#fff;border-radius:.75rem;padding:.85rem 1rem;
+            margin-bottom:.85rem;display:flex;align-items:center;gap:.75rem;">
+  <div style="flex:1;">
+    <div style="font-size:.7rem;opacity:.7;letter-spacing:.04em;text-transform:uppercase;">Prayag Production</div>
+    <div style="font-size:1rem;font-weight:800;">Costing</div>
+  </div>
+  <a href="/" style="font-size:.75rem;color:rgba(255,255,255,.75);text-decoration:none;">← Home</a>
+</div>
+
+<!-- ── Selectors ──────────────────────────────────────────────────────────── -->
+<div style="background:#fff;border-radius:.65rem;box-shadow:0 1px 4px rgba(0,0,0,.07);
+            padding:.7rem 1rem;margin-bottom:.8rem;display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;">
+  <!-- Category -->
+  <div style="display:flex;gap:.4rem;align-items:center;">
+    <span style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Category</span>
+    {% for cat in categories %}
+    <a href="?category={{ cat }}&fy={{ fy }}&tab={{ tab }}"
+       class="cost-tab {{ 'active' if cat == category else '' }}">
+      {{ cat_labels[cat] }}
+    </a>
+    {% endfor %}
+  </div>
+  <!-- FY -->
+  <div style="display:flex;gap:.4rem;align-items:center;margin-left:auto;">
+    <span style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Financial Year</span>
+    {% for f in fy_order %}
+      {% if loop.index <= fy_count %}
+    <a href="?category={{ category }}&fy={{ f }}&tab={{ tab }}"
+       class="cost-tab {{ 'active' if f == fy else '' }}"
+       style="{% if f != fy %}font-size:.72rem;padding:.35rem .65rem;{% endif %}">
+      {{ fy_configs[f].label }}
+    </a>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ── FY status badge ───────────────────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem;">
+  {% if fy_frozen %}
+  <span class="freeze-badge">🔒 Frozen — FY closed · data is read-only</span>
+  {% else %}
+  <span class="live-badge">🟢 Live — FY2026-27 recomputes from source</span>
+  {% endif %}
+  {% if labour_meta %}
+  <span style="font-size:.72rem;color:#6b7280;">
+    Labour: loaded {{ labour_meta.n_months }} months
+    · {{ labour_meta.loaded_at.strftime('%d-%m-%Y %H:%M') if labour_meta.loaded_at else '' }}
+  </span>
+  {% endif %}
+</div>
+
+{% if category == 'PTMT' %}
+<!-- ── PTMT stub ─────────────────────────────────────────────────────────── -->
+<div class="cost-card">
+  <div class="ptmt-stub">
+    <div style="font-size:2rem;margin-bottom:.5rem;">⚙️</div>
+    <div style="font-weight:700;font-size:.95rem;color:#374151;margin-bottom:.3rem;">PTMT Costing — Coming Soon</div>
+    <div style="font-size:.8rem;">PTMT labour and raw material costing will be available in the next release.</div>
+  </div>
+</div>
+
+{% else %}
+
+<!-- ── Combined KPI summary ───────────────────────────────────────────────── -->
+{% if summary and summary.total_kg %}
+<div class="cost-card" style="margin-bottom:.85rem;">
+  <div class="section-hdr">📊 Combined Cost Summary — {{ fy_label }}</div>
+  <div class="kpi-grid">
+    <div class="kpi-box">
+      <div class="kpi-lbl">Labour Cost</div>
+      <div class="kpi-val">₹{{ "{:,.0f}".format(summary.labour_cost_rs) }}</div>
+      {% if summary.labour_per_kg %}<div class="kpi-sub">₹{{ "%.2f"|format(summary.labour_per_kg) }}/kg</div>{% endif %}
+    </div>
+    {% if summary.rm_cost_rs %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">RM Cost (est.)</div>
+      <div class="kpi-val">₹{{ "{:,.0f}".format(summary.rm_cost_rs) }}</div>
+      {% if summary.rm_per_kg %}<div class="kpi-sub">₹{{ "%.2f"|format(summary.rm_per_kg) }}/kg</div>{% endif %}
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-lbl">Combined Cost</div>
+      <div class="kpi-val">₹{{ "{:,.0f}".format(summary.total_cost_rs) }}</div>
+      {% if summary.combined_per_kg %}<div class="kpi-sub">₹{{ "%.2f"|format(summary.combined_per_kg) }}/kg combined</div>{% endif %}
+    </div>
+    {% endif %}
+    <div class="kpi-box">
+      <div class="kpi-lbl">Pipe Production</div>
+      <div class="kpi-val">{{ "{:,.0f}".format(summary.pipe_kg) }} kg</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-lbl">Fittings Production</div>
+      <div class="kpi-val">{{ "{:,.0f}".format(summary.fitting_kg) }} kg</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-lbl">Total Production</div>
+      <div class="kpi-val">{{ "{:,.0f}".format(summary.total_kg) }} kg</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Sub-section tabs ───────────────────────────────────────────────────── -->
+<div style="display:flex;gap:.4rem;margin-bottom:.75rem;">
+  <a href="?category={{ category }}&fy={{ fy }}&tab=labour"
+     class="cost-tab {{ 'active' if tab == 'labour' else '' }}">👷 Labour Costing</a>
+  <a href="?category={{ category }}&fy={{ fy }}&tab=rm"
+     class="cost-tab {{ 'active' if tab == 'rm' else '' }}">🧪 Raw Material Costing</a>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     LABOUR TAB
+════════════════════════════════════════════════════════════════════════════ -->
+{% if tab == 'labour' %}
+
+  {% if not labour_view.loaded %}
+  <!-- Load prompt -->
+  <div class="cost-card">
+    <div class="info-box" style="margin:0;">
+      <strong>No data loaded yet for {{ fy_label }}.</strong>
+      {% if not fy_frozen %}
+      Click <strong>Load / Refresh</strong> to read the source workbook.
+      {% else %}
+      Click <strong>Load Snapshot</strong> to read and freeze this FY.
+      Once frozen, the snapshot is immutable.
+      {% endif %}
+    </div>
+    {% if not fy_frozen %}
+    <div style="margin-top:.65rem;">
+      <button onclick="doLoadLabour(false)"
+              style="background:var(--terra);color:#fff;border:none;padding:.45rem .9rem;
+                     border-radius:.4rem;font-size:.8rem;font-weight:700;cursor:pointer;">
+        ⟳ Load / Refresh Labour Data
+      </button>
+    </div>
+    {% else %}
+    <div style="margin-top:.65rem;">
+      <button onclick="doLoadLabour(false)"
+              style="background:var(--navy);color:#fff;border:none;padding:.45rem .9rem;
+                     border-radius:.4rem;font-size:.8rem;font-weight:700;cursor:pointer;">
+        📥 Load Snapshot (freeze once)
+      </button>
+    </div>
+    {% endif %}
+  </div>
+
+  {% else %}
+  <!-- Labour data loaded -->
+
+  <!-- Reload button (live FY or force-reload) -->
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.65rem;flex-wrap:wrap;">
+    {% if not fy_frozen %}
+    <button onclick="doLoadLabour(false)"
+            style="background:var(--terra);color:#fff;border:none;padding:.38rem .75rem;
+                   border-radius:.35rem;font-size:.78rem;font-weight:700;cursor:pointer;">
+      ⟳ Refresh from Source
+    </button>
+    {% else %}
+    <span style="font-size:.75rem;color:#6b7280;">🔒 Frozen snapshot — read-only.</span>
+    <button onclick="doLoadLabour(true)"
+            style="background:#6b7280;color:#fff;border:none;padding:.35rem .65rem;
+                   border-radius:.35rem;font-size:.72rem;cursor:pointer;"
+            title="Force-overwrite even though FY is frozen (manager override)">
+      Force Reload
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- Data mismatch warning -->
+  {% if labour_view.comparison and labour_view.comparison.variance_pct and
+        labour_view.comparison.variance_pct > 25 %}
+  <div class="warn-box" style="margin-bottom:.75rem;">
+    <strong>⚠️ Labour cost runs {{ "{:.1f}".format(labour_view.comparison.variance_pct) }}% above ideal</strong>
+    — actual ₹{{ "%.3f"|format(labour_view.comparison.actual_per_kg) }}/kg vs ideal
+    ₹{{ "%.3f"|format(labour_view.comparison.ideal_per_kg) }}/kg.
+    Investigate overtime, contractor mix, or low production output.
+  </div>
+  {% endif %}
+
+  <!-- Actual vs Ideal summary -->
+  {% set cmp = labour_view.comparison %}
+  {% if cmp %}
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">⚖️ Actual vs Ideal Labour Cost</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.55rem;">
+      <div class="kpi-box">
+        <div class="kpi-lbl">Actual ₹/kg</div>
+        <div class="kpi-val" style="color:var(--terra);">
+          {% if cmp.actual_per_kg %}₹{{ "%.3f"|format(cmp.actual_per_kg) }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Ideal ₹/kg (weighted)</div>
+        <div class="kpi-val" style="color:#059669;">
+          {% if cmp.ideal_per_kg %}₹{{ "%.3f"|format(cmp.ideal_per_kg) }}{% else %}—{% endif %}
+        </div>
+        <div class="kpi-sub">Pipe ₹{{ "%.2f"|format(cmp.pipe_ideal_rate) }} · Fittings ₹{{ "%.2f"|format(cmp.fitting_ideal_rate) }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Variance ₹/kg</div>
+        <div class="kpi-val" style="color:{% if cmp.variance_rs and cmp.variance_rs > 0 %}var(--terra){% else %}#059669{% endif %};">
+          {% if cmp.variance_rs %}{{ "%+.3f"|format(cmp.variance_rs) }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Variance %</div>
+        <div class="kpi-val" style="color:{% if cmp.variance_pct and cmp.variance_pct > 0 %}var(--terra){% else %}#059669{% endif %};">
+          {% if cmp.variance_pct %}{{ "%+.1f%%"|format(cmp.variance_pct) }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Total Wages</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(cmp.total_wages) }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Total Production</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(cmp.total_kg) }} kg</div>
+        <div class="kpi-sub">Pipe {{ "{:,.0f}".format(cmp.total_pipe_kg) }} · Fit {{ "{:,.0f}".format(cmp.total_fitting_kg) }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- FY totals strip -->
+  {% set tot = labour_view.totals %}
+  {% if tot %}
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">📋 FY Totals — {{ fy_label }}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.5rem;">
+      <div class="kpi-box">
+        <div class="kpi-lbl">Payroll Labour</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.no_of_labour or 0)|replace(",","") }}</div>
+      </div>
+      {% if tot.contractor_labour %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Contractor Labour</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.contractor_labour or 0)|replace(",","") }}</div>
+      </div>
+      {% endif %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Paid Hours</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.paid_hours or 0) }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Actual Hours</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.actual_hours or 0) }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Paid Wages</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(tot.paid_wages or 0) }}</div>
+      </div>
+      {% if tot.contractor_wages %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Contractor Wages</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(tot.contractor_wages or 0) }}</div>
+      </div>
+      {% endif %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">₹/hr (paid hrs)</div>
+        <div class="kpi-val">{% if tot.per_hour_cost_paid %}₹{{ "%.2f"|format(tot.per_hour_cost_paid) }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">₹/hr (actual hrs)</div>
+        <div class="kpi-val">{% if tot.per_hour_cost_actual %}₹{{ "%.2f"|format(tot.per_hour_cost_actual) }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Pipe Production</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.pipe_prod_kg or 0) }} kg</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Fittings Prod.</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.fitting_prod_kg or 0) }} kg</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Total Production</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(tot.total_prod_kg or 0) }} kg</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Monthly table -->
+  {% if labour_view.monthly %}
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">📅 Monthly Labour Detail</div>
+    <div style="overflow-x:auto;">
+    <table class="cost-tbl">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Month</th>
+          <th>Payroll</th>
+          {% if labour_view.monthly[0].contractor_labour is not none %}<th>Contractor</th>{% endif %}
+          <th>Paid Hrs</th>
+          <th>Actual Hrs</th>
+          <th>Paid Wages ₹</th>
+          {% if labour_view.monthly[0].contractor_wages is not none %}<th>Contr. Wages ₹</th>{% endif %}
+          <th>₹/hr (paid)</th>
+          <th>₹/hr (actual)</th>
+          <th>Pipe kg</th>
+          <th>Fittings kg</th>
+          <th>Total kg</th>
+          <th>₹/kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(tot_ph=0,tot_ah=0,tot_pw=0,tot_cw=0,tot_pipe=0,tot_fit=0,tot_kg=0) %}
+        {% for r in labour_view.monthly %}
+          {% set ns.tot_ph   = ns.tot_ph   + (r.paid_hours or 0) %}
+          {% set ns.tot_ah   = ns.tot_ah   + (r.actual_hours or 0) %}
+          {% set ns.tot_pw   = ns.tot_pw   + (r.paid_wages or 0) %}
+          {% set ns.tot_cw   = ns.tot_cw   + (r.contractor_wages or 0) %}
+          {% set ns.tot_pipe = ns.tot_pipe + (r.pipe_prod_kg or 0) %}
+          {% set ns.tot_fit  = ns.tot_fit  + (r.fitting_prod_kg or 0) %}
+          {% set ns.tot_kg   = ns.tot_kg   + (r.total_prod_kg or 0) %}
+        <tr>
+          <td style="font-weight:600;">{{ r.month_label }}</td>
+          <td>{{ "{:,.0f}".format(r.no_of_labour or 0)|replace(",","") if r.no_of_labour else "—" }}</td>
+          {% if labour_view.monthly[0].contractor_labour is not none %}
+          <td>{{ "{:,.0f}".format(r.contractor_labour or 0)|replace(",","") if r.contractor_labour else "—" }}</td>
+          {% endif %}
+          <td>{{ "{:,.0f}".format(r.paid_hours or 0) if r.paid_hours else "—" }}</td>
+          <td>{{ "{:,.0f}".format(r.actual_hours or 0) if r.actual_hours else "—" }}</td>
+          <td>₹{{ "{:,.0f}".format(r.paid_wages or 0) if r.paid_wages else "—" }}</td>
+          {% if labour_view.monthly[0].contractor_wages is not none %}
+          <td>₹{{ "{:,.0f}".format(r.contractor_wages or 0) if r.contractor_wages else "—" }}</td>
+          {% endif %}
+          <td>{{ "%.2f"|format(r.per_hour_cost_paid) if r.per_hour_cost_paid else "—" }}</td>
+          <td>{{ "%.2f"|format(r.per_hour_cost_actual) if r.per_hour_cost_actual else "—" }}</td>
+          <td>{{ "{:,.0f}".format(r.pipe_prod_kg) if r.pipe_prod_kg else "—" }}</td>
+          <td>{{ "{:,.0f}".format(r.fitting_prod_kg) if r.fitting_prod_kg else "—" }}</td>
+          <td>{{ "{:,.0f}".format(r.total_prod_kg) if r.total_prod_kg else "—" }}</td>
+          <td>{{ "%.3f"|format(r.per_kg_labour_cost) if r.per_kg_labour_cost else "—" }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="total-row">
+          <td>TOTAL</td>
+          <td>—</td>
+          {% if labour_view.monthly[0].contractor_labour is not none %}<td>—</td>{% endif %}
+          <td>{{ "{:,.0f}".format(ns.tot_ph) }}</td>
+          <td>{{ "{:,.0f}".format(ns.tot_ah) }}</td>
+          <td>₹{{ "{:,.0f}".format(ns.tot_pw) }}</td>
+          {% if labour_view.monthly[0].contractor_wages is not none %}<td>₹{{ "{:,.0f}".format(ns.tot_cw) }}</td>{% endif %}
+          <td>{{ "%.2f"|format((ns.tot_pw+ns.tot_cw)/ns.tot_ph) if ns.tot_ph > 0 else "—" }}</td>
+          <td>{{ "%.2f"|format((ns.tot_pw+ns.tot_cw)/ns.tot_ah) if ns.tot_ah > 0 else "—" }}</td>
+          <td>{{ "{:,.0f}".format(ns.tot_pipe) }}</td>
+          <td>{{ "{:,.0f}".format(ns.tot_fit) }}</td>
+          <td>{{ "{:,.0f}".format(ns.tot_kg) }}</td>
+          <td>{{ "%.3f"|format((ns.tot_pw+ns.tot_cw)/ns.tot_kg) if ns.tot_kg > 0 else "—" }}</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% endif %}{# end labour_view.loaded #}
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     RM TAB
+════════════════════════════════════════════════════════════════════════════ -->
+{% elif tab == 'rm' %}
+
+  {% if not rm_recipes %}
+  <div class="cost-card">
+    <div class="info-box" style="margin:0;">
+      No compound recipe cost data found for <strong>{{ fy_label }}</strong>.
+      Seed compound recipes first via the Machine Planning → Settings page.
+    </div>
+  </div>
+  {% else %}
+
+  <!-- Recipe cost map -->
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">🧪 Compound Recipe Cost Reference</div>
+    <div style="overflow-x:auto;">
+    <table class="cost-tbl">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Material</th>
+          <th style="text-align:left;">Type</th>
+          <th>Recipe ₹/kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rm_recipes %}
+        <tr>
+          <td style="font-weight:600;">{{ r.material }}</td>
+          <td>{{ r.type | capitalize }}</td>
+          <td>{% if r.cost_rs_per_kg %}₹{{ "%.2f"|format(r.cost_rs_per_kg) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <!-- Planned RM cost -->
+  {% if planned_rm and planned_rm.loaded %}
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">📋 Planned RM Cost (from Machine Plan)</div>
+    {% if planned_rm.no_cost_items %}
+    <div class="warn-box">
+      <strong>⚠️ No recipe cost</strong> for {{ planned_rm.no_cost_items|length }} item(s):
+      {{ planned_rm.no_cost_items[:5]|join(", ") }}{% if planned_rm.no_cost_items|length > 5 %} …{% endif %}
+    </div>
+    {% endif %}
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:.65rem;">
+      <div class="kpi-box">
+        <div class="kpi-lbl">Fresh Compound kg</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(planned_rm.total_fresh_kg) }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Pulverizer kg</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(planned_rm.total_pulv_kg) }}</div>
+        <div class="kpi-sub">Regrind — costed at ₹0, recovery value separate</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Total RM Cost</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(planned_rm.total_cost_rs) }}</div>
+      </div>
+    </div>
+    <table class="cost-tbl">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Material</th>
+          <th>Recipe ₹/kg</th>
+          <th>Fresh kg</th>
+          <th>Pulv. kg</th>
+          <th>RM Cost ₹</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ln in planned_rm.lines %}
+        <tr>
+          <td style="font-weight:600;">{{ ln.material }}</td>
+          <td>{% if ln.recipe_rs_per_kg %}₹{{ "%.2f"|format(ln.recipe_rs_per_kg) }}{% else %}—{% endif %}</td>
+          <td>{{ "{:,.1f}".format(ln.fresh_kg) }}</td>
+          <td>{{ "{:,.1f}".format(ln.pulv_kg) }}</td>
+          <td>{% if ln.cost_rs is not none %}₹{{ "{:,.0f}".format(ln.cost_rs) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="info-box">
+    Upload a demand file on the Machine Planning page to see the Planned RM cost breakdown.
+  </div>
+  {% endif %}
+
+  <!-- Actual RM cost -->
+  {% if actual_rm and actual_rm.loaded %}
+  <div class="cost-card" style="margin-bottom:.75rem;">
+    <div class="section-hdr">📊 Actual RM Cost (from Production)</div>
+
+    <!-- Data mismatch warning -->
+    {% if actual_rm.data_mismatch %}
+    <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:.5rem;padding:.65rem .85rem;margin-bottom:.65rem;">
+      <div style="font-weight:800;font-size:.82rem;color:#92400e;margin-bottom:.3rem;">
+        ⚠️ DATA MISMATCH — Fittings Production: two irreconcilable figures
+      </div>
+      <div style="font-size:.78rem;color:#374151;display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.4rem;">
+        <div style="background:#fff;border-radius:.35rem;padding:.45rem .6rem;">
+          <div style="font-weight:700;color:#6b7280;font-size:.68rem;text-transform:uppercase;">Labour Workbook</div>
+          <div style="font-size:1rem;font-weight:800;color:var(--terra);">
+            {{ "{:,.0f}".format(actual_rm.data_mismatch.labour_sheet_fitting_kg) }} kg
+          </div>
+        </div>
+        <div style="background:#fff;border-radius:.35rem;padding:.45rem .6rem;">
+          <div style="font-weight:700;color:#6b7280;font-size:.68rem;text-transform:uppercase;">Report-12 Actuals</div>
+          <div style="font-size:1rem;font-weight:800;color:var(--navy);">
+            {{ "{:,.0f}".format(actual_rm.data_mismatch.report12_fitting_kg) }} kg
+          </div>
+        </div>
+      </div>
+      <div style="font-size:.75rem;color:#6b7280;">{{ actual_rm.data_mismatch.note }}</div>
+    </div>
+    {% endif %}
+
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.55rem;">
+      <div class="kpi-box">
+        <div class="kpi-lbl">Pipe Volume</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(actual_rm.total_pipe_kg) }} kg</div>
+        {% if actual_rm.pipe_recipe_rs_kg %}<div class="kpi-sub">@ ₹{{ "%.2f"|format(actual_rm.pipe_recipe_rs_kg) }}/kg</div>{% endif %}
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-lbl">Fittings Volume</div>
+        <div class="kpi-val">{{ "{:,.0f}".format(actual_rm.total_fitting_kg) }} kg</div>
+        {% if actual_rm.fitting_recipe_rs_kg %}<div class="kpi-sub">@ ₹{{ "%.2f"|format(actual_rm.fitting_recipe_rs_kg) }}/kg</div>{% endif %}
+      </div>
+      {% if actual_rm.pipe_cost_rs %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Pipe RM Cost</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(actual_rm.pipe_cost_rs) }}</div>
+      </div>
+      {% endif %}
+      {% if actual_rm.fitting_cost_rs %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Fittings RM Cost</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(actual_rm.fitting_cost_rs) }}</div>
+      </div>
+      {% endif %}
+      {% if actual_rm.total_cost_rs %}
+      <div class="kpi-box">
+        <div class="kpi-lbl">Total RM Cost</div>
+        <div class="kpi-val">₹{{ "{:,.0f}".format(actual_rm.total_cost_rs) }}</div>
+      </div>
+      {% endif %}
+    </div>
+    <div style="font-size:.72rem;color:#9ca3af;">{{ actual_rm.note }}</div>
+  </div>
+  {% endif %}
+
+  {% endif %}{# end rm_recipes #}
+
+{% endif %}{# end tab #}
+
+{% endif %}{# end PTMT stub #}
+
+<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<div id="toast-box" style="position:fixed;bottom:1.2rem;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.4rem;"></div>
+
+<script>
+function showToast(msg, isErr) {
+  const el = document.createElement("div");
+  el.textContent = msg;
+  el.style.cssText = `background:${isErr?"#ef4444":"#166534"};color:#fff;
+    padding:.5rem .85rem;border-radius:.45rem;font-size:.8rem;font-weight:600;
+    box-shadow:0 2px 8px rgba(0,0,0,.25);max-width:280px;`;
+  document.getElementById("toast-box").appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+async function doLoadLabour(force) {
+  const btn = event.target;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "⟳ Loading…";
+  try {
+    const r = await fetch("/costing/api/load-labour", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        category: "{{ category }}",
+        fy: "{{ fy }}",
+        force: force,
+      }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      showToast(
+        j.skipped
+          ? "Frozen snapshot already loaded — no change."
+          : `Loaded ${j.n_months} months.`,
+        false
+      );
+      if (!j.skipped) setTimeout(() => location.reload(), 800);
+    } else {
+      showToast("Error: " + (j.error || "load failed"), true);
+    }
+  } catch(e) {
+    showToast("Network error", true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+</script>
+{% endblock %}

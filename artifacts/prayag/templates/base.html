@@ -388,7 +388,7 @@
       {# Hub — 3 category shortcuts, nothing active #}
       {{ _nb('/performance', 'Performance', _i_perf, false) }}
       {{ _nb('/machine-planning', 'Planning', _i_plan, false) }}
-      {{ _nb('/labour', 'Costing', _i_cost, false) }}
+      {{ _nb('/costing', 'Costing', _i_cost, false) }}
 
     {% elif _in_planning %}
       {# Machine Planning section #}
@@ -401,7 +401,8 @@
     {% elif _in_costing %}
       {# Costing section #}
       {{ _nb('/', 'Home', _i_home, false) }}
-      {{ _nb('/labour' ~ _pqs, 'Labour', _i_labour, true) }}
+      {{ _nb('/costing?tab=labour', 'Labour', _i_labour, 'tab=labour' in request.query_string.decode() or request.path == '/labour') }}
+      {{ _nb('/costing?tab=rm', 'Materials', _i_mach, 'tab=rm' in request.query_string.decode()) }}
 
     {% else %}
       {# Machine Performance (everything else) #}
