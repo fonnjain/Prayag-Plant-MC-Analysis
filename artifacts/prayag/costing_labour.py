@@ -871,6 +871,114 @@ def load_labour_fy(
     # (contains gross PIECES, not kg).  Report-12 "Weight of Total Production"
     # is formula-driven and authoritative for all FYs.
     month_labels = [r["month_label"] for r in monthly_rows]
+
+    # ── Auto sources: employee data (hours/headcount) + KH-1 wages files ─────
+    #
+    # Hours/headcount: Employee Data Details (COST) tabs D-1/D-2/D-3.
+    #   Plumbing = TOTAL − GARDEN PIPE − HDPE PIPE − ADMIN, resolved by label.
+    #   Month columns run in REVERSE (latest first) — mapped by header text.
+    #
+    # Wages: monthly KH-1 wages files, CPVC filter.
+    #   TOTAL PAYABLE column found by header text (shifts between files).
+    #
+    # The segment labour-cost sheet's Plumbing tab is kept for:
+    #   (a) pipe_prod_kg (still read from there)
+    #   (b) cross-check reference (±0.5% divergence → reconciliation warning)
+    #
+    emp_file_id  = costing_model.EMPLOYEE_DATA_SOURCES.get(fy)
+    emp_data: dict = {
+        "paid_hours": {}, "actual_hours": {}, "headcount": {},
+        "warnings": [], "ok": False, "source_file_id": None,
+    }
+    if emp_file_id:
+        try:
+            import costing_employee as _emp
+            emp_data = _emp.load_employee_data(emp_file_id, fy, token)
+            errors.extend(emp_data.get("warnings", []))
+        except Exception as exc:
+            errors.append(f"Employee data load failed: {exc}")
+            logger.warning("load_labour_fy: employee data failed: %s", exc)
+
+    wages_src       = costing_model.WAGES_SOURCES.get(segment, {}).get(fy, {})
+    wages_by_month: dict = {}
+    wages_file_count     = 0
+    if wages_src:
+        try:
+            import costing_wages as _wag
+            wages_by_month   = _wag.load_wages_fy(fy, segment, month_labels, token, wages_src)
+            wages_file_count = sum(1 for r in wages_by_month.values() if r.get("ok"))
+            for wr in wages_by_month.values():
+                errors.extend(wr.get("warnings", []))
+        except Exception as exc:
+            errors.append(f"Wages auto-load failed: {exc}")
+            logger.warning("load_labour_fy: wages auto-load failed: %s", exc)
+
+    # Apply auto sources to each monthly row.  Cross-check against segment
+    # sheet and surface reconciliation warnings; then overwrite with auto values.
+    for row in monthly_rows:
+        ml = row["month_label"]
+
+        auto_ph = (emp_data.get("paid_hours")   or {}).get(ml)
+        auto_ah = (emp_data.get("actual_hours") or {}).get(ml)
+        auto_hc = (emp_data.get("headcount")    or {}).get(ml)
+        winfo   = wages_by_month.get(ml, {})
+        auto_wg = winfo.get("wages") if winfo.get("ok") else None
+
+        # Store raw auto values for DB audit trail
+        row["auto_paid_hours"]   = auto_ph
+        row["auto_actual_hours"] = auto_ah
+        row["auto_headcount"]    = auto_hc
+        row["auto_wages"]        = auto_wg
+
+        # Hours cross-check
+        seg_ph          = row.get("paid_hours")
+        hours_recon_pct = None
+        if auto_ph is not None and seg_ph and seg_ph > 0:
+            hours_recon_pct = round(abs(auto_ph - seg_ph) / seg_ph * 100, 3)
+            if hours_recon_pct > 0.5:
+                errors.append(
+                    f"RECON WARNING {ml}: paid hours — auto={auto_ph:,.0f} "
+                    f"vs segment sheet={seg_ph:,.0f} ({hours_recon_pct:.2f}%)"
+                )
+        row["hours_recon_pct"] = hours_recon_pct
+
+        # Wages cross-check
+        seg_wg          = row.get("paid_wages")
+        wages_recon_pct = None
+        if auto_wg is not None and seg_wg and seg_wg > 0:
+            wages_recon_pct = round(abs(auto_wg - seg_wg) / seg_wg * 100, 3)
+            if wages_recon_pct > 0.5:
+                errors.append(
+                    f"RECON WARNING {ml}: wages — auto={auto_wg:,.0f} "
+                    f"vs segment sheet={seg_wg:,.0f} ({wages_recon_pct:.2f}%)"
+                )
+        row["wages_recon_pct"] = wages_recon_pct
+
+        # Overwrite segment sheet hours/wages with auto-sourced values
+        if auto_ph is not None:
+            row["paid_hours"]   = auto_ph
+            row["hours_source"] = f"employee_data:{emp_file_id}"
+        else:
+            row["hours_source"] = "labour_sheet"
+        if auto_ah is not None:
+            row["actual_hours"] = auto_ah
+        if auto_hc is not None:
+            row["no_of_labour"] = auto_hc
+        if auto_wg is not None:
+            row["paid_wages"]   = auto_wg
+            row["wages_source"] = f"wages_file:{winfo.get('source_file_id', '')}"
+        else:
+            row["wages_source"] = "labour_sheet"
+
+        # Recompute per-hour costs now that hours and wages may have changed
+        _total_wg = float(row.get("paid_wages") or 0) + float(row.get("contractor_wages") or 0)
+        _ph = float(row.get("paid_hours") or 0)
+        _ah = float(row.get("actual_hours") or 0)
+        if _ph > 0:
+            row["per_hour_cost_paid"]   = round(_total_wg / _ph, 4)
+        if _ah > 0:
+            row["per_hour_cost_actual"] = round(_total_wg / _ah, 4)
+
     r12_by_month = {}
     r12_errors: list[str] = []
     try:
@@ -938,6 +1046,8 @@ def load_labour_fy(
             pipe_ideal_rate=ideal_rates["pipe"],
             fitting_ideal_rate=ideal_rates["fitting"],
             source_file_id=file_id,
+            emp_data_file_id=emp_file_id or "",
+            wages_file_count=wages_file_count,
         )
     except costing_model.CostingModelError as e:
         errors.append(str(e))

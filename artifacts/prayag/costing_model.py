@@ -13,10 +13,24 @@ CATEGORIES
 
 FITTINGS PRODUCTION SOURCE
 ---------------------------
-fitting_prod_kg = Report-12 "Weight of Total Production" (formula-driven).
+fitting_prod_kg = Report-12 "Wt in Kgs" + "Actual Rejection Weight (in Kgs)"
+(gross actual = good output + rejected weight).
 The labour sheet's "Fittings Production" column is MISLABELLED in FY2026-27
 (contains PIECES, not kg).  The R12 figure is authoritative for all FYs.
-The old labour-sheet value is never stored; the correct R12 value replaces it.
+
+AUTO LABOUR SOURCES (Part A + B)
+---------------------------------
+Hours and headcount: "EMPLOYEE DATA DETAILS (COST)" workbook, tabs D-1/D-2/D-3.
+  Plumbing = TOTAL − GARDEN PIPE − HDPE PIPE − ADMIN (resolved by label, not row number).
+  Months are reverse-ordered in the sheet (latest first); mapped by header text.
+
+Wages: monthly "<N>. Wages <Mon>-<Year>" files, tab KH-1.
+  Filter: DEPARTMENT == "CPVC" (Prayag's segment label for Plumbing).
+  Column: "TOTAL PAYABLE" located by header text (shifts between files).
+
+The segment labour-cost sheet's Plumbing tab is still read as a cross-check
+reference and for pipe_prod_kg.  Divergence > 0.5% surfaces a reconciliation
+warning but does not suppress either figure.
 """
 from __future__ import annotations
 
@@ -75,6 +89,35 @@ LABOUR_SOURCES: dict[str, dict[str, str]] = {
     "PTMT": {},   # stubbed
 }
 
+# ── Employee Data file IDs ─────────────────────────────────────────────────────
+# Source: "<FY> EMPLOYEE DATA DETAILS (COST)"
+# Tabs: D-1 (Paid Hours), D-2 (Actual Working Hours), D-3 (Actual Number Of Persons)
+# Plumbing = TOTAL − GARDEN PIPE − HDPE PIPE − ADMIN (resolved by label, never by row).
+EMPLOYEE_DATA_SOURCES: dict[str, str] = {
+    "2627": "1Mfjo-CaxboN52hUO_IzrKqEAFxHgegJI4BHQb6H4VYM",
+    "2526": "1b34kCxmbwIWQJdZNL4-I4wuWGU5EzG0NJTg_V7QfYEs",
+}
+
+# ── Monthly wages file IDs ─────────────────────────────────────────────────────
+# Source: Monthly "<N>. Wages <Mon>-<Year>" files.  Tab KH-1; filter DEPT=="CPVC".
+# TOTAL PAYABLE column found by header text (shifts between files — never hardcode).
+# Acceptance: Apr-2025 = 1,904,701 ; Mar-2026 = 1,529,429 ; FY2025-26 = 21,452,790.
+# Add new months here as workbooks become available.
+WAGES_SOURCES: dict[str, dict[str, dict[str, str]]] = {
+    "PLUMBING": {
+        # FY 2025-26: Apr-2025 through Mar-2026
+        "2526": {
+            "2025-04": "1jgp3ftEr1xlEk8kXZp1Wo_ojrd2GrhGF7OZ5kNZO9z8",  # Apr-2025 → 1,904,701
+            # 2025-05 through 2026-02: file IDs not yet registered — add here
+            "2026-03": "1hl0FMeR6IxvXZonXVUpSVEtWJuqy7lZ9E3K8r4ZiOzE",  # Mar-2026 → 1,529,429
+        },
+        # FY 2026-27: Apr-2026 onwards (add as files become available)
+        "2627": {
+        },
+    },
+    "PTMT": {},   # stubbed — to be added when PTMT costing is built
+}
+
 
 def labour_file_id(category: str, fy: str) -> Optional[str]:
     return LABOUR_SOURCES.get(category, {}).get(fy)
@@ -131,6 +174,18 @@ _DDL_MIGRATION_STMTS = [
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_variance_pct   NUMERIC",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_divergent_n    INT",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_divergent_rows JSONB",
+    # Auto-sourced hours / wages (Employee Data Details D-1/D-2/D-3 + KH-1 wages files)
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS auto_paid_hours   NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS auto_actual_hours  NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS auto_headcount     NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS auto_wages         NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS hours_source       TEXT",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS wages_source       TEXT",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS hours_recon_pct    NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS wages_recon_pct    NUMERIC",
+    # Employee data + wages file tracking in meta
+    "ALTER TABLE costing_labour_meta    ADD COLUMN IF NOT EXISTS emp_data_file_id   TEXT",
+    "ALTER TABLE costing_labour_meta    ADD COLUMN IF NOT EXISTS wages_file_count   INT",
 ]
 
 _INITIALISED = False
@@ -244,9 +299,13 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         fitting_r12_kg, wt_in_kgs_total, r12_rejection_kg,
                         fitting_kg_source,
                         fitting_variance_pct, fitting_divergent_n,
-                        fitting_divergent_rows)
+                        fitting_divergent_rows,
+                        auto_paid_hours, auto_actual_hours, auto_headcount,
+                        auto_wages, hours_source, wages_source,
+                        hours_recon_pct, wages_recon_pct)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                               %s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (segment, fy, month_label) DO UPDATE SET
                            month_num             = EXCLUDED.month_num,
                            no_of_labour          = EXCLUDED.no_of_labour,
@@ -269,7 +328,15 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                            fitting_kg_source     = EXCLUDED.fitting_kg_source,
                            fitting_variance_pct  = EXCLUDED.fitting_variance_pct,
                            fitting_divergent_n   = EXCLUDED.fitting_divergent_n,
-                           fitting_divergent_rows = EXCLUDED.fitting_divergent_rows
+                           fitting_divergent_rows = EXCLUDED.fitting_divergent_rows,
+                           auto_paid_hours       = EXCLUDED.auto_paid_hours,
+                           auto_actual_hours     = EXCLUDED.auto_actual_hours,
+                           auto_headcount        = EXCLUDED.auto_headcount,
+                           auto_wages            = EXCLUDED.auto_wages,
+                           hours_source          = EXCLUDED.hours_source,
+                           wages_source          = EXCLUDED.wages_source,
+                           hours_recon_pct       = EXCLUDED.hours_recon_pct,
+                           wages_recon_pct       = EXCLUDED.wages_recon_pct
                     """,
                     (
                         segment, fy,
@@ -286,6 +353,10 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         r.get("fitting_kg_source"),
                         r.get("fitting_variance_pct"), r.get("fitting_divergent_n"),
                         divergent_json,
+                        r.get("auto_paid_hours"), r.get("auto_actual_hours"),
+                        r.get("auto_headcount"), r.get("auto_wages"),
+                        r.get("hours_source"), r.get("wages_source"),
+                        r.get("hours_recon_pct"), r.get("wages_recon_pct"),
                     ),
                 )
         return len(rows)
@@ -297,6 +368,8 @@ def upsert_labour_meta(
     segment: str, fy: str, *, frozen: bool,
     n_months: int, pipe_ideal_rate=None, fitting_ideal_rate=None,
     source_file_id: str = "",
+    emp_data_file_id: str = "",
+    wages_file_count: int = 0,
 ) -> None:
     """Insert or update the metadata row for (segment, fy)."""
     if not AVAILABLE:
@@ -307,18 +380,22 @@ def upsert_labour_meta(
             cur.execute(
                 """INSERT INTO costing_labour_meta
                    (segment, fy, frozen, n_months, pipe_ideal_rate,
-                    fitting_ideal_rate, source_file_id, loaded_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,now())
+                    fitting_ideal_rate, source_file_id,
+                    emp_data_file_id, wages_file_count, loaded_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
                    ON CONFLICT (segment, fy) DO UPDATE SET
                        frozen             = EXCLUDED.frozen,
                        n_months           = EXCLUDED.n_months,
                        pipe_ideal_rate    = EXCLUDED.pipe_ideal_rate,
                        fitting_ideal_rate = EXCLUDED.fitting_ideal_rate,
                        source_file_id     = EXCLUDED.source_file_id,
+                       emp_data_file_id   = EXCLUDED.emp_data_file_id,
+                       wages_file_count   = EXCLUDED.wages_file_count,
                        loaded_at          = now()
                 """,
                 (segment, fy, frozen, n_months, pipe_ideal_rate,
-                 fitting_ideal_rate, source_file_id),
+                 fitting_ideal_rate, source_file_id,
+                 emp_data_file_id, wages_file_count),
             )
     except Exception as e:
         raise CostingModelError(f"upsert_labour_meta: {e}") from e

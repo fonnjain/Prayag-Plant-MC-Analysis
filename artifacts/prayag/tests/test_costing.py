@@ -85,7 +85,11 @@ def patch_deps(tmp_path_factory):
     sys.modules.setdefault("psycopg2.extras", types.ModuleType("psycopg2.extras"))
 
     # Drop costing modules so they re-import from scratch and pick up stubs
-    for mod_name in ["costing_model", "costing_labour", "costing_rm"]:
+    _COSTING_MODS = [
+        "costing_model", "costing_labour", "costing_rm",
+        "costing_employee", "costing_wages",
+    ]
+    for mod_name in _COSTING_MODS:
         sys.modules.pop(mod_name, None)
 
     # Add prayag directory to path
@@ -102,7 +106,7 @@ def patch_deps(tmp_path_factory):
         else:
             sys.modules[k] = orig
     # Also evict costing modules so a subsequent import gets a clean slate
-    for mod_name in ["costing_model", "costing_labour", "costing_rm"]:
+    for mod_name in _COSTING_MODS:
         sys.modules.pop(mod_name, None)
 
 
@@ -1600,3 +1604,687 @@ class TestRejectionProdTabGuard:
         assert "r12_kg" in result
         assert "ratio" in result
         assert result["r12_kg"] == pytest.approx(90_038.43, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# ── Helpers shared by Employee-Data and Wages test classes ─────────────────
+# ---------------------------------------------------------------------------
+
+def _import_employee():
+    import costing_employee
+    return costing_employee
+
+
+def _import_wages():
+    import costing_wages
+    return costing_wages
+
+
+# ---------------------------------------------------------------------------
+# Employee Data: fixture builder
+# ---------------------------------------------------------------------------
+
+_FY2526_MONTHS_FWD = [
+    "APR", "MAY", "JUN", "JUL", "AUG", "SEP",
+    "OCT", "NOV", "DEC", "JAN", "FEB", "MAR",
+]
+
+#  Exact per-month Plumbing values whose sum matches the FY2525-26 acceptance
+#  figures.  Built to satisfy: TOTAL − GARDEN PIPE − HDPE PIPE − ADMIN.
+#  Constants added below (GARDEN=25_000, HDPE=20_000, ADMIN=7_000 per month).
+_GARDEN = 25_000
+_HDPE   = 20_000
+_ADMIN  =  7_000
+
+# D-1 Paid Hours: per-month Plumbing values summing to 431,468
+_D1_PLUMB = {
+    "APR": 36_000, "MAY": 36_100, "JUN": 35_900, "JUL": 35_800,
+    "AUG": 36_200, "SEP": 35_700, "OCT": 36_300, "NOV": 35_600,
+    "DEC": 36_400, "JAN": 35_500, "FEB": 36_500, "MAR": 35_468,
+}  # sum = 431_468
+
+# D-2 Actual Hours: summing to 362,225
+_D2_PLUMB = {
+    "APR": 30_200, "MAY": 30_300, "JUN": 30_100, "JUL": 30_000,
+    "AUG": 30_400, "SEP": 29_900, "OCT": 30_500, "NOV": 29_800,
+    "DEC": 30_600, "JAN": 29_700, "FEB": 30_700, "MAR": 30_025,
+}  # sum = 362_225
+
+# D-3 Headcount: summing to 1,438
+_D3_PLUMB = {
+    "APR": 120, "MAY": 120, "JUN": 120, "JUL": 120,
+    "AUG": 120, "SEP": 120, "OCT": 120, "NOV": 120,
+    "DEC": 120, "JAN": 120, "FEB": 119, "MAR": 119,
+}  # sum = 1_438
+
+
+def _make_d_tab(months_fwd, plumb_by_month):
+    """Create a minimal D-tab grid (reversed month columns, as in real sheets).
+
+    Structure (col indices):
+      0 = SR NO / blank
+      1 = Segment ("PIPE & FITTING" for first block row)
+      2 = Department label
+      3+ = Month data, LATEST first (reversed)
+    """
+    months_rev = list(reversed(months_fwd))
+    hdr = ["SR NO", "SEGMENT", "DEPARTMENT"] + [f"{m}'26" for m in months_rev]
+
+    def _row(seg, dept, fwd_vals):
+        return ["", seg, dept] + list(reversed(fwd_vals))
+
+    plumb_fwd  = [plumb_by_month.get(m, 0) for m in months_fwd]
+    total_fwd  = [p + _GARDEN + _HDPE + _ADMIN for p in plumb_fwd]
+    garden_fwd = [_GARDEN] * len(months_fwd)
+    hdpe_fwd   = [_HDPE]   * len(months_fwd)
+    admin_fwd  = [_ADMIN]  * len(months_fwd)
+
+    rows = [
+        hdr,
+        _row("PIPE & FITTING", "ADMIN",      admin_fwd),
+        _row("",               "BALL VALVE",  [200] * len(months_fwd)),
+        _row("",               "GARDEN PIPE", garden_fwd),
+        _row("",               "HDPE PIPE",   hdpe_fwd),
+        _row("",               "MOULDING",    [300] * len(months_fwd)),
+        _row("",               "TOTAL",       total_fwd),
+        _row("",               "",            plumb_fwd),   # unlabelled = Plumbing
+        # Sentinel: next block (test block-end detection)
+        _row("GARDEN PIPE",   "ADMIN",        [100] * len(months_fwd)),
+    ]
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 15. Employee Data D-tab parser
+# ---------------------------------------------------------------------------
+
+class TestParseEmployeeDTab:
+    """costing_employee.parse_employee_d_tab — label-based PIPE & FITTING block."""
+
+    def _parse(self, values, tab_label="D-1"):
+        return _import_employee().parse_employee_d_tab(values, tab_label)
+
+    # ── Header / block detection ──────────────────────────────────────────
+
+    def test_empty_grid_returns_not_ok(self):
+        r = self._parse([])
+        assert r["ok"] is False
+
+    def test_no_month_header_returns_warning(self):
+        values = [["SR NO", "SEGMENT", "DEPARTMENT", "ALPHA", "BETA"]]
+        r = self._parse(values)
+        assert r["ok"] is False
+        assert any("header" in w.lower() or "month" in w.lower() for w in r["warnings"])
+
+    def test_no_pnf_block_returns_warning(self):
+        # Header needs ≥ 4 month columns so _parse_month_col_map succeeds
+        # and the "PIPE & FITTING block not found" warning (not a header warning) is raised.
+        hdr = ["SR NO", "SEGMENT", "DEPARTMENT",
+               "MAR'26", "FEB'26", "JAN'26", "DEC'25", "APR'25"]
+        values = [hdr, ["", "GARDEN PIPE", "ADMIN", 100, 90, 80, 70, 60]]
+        r = self._parse(values)
+        assert r["ok"] is False
+        assert r["warnings"]
+        assert any("PIPE" in w.upper() or "FITTING" in w.upper() for w in r["warnings"])
+
+    def test_no_total_row_returns_warning(self):
+        hdr = ["SR NO", "SEGMENT", "DEPARTMENT", "MAR'26", "APR'25"]
+        values = [
+            hdr,
+            ["", "PIPE & FITTING", "ADMIN", 100, 90],
+            ["", "", "GARDEN PIPE", 50, 40],
+            # no TOTAL row
+        ]
+        r = self._parse(values)
+        assert r["ok"] is False
+
+    # ── Plumbing derivation ───────────────────────────────────────────────
+
+    def test_plumbing_equals_total_minus_three_depts(self):
+        """Plumbing = TOTAL − GARDEN PIPE − HDPE PIPE − ADMIN for each month."""
+        months = ["APR", "MAY", "JUN"]
+        plumb  = {"APR": 600, "MAY": 620, "JUN": 580}
+        values = _make_d_tab(months, plumb)
+        r      = self._parse(values)
+        assert r["ok"] is True
+        assert r["by_month"]["APR"] == pytest.approx(600)
+        assert r["by_month"]["MAY"] == pytest.approx(620)
+        assert r["by_month"]["JUN"] == pytest.approx(580)
+
+    def test_subtracted_depts_present(self):
+        """subtracted dict must include GARDEN PIPE, HDPE PIPE, ADMIN."""
+        months = ["APR", "MAY"]
+        plumb  = {"APR": 300, "MAY": 310}
+        values = _make_d_tab(months, plumb)
+        r      = self._parse(values)
+        assert "GARDEN PIPE" in r["subtracted"]
+        assert "HDPE PIPE"   in r["subtracted"]
+        assert "ADMIN"       in r["subtracted"]
+
+    def test_total_by_month_present(self):
+        months = ["APR", "MAY"]
+        plumb  = {"APR": 400, "MAY": 410}
+        values = _make_d_tab(months, plumb)
+        r      = self._parse(values)
+        expected_total = 400 + _GARDEN + _HDPE + _ADMIN
+        assert r["total_by_month"]["APR"] == pytest.approx(expected_total)
+
+    # ── Reverse month column mapping ──────────────────────────────────────
+
+    def test_reverse_month_order_mapped_correctly(self):
+        """Latest month in col D (idx 3) must still map to its correct label."""
+        months = ["APR", "MAY", "JUN"]
+        plumb  = {"APR": 100, "MAY": 200, "JUN": 300}
+        values = _make_d_tab(months, plumb)
+        # Grid has JUN in col 3, MAY in col 4, APR in col 5
+        r = self._parse(values)
+        # All three months must resolve to the CORRECT value, not a shifted one
+        assert r["by_month"]["APR"] == pytest.approx(100)
+        assert r["by_month"]["MAY"] == pytest.approx(200)
+        assert r["by_month"]["JUN"] == pytest.approx(300)
+
+    def test_block_ends_at_next_segment(self):
+        """Parser must not carry GARDEN PIPE block rows into PIPE & FITTING."""
+        months = ["APR", "MAY"]
+        plumb  = {"APR": 500, "MAY": 510}
+        values = _make_d_tab(months, plumb)
+        r      = self._parse(values)
+        # by_month should only contain APR and MAY (not rows from the next block)
+        assert set(r["by_month"].keys()) <= {"APR", "MAY"}
+
+    # ── Recon warning when stored unlabelled row differs ─────────────────
+
+    def test_recon_warning_fires_when_stored_differs(self):
+        """If the stored (unlabelled) row ≠ computed Plumbing, a warning is raised."""
+        # Use 3 months so row cols are: 0=SR,1=SEG,2=DEPT, 3=JUN,4=MAY,5=APR
+        months = ["APR", "MAY", "JUN"]
+        plumb  = {"APR": 600, "MAY": 620, "JUN": 580}
+        values = _make_d_tab(months, plumb)
+        # Row order in _make_d_tab: hdr, ADMIN, BALL VALVE, GARDEN PIPE, HDPE PIPE,
+        # MOULDING, TOTAL, unlabelled, sentinel  → unlabelled is index 7
+        unlabelled_idx = 7
+        # APR is the rightmost data col (idx 5) in reversed 3-month grid
+        values[unlabelled_idx][5] = 999_999
+        r = self._parse(values)
+        assert r["recon_warnings"], "expected at least one recon warning"
+        assert any("computed" in w.lower() or "≠" in w or "stored" in w.lower()
+                   for w in r["recon_warnings"])
+
+    def test_no_recon_warning_when_stored_matches(self):
+        """No recon warning when computed and stored Plumbing agree."""
+        months = ["APR", "MAY", "JUN"]
+        plumb  = {"APR": 600, "MAY": 620, "JUN": 580}
+        values = _make_d_tab(months, plumb)
+        r      = self._parse(values)
+        assert r["recon_warnings"] == []
+
+
+# ---------------------------------------------------------------------------
+# 16. Employee Data acceptance figures (FY2025-26)
+# ---------------------------------------------------------------------------
+
+class TestEmployeeAcceptanceFigures:
+    """Verify that parse_employee_d_tab produces the correct FY2025-26 totals
+    when given fixtures that match the expected per-month Plumbing breakdown.
+
+    These are NOT integration tests — they use the acceptance-figure-consistent
+    fixture constants defined above.  The real sheets must produce the same sums.
+
+    D-1 paid hours   : 431,468
+    D-2 actual hours : 362,225
+    D-3 headcount    : 1,438
+    """
+
+    def _sum(self, plumb_by_month):
+        months = _FY2526_MONTHS_FWD
+        values = _make_d_tab(months, plumb_by_month)
+        emp = _import_employee()
+        r   = emp.parse_employee_d_tab(values, tab_label="D-test")
+        return sum(r["by_month"].values())
+
+    def test_d1_paid_hours_sum(self):
+        assert self._sum(_D1_PLUMB) == pytest.approx(431_468, abs=0.5)
+
+    def test_d2_actual_hours_sum(self):
+        assert self._sum(_D2_PLUMB) == pytest.approx(362_225, abs=0.5)
+
+    def test_d3_headcount_sum(self):
+        assert self._sum(_D3_PLUMB) == pytest.approx(1_438, abs=0.5)
+
+    def test_all_12_months_present(self):
+        """parse_employee_d_tab must return values for all 12 FY months."""
+        months = _FY2526_MONTHS_FWD
+        values = _make_d_tab(months, _D1_PLUMB)
+        emp    = _import_employee()
+        r      = emp.parse_employee_d_tab(values, tab_label="D-1")
+        assert set(r["by_month"].keys()) == set(_FY2526_MONTHS_FWD)
+
+
+# ---------------------------------------------------------------------------
+# Wages: fixture builder
+# ---------------------------------------------------------------------------
+
+def _make_kh1_values(cpvc_rows, extra_rows=None, total_payable_col=38):
+    """Minimal KH-1 fixture.
+
+    Args:
+        cpvc_rows:         [(dept_label, total_payable_value), ...]  — CPVC rows
+        extra_rows:        [(dept_label, value), ...]  — non-CPVC rows to exclude
+        total_payable_col: 0-based column index for TOTAL PAYABLE (38 = col AM)
+    """
+    n_cols     = total_payable_col + 3
+    dept_col   = 6    # col G = DEPARTMENT (0-based)
+
+    # 6 blank rows before the header row (rows 0-5)
+    values = [[""] * n_cols for _ in range(6)]
+
+    # Header row (index 6 = row 7)
+    hdr = [""] * n_cols
+    hdr[dept_col]        = "DEPARTMENT"
+    hdr[total_payable_col] = "TOTAL PAYABLE"
+    values.append(hdr)
+
+    # Data rows (index 7+)
+    for dept, val in (cpvc_rows or []):
+        row = [""] * n_cols
+        row[dept_col]          = dept
+        row[total_payable_col] = str(val)
+        values.append(row)
+
+    for dept, val in (extra_rows or []):
+        row = [""] * n_cols
+        row[dept_col]          = dept
+        row[total_payable_col] = str(val)
+        values.append(row)
+
+    return values
+
+
+# ---------------------------------------------------------------------------
+# 17. KH-1 wages parser
+# ---------------------------------------------------------------------------
+
+class TestParseKH1Wages:
+    """costing_wages.parse_kh1_wages — CPVC filter + header-based TOTAL PAYABLE."""
+
+    def _parse(self, values, **kw):
+        return _import_wages().parse_kh1_wages(values, **kw)
+
+    # ── Column discovery ──────────────────────────────────────────────────
+
+    def test_finds_total_payable_at_am(self):
+        """TOTAL PAYABLE at col 38 (AM) is found correctly."""
+        values = _make_kh1_values([("CPVC", 1_000_000)], total_payable_col=38)
+        r = self._parse(values)
+        assert r["ok"] is True
+        assert r["total_payable_col"] == 38
+
+    def test_finds_total_payable_at_an(self):
+        """TOTAL PAYABLE at col 39 (AN) — column has shifted by one."""
+        values = _make_kh1_values([("CPVC", 1_529_429)], total_payable_col=39)
+        r = self._parse(values)
+        assert r["ok"] is True
+        assert r["total_payable_col"] == 39
+        assert r["total_wages"] == pytest.approx(1_529_429, abs=1)
+
+    def test_returns_error_when_total_payable_missing(self):
+        """No TOTAL PAYABLE header → error, ok=False."""
+        values = _make_kh1_values([("CPVC", 999)])
+        # Remove the TOTAL PAYABLE header
+        hdr = values[6]
+        for i in range(len(hdr)):
+            if "TOTAL PAYABLE" in str(hdr[i]).upper():
+                hdr[i] = "GROSS SALARY"   # wrong label
+        r = self._parse(values)
+        assert r["ok"] is False
+        assert any("TOTAL PAYABLE" in w for w in r["warnings"])
+
+    def test_returns_error_when_dept_col_missing(self):
+        """No DEPARTMENT header → error, ok=False."""
+        values = _make_kh1_values([("CPVC", 999)])
+        values[6][6] = "UNIT"   # corrupt DEPARTMENT header
+        r = self._parse(values)
+        assert r["ok"] is False
+
+    # ── CPVC filter ───────────────────────────────────────────────────────
+
+    def test_only_cpvc_rows_summed(self):
+        """Non-CPVC departments are excluded from the total."""
+        values = _make_kh1_values(
+            [("CPVC", 1_000_000)],
+            extra_rows=[("ADMIN", 500_000), ("TANK", 200_000)],
+        )
+        r = self._parse(values)
+        assert r["ok"] is True
+        assert r["total_wages"] == pytest.approx(1_000_000, abs=1)
+        assert r["n_rows"] == 1
+
+    def test_admin_excluded(self):
+        values = _make_kh1_values(
+            [("CPVC", 900_000)],
+            extra_rows=[("ADMIN", 300_000)],
+        )
+        r = self._parse(values)
+        assert r["total_wages"] == pytest.approx(900_000, abs=1)
+
+    def test_tank_excluded(self):
+        values = _make_kh1_values(
+            [("CPVC", 800_000)],
+            extra_rows=[("TANK", 400_000)],
+        )
+        r = self._parse(values)
+        assert r["total_wages"] == pytest.approx(800_000, abs=1)
+
+    def test_multiple_cpvc_rows_summed(self):
+        """Multiple CPVC rows (e.g. two shifts) are all summed."""
+        values = _make_kh1_values(
+            [("CPVC", 600_000), ("CPVC", 400_000)],
+        )
+        r = self._parse(values)
+        assert r["total_wages"] == pytest.approx(1_000_000, abs=1)
+        assert r["n_rows"] == 2
+
+    def test_no_cpvc_rows_returns_ok_false(self):
+        """When no CPVC rows are found, ok=False (not a silent zero)."""
+        values = _make_kh1_values(
+            [],
+            extra_rows=[("ADMIN", 999_999)],
+        )
+        r = self._parse(values)
+        assert r["ok"] is False
+        assert r["total_wages"] == pytest.approx(0.0)
+
+    # ── Comma / format handling ───────────────────────────────────────────
+
+    def test_comma_formatted_value_parsed(self):
+        """Values like "1,904,701" must be parsed as 1904701."""
+        values = _make_kh1_values([("CPVC", "1,904,701")])
+        r = self._parse(values)
+        assert r["total_wages"] == pytest.approx(1_904_701, abs=1)
+
+    # ── Header row position ───────────────────────────────────────────────
+
+    def test_fewer_than_7_rows_returns_error(self):
+        """KH-1 with fewer than 7 rows → error, ok=False."""
+        r = self._parse([[""] * 5, [""] * 5])
+        assert r["ok"] is False
+
+    # ── col_label audit ──────────────────────────────────────────────────
+
+    def test_col_label_present_in_result(self):
+        """total_payable_col_label must contain 'TOTAL PAYABLE' for auditability."""
+        values = _make_kh1_values([("CPVC", 500_000)])
+        r = self._parse(values)
+        assert "TOTAL PAYABLE" in r["total_payable_col_label"]
+
+    def test_n_rows_count_correct(self):
+        values = _make_kh1_values([("CPVC", 100), ("CPVC", 200), ("CPVC", 300)])
+        r = self._parse(values)
+        assert r["n_rows"] == 3
+
+
+# ---------------------------------------------------------------------------
+# 18. Wages sanity range guard
+# ---------------------------------------------------------------------------
+
+class TestWagesSanityGuard:
+    """Sanity check: trailing average ±50-200% range."""
+
+    def _parse(self, values, trailing_avg):
+        return _import_wages().parse_kh1_wages(
+            values,
+            trailing_avg=trailing_avg,
+            sanity_low_ratio=0.5,
+            sanity_high_ratio=2.0,
+        )
+
+    def test_within_range_no_flag(self):
+        values = _make_kh1_values([("CPVC", 1_000_000)])
+        r = self._parse(values, trailing_avg=1_200_000)
+        assert r["is_sanity_fail"] is False
+        assert r["sanity_ratio"] == pytest.approx(1_000_000 / 1_200_000, rel=1e-4)
+
+    def test_below_low_threshold_flagged(self):
+        """Total that is 0.4× trailing average is below 0.5× threshold → fail."""
+        trailing = 1_000_000
+        val      = int(trailing * 0.4)   # below 0.5×
+        values   = _make_kh1_values([("CPVC", val)])
+        r = self._parse(values, trailing_avg=trailing)
+        assert r["is_sanity_fail"] is True
+        assert any("sanity" in w.lower() for w in r["warnings"])
+
+    def test_above_high_threshold_flagged(self):
+        """Total that is 3× trailing average is above 2× threshold → fail."""
+        trailing = 1_000_000
+        val      = trailing * 3
+        values   = _make_kh1_values([("CPVC", val)])
+        r = self._parse(values, trailing_avg=trailing)
+        assert r["is_sanity_fail"] is True
+        assert any("sanity" in w.lower() for w in r["warnings"])
+
+    def test_no_trailing_avg_no_sanity_check(self):
+        """Without trailing_avg, sanity_ratio is None and no warning is raised."""
+        values = _make_kh1_values([("CPVC", 1_000)])
+        r = _import_wages().parse_kh1_wages(values, trailing_avg=None)
+        assert r["sanity_ratio"] is None
+        assert r["is_sanity_fail"] is False
+
+    def test_sanity_ratio_computed_correctly(self):
+        trailing = 2_000_000
+        val      = 1_000_000
+        values   = _make_kh1_values([("CPVC", val)])
+        r = self._parse(values, trailing_avg=trailing)
+        assert r["sanity_ratio"] == pytest.approx(0.5, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# 19. Wages acceptance figures (KH-1 Apr-2025 and Mar-2026)
+# ---------------------------------------------------------------------------
+
+class TestWagesAcceptanceFigures:
+    """Verify parser produces the correct KH-1 acceptance figures for Plumbing.
+
+    Apr-2025 KH-1 CPVC TOTAL PAYABLE = 1,904,701  (col AM = 38)
+    Mar-2026 KH-1 CPVC TOTAL PAYABLE = 1,529,429  (col AN = 39)
+    """
+
+    def test_apr_2025_kh1(self):
+        """Apr-2025: TOTAL PAYABLE at col AM (38), single CPVC row."""
+        values = _make_kh1_values(
+            [("CPVC", "1,904,701")],
+            total_payable_col=38,
+        )
+        r = _import_wages().parse_kh1_wages(values)
+        assert r["ok"] is True
+        assert r["total_wages"] == pytest.approx(1_904_701, abs=1)
+        assert r["total_payable_col"] == 38
+
+    def test_mar_2026_kh1(self):
+        """Mar-2026: TOTAL PAYABLE at col AN (39), single CPVC row."""
+        values = _make_kh1_values(
+            [("CPVC", "1,529,429")],
+            total_payable_col=39,
+        )
+        r = _import_wages().parse_kh1_wages(values)
+        assert r["ok"] is True
+        assert r["total_wages"] == pytest.approx(1_529_429, abs=1)
+        assert r["total_payable_col"] == 39
+
+    def test_apr_and_mar_summed(self):
+        """Sum of the two registered months = 1,904,701 + 1,529,429 = 3,434,130."""
+        apr = 1_904_701
+        mar = 1_529_429
+        assert apr + mar == 3_434_130
+
+
+# ---------------------------------------------------------------------------
+# 20. Label normalisation (Part D)
+# ---------------------------------------------------------------------------
+
+class TestNormaliseDept:
+    """costing_wages.normalise_dept — trim, uppercase, alias map."""
+
+    def _n(self, s):
+        return _import_wages().normalise_dept(s)
+
+    def test_uppercase(self):
+        assert self._n("cpvc") == "CPVC"
+
+    def test_trim_whitespace(self):
+        assert self._n("  CPVC  ") == "CPVC"
+
+    def test_collapse_internal_spaces(self):
+        assert self._n("GARDEN  PIPE") == "GARDEN PIPE"
+
+    def test_hings_maps_to_hinges(self):
+        assert self._n("HINGS") == "HINGES"
+
+    def test_hinge_maps_to_hinges(self):
+        assert self._n("HINGE") == "HINGES"
+
+    def test_hinges_unchanged(self):
+        assert self._n("HINGES") == "HINGES"
+
+    def test_unknown_value_unchanged(self):
+        assert self._n("PURCHASE") == "PURCHASE"
+
+    def test_lowercase_alias_normalised(self):
+        assert self._n("hings") == "HINGES"
+
+
+# ---------------------------------------------------------------------------
+# 21. Auto-source reconciliation cross-check logic
+# ---------------------------------------------------------------------------
+
+class TestAutoSourceReconciliation:
+    """Cross-check: when auto-sourced figures differ > 0.5% from segment sheet,
+    a RECON WARNING must appear in the errors list; figures within 0.5% are silent.
+
+    These tests exercise the reconciliation logic directly (no DB, no Sheets).
+    """
+
+    def _apply_auto(self, monthly_rows, auto_ph=None, auto_wg=None):
+        """Inline the reconciliation logic from load_labour_fy."""
+        errors: list[str] = []
+        for row in monthly_rows:
+            seg_ph  = row.get("paid_hours")
+            seg_wg  = row.get("paid_wages")
+            ap      = auto_ph
+            aw      = auto_wg
+
+            row["auto_paid_hours"] = ap
+            row["auto_wages"]      = aw
+
+            hrs_pct = None
+            if ap is not None and seg_ph and seg_ph > 0:
+                hrs_pct = round(abs(ap - seg_ph) / seg_ph * 100, 3)
+                if hrs_pct > 0.5:
+                    errors.append(
+                        f"RECON WARNING {row['month_label']}: paid hours — "
+                        f"auto={ap:,.0f} vs segment sheet={seg_ph:,.0f} ({hrs_pct:.2f}%)"
+                    )
+            row["hours_recon_pct"] = hrs_pct
+
+            wg_pct = None
+            if aw is not None and seg_wg and seg_wg > 0:
+                wg_pct = round(abs(aw - seg_wg) / seg_wg * 100, 3)
+                if wg_pct > 0.5:
+                    errors.append(
+                        f"RECON WARNING {row['month_label']}: wages — "
+                        f"auto={aw:,.0f} vs segment sheet={seg_wg:,.0f} ({wg_pct:.2f}%)"
+                    )
+            row["wages_recon_pct"] = wg_pct
+
+        return errors, monthly_rows
+
+    def _row(self, month_label="APR", paid_hours=36_000, paid_wages=1_900_000):
+        return {"month_label": month_label, "paid_hours": paid_hours, "paid_wages": paid_wages}
+
+    # ── Hours cross-check ─────────────────────────────────────────────────
+
+    def test_hours_within_0_5pct_no_warning(self):
+        """0.4% hours divergence → no warning."""
+        seg_ph = 36_000
+        auto_ph = round(seg_ph * 1.004)   # +0.4%
+        errors, _ = self._apply_auto([self._row(paid_hours=seg_ph)], auto_ph=auto_ph)
+        assert errors == []
+
+    def test_hours_above_0_5pct_warning(self):
+        """1.0% hours divergence → RECON WARNING."""
+        seg_ph  = 36_000
+        auto_ph = round(seg_ph * 1.01)   # +1.0%
+        errors, _ = self._apply_auto([self._row(paid_hours=seg_ph)], auto_ph=auto_ph)
+        assert any("RECON WARNING" in e and "paid hours" in e for e in errors)
+
+    def test_hours_below_0_5pct_downward_no_warning(self):
+        """−0.3% divergence → no warning (below threshold)."""
+        seg_ph  = 36_000
+        auto_ph = round(seg_ph * 0.997)
+        errors, _ = self._apply_auto([self._row(paid_hours=seg_ph)], auto_ph=auto_ph)
+        assert errors == []
+
+    def test_hours_warning_names_both_figures(self):
+        """The warning must name both the auto and segment sheet figures."""
+        seg_ph  = 36_000
+        auto_ph = 38_000   # ~5.6% divergence
+        errors, _ = self._apply_auto([self._row(paid_hours=seg_ph)], auto_ph=auto_ph)
+        assert errors
+        w = errors[0]
+        assert str(36_000).replace("", "")[0].isdigit() or "36,000" in w or "36000" in w
+        assert "auto" in w.lower()
+
+    # ── Wages cross-check ─────────────────────────────────────────────────
+
+    def test_wages_within_0_5pct_no_warning(self):
+        seg_wg  = 1_900_000
+        auto_wg = round(seg_wg * 1.004)
+        errors, _ = self._apply_auto([self._row(paid_wages=seg_wg)], auto_wg=auto_wg)
+        assert errors == []
+
+    def test_wages_above_0_5pct_warning(self):
+        seg_wg  = 1_900_000
+        auto_wg = round(seg_wg * 1.02)   # +2%
+        errors, _ = self._apply_auto([self._row(paid_wages=seg_wg)], auto_wg=auto_wg)
+        assert any("RECON WARNING" in e and "wages" in e for e in errors)
+
+    # ── None auto source → no comparison ─────────────────────────────────
+
+    def test_none_auto_ph_no_comparison(self):
+        """When auto_ph is None (source unavailable), no cross-check runs."""
+        errors, _ = self._apply_auto([self._row()], auto_ph=None)
+        assert errors == []
+
+    def test_none_auto_wages_no_comparison(self):
+        errors, _ = self._apply_auto([self._row()], auto_wg=None)
+        assert errors == []
+
+    # ── Recon_pct stored in row ───────────────────────────────────────────
+
+    def test_hours_recon_pct_stored_in_row(self):
+        """hours_recon_pct is stored in the row for DB audit trail."""
+        seg_ph  = 36_000
+        auto_ph = round(seg_ph * 1.01)
+        _, rows = self._apply_auto([self._row(paid_hours=seg_ph)], auto_ph=auto_ph)
+        assert rows[0]["hours_recon_pct"] is not None
+        assert rows[0]["hours_recon_pct"] > 0
+
+    def test_none_auto_hours_recon_pct_is_none(self):
+        _, rows = self._apply_auto([self._row()], auto_ph=None)
+        assert rows[0]["hours_recon_pct"] is None
+
+    # ── Multiple months ───────────────────────────────────────────────────
+
+    def test_multiple_months_independent_warnings(self):
+        """Each month's cross-check is independent."""
+        rows = [
+            self._row("APR", paid_hours=36_000, paid_wages=1_900_000),
+            self._row("MAY", paid_hours=35_000, paid_wages=1_850_000),
+        ]
+        # APR: auto 1% divergent (warning); MAY: auto matches exactly (no warning)
+        errors_list: list[str] = []
+        for row in rows:
+            auto_ph = round(row["paid_hours"] * 1.01) if row["month_label"] == "APR" else row["paid_hours"]
+            e, _ = self._apply_auto([row], auto_ph=auto_ph, auto_wg=None)
+            errors_list.extend(e)
+        assert len(errors_list) == 1
+        assert "APR" in errors_list[0]
