@@ -22,6 +22,24 @@ description: Architecture, freeze rules, file IDs, and parser lessons for the /c
 - TOTAL row (row 4) is skipped because its month_label ("TOTAL") is not in MONTH_LABELS.
 - Per-kg and per-hour costs are always recomputed from raw figures — sheet formulas are never trusted.
 
+## Report-12 fittings formula — GROSS ACTUAL (corrected)
+- AUTHORITATIVE: fitting_kg = "Wt in Kgs" + "Actual Rejection Weight (in Kgs)"
+  Same gross convention as pipe (good output + rejected weight).
+- "Weight of Total Production" (formula col = pcs × std weight) is ONLY for
+  the data-quality variance flag (>2% = bad hand-keyed Wt-in-Kgs values).
+- FY2026-27 acceptance: Apr 90,038.43 / May 76,523.39 / Jun 97,980.99 = 264,542.81 kg total.
+- FY2526 fittings: 975,609 kg, Rs 4.157/kg.
+- DO NOT use "REJECTION & PRODUCTION" tab (fittings block still holds pieces, not kg).
+  check_rejection_prod_tab_units() guard: is_unit_mismatch when tab_sum > 10× r12_fitting_kg.
+
+## Report-12 two-row header (FY2627)
+- Main header row: has "Actual Rejection Weight (in Kgs)" + "Weight of Total Production".
+- Sub-header row (immediately below): has "Wt in Kgs" under "Output Production" group.
+- _r12_find_header() returns (main_idx, data_start, col_map).
+  data_start = main+2 if sub-header present, main+1 otherwise.
+  Requires "rejection_kg" to anchor the main header (robust to FY layout differences).
+- DB column r12_rejection_kg stores the rejection-weight component separately.
+
 ## Ideal Labour Cost tab
 - Default rates: Pipe Rs 2.50/kg, Fittings Rs 6.50/kg.
 - parse_ideal_rates() scans for "PIPE" / "FITTING" row labels and looks right for a numeric.
@@ -32,11 +50,9 @@ description: Architecture, freeze rules, file IDs, and parser lessons for the /c
 - Per-kg actual: Rs 4.157 · Weighted ideal: ~Rs 3.26/kg → ~28% above ideal
 - Pipe: 4,184,706 kg · Fittings: 975,609 kg · Total: 5,160,315 kg
 
-## FY2026-27 fittings mismatch (DO NOT RECONCILE)
-- Labour sheet reports ~3.89M kg fittings for 3 months.
-- Report-12 actuals total ~1.2M kg across 15 months.
-- These are irreconcilable — display both side-by-side with sources and a visible warning.
-- compute_actual_rm() fires data_mismatch when ratio > 1.5×.
+## Acceptance figures (FY2026-27, Apr–Jun 2026)
+- Pipe: 637,410 kg · Fittings: 264,542.81 kg · Total: 901,952.81 kg
+- Per-kg labour cost: Rs 6.122416759 (worsening vs FY2526 Rs 4.157)
 
 ## Report-22 machine allocation
 - Tab in the monthly Pipe & Fitting workbook; may be absent (handled gracefully).
@@ -47,6 +63,8 @@ description: Architecture, freeze rules, file IDs, and parser lessons for the /c
 
 ## DB tables
 - costing_labour_monthly: (segment, fy, month_label) UNIQUE; upsert deletes then re-inserts all months.
+  Extra columns: fitting_r12_kg, wt_in_kgs_total, r12_rejection_kg, fitting_kg_source,
+                 fitting_variance_pct, fitting_divergent_n, fitting_divergent_rows JSONB.
 - costing_labour_meta: (segment, fy) UNIQUE; tracks frozen flag, ideal rates, load timestamp.
 
 ## RM costing
@@ -59,4 +77,16 @@ description: Architecture, freeze rules, file IDs, and parser lessons for the /c
 - POST /costing/api/load-labour — {"category", "fy", "force"} → loads/freezes; returns {"ok", "n_months", "skipped"}
 - /labour remains intact (run-hours page; tile in home.html now points to /costing)
 
-**Why:** FY freeze prevents accidental overwrite of audited historical snapshots; dual-layout parser avoids year-specific branching; mismatch flag ensures business resolves data-definition ambiguity rather than hiding it in a per-kg cost.
+## Test isolation — costing tests
+- The real store module may be imported before test_costing.py runs (e.g. by test_daily_parsers.py).
+- patch_deps fixture MUST force-set sys.modules["store"] (not setdefault) and MUST use yield
+  so teardown restores the original store after the module completes.
+- Costing modules (costing_model/labour/rm) must be evicted from sys.modules in both setup
+  and teardown so they re-import with fresh stubs each time.
+- Decisive test: run test_daily_parsers.py FIRST then test_costing.py in one pytest call.
+  If you get only isolation-run pass and suite fails: the setdefault bug is back.
+
+**Why:** FY freeze prevents accidental overwrite of audited historical snapshots; dual-layout
+parser avoids year-specific branching; gross-actual convention matches how Prayag's accountants
+derive the Plumbing tab figures; variance flag surfaces data-entry errors without changing the
+authoritative sourcing.

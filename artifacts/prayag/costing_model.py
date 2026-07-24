@@ -123,9 +123,10 @@ CREATE TABLE IF NOT EXISTS costing_labour_meta (
 # Idempotent migrations — run each ALTER separately so one failure doesn't
 # block the others.  Postgres ADD COLUMN IF NOT EXISTS is safe to re-run.
 _DDL_MIGRATION_STMTS = [
-    # R12 fittings source columns
+    # R12 fittings source columns (gross actual = wt_in_kgs + rejection_kg)
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_r12_kg        NUMERIC",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS wt_in_kgs_total       NUMERIC",
+    "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS r12_rejection_kg      NUMERIC",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_kg_source      TEXT",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_variance_pct   NUMERIC",
     "ALTER TABLE costing_labour_monthly ADD COLUMN IF NOT EXISTS fitting_divergent_n    INT",
@@ -240,11 +241,12 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         per_hour_cost_paid, per_hour_cost_actual,
                         pipe_prod_kg, fitting_prod_kg, total_prod_kg,
                         per_kg_labour_cost,
-                        fitting_r12_kg, wt_in_kgs_total, fitting_kg_source,
+                        fitting_r12_kg, wt_in_kgs_total, r12_rejection_kg,
+                        fitting_kg_source,
                         fitting_variance_pct, fitting_divergent_n,
                         fitting_divergent_rows)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (segment, fy, month_label) DO UPDATE SET
                            month_num             = EXCLUDED.month_num,
                            no_of_labour          = EXCLUDED.no_of_labour,
@@ -263,6 +265,7 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                            per_kg_labour_cost    = EXCLUDED.per_kg_labour_cost,
                            fitting_r12_kg        = EXCLUDED.fitting_r12_kg,
                            wt_in_kgs_total       = EXCLUDED.wt_in_kgs_total,
+                           r12_rejection_kg      = EXCLUDED.r12_rejection_kg,
                            fitting_kg_source     = EXCLUDED.fitting_kg_source,
                            fitting_variance_pct  = EXCLUDED.fitting_variance_pct,
                            fitting_divergent_n   = EXCLUDED.fitting_divergent_n,
@@ -279,6 +282,7 @@ def upsert_labour_monthly(segment: str, fy: str, rows: list) -> int:
                         r.get("pipe_prod_kg"), r.get("fitting_prod_kg"),
                         r.get("total_prod_kg"), r.get("per_kg_labour_cost"),
                         r.get("fitting_r12_kg"), r.get("wt_in_kgs_total"),
+                        r.get("r12_rejection_kg"),
                         r.get("fitting_kg_source"),
                         r.get("fitting_variance_pct"), r.get("fitting_divergent_n"),
                         divergent_json,

@@ -65,23 +65,45 @@ def _make_sources_stub():
 
 @pytest.fixture(autouse=True, scope="module")
 def patch_deps(tmp_path_factory):
-    """Inject stubs for store, sheets, sources, mp_model so we don't need a DB."""
-    sys.modules.setdefault("store", _make_store_stub())
-    sys.modules.setdefault("sheets", _make_sheets_stub())
-    sys.modules.setdefault("sources", _make_sources_stub())
-    sys.modules.setdefault("mp_model", _make_mp_model_stub())
+    """Inject stubs for store, sheets, sources, mp_model so we don't need a DB.
+
+    ISOLATION FIX: force-set (not setdefault) so the store stub is used even
+    when the real store was already imported by an earlier test module.  The
+    fixture yields so teardown restores the original module state, preventing
+    our stubs from leaking into later test modules (e.g. test_daily_parsers).
+    """
+    _stub_keys = ["store", "sheets", "sources", "mp_model",
+                  "costing_model", "costing_labour", "costing_rm"]
+    _saved = {k: sys.modules.get(k) for k in _stub_keys}
+
+    # Force-set stubs (not setdefault — must win even if real module is loaded)
+    sys.modules["store"]    = _make_store_stub()
+    sys.modules["sheets"]   = _make_sheets_stub()
+    sys.modules["sources"]  = _make_sources_stub()
+    sys.modules["mp_model"] = _make_mp_model_stub()
     sys.modules.setdefault("psycopg2", types.ModuleType("psycopg2"))
     sys.modules.setdefault("psycopg2.extras", types.ModuleType("psycopg2.extras"))
 
-    # Reload costing modules with stubs in place
+    # Drop costing modules so they re-import from scratch and pick up stubs
     for mod_name in ["costing_model", "costing_labour", "costing_rm"]:
-        if mod_name in sys.modules:
-            del sys.modules[mod_name]
+        sys.modules.pop(mod_name, None)
 
     # Add prayag directory to path
     prayag_dir = os.path.join(os.path.dirname(__file__), "..")
     if prayag_dir not in sys.path:
         sys.path.insert(0, prayag_dir)
+
+    yield
+
+    # Teardown: restore original modules so downstream test files are unaffected
+    for k, orig in _saved.items():
+        if orig is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = orig
+    # Also evict costing modules so a subsequent import gets a clean slate
+    for mod_name in ["costing_model", "costing_labour", "costing_rm"]:
+        sys.modules.pop(mod_name, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1021,68 +1043,174 @@ class TestFyMonthToYm:
 # ---------------------------------------------------------------------------
 
 def _make_r12_values(*, with_sap_code=False, rows=None):
-    """Build a minimal Report-12 tab value grid.
+    """Build a minimal Report-12 tab value grid matching the REAL two-row header.
 
-    Layout (FY2627 with SAP Code):
-      Col 0: SAP Code, 1: Item Name, 2: Machine, 3: Date,
-      4: Pcs, 5: Wt in Kgs, 6: Weight per Pc, 7: Weight of Total Production
+    FY2627 layout (with_sap_code=True) — TWO-ROW header:
+      Row 0: blank
+      Row 1 (main hdr):  SAP Code | Item Name | Machine | Date | Pcs |
+                          Output Production | Actual Rejection Weight (in Kgs) |
+                          Weight per Pc | Weight of Total Production
+      Row 2 (sub-hdr):   ""  | ""  | ""  | ""  | ""  | "Wt in Kgs" | "" | "" | ""
+      Row 3+: data       [SAP, item, machine, date, pcs, wt_in_kgs, rej_kg, wt_pc, wtp]
+      Col indices: wik=5 (sub-hdr), rej=6, wtp=8; data_start=3
 
-    Layout (FY2526 without SAP Code):
-      Col 0: Item Name, 1: Machine, 2: Date, 3: Pcs,
-      4: Wt in Kgs, 5: Weight per Pc, 6: Weight of Total Production
+    FY2526 layout (with_sap_code=False) — SINGLE-ROW header:
+      "Wt in Kgs" is on the main header row (no sub-header row).
+      Row 0: blank
+      Row 1 (main hdr):  Item Name | Machine | Date | Pcs |
+                          Wt in Kgs | Actual Rejection Weight (in Kgs) |
+                          Weight per Pc | Weight of Total Production
+      Row 2+: data       [item, machine, date, pcs, wt_in_kgs, rej_kg, wt_pc, wtp]
+      Col indices: wik=4, rej=5, wtp=7; data_start=2
     """
     if with_sap_code:
-        hdr = ["SAP Code", "Item Name", "Machine", "Date",
-               "Pcs", "Wt in Kgs", "Weight per Pc", "Weight of Total Production"]
+        main_hdr = ["SAP Code", "Item Name", "Machine", "Date", "Pcs",
+                    "Output Production", "Actual Rejection Weight (in Kgs)",
+                    "Weight per Pc", "Weight of Total Production"]
+        sub_hdr  = ["",         "",          "",        "",     "",
+                    "Wt in Kgs", "",          "",        ""]
+        if rows is None:
+            rows = [
+                ["SAP001", "90mm TEE",  "M/C-1", "01-04-2026", 100, 50.0, 0.0, 0.5, 50.0],
+                ["SAP002", "110mm ELB", "M/C-2", "01-04-2026", 200, 80.0, 0.0, 0.4, 80.0],
+            ]
+        return [[], main_hdr, sub_hdr] + rows
     else:
-        hdr = ["Item Name", "Machine", "Date",
-               "Pcs", "Wt in Kgs", "Weight per Pc", "Weight of Total Production"]
-
-    if rows is None:
-        # Two data rows with identical W-T-P and Wt-in-Kgs (no variance)
-        if with_sap_code:
+        main_hdr = ["Item Name", "Machine", "Date", "Pcs",
+                    "Wt in Kgs", "Actual Rejection Weight (in Kgs)",
+                    "Weight per Pc", "Weight of Total Production"]
+        if rows is None:
             rows = [
-                ["SAP001", "90mm TEE",  "M/C-1", "01-04-2026", 100, 50.0, 0.5, 50.0],
-                ["SAP002", "110mm ELB", "M/C-2", "01-04-2026", 200, 80.0, 0.4, 80.0],
+                ["90mm TEE",  "M/C-1", "01-04-2025", 100, 50.0, 0.0, 0.5, 50.0],
+                ["110mm ELB", "M/C-2", "01-04-2025", 200, 80.0, 0.0, 0.4, 80.0],
             ]
-        else:
-            rows = [
-                ["90mm TEE",  "M/C-1", "01-04-2025", 100, 50.0, 0.5, 50.0],
-                ["110mm ELB", "M/C-2", "01-04-2025", 200, 80.0, 0.4, 80.0],
-            ]
+        return [[], main_hdr] + rows
 
-    return [[], hdr] + rows   # row 0 blank, row 1 = header, data follows
+
+def _make_r12_inline(rows_data, *, two_row_hdr=False):
+    """Build a minimal inline R12 grid (single-header FY2526 style by default).
+
+    Single-header column order (col indices):
+      0: Item Name, 1: Machine, 2: Pcs,
+      3: Wt in Kgs, 4: Actual Rejection Weight (in Kgs),
+      5: Weight per Pc, 6: Weight of Total Production
+
+    ``rows_data`` items: (item, machine, pcs, wt_in_kgs, rej_kg, wt_per_pc, wtp)
+
+    Two-row header (two_row_hdr=True): "Wt in Kgs" in sub-header row.
+      0: Item Name, 1: Machine, 2: Pcs,
+      3: Output Production [main hdr], 4: Actual Rejection Weight [main hdr],
+         Weight of Total Production [main hdr]
+      sub-hdr col 3: Wt in Kgs
+    Data col indices: wik=3 (sub-hdr), rej=4 (main), wtp=5 (main).
+    """
+    if two_row_hdr:
+        main_hdr = ["Item Name", "Machine", "Pcs",
+                    "Output Production", "Actual Rejection Weight (in Kgs)",
+                    "Weight of Total Production"]
+        sub_hdr  = ["",          "",        "",
+                    "Wt in Kgs", "",        ""]
+        data = [[r[0], r[1], r[2], r[3], r[4], r[6]] for r in rows_data]
+        return [[], main_hdr, sub_hdr] + data
+    else:
+        main_hdr = ["Item Name", "Machine", "Pcs",
+                    "Wt in Kgs", "Actual Rejection Weight (in Kgs)",
+                    "Weight per Pc", "Weight of Total Production"]
+        data = list(rows_data)
+        return [[], main_hdr] + data
 
 
 class TestParseR12FittingsKg:
-    """parse_r12_fittings_kg — header-based, works for both FY layouts."""
+    """parse_r12_fittings_kg — header-based, works for both FY layouts.
+
+    AUTHORITATIVE FIGURE: total_fitting_kg = Wt-in-Kgs + Actual Rejection Weight
+    VARIANCE CHECK:       |Wt-in-Kgs − Weight-of-Total-Prod| / W-T-P × 100
+    """
 
     def _parse(self, values, **kw):
         return _import_labour().parse_r12_fittings_kg(values, **kw)
 
-    # ── Basic weight summing ─────────────────────────────────────────────
+    # ── New formula: authoritative = Wt-in-Kgs + Rejection ──────────────
 
-    def test_without_sap_code_total_wtp(self):
-        """FY2526 layout: summed Weight of Total Production = 130."""
+    def test_authoritative_is_wt_in_kgs_plus_rejection(self):
+        """total_fitting_kg = Wt-in-Kgs + Actual Rejection Weight (not W-T-P)."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 100, 50.0, 8.0, 0.5, 60.0),  # wt_in_kgs=50, rej=8, wtp=60
+        ])
+        result = self._parse(vals)
+        assert result["total_fitting_kg"] == pytest.approx(58.0), (
+            "authoritative must be 50 (Wt in Kgs) + 8 (Rejection) = 58, NOT 60 (W-T-P)"
+        )
+        assert result["wt_in_kgs"] == pytest.approx(50.0)
+        assert result["rejection_kg"] == pytest.approx(8.0)
+
+    def test_zero_rejection_gives_wt_in_kgs_as_total(self):
+        """When rejection = 0, total_fitting_kg == wt_in_kgs."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 100, 50.0, 0.0, 0.5, 50.0),
+        ])
+        result = self._parse(vals)
+        assert result["total_fitting_kg"] == pytest.approx(50.0)
+        assert result["rejection_kg"] == pytest.approx(0.0)
+
+    def test_both_rows_summed(self):
+        """Two rows: wt_in_kgs and rejection summed independently."""
         result = self._parse(_make_r12_values(with_sap_code=False))
-        assert result["weight_of_total_prod"] == pytest.approx(130.0)
-
-    def test_with_sap_code_total_wtp(self):
-        """FY2627 layout: same data, same total = 130."""
-        result = self._parse(_make_r12_values(with_sap_code=True))
-        assert result["weight_of_total_prod"] == pytest.approx(130.0)
-
-    def test_wt_in_kgs_summed(self):
-        result = self._parse(_make_r12_values(with_sap_code=False))
+        # Default rows: wt_in_kgs=[50,80], rej=[0,0] → total=130, rej=0
         assert result["wt_in_kgs"] == pytest.approx(130.0)
+        assert result["rejection_kg"] == pytest.approx(0.0)
+        assert result["total_fitting_kg"] == pytest.approx(130.0)
 
     def test_n_rows_counted(self):
         result = self._parse(_make_r12_values(with_sap_code=False))
         assert result["n_rows"] == 2
 
-    # ── Variance: zero when W-T-P == Wt-in-Kgs ──────────────────────────
+    # ── Two-row header: "Wt in Kgs" in sub-header row ───────────────────
 
-    def test_zero_variance_when_identical(self):
+    def test_sub_header_row_detected_fy2627(self):
+        """FY2627 layout: 'Wt in Kgs' is in sub-header row (not main header)."""
+        result = self._parse(_make_r12_values(with_sap_code=True))
+        assert result["wt_in_kgs"] == pytest.approx(130.0), (
+            "Wt-in-Kgs must be found via the sub-header row in FY2627 layout"
+        )
+        assert result["total_fitting_kg"] == pytest.approx(130.0)
+
+    def test_two_row_header_data_starts_after_both_rows(self):
+        """With sub-header, data must start at main+2, not main+1."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 100, 50.0, 5.0, 0.5, 50.0),
+            ("110mm ELB", "M/C-2", 200, 80.0, 8.0, 0.4, 80.0),
+        ], two_row_hdr=True)
+        result = self._parse(vals)
+        # Sub-header row ("Wt in Kgs" label) must NOT be counted as a data row
+        assert result["n_rows"] == 2, (
+            "sub-header row must be skipped; only 2 real data rows expected"
+        )
+        assert result["wt_in_kgs"] == pytest.approx(130.0)
+        assert result["rejection_kg"] == pytest.approx(13.0)
+        assert result["total_fitting_kg"] == pytest.approx(143.0)
+
+    def test_single_row_header_fy2526_still_works(self):
+        """FY2526 layout: 'Wt in Kgs' on main header row, no sub-header needed."""
+        result = self._parse(_make_r12_values(with_sap_code=False))
+        assert result["wt_in_kgs"] == pytest.approx(130.0)
+        assert result["n_rows"] == 2
+
+    # ── Variance: |Wt-in-Kgs − W-T-P| / W-T-P (data quality only) ──────
+
+    def test_variance_compares_wt_in_kgs_vs_weight_of_total_prod(self):
+        """Variance = |Wt-in-Kgs − W-T-P| / W-T-P.  W-T-P=100, Wt-in-Kgs=90 → 10%."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 200, 90.0, 0.0, 0.5, 100.0),  # wik=90, rej=0, wtp=100
+        ])
+        result = self._parse(vals)
+        assert result["weight_of_total_prod"] == pytest.approx(100.0)
+        assert result["variance_pct"] == pytest.approx(10.0, rel=1e-3)
+        # total_fitting_kg still uses gross: 90+0=90, NOT the wtp=100
+        assert result["total_fitting_kg"] == pytest.approx(90.0)
+
+    def test_zero_variance_when_wt_in_kgs_equals_wtp(self):
+        """No variance when hand-keyed Wt-in-Kgs matches the formula W-T-P."""
         result = self._parse(_make_r12_values(with_sap_code=False))
         assert result["variance_pct"] == pytest.approx(0.0, abs=0.01)
 
@@ -1090,104 +1218,126 @@ class TestParseR12FittingsKg:
         result = self._parse(_make_r12_values(with_sap_code=False))
         assert result["divergent_rows"] == []
 
-    # ── Variance: fires when W-T-P != Wt-in-Kgs ─────────────────────────
-
-    def test_variance_pct_computed_correctly(self):
-        """W-T-P=100, Wt-in-Kgs=90 → 10% total variance."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE", "M/C-1", 200, 90.0, 0.5, 100.0],
-        ]
-        result = self._parse(vals)
-        assert result["weight_of_total_prod"] == pytest.approx(100.0)
-        assert result["variance_pct"] == pytest.approx(10.0, rel=1e-3)
-
     def test_row_flagged_when_divergence_exceeds_threshold(self):
-        """Row where |W-T-P − Wt-in-Kgs| / W-T-P = 10% > default 5% threshold."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE", "M/C-1", 200, 90.0, 0.5, 100.0],
-        ]
+        """Row with |W-T-P − Wt-in-Kgs| / W-T-P = 10% > default 5% → flagged."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 200, 90.0, 0.0, 0.5, 100.0),
+        ])
         result = self._parse(vals)
         assert len(result["divergent_rows"]) == 1
         row = result["divergent_rows"][0]
         assert row["diff_pct"] == pytest.approx(10.0, rel=1e-2)
 
     def test_row_not_flagged_within_threshold(self):
-        """Row at 3% divergence < 5% default threshold — not flagged."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE", "M/C-1", 200, 97.0, 0.5, 100.0],   # 3% off
-        ]
+        """Row at 3% divergence < 5% default threshold → not flagged."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 200, 97.0, 0.0, 0.5, 100.0),  # 3% off
+        ])
         result = self._parse(vals, row_variance_pct=5.0)
         assert result["divergent_rows"] == []
 
     def test_custom_row_variance_threshold(self):
-        """Custom threshold=2%: a 3% row IS flagged."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE", "M/C-1", 200, 97.0, 0.5, 100.0],   # 3% off
-        ]
+        """Custom threshold=2%: a 3% divergent row IS flagged."""
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 200, 97.0, 0.0, 0.5, 100.0),  # 3% off
+        ])
         result = self._parse(vals, row_variance_pct=2.0)
         assert len(result["divergent_rows"]) == 1
+
+    def test_june_scenario_variance_fires(self):
+        """Jun 2026: 4.4% variance fires (>2%) with 81 bad-weight rows scenario."""
+        # Simplified: wt_in_kgs=97_006.92, wtp=101_512 → divergence ≈ 4.4%
+        vals = _make_r12_inline([
+            ("ALL JUNE ROWS", "various", 10000, 97_006.92, 974.07, 0.0, 101_512.0),
+        ])
+        result = self._parse(vals)
+        # Variance = |97006.92 − 101512| / 101512 × 100 ≈ 4.44%
+        assert result["variance_pct"] is not None
+        assert result["variance_pct"] > 2.0, (
+            f"June variance {result['variance_pct']:.2f}% should exceed 2% threshold"
+        )
+
+    # ── Acceptance decomposition: verified to the paisa ─────────────────
+
+    def test_acceptance_apr_decomposition(self):
+        """Apr 2026: 89,151.74 + 886.69 = 90,038.43 kg (verified to the paisa)."""
+        vals = _make_r12_inline([
+            ("APR combined", "M/C-1", 1000, 89_151.74, 886.69, 0.0, 93_839.0),
+        ])
+        result = self._parse(vals)
+        assert result["wt_in_kgs"] == pytest.approx(89_151.74, rel=1e-6)
+        assert result["rejection_kg"] == pytest.approx(886.69, rel=1e-6)
+        assert result["total_fitting_kg"] == pytest.approx(90_038.43, rel=1e-6)
+
+    def test_acceptance_may_decomposition(self):
+        """May 2026: 75,771.15 + 752.24 = 76,523.39 kg."""
+        vals = _make_r12_inline([
+            ("MAY combined", "M/C-1", 1000, 75_771.15, 752.24, 0.0, 79_875.0),
+        ])
+        result = self._parse(vals)
+        assert result["wt_in_kgs"] == pytest.approx(75_771.15, rel=1e-6)
+        assert result["rejection_kg"] == pytest.approx(752.24, rel=1e-6)
+        assert result["total_fitting_kg"] == pytest.approx(76_523.39, rel=1e-6)
+
+    def test_acceptance_jun_decomposition(self):
+        """Jun 2026: 97,006.92 + 974.07 = 97,980.99 kg."""
+        vals = _make_r12_inline([
+            ("JUN combined", "M/C-1", 1000, 97_006.92, 974.07, 0.0, 101_512.0),
+        ])
+        result = self._parse(vals)
+        assert result["wt_in_kgs"] == pytest.approx(97_006.92, rel=1e-6)
+        assert result["rejection_kg"] == pytest.approx(974.07, rel=1e-6)
+        assert result["total_fitting_kg"] == pytest.approx(97_980.99, rel=1e-6)
+
+    def test_acceptance_three_month_total(self):
+        """Sum of Apr+May+Jun = 264,542.81 kg total (authoritative acceptance figure)."""
+        monthly_totals = [90_038.43, 76_523.39, 97_980.99]
+        assert sum(monthly_totals) == pytest.approx(264_542.81, rel=1e-6)
 
     # ── Edge cases ───────────────────────────────────────────────────────
 
     def test_empty_values_returns_zero(self):
         result = self._parse([])
-        assert result["weight_of_total_prod"] == 0.0
+        assert result["total_fitting_kg"] == 0.0
         assert result["n_rows"] == 0
 
     def test_no_header_returns_zero(self):
         result = self._parse([["Date", "Item", "Pcs"]])
-        assert result["weight_of_total_prod"] == 0.0
+        assert result["total_fitting_kg"] == 0.0
 
     def test_total_row_skipped(self):
         """A row whose first cell is 'TOTAL' must not be summed."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE",  "M/C-1", 100, 50.0, 0.5, 50.0],
-            ["TOTAL",     "",       300, 150.0, "", 150.0],   # ← must be skipped
-        ]
+        vals = _make_r12_inline([
+            ("90mm TEE",  "M/C-1", 100, 50.0, 5.0, 0.5, 50.0),
+            ("TOTAL",     "",      300, 150.0, 15.0, "", 150.0),  # ← must be skipped
+        ])
         result = self._parse(vals)
-        assert result["weight_of_total_prod"] == pytest.approx(50.0), (
-            "TOTAL row must not be double-counted"
-        )
+        assert result["wt_in_kgs"] == pytest.approx(50.0), "TOTAL row must not be double-counted"
+        assert result["rejection_kg"] == pytest.approx(5.0)
+        assert result["total_fitting_kg"] == pytest.approx(55.0)
         assert result["n_rows"] == 1
 
-    def test_non_numeric_weight_rows_skipped(self):
-        """Sub-header rows with text in weight column are auto-skipped."""
+    def test_non_numeric_rejection_rows_skipped(self):
+        """Rows with non-numeric rejection cell are auto-skipped (e.g. sub-hdr)."""
         vals = [
             [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["ITEM",      "M/C",     "PCS", "WT",        "WT/PC", "TOTAL WT"],  # sub-hdr
-            ["90mm TEE",  "M/C-1",   100,   50.0,        0.5,     50.0],
+            ["Item Name", "Machine", "Pcs",
+             "Wt in Kgs", "Actual Rejection Weight (in Kgs)",
+             "Weight per Pc", "Weight of Total Production"],
+            ["ITEM", "M/C", "PCS", "WT", "REJ", "WT/PC", "TOTAL WT"],  # sub-hdr-like
+            ["90mm TEE", "M/C-1", 100, 50.0, 5.0, 0.5, 50.0],
         ]
         result = self._parse(vals)
-        assert result["weight_of_total_prod"] == pytest.approx(50.0)
+        assert result["total_fitting_kg"] == pytest.approx(55.0)
         assert result["n_rows"] == 1
 
     # ── Divergent row metadata ───────────────────────────────────────────
 
     def test_divergent_row_metadata_fields(self):
         """Flagged rows carry item, machine, pcs, w_tot, w_kgs, diff_pct."""
-        vals = [
-            [],
-            ["Item Name", "Machine", "Pcs", "Wt in Kgs", "Weight per Pc",
-             "Weight of Total Production"],
-            ["90mm TEE", "M/C-1", 200, 90.0, 0.5, 100.0],
-        ]
+        vals = _make_r12_inline([
+            ("90mm TEE", "M/C-1", 200, 90.0, 0.0, 0.5, 100.0),
+        ])
         result = self._parse(vals)
         assert len(result["divergent_rows"]) == 1
         row = result["divergent_rows"][0]
@@ -1206,30 +1356,45 @@ class TestParseR12FittingsKg:
 class TestR12SourceRouting:
     """Verify that monthly rows are patched correctly from R12 data."""
 
-    def _patch_row(self, r12_kg, wt_in_kgs, fitting_sheet_kg=500_000.0):
-        """Simulate the patching logic in load_labour_fy for one row."""
+    def _patch_row(self, total_fitting_kg, wt_in_kgs, rejection_kg=0.0,
+                   wtp=None, fitting_sheet_kg=500_000.0):
+        """Simulate the patching logic in load_labour_fy for one row.
+
+        ``total_fitting_kg`` = wt_in_kgs + rejection_kg (gross actual authoritative).
+        ``wtp``              = Weight-of-Total-Production (formula-driven, variance ref).
+        """
         row = {
             "month_label": "APR", "month_num": 1,
             "pipe_prod_kg": 600_000.0,
-            "fitting_prod_kg": fitting_sheet_kg,   # wrong labour-sheet value
+            "fitting_prod_kg": fitting_sheet_kg,
             "paid_wages": 500_000.0, "contractor_wages": 50_000.0,
         }
-        r12 = {"weight_of_total_prod": r12_kg, "wt_in_kgs": wt_in_kgs,
-                "variance_pct": abs(r12_kg - wt_in_kgs) / r12_kg * 100 if r12_kg else None,
-                "divergent_rows": [], "n_rows": 10}
+        if wtp is None:
+            wtp = wt_in_kgs   # default: no divergence
+        variance_pct = (abs(wt_in_kgs - wtp) / wtp * 100) if wtp else None
+        r12 = {
+            "total_fitting_kg": total_fitting_kg,
+            "wt_in_kgs":        wt_in_kgs,
+            "rejection_kg":     rejection_kg,
+            "weight_of_total_prod": wtp,
+            "variance_pct":     variance_pct,
+            "divergent_rows": [], "n_rows": 10,
+        }
 
         # Mirror the patching logic from load_labour_fy
-        if r12_kg > 0:
-            row["fitting_r12_kg"]        = r12_kg
+        if total_fitting_kg > 0:
+            row["fitting_r12_kg"]        = total_fitting_kg
             row["wt_in_kgs_total"]       = wt_in_kgs
+            row["r12_rejection_kg"]      = rejection_kg
             row["fitting_kg_source"]     = "report12"
             row["fitting_variance_pct"]  = r12.get("variance_pct")
             row["fitting_divergent_n"]   = 0
             row["fitting_divergent_rows"] = []
-            row["fitting_prod_kg"]       = r12_kg
+            row["fitting_prod_kg"]       = total_fitting_kg
         else:
             row["fitting_r12_kg"]        = None
             row["wt_in_kgs_total"]       = None
+            row["r12_rejection_kg"]      = None
             row["fitting_kg_source"]     = "labour_sheet"
             row["fitting_variance_pct"]  = None
             row["fitting_divergent_n"]   = 0
@@ -1246,41 +1411,56 @@ class TestR12SourceRouting:
         return row
 
     def test_r12_source_overrides_labour_sheet(self):
-        """fitting_prod_kg becomes R12 value when R12 is available."""
-        row = self._patch_row(r12_kg=93_839.0, wt_in_kgs=89_700.0)
-        assert row["fitting_prod_kg"] == pytest.approx(93_839.0)
+        """fitting_prod_kg becomes total_fitting_kg (gross) when R12 available."""
+        row = self._patch_row(total_fitting_kg=90_038.43,
+                              wt_in_kgs=89_151.74, rejection_kg=886.69)
+        assert row["fitting_prod_kg"] == pytest.approx(90_038.43)
         assert row["fitting_kg_source"] == "report12"
+
+    def test_r12_stores_decomposition(self):
+        """wt_in_kgs_total and r12_rejection_kg stored separately."""
+        row = self._patch_row(total_fitting_kg=90_038.43,
+                              wt_in_kgs=89_151.74, rejection_kg=886.69)
+        assert row["wt_in_kgs_total"]  == pytest.approx(89_151.74)
+        assert row["r12_rejection_kg"] == pytest.approx(886.69)
 
     def test_labour_sheet_fallback_when_r12_zero(self):
         """When R12 returns 0, labour-sheet value kept with 'labour_sheet' source."""
-        row = self._patch_row(r12_kg=0.0, wt_in_kgs=0.0, fitting_sheet_kg=80_000.0)
+        row = self._patch_row(total_fitting_kg=0.0, wt_in_kgs=0.0,
+                              fitting_sheet_kg=80_000.0)
         assert row["fitting_prod_kg"] == pytest.approx(80_000.0)
         assert row["fitting_kg_source"] == "labour_sheet"
+        assert row["r12_rejection_kg"] is None
 
     def test_total_prod_kg_recomputed(self):
-        """total_prod_kg = pipe + R12 fitting (not the old labour-sheet total)."""
-        row = self._patch_row(r12_kg=93_839.0, wt_in_kgs=93_839.0)
-        expected = 600_000.0 + 93_839.0
+        """total_prod_kg = pipe + gross R12 fitting (not old labour-sheet total)."""
+        row = self._patch_row(total_fitting_kg=90_038.43,
+                              wt_in_kgs=89_151.74, rejection_kg=886.69)
+        expected = 600_000.0 + 90_038.43
         assert row["total_prod_kg"] == pytest.approx(expected, rel=1e-4)
 
     def test_per_kg_recomputed(self):
         """per_kg_labour_cost = total_wages / total_prod_kg (recomputed)."""
-        row = self._patch_row(r12_kg=93_839.0, wt_in_kgs=93_839.0)
+        row = self._patch_row(total_fitting_kg=90_038.43,
+                              wt_in_kgs=89_151.74, rejection_kg=886.69)
         total_wages = 500_000.0 + 50_000.0
         expected = total_wages / row["total_prod_kg"]
         assert row["per_kg_labour_cost"] == pytest.approx(expected, rel=1e-4)
 
-    def test_variance_flag_set_when_divergence_exceeds_2pct(self):
-        """Variance >2% from R12 data is stored in the row."""
-        # W-T-P=100, Wt-in-Kgs=95 → 5% variance
-        row = self._patch_row(r12_kg=100_000.0, wt_in_kgs=95_000.0)
+    def test_variance_flag_set_when_wt_in_kgs_diverges_from_wtp(self):
+        """Variance flag = |Wt-in-Kgs − W-T-P| / W-T-P — NOT using total_fitting_kg."""
+        # wt_in_kgs=95_000, wtp=100_000 → 5% variance
+        row = self._patch_row(total_fitting_kg=95_000.0,
+                              wt_in_kgs=95_000.0, rejection_kg=0.0,
+                              wtp=100_000.0)
         assert row["fitting_variance_pct"] is not None
         assert row["fitting_variance_pct"] > 2.0
 
     def test_no_variance_flag_when_within_threshold(self):
-        """Variance <2% does not set a meaningful warning."""
-        # 1% divergence
-        row = self._patch_row(r12_kg=100_000.0, wt_in_kgs=99_100.0)
+        """<2% divergence — variance stays low."""
+        row = self._patch_row(total_fitting_kg=99_100.0,
+                              wt_in_kgs=99_100.0, rejection_kg=0.0,
+                              wtp=100_000.0)   # 0.9% divergence
         assert row["fitting_variance_pct"] is not None
         assert row["fitting_variance_pct"] < 2.0
 
@@ -1290,37 +1470,133 @@ class TestR12SourceRouting:
 # ---------------------------------------------------------------------------
 
 class TestAcceptanceFiguresMath:
-    """Cross-check that the acceptance figures are internally consistent.
+    """Cross-check acceptance figures are internally consistent (no live data needed).
 
-    These are the known-correct figures for FY2026-27 (Apr/May/Jun 2026)
-    derived from Report-12.  We verify internal maths — no live sheet needed.
+    FY2026-27 (Apr/May/Jun 2026) — corrected gross-actual formula:
+      fitting_kg = Wt-in-Kgs + Actual Rejection Weight (verified to the paisa).
     """
 
-    # Acceptance figures from the design spec
-    MONTHS = ["APR", "MAY", "JUN"]
-    FITTING_KG = [93_839.0, 79_875.0, 101_512.0]
-    PIPE_KG    = [637_410.0 / 3, 637_410.0 / 3, 637_410.0 / 3]  # rough equal split
-    TOTAL_WAGES = 5_791_710.0   # three-month sum
+    # Gross-actual components (Wt-in-Kgs and Rejection per month)
+    WIK_KG  = [89_151.74, 75_771.15, 97_006.92]   # Wt in Kgs
+    REJ_KG  = [886.69,    752.24,    974.07]        # Actual Rejection Weight
+    # Authoritative costing figure: WIK + REJ
+    FITTING_KG = [90_038.43, 76_523.39, 97_980.99]
+    # Formula-driven column (for variance reference only)
+    WTP_KG  = [93_839.0, 79_875.0, 101_512.0]
+    PIPE_KG_TOTAL = 637_410.0
+    # wages derived from: 6.122416759 × (637,410 + 264,542.81) = 6.1224… × 901,952.81
+    TOTAL_WAGES   = 5_522_131.0
+
+    def test_wik_plus_rej_equals_fitting_kg(self):
+        """Each month: Wt-in-Kgs + Rejection = total_fitting_kg (to the paisa)."""
+        for wik, rej, expected in zip(self.WIK_KG, self.REJ_KG, self.FITTING_KG):
+            assert wik + rej == pytest.approx(expected, rel=1e-6), (
+                f"Wt-in-Kgs {wik} + Rejection {rej} should equal {expected}"
+            )
 
     def test_fy_to_date_fittings_sum(self):
-        """Apr+May+Jun = 275,226 kg (rounded)."""
-        assert sum(self.FITTING_KG) == pytest.approx(275_226.0, abs=1)
+        """Apr+May+Jun fittings = 264,542.81 kg (official corrected figure)."""
+        assert sum(self.FITTING_KG) == pytest.approx(264_542.81, rel=1e-6)
 
-    def test_cost_per_kg_trend(self):
-        """FY2627 cost/kg must be higher than FY2526 (₹4.157/kg).
+    def test_total_production_kg(self):
+        """Total production = pipe 637,410 + fittings 264,542.81 = 901,952.81 kg."""
+        total = self.PIPE_KG_TOTAL + sum(self.FITTING_KG)
+        assert total == pytest.approx(901_952.81, rel=1e-5)
 
-        FY2627 to-date: 5,791,710 / (637,410 + 275,226) = ~6.35 ₹/kg.
-        This is a known business-concern trend.
-        """
-        total_kg = 637_410.0 + 275_226.0
+    def test_cost_per_kg_fy2627(self):
+        """FY2627 cost per kg ≈ ₹6.122 (using official wage total)."""
+        total_kg = self.PIPE_KG_TOTAL + sum(self.FITTING_KG)
+        cost_per_kg = self.TOTAL_WAGES / total_kg
+        assert cost_per_kg == pytest.approx(6.122416759, rel=1e-4)
+
+    def test_cost_per_kg_exceeds_fy2526_baseline(self):
+        """FY2627 cost/kg must exceed FY2526 baseline ₹4.157/kg (cost worsening)."""
+        total_kg = self.PIPE_KG_TOTAL + sum(self.FITTING_KG)
         cost_per_kg = self.TOTAL_WAGES / total_kg
         assert cost_per_kg > 4.157, (
-            f"FY2627 cost/kg {cost_per_kg:.2f} must exceed FY2526 baseline ₹4.157"
+            f"FY2627 cost/kg {cost_per_kg:.4f} must exceed FY2526 baseline ₹4.157"
         )
-        assert cost_per_kg == pytest.approx(6.35, rel=0.02)
 
-    def test_r12_source_flag_exposed_on_rows(self):
+    def test_formula_column_is_higher_than_gross_actual(self):
+        """W-T-P (pcs×std wt) exceeds gross-actual in all three months."""
+        for wtp, gross in zip(self.WTP_KG, self.FITTING_KG):
+            assert wtp > gross, (
+                f"W-T-P {wtp} should exceed gross-actual {gross} "
+                "(W-T-P includes standard weight per pc; gross uses hand-keyed values)"
+            )
+
+    def test_r12_source_flag_on_rows(self):
         """After patching, fitting_kg_source must be 'report12'."""
         for fg in self.FITTING_KG:
             row = {"fitting_prod_kg": fg, "fitting_kg_source": "report12"}
             assert row["fitting_kg_source"] == "report12"
+
+
+# ---------------------------------------------------------------------------
+# 14. REJECTION & PRODUCTION tab unit-mismatch guard
+# ---------------------------------------------------------------------------
+
+class TestRejectionProdTabGuard:
+    """check_rejection_prod_tab_units — detect when fittings column holds pieces."""
+
+    def _check(self, tab_values, r12_fitting_kg, **kw):
+        return _import_labour().check_rejection_prod_tab_units(tab_values, r12_fitting_kg, **kw)
+
+    def _make_rej_prod_tab(self, prod_value):
+        """Minimal 'REJECTION & PRODUCTION' tab with a Fittings production cell."""
+        return [
+            ["REJECTION & PRODUCTION SUMMARY"],
+            [],
+            ["",        "Pipe",        "",   "Fittings",           ""],
+            ["Month",   "Production",  "",   "Production (Kgs)",   "Rejection (Kgs)"],
+            ["APR",     500_000,       "",   prod_value,            2_000],
+        ]
+
+    def test_detects_pieces_when_far_exceeds_r12_kg(self):
+        """FY2627 REJECTION tab: fittings shows 1,340,117 pcs but R12 says ~90,038 kg.
+
+        Ratio ≈ 14.9 > 10 → unit mismatch detected.
+        """
+        result = self._check(
+            self._make_rej_prod_tab(1_340_117),
+            r12_fitting_kg=90_038.43,
+        )
+        assert result["is_unit_mismatch"] is True
+        assert result["ratio"] == pytest.approx(1_340_117 / 90_038.43, rel=1e-3)
+
+    def test_no_mismatch_when_within_ratio(self):
+        """Tab value close to R12 kg → ratio < 10 → no mismatch."""
+        result = self._check(
+            self._make_rej_prod_tab(91_000),   # only 1% above R12
+            r12_fitting_kg=90_038.43,
+        )
+        assert result["is_unit_mismatch"] is False
+
+    def test_custom_mismatch_ratio(self):
+        """Custom ratio=5: value 6× R12 triggers mismatch."""
+        result = self._check(
+            self._make_rej_prod_tab(540_231),  # ~6× r12
+            r12_fitting_kg=90_038.43,
+            mismatch_ratio=5.0,
+        )
+        assert result["is_unit_mismatch"] is True
+
+    def test_r12_kg_zero_returns_no_mismatch(self):
+        """When R12 kg is 0 (unavailable), cannot compute ratio → no false-positive."""
+        result = self._check(
+            self._make_rej_prod_tab(1_000_000),
+            r12_fitting_kg=0.0,
+        )
+        assert result["is_unit_mismatch"] is False
+        assert result["ratio"] == pytest.approx(0.0)
+
+    def test_tab_sum_and_r12_kg_in_result(self):
+        """Result dict contains tab_sum, r12_kg, and ratio for auditability."""
+        result = self._check(
+            self._make_rej_prod_tab(1_340_117),
+            r12_fitting_kg=90_038.43,
+        )
+        assert "tab_sum" in result
+        assert "r12_kg" in result
+        assert "ratio" in result
+        assert result["r12_kg"] == pytest.approx(90_038.43, rel=1e-4)

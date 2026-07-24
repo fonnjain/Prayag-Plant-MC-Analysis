@@ -245,14 +245,22 @@ def parse_ideal_rates(values: list) -> dict:
 
 # ── Report-12 fittings kg parser ──────────────────────────────────────────────
 #
-# Header that identifies the authoritative weight column:
-_R12_HDR_WTP   = "WEIGHT OF TOTAL PRODUCTION"
-# Hand-keyed column (used only for the data-quality variance check):
-_R12_HDR_WIK   = "WT IN KGS"
-# Per-row divergence threshold for naming individual bad entries:
+# Authoritative fittings formula (gross actual = good output + rejected weight):
+#   fitting_kg = "Wt in Kgs" + "Actual Rejection Weight (in Kgs)"
+#
+# "Wt in Kgs" is a SUB-HEADER on the row below the main header row (it sits
+# under the "Output Production" group header).  "Actual Rejection Weight
+# (in Kgs)" lives on the main header row.
+#
+# "Weight of Total Production" (formula = pcs × std weight) is used ONLY for
+# the J-vs-M data-quality variance check, NOT for the costing figure.
+#
+# Per-row divergence threshold (Wt-in-Kgs vs Weight-of-Total-Prod):
 _R12_ROW_VARIANCE_PCT = 5.0
 # Total-month divergence threshold for the UI warning card:
 R12_TOTAL_VARIANCE_WARN_PCT = 2.0
+# Unit-mismatch multiplier guard for the REJECTION & PRODUCTION tab:
+_REJ_PROD_TAB_MISMATCH_RATIO = 10.0
 
 
 def _fy_month_to_ym(fy: str, month_label: str) -> str:
@@ -270,38 +278,64 @@ def _fy_month_to_ym(fy: str, month_label: str) -> str:
 
 
 def _r12_find_header(values: list) -> tuple:
-    """Scan the first 10 rows for the Report-12 header row.
+    """Scan the first 12 rows for the Report-12 two-row header.
 
-    Returns (hdr_idx, col_map) where col_map maps field names to column
-    indices.  hdr_idx is -1 if the header cannot be found.
+    Report-12 uses a TWO-ROW header:
+      Main row  — contains "Actual Rejection Weight (in Kgs)" and
+                  "Weight of Total Production" (and auxiliary fields).
+      Sub-row   — immediately below the main row; contains "Wt in Kgs"
+                  positioned under the "Output Production" group header.
 
-    Works for both FY2025-26 (no SAP Code) and FY2026-27 (with SAP Code)
-    layouts because we search by header text, not by position.
+    Both FY layouts (FY2526: no SAP Code column, FY2627: with SAP Code) are
+    handled because all lookups are by header text, not position.
+
+    Returns (main_hdr_idx, data_start_idx, col_map).
+      main_hdr_idx == -1 → header not found.
+      data_start_idx     → first true data row (main+1 or main+2).
+    col_map keys: "rejection_kg", "weight_of_total_prod", "wt_in_kgs",
+                  "item", "machine", "pc".
     """
-    # All keys upper-stripped.  First match wins per field.
-    _WANT = {
-        _R12_HDR_WTP:    "weight_of_total_prod",
-        _R12_HDR_WIK:    "wt_in_kgs",
-        "ITEM NAME":      "item",
-        "ITEM":           "item",
-        "MACHINE":        "machine",
-        "M/C":            "machine",
-        "PCS":            "pc",
-        "PC":             "pc",
-        "PIECES":         "pc",
-    }
+    # Prefix-based matching — handles "(in Kgs)", "(IN KGS)", etc.
+    _MAIN = [
+        ("ACTUAL REJECTION WEIGHT", "rejection_kg"),
+        ("WEIGHT OF TOTAL PRODUCTION", "weight_of_total_prod"),
+        ("ITEM NAME",  "item"),
+        ("ITEM",       "item"),
+        ("MACHINE",    "machine"),
+        ("M/C",        "machine"),
+        ("PCS",        "pc"),
+        ("PC",         "pc"),
+        ("PIECES",     "pc"),
+        ("WT IN KGS",  "wt_in_kgs"),   # sometimes on main row (FY2526)
+    ]
 
-    for ri, row in enumerate(values[:10]):
+    for ri, row in enumerate(values[:12]):
         col_map: dict[str, int] = {}
         for ci, cell in enumerate(row):
             key = _norm_hdr(cell)
-            for pattern, field in _WANT.items():
-                if key == pattern and field not in col_map:
+            for prefix, field in _MAIN:
+                if key.startswith(prefix) and field not in col_map:
                     col_map[field] = ci
                     break
-        if "weight_of_total_prod" in col_map:
-            return ri, col_map
-    return -1, {}
+
+        # Need at least the rejection column to consider this the main header
+        if "rejection_kg" not in col_map:
+            continue
+
+        # Check the next row for the "Wt in Kgs" sub-header
+        wik_in_sub = False
+        if "wt_in_kgs" not in col_map:
+            sub_row = values[ri + 1] if ri + 1 < len(values) else []
+            for ci, cell in enumerate(sub_row):
+                if _norm_hdr(cell).startswith("WT IN KGS"):
+                    col_map["wt_in_kgs"] = ci
+                    wik_in_sub = True
+                    break
+
+        data_start = ri + 2 if wik_in_sub else ri + 1
+        return ri, data_start, col_map
+
+    return -1, -1, {}
 
 
 def parse_r12_fittings_kg(
@@ -309,73 +343,88 @@ def parse_r12_fittings_kg(
     *,
     row_variance_pct: float = _R12_ROW_VARIANCE_PCT,
 ) -> dict:
-    """Parse Report-12 tab for total fittings weight (for costing purposes).
+    """Parse Report-12 tab for total fittings weight (for costing).
 
-    Returns the sum of "Weight of Total Production" (authoritative, formula-
-    driven = pcs × std_weight / 1000) and "Wt in Kgs" (hand-keyed, for the
-    data-quality J-vs-M variance check).
+    AUTHORITATIVE FIGURE:
+      total_fitting_kg = "Wt in Kgs" + "Actual Rejection Weight (in Kgs)"
+      (gross actual = good output + rejected weight, same convention as pipe)
 
-    Works for both FY layouts (FY2025-26 no SAP Code; FY2026-27 with SAP Code)
-    because column positions are detected by header text.
+    DATA-QUALITY VARIANCE:
+      variance_pct = |Wt-in-Kgs − Weight-of-Total-Production| / W-T-P × 100
+      "Weight of Total Production" is formula-driven (pcs × std weight).
+      When variance > R12_TOTAL_VARIANCE_WARN_PCT the UI shows a warning
+      so bad hand-entries (e.g. wrong Wt-in-Kgs) can be corrected at source.
 
-    ``row_variance_pct`` (default 5%): flag a row in ``divergent_rows`` when
-    ``|weight_of_total_prod − wt_in_kgs| / weight_of_total_prod > threshold``.
+    Handles both FY layouts (FY2526 no SAP Code; FY2627 with SAP Code) and
+    the two-row header (main header + "Wt in Kgs" sub-header row).
+
+    ``row_variance_pct`` (default 5%): flag a data row in ``divergent_rows``
+    when its per-row |Wt-in-Kgs − W-T-P| / W-T-P exceeds this threshold.
 
     Returns::
 
         {
-            "weight_of_total_prod": float,   # authoritative R12 total kg
-            "wt_in_kgs":           float,   # hand-keyed total kg
-            "variance_pct":        float|None,
-            "divergent_rows":      list[dict],  # {item, machine, pcs, w_tot, w_kgs, diff_pct}
-            "n_rows":              int,
+            "total_fitting_kg":   float,  # authoritative costing figure (gross)
+            "wt_in_kgs":          float,  # good-output sum (Wt in Kgs)
+            "rejection_kg":       float,  # rejected-weight sum
+            "weight_of_total_prod": float, # formula-driven sum (variance ref)
+            "variance_pct":       float|None,
+            "divergent_rows":     list[dict],
+            "n_rows":             int,
         }
     """
     _EMPTY = {
-        "weight_of_total_prod": 0.0, "wt_in_kgs": 0.0,
-        "variance_pct": None, "divergent_rows": [], "n_rows": 0,
+        "total_fitting_kg": 0.0, "wt_in_kgs": 0.0, "rejection_kg": 0.0,
+        "weight_of_total_prod": 0.0, "variance_pct": None,
+        "divergent_rows": [], "n_rows": 0,
     }
     if not values:
         return _EMPTY
 
-    hdr_idx, col_map = _r12_find_header(values)
-    if hdr_idx < 0 or "weight_of_total_prod" not in col_map:
-        logger.warning("parse_r12_fittings_kg: 'Weight of Total Production' header not found")
+    main_idx, data_start, col_map = _r12_find_header(values)
+    if main_idx < 0 or "rejection_kg" not in col_map:
+        logger.warning("parse_r12_fittings_kg: required headers not found "
+                       "(need 'Actual Rejection Weight (in Kgs)')")
         return _EMPTY
 
-    wtp_col  = col_map["weight_of_total_prod"]
+    rej_col  = col_map["rejection_kg"]
+    wtp_col  = col_map.get("weight_of_total_prod", -1)
     wik_col  = col_map.get("wt_in_kgs", -1)
     item_col = col_map.get("item", -1)
     mc_col   = col_map.get("machine", -1)
     pc_col   = col_map.get("pc", -1)
 
-    total_wtp = 0.0
     total_wik = 0.0
+    total_rej = 0.0
+    total_wtp = 0.0
     divergent: list = []
     n_rows = 0
     row_thr = row_variance_pct / 100.0
 
-    for row in values[hdr_idx + 1:]:
-        if not row or len(row) <= wtp_col:
+    for row in values[data_start:]:
+        if not row or len(row) <= rej_col:
             continue
 
-        # Skip TOTAL / sub-header rows (non-numeric weight cell)
-        wtp = _num(row[wtp_col])
-        if wtp is None:
+        # Skip TOTAL / sub-header rows: rejection cell must be numeric
+        rej = _num(row[rej_col])
+        if rej is None:
             continue
 
-        # Skip rows where the first cell is a TOTAL indicator
+        # Skip TOTAL indicator rows (e.g. row labelled "TOTAL", "GRAND TOTAL")
         first = _norm_hdr(row[0]) if row else ""
         if any(t in first for t in ("TOTAL", "GRAND", "SUM", "SR NO", "S.NO")):
             continue
 
         n_rows += 1
-        total_wtp += wtp
+        total_rej += rej
 
         wik = _num(row[wik_col] if wik_col >= 0 and wik_col < len(row) else None) or 0.0
         total_wik += wik
 
-        # Flag per-row divergence
+        wtp = _num(row[wtp_col] if wtp_col >= 0 and wtp_col < len(row) else None) or 0.0
+        total_wtp += wtp
+
+        # Flag per-row divergence: Wt-in-Kgs vs formula (data quality)
         if wtp > 0 and wik_col >= 0 and abs(wtp - wik) / wtp > row_thr:
             item = str(row[item_col]).strip() if item_col >= 0 and item_col < len(row) else "?"
             mc   = str(row[mc_col]).strip()   if mc_col   >= 0 and mc_col   < len(row) else "?"
@@ -386,16 +435,93 @@ def parse_r12_fittings_kg(
                 "diff_pct": round(abs(wtp - wik) / wtp * 100, 1),
             })
 
+    # Variance: Wt-in-Kgs vs Weight-of-Total-Prod (data quality signal)
     variance_pct = None
     if total_wtp > 0 and wik_col >= 0:
         variance_pct = round(abs(total_wtp - total_wik) / total_wtp * 100, 2)
 
     return {
+        "total_fitting_kg":     round(total_wik + total_rej, 2),
+        "wt_in_kgs":            round(total_wik, 2),
+        "rejection_kg":         round(total_rej, 2),
         "weight_of_total_prod": round(total_wtp, 2),
-        "wt_in_kgs":           round(total_wik, 2),
-        "variance_pct":        variance_pct,
-        "divergent_rows":      divergent,
-        "n_rows":              n_rows,
+        "variance_pct":         variance_pct,
+        "divergent_rows":       divergent,
+        "n_rows":               n_rows,
+    }
+
+
+def check_rejection_prod_tab_units(
+    tab_values: list,
+    r12_fitting_kg: float,
+    *,
+    mismatch_ratio: float = _REJ_PROD_TAB_MISMATCH_RATIO,
+) -> dict:
+    """Guard: detect if 'REJECTION & PRODUCTION' tab fittings column holds pieces.
+
+    The "REJECTION & PRODUCTION" tab (in the same annual labour workbook) has a
+    Fittings block with columns headed 'Production (Kgs)' and 'Rejection (Kgs)'.
+    In FY2026-27 those cells still contain GROSS PIECES, not kg — the tab was
+    not corrected when the Plumbing tab was fixed.
+
+    DO NOT USE this tab as a costing source for fittings production.  This
+    guard can be used defensively: if the sum of the 'Production (Kgs)' column
+    exceeds ``mismatch_ratio × r12_fitting_kg`` (default 10×), the column
+    almost certainly contains pieces, not kg.
+
+    Parameters
+    ----------
+    tab_values:       raw cell grid from batch_get for this tab.
+    r12_fitting_kg:   the trusted Report-12 fittings kg figure for the same month.
+    mismatch_ratio:   multiplier threshold (default 10).
+
+    Returns
+    -------
+    dict with keys:
+      "is_unit_mismatch": bool
+      "tab_sum":          float  (sum of 'Production (Kgs)' column values)
+      "r12_kg":           float  (the trusted R12 figure passed in)
+      "ratio":            float  (tab_sum / r12_kg, or 0 if r12_kg == 0)
+    """
+    tab_sum = 0.0
+    # Two-pass scan to find the "Production (Kgs)" column in the Fittings block.
+    # Pass 1: find the column where the "Fittings" group header appears.
+    # Pass 2: find "Production" at or after that column (to skip the Pipe section).
+    fitting_group_col = -1
+    for row in tab_values[:15]:
+        for ci, cell in enumerate(row):
+            if "FITTING" in _norm_hdr(cell):
+                fitting_group_col = ci
+                break
+        if fitting_group_col >= 0:
+            break
+
+    prod_col = -1
+    hdr_row_idx = -1
+    for ri, row in enumerate(tab_values[:20]):
+        for ci, cell in enumerate(row):
+            if fitting_group_col >= 0 and ci < fitting_group_col:
+                continue   # skip Pipe / other columns that precede the Fittings block
+            key = _norm_hdr(cell)
+            if "PRODUCTION" in key and prod_col < 0:
+                prod_col = ci
+                hdr_row_idx = ri
+        if prod_col >= 0:
+            break
+
+    if prod_col >= 0:
+        for row in tab_values[hdr_row_idx + 1:]:
+            if row and prod_col < len(row):
+                v = _num(row[prod_col])
+                if v is not None:
+                    tab_sum += v
+
+    ratio = (tab_sum / r12_fitting_kg) if r12_fitting_kg > 0 else 0.0
+    return {
+        "is_unit_mismatch": ratio > mismatch_ratio,
+        "tab_sum": round(tab_sum, 2),
+        "r12_kg":  round(r12_fitting_kg, 2),
+        "ratio":   round(ratio, 2),
     }
 
 
@@ -757,12 +883,14 @@ def load_labour_fy(
     for row in monthly_rows:
         ml = row["month_label"]
         r12 = r12_by_month.get(ml, {})
-        r12_kg = float(r12.get("weight_of_total_prod") or 0)
+        # Authoritative = Wt in Kgs + Actual Rejection Weight (gross actual)
+        r12_kg = float(r12.get("total_fitting_kg") or 0)
 
         if r12_kg > 0:
             # Authoritative R12 value available — use it
             row["fitting_r12_kg"]        = r12_kg
             row["wt_in_kgs_total"]       = float(r12.get("wt_in_kgs") or 0)
+            row["r12_rejection_kg"]      = float(r12.get("rejection_kg") or 0)
             row["fitting_kg_source"]     = "report12"
             row["fitting_variance_pct"]  = r12.get("variance_pct")
             row["fitting_divergent_n"]   = len(r12.get("divergent_rows") or [])
@@ -774,6 +902,7 @@ def load_labour_fy(
             # No R12 data — keep labour-sheet figure with a source flag
             row["fitting_r12_kg"]        = None
             row["wt_in_kgs_total"]       = None
+            row["r12_rejection_kg"]      = None
             row["fitting_kg_source"]     = "labour_sheet"
             row["fitting_variance_pct"]  = None
             row["fitting_divergent_n"]   = 0

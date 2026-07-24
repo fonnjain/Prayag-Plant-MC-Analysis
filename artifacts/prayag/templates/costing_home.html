@@ -351,7 +351,9 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
   <div class="cost-card" style="margin-bottom:.75rem;">
     <div class="section-hdr">📅 Monthly Labour Detail</div>
 
-    {# ── J-vs-M variance warning: months where R-12 vs Wt-in-Kgs diverge >2% ── #}
+    {# ── Data-quality variance: Wt-in-Kgs vs Weight-of-Total-Production diverge >2% ── #}
+    {# Costing uses Wt-in-Kgs + Rejection (gross actual). W-T-P is formula-driven    #}
+    {# (pcs × std weight). Large divergence = bad hand-keyed weights in the log.      #}
     {% set ns_v = namespace(warn_months=[]) %}
     {% for r in labour_view.monthly %}
       {% if r.fitting_variance_pct is not none and r.fitting_variance_pct > 2 %}
@@ -361,12 +363,13 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
     {% if ns_v.warn_months %}
     <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:.5rem;padding:.6rem .85rem;margin-bottom:.65rem;">
       <div style="font-weight:800;font-size:.82rem;color:#92400e;margin-bottom:.25rem;">
-        ⚠️ J-vs-M Weight Variance &gt;2% — hand-keyed "Wt in Kgs" differs from formula "Weight of Total Production"
+        ⚠️ Data Quality — "Wt in Kgs" diverges from formula "Weight of Total Production" by &gt;2%
       </div>
       <div style="font-size:.78rem;color:#374151;">
         Affected months: <strong>{{ ns_v.warn_months | join(" · ") }}</strong>.
-        Production figures use the formula-driven column (Report-12 authoritative).
-        Wt-in-Kgs column needs manual correction in the Moulding Report-12.
+        <em>Costing uses gross actual (Wt in Kgs + Rejection Weight) — this flag signals
+        possible hand-entry errors in the Moulding Report-12 weight column.
+        Correct at source to clear the warning.</em>
       </div>
       {% for r in labour_view.monthly %}
         {% if r.fitting_divergent_n and r.fitting_divergent_n > 0 and r.fitting_variance_pct is not none and r.fitting_variance_pct > 2 %}
@@ -430,7 +433,7 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
           <td{% if fit_warn %} style="background:#fef9c3;"{% endif %}>
             {{ "{:,.0f}".format(r.fitting_prod_kg) if r.fitting_prod_kg else "—" }}
             {% if r.fitting_kg_source == "report12" %}
-              <span style="font-size:.68em;font-weight:700;color:#059669;margin-left:.25em;" title="Source: Report-12 Weight of Total Production">R12</span>
+              <span style="font-size:.68em;font-weight:700;color:#059669;margin-left:.25em;" title="Source: Report-12 — Wt in Kgs + Actual Rejection Weight (gross actual)">R12</span>
             {% elif r.fitting_kg_source == "labour_sheet" %}
               <span style="font-size:.68em;font-weight:700;color:#d97706;margin-left:.25em;" title="Source: Labour workbook (Report-12 unavailable)">LS</span>
             {% endif %}
