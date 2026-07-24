@@ -119,6 +119,18 @@ class CostingModelError(Exception):
     pass
 
 
+def _coerce_row(row: dict) -> dict:
+    """Convert decimal.Decimal values to float at the DB read boundary.
+
+    Postgres NUMERIC columns come back as decimal.Decimal via psycopg2.
+    All downstream maths in costing modules uses Python float, so mixing
+    would raise TypeError on the first multiplication.  Coerce once here
+    so every caller gets plain floats without any individual cast guards.
+    """
+    from decimal import Decimal
+    return {k: float(v) if isinstance(v, Decimal) else v for k, v in row.items()}
+
+
 def init_costing_tables() -> None:
     """Create costing_ tables idempotently (lazy, once per process)."""
     global _INITIALISED
@@ -146,7 +158,7 @@ def get_labour_meta(segment: str, fy: str) -> Optional[dict]:
                 (segment, fy),
             )
             row = cur.fetchone()
-            return dict(row) if row else None
+            return _coerce_row(dict(row)) if row else None
     except Exception:
         logger.exception("get_labour_meta failed")
         return None
@@ -164,7 +176,7 @@ def get_labour_monthly(segment: str, fy: str) -> list:
                 "WHERE segment=%s AND fy=%s ORDER BY month_num",
                 (segment, fy),
             )
-            return [dict(r) for r in cur.fetchall()]
+            return [_coerce_row(dict(r)) for r in cur.fetchall()]
     except Exception:
         logger.exception("get_labour_monthly failed")
         return []

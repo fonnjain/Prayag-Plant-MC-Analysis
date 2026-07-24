@@ -4499,6 +4499,20 @@ def costing_hub():
                 fitting_r12_kg=r12_kg,
             )
 
+    # ── Derived pipe labour (top-down; pipe M/C rows empty in Report-22) ────
+    pipe_derived_labour = None
+    if labour_view.get("loaded"):
+        _lv_tot   = labour_view.get("totals", {})
+        _lv_rates = labour_view.get("ideal_rates", {})
+        _pipe_kg  = float(_lv_tot.get("pipe_prod_kg") or 0)
+        _pipe_rate = float(_lv_rates.get("pipe") or 2.50)
+        if _pipe_kg > 0:
+            pipe_derived_labour = {
+                "pipe_kg":     round(_pipe_kg, 0),
+                "rate_per_kg": _pipe_rate,
+                "total_rs":    round(_pipe_kg * _pipe_rate, 0),
+            }
+
     # ── Combined summary ─────────────────────────────────────────────────────
     summary = {}
     if labour_view.get("loaded") and labour_view.get("totals"):

@@ -5,14 +5,29 @@ rejection stats (mp_rejection_item / mp_rejection_summary, populated by
 mp_rejection.recompute_rejection) and applies the gross-up formula so that
 net good output meets demand after quality rejection.
 
-FORMULA
--------
-    gross_qty = net_demand / (1 − rejection_rate)
+REJECTION BASIS — GROSS (Prayag's convention)
+----------------------------------------------
+All rates stored and applied here use the GROSS basis, matching Prayag's own
+"REJECTION & PRODUCTION" tab:
 
-This is ALWAYS applied FIRST (piece count).  The separate material waste factor
-(mp_wastage.py) is applied SECOND on top of the gross piece count:
+    rejection_rate_gross = rej_kg / (prod_kg + rej_kg)
 
-    material_kg = gross_qty × wt_per_pc × (1 + waste_pct)
+The gross-up formula then pairs correctly:
+
+    gross_qty = net_demand / (1 − rejection_rate_gross)
+
+This is equivalent to:  gross = net_demand × (1 + rej/prod)   [net rate]
+Both identities give identical gross quantities.  Using the NET rate in the
+gross formula (net/(1−r_net)) over-states by ~(r_net − r_gross)/(1−r_net) per
+unit — about 1–2% at typical 9–11% NET rates.
+
+The stored constant REJ_BASIS = "gross" must be saved alongside any frozen plan
+run so that run remains reproducible if the formula is ever changed.
+
+FORMULA SEQUENCE
+----------------
+    gross_qty   = net_demand / (1 − rejection_rate_gross)   [quality: more pieces]
+    material_kg = gross_qty × wt_per_pc × (1 + waste_pct)  [process: more material]
 
 Never conflate the two — rejection is a quality/piece loss, waste is a
 process/material loss.
@@ -36,14 +51,21 @@ logger = logging.getLogger(__name__)
 REJ_CAP     = 0.50    # safety cap: no rate above 50% (implausible data guard)
 MIN_PROD_KG = 500.0   # min cumulative production (kg) for item-level rate trust
 
+# Basis label saved on every plan run so frozen runs remain reproducible.
+REJ_BASIS = "gross"   # rej_kg / (prod_kg + rej_kg) — Prayag's convention
+
 
 # ── Core formula ──────────────────────────────────────────────────────────────
 
 def gross_qty(net_demand: float, rate: float, cap: float = REJ_CAP) -> float:
     """Return gross quantity so net good output = net_demand after rejection at rate.
 
+    ``rate`` MUST be a GROSS-basis rate: rej_kg / (prod_kg + rej_kg).
     gross = net / (1 − rate).  rate is capped at *cap* before applying.
     If rate ≤ 0 returns net_demand unchanged.
+
+    Do NOT pass a NET-basis rate (rej/prod) — that pairs with net*(1+r), not
+    net/(1−r), and over-states gross quantity by ~1–2% at typical rates.
     """
     r = min(max(rate, 0.0), cap)
     if r <= 0.0:
@@ -87,7 +109,9 @@ def build_rejection_lookup(segment: str) -> dict:
                 rej  = float(rej_kg  or 0)
                 if prod <= 0:
                     continue
-                raw = rej / prod
+                # GROSS basis: rej / (prod + rej) — matches Prayag's own reporting
+                total = prod + rej
+                raw = rej / total if total > 0 else 0.0
                 result["items"][item_key] = {
                     "rate":   min(raw, REJ_CAP),
                     "capped": raw > REJ_CAP,
@@ -108,15 +132,18 @@ def build_rejection_lookup(segment: str) -> dict:
                 if prod <= 0:
                     continue
                 mat_key = f"{plant_type.upper()}:{material.upper()}"
-                result["material"][mat_key] = min(rej / prod, REJ_CAP)
+                # GROSS basis: rej / (prod + rej)
+                mat_total = prod + rej
+                result["material"][mat_key] = min(rej / mat_total if mat_total > 0 else 0.0, REJ_CAP)
                 acc = type_acc.setdefault(plant_type.upper(), {"prod": 0.0, "rej": 0.0})
                 acc["prod"] += prod
                 acc["rej"]  += rej
 
-            # Overall type rate (weighted sum across all materials)
+            # Overall type rate (weighted sum across all materials) — GROSS basis
             for pt, acc in type_acc.items():
-                if acc["prod"] > 0:
-                    result["overall"][pt] = min(acc["rej"] / acc["prod"], REJ_CAP)
+                total = acc["prod"] + acc["rej"]
+                if total > 0:
+                    result["overall"][pt] = min(acc["rej"] / total, REJ_CAP)
 
     except Exception:
         logger.exception("build_rejection_lookup failed for segment=%s", segment)

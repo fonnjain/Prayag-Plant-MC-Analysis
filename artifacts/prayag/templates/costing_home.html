@@ -249,6 +249,45 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
   </div>
   {% endif %}
 
+  <!-- ── Pipe labour attribution ──────────────────────────────────────────── -->
+  {% if pipe_derived_labour %}
+  <div class="cost-card" style="margin-bottom:.75rem;border-left:3px solid #93c5fd;">
+    <div class="section-hdr">🔩 Pipe Machine Labour — Attribution Note</div>
+    <div style="font-size:.8rem;color:#374151;line-height:1.55;margin-bottom:.65rem;">
+      Report-22 (machine manpower allocation) has been verified across multiple
+      monthly workbooks for this segment.
+      <strong>All 9 pipe extrusion machines record zero man-hours</strong> —
+      pipe machine labour is not captured at the machine level anywhere in the
+      source.  Every recorded man-hour belongs to moulding machines and
+      moulding support departments.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:.5rem;margin-bottom:.6rem;">
+      <div class="kpi-box" style="border:1px dashed #93c5fd;">
+        <div class="kpi-lbl">Derived Pipe Labour <span style="font-size:.68rem;color:#6b7280;">(not measured)</span></div>
+        <div class="kpi-val" style="color:#1d4ed8;">₹{{ "{:,.0f}".format(pipe_derived_labour.total_rs) }}</div>
+        <div class="kpi-sub">Ideal rate ₹{{ "%.2f"|format(pipe_derived_labour.rate_per_kg) }}/kg × {{ "{:,.0f}".format(pipe_derived_labour.pipe_kg) }} kg</div>
+      </div>
+      <div class="kpi-box" style="background:#f8fafc;">
+        <div class="kpi-lbl">Pipe Machines (9)</div>
+        <div class="kpi-val" style="color:#6b7280;font-size:.85rem;font-style:italic;">Not captured</div>
+        <div class="kpi-sub">Report-22 rows are empty across all verified months</div>
+      </div>
+      <div class="kpi-box" style="background:#f8fafc;">
+        <div class="kpi-lbl">Moulding Machines</div>
+        <div class="kpi-val" style="color:#374151;font-size:.85rem;">Per-machine (from Report-22)</div>
+        <div class="kpi-sub">Requires monthly workbook read (separate step)</div>
+      </div>
+    </div>
+    <div style="font-size:.74rem;color:#6b7280;background:#f1f5f9;padding:.4rem .6rem;border-radius:.35rem;">
+      ℹ️ Moulding labour in Report-22 is allocated per machine, not per mould or
+      fitting item, so it cannot be attributed to a specific fitting type (CPVC/UPVC/SWR/AGRI)
+      without a further allocation model.
+      The derived pipe figure above uses the ideal rate only and is shown for
+      reference — <strong>do not use it as a measured cost</strong>.
+    </div>
+  </div>
+  {% endif %}
+
   <!-- FY totals strip -->
   {% set tot = labour_view.totals %}
   {% if tot %}

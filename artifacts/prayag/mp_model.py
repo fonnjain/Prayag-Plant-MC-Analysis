@@ -393,6 +393,7 @@ CREATE TABLE IF NOT EXISTS mp_wastage_meta (
 _MIGRATIONS = """
 ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS fitting_demand       JSONB;
 ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS uploaded_file_path   TEXT NOT NULL DEFAULT '';
+ALTER TABLE mp_plan_run ADD COLUMN IF NOT EXISTS rej_basis_formula    TEXT NOT NULL DEFAULT 'gross';
 ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS shifts_per_day       INT     NOT NULL DEFAULT 2;
 ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS hours_per_shift      NUMERIC NOT NULL DEFAULT 10;
 ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS working_days_month   INT     NOT NULL DEFAULT 25;
