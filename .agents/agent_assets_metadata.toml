@@ -96,3 +96,15 @@ id = "3X4OgjVmy6LhIx4ccmbhd"
 uri = "file://Prayag_Production_Analytics_Walkthrough.docx"
 type = "word_document"
 title = "Prayag Production Analytics — Complete Walkthrough"
+
+[[outputs]]
+id = "wpYRBDsCZypkByBbSScB2"
+uri = "file://Prayag_Architecture_and_Database.xlsx"
+type = "table"
+title = "Prayag Architecture & Database Schema"
+
+[[outputs]]
+id = "FAVgdtswjnx8hNv4xyHLI"
+uri = "file://Prayag_Logic_and_Formulas.md"
+type = "text"
+title = "Prayag Logic & Formulas Reference"
