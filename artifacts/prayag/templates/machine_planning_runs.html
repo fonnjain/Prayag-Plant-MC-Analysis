@@ -62,7 +62,12 @@
               View
             </a>
             {% else %}
-            <span style="font-size:.73rem;color:#9ca3af;">pending</span>
+            {# pending = never frozen; show a View link so the user can re-run & freeze #}
+            <a href="{{ url_for('mp_run_detail', run_id=run.id) }}"
+               style="font-size:.75rem;color:#92400e;text-decoration:none;
+                      border:1px solid #fde68a;border-radius:.3rem;padding:.15rem .4rem;">
+              View ›
+            </a>
             {% endif %}
           </td>
         </tr>

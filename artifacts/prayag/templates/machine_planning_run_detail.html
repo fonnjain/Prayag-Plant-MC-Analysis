@@ -5,16 +5,22 @@
   {# ── Header ────────────────────────────────────────────────────────────── #}
   <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
     <h2 style="font-size:1.05rem;font-weight:800;color:var(--navy);margin:0;">
-      Frozen Run #{{ run_id }}
+      {% if run_status == 'pending' %}Pending{% elif run_status == 'finalized' %}Finalized{% else %}Frozen{% endif %} Run #{{ run_id }}
     </h2>
     {% if result %}
     <span style="font-size:.75rem;color:#6b7280;background:#f3f4f6;
                  border-radius:99px;padding:.15rem .6rem;">
       {{ result.effective_month }} · {{ result.segment }}
     </span>
+    {% elif run_row.month %}
+    <span style="font-size:.75rem;color:#6b7280;background:#f3f4f6;
+                 border-radius:99px;padding:.15rem .6rem;">
+      {{ run_row.month }}{% if run_row.segment %} · {{ run_row.segment }}{% endif %}
+    </span>
     {% endif %}
     <span style="font-size:.72rem;border-radius:99px;padding:.15rem .55rem;
                  {% if run_status=='finalized' %}background:#d1fae5;color:#065f46;
+                 {% elif run_status=='pending' %}background:#fef9c3;color:#854d0e;
                  {% else %}background:#fef3c7;color:#92400e;{% endif %}">
       {{ run_status }}
     </span>
@@ -40,6 +46,50 @@
     <span style="font-size:.75rem;color:#065f46;font-weight:700;">✅ Finalized</span>
     {% endif %}
   </div>
+
+  {# ── Pending run — re-freeze prompt ────────────────────────────────────── #}
+  {% if run_status == 'pending' %}
+  <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:.6rem;
+              padding:.85rem 1rem;margin-bottom:1rem;">
+    {% if refreeze_error is defined and refreeze_error %}
+    <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:.4rem;
+                padding:.55rem .75rem;margin-bottom:.65rem;font-size:.78rem;color:#991b1b;">
+      ⚠️ {{ refreeze_error }}
+    </div>
+    {% endif %}
+    <div style="font-size:.84rem;font-weight:700;color:#92400e;margin-bottom:.3rem;">
+      ⏳ This run has not been frozen yet
+    </div>
+    <div style="font-size:.76rem;color:#78350f;line-height:1.5;margin-bottom:.65rem;">
+      The optimiser result was never saved — this usually happens when the browser
+      session expired before the Freeze button was clicked on the results page.
+      The original demand data is stored and the plan can be re-run and frozen now
+      without re-uploading the file.
+    </div>
+    {% set demand_count  = (run_row.uploaded_demand or []) | length %}
+    {% set fitting_count = (run_row.fitting_demand  or []) | length %}
+    {% if demand_count or fitting_count %}
+    <div style="font-size:.73rem;color:#92400e;margin-bottom:.55rem;">
+      Stored demand:
+      {% if demand_count %}{{ demand_count }} pipe item{{ 's' if demand_count != 1 else '' }}{% endif %}
+      {% if demand_count and fitting_count %} · {% endif %}
+      {% if fitting_count %}{{ fitting_count }} fitting item{{ 's' if fitting_count != 1 else '' }}{% endif %}
+    </div>
+    <form method="post" action="{{ url_for('mp_run_refreeze', run_id=run_id) }}" style="margin:0;">
+      <button type="submit"
+              style="background:var(--terra);color:#fff;border:none;border-radius:.4rem;
+                     padding:.35rem .8rem;font-size:.8rem;font-weight:700;cursor:pointer;">
+        ▶ Re-run &amp; Freeze
+      </button>
+    </form>
+    {% else %}
+    <div style="font-size:.76rem;color:#991b1b;">
+      No demand data found for this run.
+      <a href="{{ url_for('mp_upload') }}" style="color:var(--terra);">Upload a new demand file →</a>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {# ── Combined material summary ─────────────────────────────────────────── #}
   {% if combined_material_kg %}

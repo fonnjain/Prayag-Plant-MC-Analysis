@@ -6392,24 +6392,15 @@ def mp_report_download(report_id: str):
 # MP-4: Freeze / Finalize / Run history routes
 # ---------------------------------------------------------------------------
 
-@app.route("/machine-planning/freeze", methods=["POST"])
-def mp_freeze():
-    """Freeze the current session's plan run — writes frozen_inputs + results."""
-    run_id = session.get("mp2_run_id")
-    if not run_id:
-        return redirect(url_for("mp_upload"))
-    payload = _mp2_load_run(run_id)
-    if not payload:
-        return redirect(url_for("mp_upload"))
+def _do_freeze_run(run_id: int, result, fitting_result, month: str, segment: str) -> Optional[str]:
+    """Freeze a plan run: write results to DB, then persist plan lines.
 
-    result         = _mp2_result_from_session()
-    fitting_result = _mp3_fitting_result_from_session()
-
-    month   = payload.get("effective_month", "")
-    segment = payload.get("segment", _mp_seed.SEGMENT)
-
-    frozen_inputs     = _build_frozen_inputs(month, segment)
-    results_snapshot  = {
+    Returns None on success, or an error string to show to the user.
+    Persisting plan lines is non-fatal (the run IS frozen even if that step
+    fails — follow-up tracking may be incomplete but the run is saved).
+    """
+    frozen_inputs = _build_frozen_inputs(month, segment)
+    results_snapshot = {
         "pipe":    dataclasses.asdict(result)         if result         else None,
         "fitting": dataclasses.asdict(fitting_result) if fitting_result else None,
     }
@@ -6418,16 +6409,19 @@ def mp_freeze():
         from mp_model import update_plan_run_freeze
         update_plan_run_freeze(int(run_id), frozen_inputs, results_snapshot)
     except Exception as exc:
-        app.logger.error("mp_freeze: %s", exc)
+        app.logger.error("_do_freeze_run DB: %s", exc)
+        return f"Could not save the frozen plan (database error: {exc}). Please try again."
 
-    # Persist plan lines from the scheduler result for follow-up tracking
+    # Persist plan lines for follow-up tracking (non-fatal)
     try:
         import mp_followup as _mp_followup
-        import mp_scheduler as _mp_scheduler
-        import mp_model as _mpm_local
-        demand_dicts   = payload.get("demand") or []
-        fitting_dicts  = payload.get("fitting_demand") or []
-        sched_items    = (result.items if result else [])
+        demand_dicts  = []
+        fitting_dicts = []
+        payload = _mp2_load_run(str(run_id))
+        if payload:
+            demand_dicts  = payload.get("demand") or []
+            fitting_dicts = payload.get("fitting_demand") or []
+        sched_items = (result.items if result else [])
         try:
             _freeze_dt = _mp_model.get_downtime_affecting_month(segment, month)
         except Exception:
@@ -6442,10 +6436,49 @@ def mp_freeze():
         plan_lines = _mp_followup.build_plan_lines_from_schedule(
             sched, result, int(run_id), segment, month,
         )
-        _mpm_local.insert_plan_lines(plan_lines)
-        app.logger.info("mp_freeze: persisted %d plan lines for run #%s", len(plan_lines), run_id)
+        _mp_model.insert_plan_lines(plan_lines)
+        app.logger.info("_do_freeze_run: persisted %d plan lines for run #%d", len(plan_lines), run_id)
     except Exception as exc:
-        app.logger.warning("mp_freeze plan_lines (non-fatal): %s", exc)
+        app.logger.warning("_do_freeze_run plan_lines (non-fatal): %s", exc)
+
+    return None   # success
+
+
+@app.route("/machine-planning/freeze", methods=["POST"])
+def mp_freeze():
+    """Freeze the current session's plan run — writes frozen_inputs + results."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return redirect(url_for("mp_upload"))
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return redirect(url_for("mp_upload"))
+
+    result         = _mp2_result_from_session()
+    fitting_result = _mp3_fitting_result_from_session()
+
+    if result is None and fitting_result is None:
+        # Engine returned nothing — session may have expired or engine failed.
+        return render_template(
+            "machine_planning_runs.html",
+            runs=_mp_model.list_plan_runs(_mp_seed.SEGMENT, limit=40) if _mp_model.AVAILABLE else [],
+            error=(
+                "Plan could not be frozen: the optimiser returned no results. "
+                "This usually means the browser session expired before you clicked Freeze. "
+                "Find your run in the list below and click 'View ›' to re-run and freeze it."
+            ),
+        )
+
+    month   = payload.get("effective_month", "")
+    segment = payload.get("segment", _mp_seed.SEGMENT)
+
+    err = _do_freeze_run(int(run_id), result, fitting_result, month, segment)
+    if err:
+        return render_template(
+            "machine_planning_runs.html",
+            runs=_mp_model.list_plan_runs(_mp_seed.SEGMENT, limit=40) if _mp_model.AVAILABLE else [],
+            error=err,
+        )
 
     return redirect(url_for("mp_run_list"))
 
@@ -6464,17 +6497,29 @@ def mp_run_list():
 
 @app.route("/machine-planning/runs/<int:run_id>")
 def mp_run_detail(run_id: int):
-    """View a frozen plan run read-only."""
+    """View a frozen plan run read-only (or prompt to re-freeze a pending run)."""
     from mp_model import get_plan_run_by_id
     row = get_plan_run_by_id(run_id)
     if not row:
         abort(404)
     if not row.get("results"):
+        # Pending run — show a re-freeze prompt rather than an error redirect.
+        _empty = dict(
+            result=None, fitting_result=None,
+            baseline_by_mc={}, opt_peak_hrs=0, opt_peak_pct=0,
+            base_peak_hrs=0, base_peak_pct=0, n_estimated=0,
+            groups=_mp_engine.REPORT_11_GROUPS,
+            fit_baseline_by_mc={}, fit_opt_peak_hrs=0, fit_opt_peak_pct=0,
+            fit_base_peak_hrs=0, fit_base_peak_pct=0, fit_n_estimated=0,
+            combined_material_kg=0, combined_fresh_kg=0, combined_pulv_kg=0,
+        )
         return render_template(
-            "machine_planning_runs.html",
-            runs=[],
-            error=f"Run #{run_id} has not been frozen yet (status: {row.get('status','?')}). "
-                  "Upload and freeze a run first.",
+            "machine_planning_run_detail.html",
+            run_row=row,
+            run_id=run_id,
+            run_status=row.get("status", "pending"),
+            frozen=False,
+            **_empty,
         )
     vars_ = _reconstruct_display_vars(row)
     return render_template(
@@ -6485,6 +6530,115 @@ def mp_run_detail(run_id: int):
         frozen=True,
         **vars_,
     )
+
+
+@app.route("/machine-planning/runs/<int:run_id>/refreeze", methods=["POST"])
+def mp_run_refreeze(run_id: int):
+    """Re-run the optimiser from stored demand and freeze the run.
+
+    Handles the three pending runs that were never frozen (session expired
+    before the user clicked Freeze on the results page).  The demand data is
+    still in the DB, so we can reconstruct the full optimiser result without
+    asking the user to re-upload.
+    """
+    from mp_model import get_plan_run_by_id
+    row = get_plan_run_by_id(run_id)
+    if not row:
+        abort(404)
+    if row.get("status") == "finalized":
+        return redirect(url_for("mp_run_detail", run_id=run_id))
+
+    demand_dicts  = row.get("uploaded_demand") or []
+    fitting_dicts = row.get("fitting_demand")  or []
+    month   = row["month"]
+    segment = row.get("segment", _mp_seed.SEGMENT)
+
+    if not demand_dicts and not fitting_dicts:
+        return render_template(
+            "machine_planning_runs.html",
+            runs=_mp_model.list_plan_runs(_mp_seed.SEGMENT, limit=40) if _mp_model.AVAILABLE else [],
+            error=(
+                f"Run #{run_id} has no stored demand data and cannot be re-run. "
+                "Please upload a new demand file."
+            ),
+        )
+
+    # Re-run both engines from stored demand
+    result         = None
+    fitting_result = None
+    try:
+        rej_lookup, wastage_lookup = _build_plan_lookups(segment, month)
+        if demand_dicts:
+            demand = [_mp_engine.DemandItem(**d) for d in demand_dicts]
+            result = _mp_engine.run_engine(
+                demand, month, segment,
+                rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
+            )
+        if fitting_dicts:
+            fitting_demand = [_mp_engine.FittingDemandItem(**d) for d in fitting_dicts]
+            fitting_result = _mp_engine.run_fitting_engine(
+                fitting_demand, month, segment,
+                rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
+            )
+    except Exception as exc:
+        app.logger.error("mp_run_refreeze engine run_id=%d: %s", run_id, exc)
+        return render_template(
+            "machine_planning_run_detail.html",
+            run_row=row, run_id=run_id,
+            run_status=row.get("status", "pending"), frozen=False,
+            refreeze_error=f"Optimiser failed: {exc}. Check that seed data is configured for {month}.",
+            result=None, fitting_result=None,
+            baseline_by_mc={}, opt_peak_hrs=0, opt_peak_pct=0,
+            base_peak_hrs=0, base_peak_pct=0, n_estimated=0,
+            groups=_mp_engine.REPORT_11_GROUPS,
+            fit_baseline_by_mc={}, fit_opt_peak_hrs=0, fit_opt_peak_pct=0,
+            fit_base_peak_hrs=0, fit_base_peak_pct=0, fit_n_estimated=0,
+            combined_material_kg=0, combined_fresh_kg=0, combined_pulv_kg=0,
+        )
+
+    if result is None and fitting_result is None:
+        return render_template(
+            "machine_planning_run_detail.html",
+            run_row=row, run_id=run_id,
+            run_status=row.get("status", "pending"), frozen=False,
+            refreeze_error=(
+                "Optimiser returned no results. Verify that the demand file "
+                f"has valid items and that seed data is configured for {month}."
+            ),
+            result=None, fitting_result=None,
+            baseline_by_mc={}, opt_peak_hrs=0, opt_peak_pct=0,
+            base_peak_hrs=0, base_peak_pct=0, n_estimated=0,
+            groups=_mp_engine.REPORT_11_GROUPS,
+            fit_baseline_by_mc={}, fit_opt_peak_hrs=0, fit_opt_peak_pct=0,
+            fit_base_peak_hrs=0, fit_base_peak_pct=0, fit_n_estimated=0,
+            combined_material_kg=0, combined_fresh_kg=0, combined_pulv_kg=0,
+        )
+
+    # Populate run cache so _do_freeze_run can load demand for plan lines
+    _MP2_RUN_CACHE[str(run_id)] = {
+        "segment": segment,
+        "effective_month": month,
+        "demand":         demand_dicts,
+        "fitting_demand": fitting_dicts,
+    }
+
+    err = _do_freeze_run(run_id, result, fitting_result, month, segment)
+    if err:
+        return render_template(
+            "machine_planning_run_detail.html",
+            run_row=row, run_id=run_id,
+            run_status=row.get("status", "pending"), frozen=False,
+            refreeze_error=err,
+            result=None, fitting_result=None,
+            baseline_by_mc={}, opt_peak_hrs=0, opt_peak_pct=0,
+            base_peak_hrs=0, base_peak_pct=0, n_estimated=0,
+            groups=_mp_engine.REPORT_11_GROUPS,
+            fit_baseline_by_mc={}, fit_opt_peak_hrs=0, fit_opt_peak_pct=0,
+            fit_base_peak_hrs=0, fit_base_peak_pct=0, fit_n_estimated=0,
+            combined_material_kg=0, combined_fresh_kg=0, combined_pulv_kg=0,
+        )
+
+    return redirect(url_for("mp_run_detail", run_id=run_id))
 
 
 @app.route("/machine-planning/runs/<int:run_id>/finalize", methods=["POST"])
