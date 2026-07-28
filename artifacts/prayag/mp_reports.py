@@ -1375,6 +1375,12 @@ def consolidated_plan_bytes(
         ws7.cell(row=r7, column=1).value = "(not available)"
         r7 += 1
 
+    # ── Save and return ───────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FILE 1 — Revised Production Plan (rejection + waste shown per item)

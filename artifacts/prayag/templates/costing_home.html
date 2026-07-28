@@ -123,7 +123,15 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
     <div class="kpi-box">
       <div class="kpi-lbl">Total Production</div>
       <div class="kpi-val">{{ "{:,.0f}".format(summary.total_kg) }} kg</div>
+      <div class="kpi-sub" style="color:#6b7280">₹/kg basis</div>
     </div>
+    {% if summary.partial_prod_kg %}
+    <div class="kpi-box" style="border:1px solid #fbbf24;background:#fffbeb">
+      <div class="kpi-lbl" style="color:#92400e">⚠ Partial (no labour yet)</div>
+      <div class="kpi-val" style="color:#92400e">{{ "{:,.0f}".format(summary.partial_prod_kg) }} kg</div>
+      <div class="kpi-sub" style="color:#b45309">excluded from ₹/kg</div>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -341,6 +349,7 @@ table.cost-tbl tr.total-row { background:#f8fafc; font-weight:800; border-top:2p
       <div class="kpi-box">
         <div class="kpi-lbl">Total Production</div>
         <div class="kpi-val">{{ "{:,.0f}".format(tot.total_prod_kg or 0) }} kg</div>
+        {% if tot.partial_prod_kg %}<div class="kpi-sub" style="color:#92400e">incl. {{ "{:,.0f}".format(tot.partial_prod_kg) }} kg partial</div>{% endif %}
       </div>
     </div>
   </div>

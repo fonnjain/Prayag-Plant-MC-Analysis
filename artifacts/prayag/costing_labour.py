@@ -593,7 +593,14 @@ def load_r12_for_fy(
 # ── FY-level computations ──────────────────────────────────────────────────────
 
 def compute_fy_totals(monthly_rows: list) -> dict:
-    """Aggregate monthly rows into FY totals."""
+    """Aggregate monthly rows into FY totals.
+
+    Only months that carry paid-labour data (paid_hours > 0 or paid_wages > 0)
+    contribute to the cost-per-kg denominator.  Months that have production kg
+    but no labour entry yet (e.g. a fitting R12 feed before the payroll tab is
+    populated) are tracked separately as 'partial months' so they do not inflate
+    the denominator and produce a falsely-low Rs/kg figure.
+    """
     totals: dict = {
         "no_of_labour":         None,
         "contractor_labour":    None,
@@ -605,6 +612,11 @@ def compute_fy_totals(monthly_rows: list) -> dict:
         "fitting_prod_kg":      0.0,
         "total_prod_kg":        0.0,
         "n_months":             0,
+        # Labour-backed months only (used as Rs/kg denominator)
+        "labour_total_prod_kg": 0.0,
+        # Production-only months (no labour entry yet)
+        "partial_prod_kg":      0.0,
+        "partial_months":       [],
     }
     sum_fields = [
         "paid_hours", "actual_hours", "paid_wages", "contractor_wages",
@@ -624,6 +636,19 @@ def compute_fy_totals(monthly_rows: list) -> dict:
         if clc is not None:
             totals["contractor_labour"] = (totals["contractor_labour"] or 0) + float(clc)
 
+        # Track labour-backed vs partial-month production separately
+        has_labour = (
+            float(r.get("paid_hours") or 0) > 0
+            or float(r.get("paid_wages") or 0) > 0
+        )
+        row_prod_kg = float(r.get("total_prod_kg") or 0)
+        if has_labour:
+            totals["labour_total_prod_kg"] += row_prod_kg
+        elif row_prod_kg > 0:
+            totals["partial_prod_kg"] += row_prod_kg
+            label = r.get("month_label") or r.get("month") or "?"
+            totals["partial_months"].append(label)
+
     # Derive per-unit aggregates
     ph  = totals["paid_hours"]
     ah  = totals["actual_hours"]
@@ -633,8 +658,10 @@ def compute_fy_totals(monthly_rows: list) -> dict:
 
     totals["per_hour_cost_paid"]   = round(total_wages / ph, 4) if ph > 0 else None
     totals["per_hour_cost_actual"] = round(total_wages / ah, 4) if ah > 0 else None
-    tp = totals["total_prod_kg"]
-    totals["per_kg_labour_cost"]   = round(total_wages / tp, 4) if tp > 0 else None
+    # Use only labour-backed months for per-kg cost to avoid partial months
+    # inflating the denominator with production that has no matching wages.
+    labour_kg = totals["labour_total_prod_kg"]
+    totals["per_kg_labour_cost"] = round(total_wages / labour_kg, 4) if labour_kg > 0 else None
 
     return totals
 
@@ -649,14 +676,23 @@ def compute_ideal_comparison(
     Ideal Rs/kg = production-weighted average:
         (pipe_kg × pipe_rate + fitting_kg × fitting_rate) / total_kg
 
+    Only months with labour data (paid_hours > 0 or paid_wages > 0) are
+    included so that partial months (production but no payroll yet) do not
+    dilute the denominator and produce an incorrectly-low actual Rs/kg.
+
     Returns dict with actual, ideal (per kg), variance (Rs + %).
     """
-    total_pipe = sum(float(r.get("pipe_prod_kg") or 0) for r in monthly_rows)
-    total_fit  = sum(float(r.get("fitting_prod_kg") or 0) for r in monthly_rows)
+    labour_rows = [
+        r for r in monthly_rows
+        if float(r.get("paid_hours") or 0) > 0
+        or float(r.get("paid_wages") or 0) > 0
+    ]
+    total_pipe = sum(float(r.get("pipe_prod_kg") or 0) for r in labour_rows)
+    total_fit  = sum(float(r.get("fitting_prod_kg") or 0) for r in labour_rows)
     total_kg   = total_pipe + total_fit
     total_wages = sum(
         float(r.get("paid_wages") or 0) + float(r.get("contractor_wages") or 0)
-        for r in monthly_rows
+        for r in labour_rows
     )
 
     actual_per_kg = round(total_wages / total_kg, 4) if total_kg > 0 else None

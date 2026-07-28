@@ -302,13 +302,24 @@ def combined_cost_summary(
     """Build the top-of-page summary: RM + Labour totals, cost per kg.
 
     Uses actual RM when available, planned RM as fallback.
+
+    Rs/kg is computed using only *labour-backed* months (months where paid
+    hours or wages are present).  Production from partial months (e.g. a
+    fittings R12 feed before the payroll tab is populated) is exposed as
+    ``partial_prod_kg`` so the template can display it separately.  This
+    prevents partial months from inflating the denominator and producing an
+    artificially-low cost-per-kg figure.
     """
     rm_cost   = (actual_rm.get("total_cost_rs") if actual_rm.get("loaded")
                  else planned_rm.get("total_cost_rs"))
     lab_cost  = labour_totals.get("paid_wages", 0) + labour_totals.get("contractor_wages", 0)
-    total_kg  = labour_totals.get("total_prod_kg") or 0
+    # Labour-backed production only (excludes partial months)
+    total_kg  = (labour_totals.get("labour_total_prod_kg")
+                 or labour_totals.get("total_prod_kg") or 0)
     pipe_kg   = labour_totals.get("pipe_prod_kg")  or 0
     fit_kg    = labour_totals.get("fitting_prod_kg") or 0
+    partial_kg = labour_totals.get("partial_prod_kg") or 0
+    full_kg    = (labour_totals.get("total_prod_kg") or 0)
 
     rm_per_kg  = round(rm_cost  / total_kg, 4) if rm_cost  and total_kg else None
     lab_per_kg = round(lab_cost / total_kg, 4) if lab_cost and total_kg else None
@@ -324,7 +335,11 @@ def combined_cost_summary(
         "rm_per_kg":        rm_per_kg,
         "labour_per_kg":    lab_per_kg,
         "combined_per_kg":  combined_per_kg,
+        # total_kg = labour-backed months only (denominator for Rs/kg)
         "total_kg":         round(total_kg, 0),
         "pipe_kg":          round(pipe_kg, 0),
         "fitting_kg":       round(fit_kg, 0),
+        # extra display fields
+        "partial_prod_kg":  round(partial_kg, 0),
+        "full_total_kg":    round(full_kg, 0),
     }

@@ -53,9 +53,9 @@ class TestMpDataView:
         assert b"PTMT" in r.data
 
     def test_root_route_not_mp(self, client):
-        """The '/' URL rule must map to 'overview', not to 'mp_data_view'."""
+        """The '/' URL rule must map to 'hub', not to 'mp_data_view'."""
         url_map = {rule.rule: rule.endpoint for rule in flask_app.app.url_map.iter_rules()}
-        assert url_map.get("/") == "overview"
+        assert url_map.get("/") == "hub"
         assert url_map.get("/") != "mp_data_view"
 
     def test_data_route_not_mp(self, client):

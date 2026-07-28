@@ -113,7 +113,7 @@ class TestRateFallback:
         ph = [_ph_row("A1", 45.0)]
         rt = [_route_row("A1", "M/C-1", "CPVC")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        rate, est = _get_rate("A1", "CPVC", ph_dict, mat_avg, overall)
+        rate, est, _tier = _get_rate("A1", "CPVC", ph_dict, mat_avg, overall)
         assert rate == 45.0
         assert est is False
 
@@ -124,7 +124,7 @@ class TestRateFallback:
               _route_row("S1", "M/C-3", "SWR")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
         # S1 has no per-hour entry; same material SWR has no entries either
-        rate, est = _get_rate("S1", "SWR", ph_dict, mat_avg, overall)
+        rate, est, _tier = _get_rate("S1", "SWR", ph_dict, mat_avg, overall)
         assert est is True
         # Falls back to overall avg = (40+60)/2 = 50
         assert abs(rate - 50.0) < 1e-6
@@ -135,7 +135,7 @@ class TestRateFallback:
               _route_row("U1", "M/C-2", "UPVC"),
               _route_row("AG1", "M/C-4", "AGRI")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        rate, est = _get_rate("AG1", "AGRI", ph_dict, mat_avg, overall)
+        rate, est, _tier = _get_rate("AG1", "AGRI", ph_dict, mat_avg, overall)
         assert est is True
         assert abs(rate - 40.0) < 1e-6   # (30+50)/2
 
@@ -147,7 +147,7 @@ class TestRateFallback:
               _route_row("C3", "M/C-1", "CPVC")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
         # C3 has no ph entry but is CPVC; CPVC avg = (40+60)/2 = 50
-        rate, est = _get_rate("C3", "CPVC", ph_dict, mat_avg, overall)
+        rate, est, _tier = _get_rate("C3", "CPVC", ph_dict, mat_avg, overall)
         assert est is True
         assert abs(rate - 50.0) < 1e-6
 
@@ -157,7 +157,7 @@ class TestRateFallback:
               _route_row("PW11", "M/C-1", "UPVC"),
               _route_row("SW20", "M/C-3", "SWR")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        _, est = _get_rate("SW20", "SWR", ph_dict, mat_avg, overall)
+        _, est, _tier = _get_rate("SW20", "SWR", ph_dict, mat_avg, overall)
         assert est is True
 
 

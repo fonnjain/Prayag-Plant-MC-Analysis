@@ -67,10 +67,13 @@ class TestBuildRejectionLookup:
 
         assert lu["has_data"] is True
         assert "PIPE:CPVC" in lu["material"]
-        assert abs(lu["material"]["PIPE:CPVC"] - 0.12) < 1e-9
-        assert abs(lu["material"]["PIPE:UPVC"] - 0.10) < 1e-9
-        # overall = (120+200)/(1000+2000) = 320/3000 ≈ 0.1067
-        assert abs(lu["overall"]["PIPE"] - 320 / 3000) < 1e-6
+        # Rates are GROSS-basis: rej / (prod + rej) — matches Prayag convention
+        # CPVC: 120 / (1000 + 120) = 120/1120 ≈ 0.10714
+        assert abs(lu["material"]["PIPE:CPVC"] - 120 / 1120) < 1e-9
+        # UPVC: 200 / (2000 + 200) = 200/2200 ≈ 0.09091
+        assert abs(lu["material"]["PIPE:UPVC"] - 200 / 2200) < 1e-9
+        # overall PIPE: (120+200) / ((1000+120) + (2000+200)) = 320/3320 ≈ 0.09639
+        assert abs(lu["overall"]["PIPE"] - 320 / 3320) < 1e-6
 
     def test_rate_capped_at_rej_cap(self):
         """99% rejection is implausible — should be capped at REJ_CAP."""
