@@ -2395,3 +2395,285 @@ class TestAutoSourceReconciliation:
             errors_list.extend(e)
         assert len(errors_list) == 1
         assert "APR" in errors_list[0]
+
+
+# ---------------------------------------------------------------------------
+# Partial-month regression guard
+#
+# These three test classes together pin the bug-fix that prevents partial
+# months (production kg present but no payroll yet) from inflating the
+# denominator and producing a falsely-low ₹/kg figure.
+#
+# Scenario used throughout:
+#   APR — full labour month: 200 t pipe, 100 t fittings, Rs 18 L wages
+#   MAY — full labour month: 210 t pipe, 110 t fittings, Rs 19 L wages
+#   JUN — PARTIAL month:      50 t pipe,  30 t fittings,  NO wages/hours
+#
+# Labour-backed kg  = 300,000 + 320,000 = 620,000 kg  ← correct denominator
+# Inflated total kg = 620,000 + 80,000  = 700,000 kg  ← wrong denominator
+# ---------------------------------------------------------------------------
+
+def _partial_month_rows():
+    """Three-month test fixture: two full + one partial (no payroll)."""
+    return [
+        {
+            "month_label": "APR", "month_num": 1,
+            "paid_hours":  30_000, "actual_hours": 26_500,
+            "paid_wages":  1_800_000, "contractor_wages": 0,
+            "pipe_prod_kg": 200_000, "fitting_prod_kg": 100_000, "total_prod_kg": 300_000,
+        },
+        {
+            "month_label": "MAY", "month_num": 2,
+            "paid_hours":  33_000, "actual_hours": 29_000,
+            "paid_wages":  1_900_000, "contractor_wages": 0,
+            "pipe_prod_kg": 210_000, "fitting_prod_kg": 110_000, "total_prod_kg": 320_000,
+        },
+        {
+            # JUN: production recorded (e.g. from R12 fittings feed) but payroll
+            # not yet entered — this is the "partial month" case.
+            "month_label": "JUN", "month_num": 3,
+            "paid_hours":  0, "actual_hours": 0,
+            "paid_wages":  0, "contractor_wages": 0,
+            "pipe_prod_kg": 50_000, "fitting_prod_kg": 30_000, "total_prod_kg": 80_000,
+        },
+    ]
+
+_LABOUR_BACKED_KG  = 620_000   # APR + MAY only
+_PARTIAL_KG        = 80_000    # JUN only
+_INFLATED_TOTAL_KG = 700_000   # naive sum — wrong denominator
+_TOTAL_WAGES       = 1_800_000 + 1_900_000   # 3_700_000
+
+
+class TestFYTotalsPartialMonth:
+    """compute_fy_totals must separate partial months from the ₹/kg denominator."""
+
+    def _tot(self):
+        cl = _import_labour()
+        return cl.compute_fy_totals(_partial_month_rows())
+
+    # ── Denominator separation ────────────────────────────────────────────
+
+    def test_labour_total_prod_kg_excludes_partial(self):
+        """labour_total_prod_kg must not include the partial month's production."""
+        tot = self._tot()
+        assert tot["labour_total_prod_kg"] == pytest.approx(_LABOUR_BACKED_KG, rel=1e-6)
+
+    def test_partial_prod_kg_equals_partial_month(self):
+        """partial_prod_kg must capture exactly the partial month's kg."""
+        tot = self._tot()
+        assert tot["partial_prod_kg"] == pytest.approx(_PARTIAL_KG, rel=1e-6)
+
+    def test_total_prod_kg_includes_all_months(self):
+        """total_prod_kg is the naive sum (all months, used only for display)."""
+        tot = self._tot()
+        assert tot["total_prod_kg"] == pytest.approx(_INFLATED_TOTAL_KG, rel=1e-6)
+
+    def test_partial_months_list_contains_jun(self):
+        """partial_months should name the month label(s) that were partial."""
+        tot = self._tot()
+        assert "JUN" in tot["partial_months"]
+
+    def test_partial_months_list_length(self):
+        """Only the one partial month should appear in the list."""
+        tot = self._tot()
+        assert len(tot["partial_months"]) == 1
+
+    # ── Per-kg cost uses labour-backed denominator ────────────────────────
+
+    def test_per_kg_uses_labour_denominator_not_inflated(self):
+        """per_kg_labour_cost must be wages / labour_backed_kg, not wages / total_kg."""
+        tot = self._tot()
+        expected = _TOTAL_WAGES / _LABOUR_BACKED_KG
+        wrong    = _TOTAL_WAGES / _INFLATED_TOTAL_KG   # what the bug would produce
+        assert tot["per_kg_labour_cost"] == pytest.approx(expected, rel=1e-4)
+        # Confirm the wrong value is meaningfully different so the test has bite
+        assert abs(tot["per_kg_labour_cost"] - wrong) / wrong > 0.05
+
+    def test_per_kg_cost_value(self):
+        """Spot-check the exact arithmetic (result is rounded to 4 dp by the function)."""
+        tot = self._tot()
+        assert tot["per_kg_labour_cost"] == pytest.approx(
+            _TOTAL_WAGES / _LABOUR_BACKED_KG, rel=1e-4
+        )
+
+    # ── Other totals still sum all months ────────────────────────────────
+
+    def test_paid_wages_sums_all_months(self):
+        """paid_wages is a straight sum regardless of partial status."""
+        tot = self._tot()
+        assert tot["paid_wages"] == pytest.approx(_TOTAL_WAGES, rel=1e-6)
+
+    def test_paid_hours_sums_labour_months_only_in_practice(self):
+        """paid_hours sums to APR+MAY (JUN has 0, so total is still correct)."""
+        tot = self._tot()
+        assert tot["paid_hours"] == pytest.approx(30_000 + 33_000, rel=1e-6)
+
+
+class TestIdealComparisonPartialMonth:
+    """compute_ideal_comparison must exclude partial months from both sides."""
+
+    _PIPE_RATE    = 2.50
+    _FITTING_RATE = 6.50
+
+    def _cmp(self):
+        cl = _import_labour()
+        return cl.compute_ideal_comparison(
+            _partial_month_rows(), self._PIPE_RATE, self._FITTING_RATE
+        )
+
+    # ── Denominator uses only labour-backed months ────────────────────────
+
+    def test_actual_per_kg_uses_labour_backed_kg(self):
+        """actual_per_kg = total_wages / labour_backed_kg (JUN excluded)."""
+        cmp = self._cmp()
+        expected = _TOTAL_WAGES / _LABOUR_BACKED_KG
+        assert cmp["actual_per_kg"] == pytest.approx(expected, rel=1e-4)
+
+    def test_actual_per_kg_not_diluted_by_partial_month(self):
+        """actual_per_kg must differ from the naive (inflated) calculation."""
+        cmp = self._cmp()
+        naive = _TOTAL_WAGES / _INFLATED_TOTAL_KG
+        # Partial month dilutes the result — actual should be higher than naive
+        assert cmp["actual_per_kg"] > naive
+
+    # ── Ideal rate also uses only labour-backed months ────────────────────
+
+    def test_ideal_per_kg_uses_labour_backed_kg(self):
+        """ideal_per_kg weighted average uses only APR+MAY pipe/fitting split."""
+        cmp = self._cmp()
+        labour_pipe = 200_000 + 210_000   # APR + MAY only
+        labour_fit  = 100_000 + 110_000   # APR + MAY only
+        total       = labour_pipe + labour_fit
+        expected    = (labour_pipe * self._PIPE_RATE + labour_fit * self._FITTING_RATE) / total
+        assert cmp["ideal_per_kg"] == pytest.approx(expected, rel=1e-4)
+
+    def test_ideal_per_kg_not_diluted_by_partial_month(self):
+        """ideal_per_kg must differ from the naive (all-months) calculation."""
+        cmp = self._cmp()
+        all_pipe = 200_000 + 210_000 + 50_000   # includes JUN
+        all_fit  = 100_000 + 110_000 + 30_000   # includes JUN
+        all_kg   = all_pipe + all_fit
+        naive_ideal = (all_pipe * self._PIPE_RATE + all_fit * self._FITTING_RATE) / all_kg
+        assert cmp["ideal_per_kg"] != pytest.approx(naive_ideal, rel=1e-4)
+
+    # ── Variance is still meaningful ─────────────────────────────────────
+
+    def test_variance_pct_not_none(self):
+        cmp = self._cmp()
+        assert cmp["variance_pct"] is not None
+
+    def test_variance_rs_not_none(self):
+        cmp = self._cmp()
+        assert cmp["variance_rs"] is not None
+
+    def test_empty_rows_still_returns_none_values(self):
+        """Regression: empty input must not crash."""
+        cl = _import_labour()
+        cmp = cl.compute_ideal_comparison([], self._PIPE_RATE, self._FITTING_RATE)
+        assert cmp["actual_per_kg"] is None
+        assert cmp["ideal_per_kg"]  is None
+
+    def test_all_partial_rows_returns_none_actual(self):
+        """When every row is partial (no payroll), actual_per_kg must be None."""
+        cl = _import_labour()
+        # Two months with production but zero wages/hours
+        rows = [
+            {"month_label": "APR", "paid_hours": 0, "paid_wages": 0,
+             "contractor_wages": 0, "pipe_prod_kg": 100_000,
+             "fitting_prod_kg": 50_000, "total_prod_kg": 150_000},
+            {"month_label": "MAY", "paid_hours": 0, "paid_wages": 0,
+             "contractor_wages": 0, "pipe_prod_kg": 110_000,
+             "fitting_prod_kg": 55_000, "total_prod_kg": 165_000},
+        ]
+        cmp = cl.compute_ideal_comparison(rows, self._PIPE_RATE, self._FITTING_RATE)
+        assert cmp["actual_per_kg"] is None
+        assert cmp["ideal_per_kg"]  is None
+
+
+class TestCombinedCostSummaryPartialMonth:
+    """combined_cost_summary must use labour_total_prod_kg as the ₹/kg denominator."""
+
+    # Build a labour_totals dict that mirrors what compute_fy_totals returns
+    # for the _partial_month_rows() scenario.
+    _LABOUR_TOTALS = {
+        "paid_wages":           1_800_000 + 1_900_000,   # 3_700_000
+        "contractor_wages":     0,
+        "pipe_prod_kg":         200_000 + 210_000 + 50_000,    # all months
+        "fitting_prod_kg":      100_000 + 110_000 + 30_000,    # all months
+        "total_prod_kg":        _INFLATED_TOTAL_KG,            # 700_000 (naive)
+        "labour_total_prod_kg": _LABOUR_BACKED_KG,             # 620_000 (correct)
+        "partial_prod_kg":      _PARTIAL_KG,                   # 80_000
+    }
+
+    def _summary(self, rm_cost=None):
+        crm = _import_rm()
+        planned_rm = {"total_cost_rs": rm_cost, "loaded": True} if rm_cost else {"loaded": False}
+        actual_rm  = {"loaded": False}
+        return crm.combined_cost_summary(self._LABOUR_TOTALS, planned_rm, actual_rm)
+
+    # ── total_kg is the labour-backed figure ─────────────────────────────
+
+    def test_total_kg_uses_labour_backed_not_inflated(self):
+        """total_kg in the summary must equal labour_total_prod_kg, not total_prod_kg."""
+        s = self._summary()
+        assert s["total_kg"] == pytest.approx(_LABOUR_BACKED_KG, abs=1)
+
+    def test_total_kg_not_inflated_by_partial_month(self):
+        """total_kg must not equal the naive sum that includes partial-month production."""
+        s = self._summary()
+        assert s["total_kg"] != pytest.approx(_INFLATED_TOTAL_KG, abs=1)
+
+    # ── ₹/kg derived from the correct denominator ────────────────────────
+
+    def test_labour_per_kg_uses_labour_backed_denominator(self):
+        """labour_per_kg = total_wages / labour_backed_kg."""
+        s = self._summary()
+        expected = _TOTAL_WAGES / _LABOUR_BACKED_KG
+        assert s["labour_per_kg"] == pytest.approx(expected, rel=1e-4)
+
+    def test_rm_per_kg_uses_labour_backed_denominator(self):
+        """rm_per_kg must also divide by labour_backed_kg, not inflated total."""
+        rm_cost = 5_000_000
+        s = self._summary(rm_cost=rm_cost)
+        expected = rm_cost / _LABOUR_BACKED_KG
+        wrong    = rm_cost / _INFLATED_TOTAL_KG
+        assert s["rm_per_kg"] == pytest.approx(expected, rel=1e-4)
+        assert abs(s["rm_per_kg"] - wrong) / wrong > 0.05   # must differ meaningfully
+
+    def test_combined_per_kg_consistent_with_rm_and_labour(self):
+        """combined_per_kg = rm_per_kg + labour_per_kg."""
+        rm_cost = 5_000_000
+        s = self._summary(rm_cost=rm_cost)
+        assert s["combined_per_kg"] == pytest.approx(
+            s["rm_per_kg"] + s["labour_per_kg"], rel=1e-6
+        )
+
+    # ── Partial-month fields are preserved for display ────────────────────
+
+    def test_partial_prod_kg_passed_through(self):
+        """partial_prod_kg must be surfaced so the template can warn about it."""
+        s = self._summary()
+        assert s["partial_prod_kg"] == pytest.approx(_PARTIAL_KG, abs=1)
+
+    def test_full_total_kg_is_naive_sum(self):
+        """full_total_kg = total_prod_kg from labour_totals (display only)."""
+        s = self._summary()
+        assert s["full_total_kg"] == pytest.approx(_INFLATED_TOTAL_KG, abs=1)
+
+    # ── Edge case: labour_total_prod_kg absent (falls back to total_prod_kg) ──
+
+    def test_fallback_to_total_prod_kg_when_labour_backed_absent(self):
+        """If labour_total_prod_kg is missing (old dict), fall back to total_prod_kg."""
+        crm = _import_rm()
+        labour_totals_old = {
+            "paid_wages":       _TOTAL_WAGES,
+            "contractor_wages": 0,
+            "total_prod_kg":    _LABOUR_BACKED_KG,   # old dict has only total_prod_kg
+            # labour_total_prod_kg intentionally absent
+        }
+        s = crm.combined_cost_summary(labour_totals_old, {"loaded": False}, {"loaded": False})
+        # Falls back to total_prod_kg — no crash, meaningful result
+        assert s["total_kg"] == pytest.approx(_LABOUR_BACKED_KG, abs=1)
+        assert s["labour_per_kg"] == pytest.approx(
+            _TOTAL_WAGES / _LABOUR_BACKED_KG, rel=1e-4
+        )
