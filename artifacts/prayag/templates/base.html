@@ -43,6 +43,48 @@
     /* Smooth transitions */
     * { -webkit-tap-highlight-color: transparent; }
     select, input { font-size: 16px; } /* prevent zoom on iOS */
+
+    /* ===== LEFT DRAWER NAV ===== */
+    #nav-overlay {
+      display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+      z-index:500; transition:opacity .22s ease; opacity:0;
+    }
+    #nav-overlay.nav-open { display:block; opacity:1; }
+    #nav-drawer {
+      position:fixed; top:0; left:-292px; width:280px; height:100%;
+      overflow-y:auto; background:#fff; z-index:501;
+      transition:left .25s cubic-bezier(.32,.72,0,1);
+      box-shadow:4px 0 28px rgba(0,0,0,.18);
+      display:flex; flex-direction:column;
+    }
+    #nav-drawer.nav-open { left:0; }
+    .nd-head {
+      background:var(--navy); padding:.85rem 1rem .75rem;
+      display:flex; align-items:center; justify-content:space-between;
+      flex-shrink:0; position:sticky; top:0; z-index:1;
+    }
+    .nd-body { flex:1; padding:.35rem 0 2rem; }
+    .nd-group {
+      font-size:.65rem; font-weight:800; letter-spacing:.08em;
+      color:#9ca3af; padding:.85rem 1rem .3rem;
+      text-transform:uppercase;
+    }
+    .nd-item {
+      display:flex; align-items:center; gap:.6rem;
+      padding:.52rem 1rem .52rem 1.15rem;
+      font-size:.8rem; font-weight:500; color:#374151;
+      text-decoration:none; border-left:3px solid transparent;
+      transition:background .12s, color .12s;
+    }
+    .nd-item:hover { background:#f8fafc; color:var(--navy); }
+    .nd-item.nd-active {
+      background:#eef2ff; color:var(--navy); font-weight:700;
+      border-left-color:var(--terra);
+    }
+    .nd-item.nd-sub { padding-left:1.6rem; font-size:.77rem; }
+    .nd-item.nd-top { font-size:.85rem; font-weight:700; padding-left:1rem; }
+    .nd-divider { border:0; border-top:1px solid #f3f4f6; margin:.25rem 0; }
+    .nd-icon { width:1rem; text-align:center; flex-shrink:0; font-size:.85rem; }
     /* Info (i) affordance for metric tooltips */
     .info-btn { display:inline-flex; align-items:center; justify-content:center;
       vertical-align:middle; padding:2px; margin-left:1px; border:0; background:none;
@@ -124,11 +166,192 @@
   </div>
 </div>
 
+<!-- ===== LEFT DRAWER OVERLAY ===== -->
+<div id="nav-overlay" onclick="navClose()"></div>
+
+<!-- ===== LEFT DRAWER NAV ===== -->
+{% set _p = request.path %}
+{% set _q = request.query_string.decode() %}
+<nav id="nav-drawer" role="navigation" aria-label="Full navigation">
+
+  <div class="nd-head">
+    <div style="color:#fff;font-weight:800;font-size:.88rem;display:flex;align-items:center;gap:.5rem;">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+        <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+      </svg>
+      All Pages
+    </div>
+    <button onclick="navClose()" aria-label="Close navigation"
+            style="background:rgba(255,255,255,.15);border:none;border-radius:.35rem;
+                   width:1.7rem;height:1.7rem;color:#fff;font-size:1rem;
+                   cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
+  </div>
+
+  <div class="nd-body">
+
+    {# ── Home ── #}
+    <a href="/" class="nd-item nd-top {{ 'nd-active' if _p == '/' else '' }}">
+      <span class="nd-icon">🏠</span> Home
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Machine Performance ── #}
+    <div class="nd-group">📊 Machine Performance</div>
+    <a href="/performance" class="nd-item nd-sub {{ 'nd-active' if _p == '/performance' else '' }}">
+      <span class="nd-icon">⚡</span> Overview
+    </a>
+    <a href="/plant" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/plant') else '' }}">
+      <span class="nd-icon">🏭</span> Plant View
+    </a>
+    <a href="/machine" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine') and not _p.startswith('/machine-planning') else '' }}">
+      <span class="nd-icon">⚙️</span> Machine View
+    </a>
+    <a href="/losses" class="nd-item nd-sub {{ 'nd-active' if _p == '/losses' else '' }}">
+      <span class="nd-icon">📉</span> Losses / Downtime
+    </a>
+    <a href="/reports" class="nd-item nd-sub {{ 'nd-active' if _p == '/reports' else '' }}">
+      <span class="nd-icon">📄</span> Reports
+    </a>
+    <a href="/management-reports" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/management-reports') else '' }}">
+      <span class="nd-icon">📋</span> Management Reports
+    </a>
+    <a href="/management-entries" class="nd-item nd-sub {{ 'nd-active' if _p == '/management-entries' else '' }}">
+      <span class="nd-icon">✏️</span> Management Entries
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Machine Planning ── #}
+    <div class="nd-group">⚙️ Machine Planning</div>
+    <a href="/machine-planning" class="nd-item nd-sub {{ 'nd-active' if _p == '/machine-planning' else '' }}">
+      <span class="nd-icon">🗂️</span> Planning Hub
+    </a>
+    <a href="/machine-planning/upload" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/upload') or _p.startswith('/machine-planning/results') else '' }}">
+      <span class="nd-icon">⬆️</span> Upload Release Plan
+    </a>
+    <a href="/machine-planning/data" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/data') else '' }}">
+      <span class="nd-icon">🗄️</span> Data Setup
+    </a>
+    <a href="/machine-planning/settings" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/settings') else '' }}">
+      <span class="nd-icon">🔧</span> Settings
+    </a>
+    <a href="/machine-planning/runs" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/runs') or _p.startswith('/machine-planning/report') or _p.startswith('/machine-planning/freeze') else '' }}">
+      <span class="nd-icon">📑</span> Plan Runs
+    </a>
+    <a href="/machine-planning/followup" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/followup') else '' }}">
+      <span class="nd-icon">📊</span> Follow-Up
+    </a>
+    <a href="/machine-planning/schedule" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/machine-planning/schedule') else '' }}">
+      <span class="nd-icon">📅</span> Schedule
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Costing ── #}
+    <div class="nd-group">💰 Costing</div>
+    <a href="/costing" class="nd-item nd-sub {{ 'nd-active' if _p == '/costing' and 'tab=labour' not in _q and 'tab=rm' not in _q else '' }}">
+      <span class="nd-icon">💰</span> Costing Overview
+    </a>
+    <a href="/costing/analysis" class="nd-item nd-sub {{ 'nd-active' if _p == '/costing/analysis' else '' }}">
+      <span class="nd-icon">📈</span> Costing Analysis
+    </a>
+    <a href="/costing?tab=labour" class="nd-item nd-sub {{ 'nd-active' if 'tab=labour' in _q or _p == '/labour' else '' }}">
+      <span class="nd-icon">👥</span> Labour Costing
+    </a>
+    <a href="/costing?tab=rm" class="nd-item nd-sub {{ 'nd-active' if 'tab=rm' in _q else '' }}">
+      <span class="nd-icon">🧱</span> Raw Materials
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Capacity Planning ── #}
+    <div class="nd-group">📋 Capacity Planning</div>
+    <a href="/planning" class="nd-item nd-sub {{ 'nd-active' if _p == '/planning' else '' }}">
+      <span class="nd-icon">🗓️</span> Planning
+    </a>
+    <a href="/planning/ptmt-capacity" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/planning/ptmt-capacity') else '' }}">
+      <span class="nd-icon">🔩</span> PTMT Capacity
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Operations Views ── #}
+    <div class="nd-group">🏭 Operations</div>
+    <a href="/materials" class="nd-item nd-sub {{ 'nd-active' if _p == '/materials' else '' }}">
+      <span class="nd-icon">🧱</span> Materials
+    </a>
+    <a href="/maintenance" class="nd-item nd-sub {{ 'nd-active' if _p == '/maintenance' else '' }}">
+      <span class="nd-icon">🔨</span> Maintenance
+    </a>
+    <a href="/manpower" class="nd-item nd-sub {{ 'nd-active' if _p == '/manpower' else '' }}">
+      <span class="nd-icon">👷</span> Manpower
+    </a>
+    <a href="/yield" class="nd-item nd-sub {{ 'nd-active' if _p == '/yield' else '' }}">
+      <span class="nd-icon">📐</span> Yield
+    </a>
+    <a href="/mixer" class="nd-item nd-sub {{ 'nd-active' if _p == '/mixer' else '' }}">
+      <span class="nd-icon">🌀</span> Mixer
+    </a>
+    <a href="/toolroom" class="nd-item nd-sub {{ 'nd-active' if _p == '/toolroom' else '' }}">
+      <span class="nd-icon">🛠️</span> Toolroom
+    </a>
+    <a href="/wastage" class="nd-item nd-sub {{ 'nd-active' if _p == '/wastage' else '' }}">
+      <span class="nd-icon">♻️</span> Wastage
+    </a>
+    <a href="/compound" class="nd-item nd-sub {{ 'nd-active' if _p == '/compound' else '' }}">
+      <span class="nd-icon">🧪</span> Compound
+    </a>
+    <a href="/labour" class="nd-item nd-sub {{ 'nd-active' if _p == '/labour' else '' }}">
+      <span class="nd-icon">👥</span> Labour View
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Data & Audit ── #}
+    <div class="nd-group">🔍 Data &amp; Audit</div>
+    <a href="/sources" class="nd-item nd-sub {{ 'nd-active' if _p == '/sources' else '' }}">
+      <span class="nd-icon">🗄️</span> Data Sources
+    </a>
+    <a href="/confirmation" class="nd-item nd-sub {{ 'nd-active' if _p == '/confirmation' else '' }}">
+      <span class="nd-icon">✅</span> Confirmation
+    </a>
+    <a href="/verify" class="nd-item nd-sub {{ 'nd-active' if _p == '/verify' else '' }}">
+      <span class="nd-icon">🔎</span> Verification
+    </a>
+    <a href="/data" class="nd-item nd-sub {{ 'nd-active' if _p == '/data' else '' }}">
+      <span class="nd-icon">❤️</span> Data Health
+    </a>
+    <a href="/manifest" class="nd-item nd-sub {{ 'nd-active' if _p == '/manifest' else '' }}">
+      <span class="nd-icon">📦</span> Ingestion Manifest
+    </a>
+    <a href="/input" class="nd-item nd-sub {{ 'nd-active' if _p == '/input' else '' }}">
+      <span class="nd-icon">🎯</span> Ideal Input
+    </a>
+    <a href="/segment-input" class="nd-item nd-sub {{ 'nd-active' if _p == '/segment-input' else '' }}">
+      <span class="nd-icon">✍️</span> Segment Input
+    </a>
+    <hr class="nd-divider">
+
+    {# ── Settings & Help ── #}
+    <div class="nd-group">⚙️ Settings &amp; Help</div>
+    <a href="/settings/api-key" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings') else '' }}">
+      <span class="nd-icon">🔑</span> API Key
+    </a>
+    <a href="/glossary" class="nd-item nd-sub {{ 'nd-active' if _p == '/glossary' else '' }}">
+      <span class="nd-icon">📖</span> Glossary
+    </a>
+
+  </div>{# /nd-body #}
+</nav>
+
 <!-- ===== STICKY HEADER ===== -->
 <header id="app-header" class="bg-navy fixed top-0 left-0 right-0 z-50 shadow-lg">
   <div class="max-w-2xl mx-auto px-3 pt-3 pb-2">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
+        <button onclick="navOpen()" aria-label="Open navigation"
+                style="background:rgba(255,255,255,.15);border:none;border-radius:.45rem;
+                       width:2rem;height:2rem;display:flex;align-items:center;justify-content:center;
+                       cursor:pointer;flex-shrink:0;padding:0;">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
         <div class="w-8 h-8 bg-terra rounded-lg flex items-center justify-center flex-shrink-0">
           <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2">
             <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
@@ -419,6 +642,26 @@
 <script>
 // Offset main content by the actual sticky-header height so the filter bar
 // is never clipped, regardless of how tall the header renders.
+// ---- Left drawer nav ----
+function navOpen() {
+  document.getElementById('nav-overlay').classList.add('nav-open');
+  document.getElementById('nav-drawer').classList.add('nav-open');
+  document.body.style.overflow = 'hidden';
+}
+function navClose() {
+  document.getElementById('nav-overlay').classList.remove('nav-open');
+  document.getElementById('nav-drawer').classList.remove('nav-open');
+  document.body.style.overflow = '';
+}
+// Close on Escape key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') navClose();
+});
+// Close drawer on nav link click (the page will navigate anyway)
+document.querySelectorAll('#nav-drawer a').forEach(function(a) {
+  a.addEventListener('click', navClose);
+});
+
 function syncHeaderOffset() {
   var header = document.getElementById('app-header');
   var main = document.querySelector('.main-content');
