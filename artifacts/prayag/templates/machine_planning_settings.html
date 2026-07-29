@@ -72,6 +72,20 @@
 
 {% if tab == 'plumbing' %}
 
+{# ── Roster note (shown when a month-fallback was used) ───────────────── #}
+{% if machine_roster_note %}
+<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:.4rem;padding:.45rem .75rem;margin-bottom:.75rem;font-size:.78rem;display:flex;align-items:center;gap:.5rem;">
+  <span style="font-size:1rem;flex-shrink:0;">ℹ️</span>
+  <span><strong>Machine roster:</strong> {{ machine_roster_note }}.
+    Showing {{ machine_roster_extrusion|length }} extrusion + {{ machine_roster_moulding|length }} moulding machines.</span>
+</div>
+{% elif not machine_roster_extrusion and not machine_roster_moulding %}
+<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.4rem;padding:.45rem .75rem;margin-bottom:.75rem;font-size:.78rem;display:flex;align-items:center;gap:.5rem;">
+  <span style="font-size:1rem;flex-shrink:0;">⚠️</span>
+  <span><strong>No machine roster found.</strong> Visit <a href="/machine-planning/data?tab=plumbing">Data page</a> and use ↺ Reset to seed the roster.</span>
+</div>
+{% endif %}
+
 {# ── Aggregate pipe_total and fitting_total ───────────────────────────── #}
 {% set ns = namespace(pipe_prod=0, pipe_rej=0, fit_prod=0, fit_rej=0) %}
 {% for r in rej_summary %}
@@ -320,9 +334,19 @@
       <label>Machine *</label>
       <select id="dt-mc-breakdown">
         <option value="">— select machine —</option>
-        {% for m in all_machine_names %}
-        <option value="{{ m }}">{{ m }}</option>
-        {% endfor %}
+        {% if machine_roster_extrusion %}
+        <optgroup label="Extrusion — Pipe ({{ machine_roster_extrusion|length }})">
+          {% for m in machine_roster_extrusion %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if machine_roster_moulding %}
+        <optgroup label="Moulding — Fitting ({{ machine_roster_moulding|length }})">
+          {% for m in machine_roster_moulding %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if not machine_roster_extrusion and not machine_roster_moulding %}
+        <option disabled>⚠ No roster — run Seed All on the Data page</option>
+        {% endif %}
       </select>
       <label>Start Date * <span style="font-size:.68rem;color:#6b7280;">(first day the machine was down)</span></label>
       <input type="date" id="dt-start-breakdown" value="{{ today_iso }}" max="{{ today_iso }}">
@@ -469,9 +493,19 @@
       <label>Machine *</label>
       <select id="dt-mc-maintenance">
         <option value="">— select machine —</option>
-        {% for m in all_machine_names %}
-        <option value="{{ m }}">{{ m }}</option>
-        {% endfor %}
+        {% if machine_roster_extrusion %}
+        <optgroup label="Extrusion — Pipe ({{ machine_roster_extrusion|length }})">
+          {% for m in machine_roster_extrusion %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if machine_roster_moulding %}
+        <optgroup label="Moulding — Fitting ({{ machine_roster_moulding|length }})">
+          {% for m in machine_roster_moulding %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if not machine_roster_extrusion and not machine_roster_moulding %}
+        <option disabled>⚠ No roster — run Seed All on the Data page</option>
+        {% endif %}
       </select>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
         <div>

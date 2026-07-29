@@ -4992,6 +4992,65 @@ _ALL_PIPE_MACHINES = [
     "M/C-6", "M/C-7", "M/C-8", "M/C-9",
 ]
 
+# Seed-default slot used when month-specific rows are absent
+_MP_ROSTER_SEED_DEFAULT = "1900-01"
+
+
+def _mp_resolve_roster(segment: str, effective_month: str) -> tuple:
+    """Return (extrusion_list, moulding_list, note) from the mp_machine roster.
+
+    Fetches from the mp_machine DB table for *effective_month*.  If that month
+    has no rows, falls back to the most recent month that does, then to the
+    seed-default slot ('1900-01'), so the list is never empty as long as
+    seeding has run at least once.  Returns a non-None ``note`` string whenever
+    a fallback is used so the display layer can tell the user which month's
+    roster is actually shown.
+    """
+    def _split(rows: list) -> tuple:
+        ext = sorted(r["machine"] for r in rows if r.get("kind") == "extrusion")
+        mol = sorted(r["machine"] for r in rows if r.get("kind") == "moulding")
+        return ext, mol
+
+    rows = _mp_model.get_machines(segment, effective_month)
+    ext, mol = _split(rows)
+    if ext or mol:
+        return ext, mol, None
+
+    # No rows for this month — find the most recent month that has rows
+    fallback_month: Optional[str] = None
+    if _mp_model.AVAILABLE:
+        try:
+            with _mp_model._conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT effective_month FROM mp_machine "
+                    "WHERE segment=%s AND effective_month!=%s "
+                    "ORDER BY effective_month DESC LIMIT 1",
+                    (segment, effective_month),
+                )
+                row = cur.fetchone()
+                fallback_month = row[0] if row else None
+        except Exception:
+            fallback_month = None
+
+    if fallback_month and fallback_month != _MP_ROSTER_SEED_DEFAULT:
+        rows = _mp_model.get_machines(segment, fallback_month)
+        ext, mol = _split(rows)
+        if ext or mol:
+            note = (
+                f"Roster shown for {fallback_month} "
+                f"— no rows found for {effective_month}"
+            )
+            return ext, mol, note
+
+    # Last resort: seed-default slot
+    rows = _mp_model.get_machines(segment, _MP_ROSTER_SEED_DEFAULT)
+    ext, mol = _split(rows)
+    if ext or mol:
+        note = "Showing seed-default roster (no month-specific rows found)"
+        return ext, mol, note
+
+    return [], [], "No machine roster seeded — visit Data → ↺ Reset / Seed All"
+
 
 def _mp_build_compound_cards(recipes: list) -> list:
     """Group recipe rows into card dicts with live-computed totals."""
@@ -5111,6 +5170,7 @@ def mp_data_view():
         _del_dt    = [r for r in _all_incl if r.get("deleted", False)]
         _dt_open   = [r for r in _all_dt if not r.get("resolved", False)]
         _dt_closed = [r for r in _all_dt if r.get("resolved", False)]
+        _nr_ext, _nr_mol, _nr_note = _mp_resolve_roster(_MP_SEGMENT, em)
         return render_template(
             "machine_planning_data.html",
             segment=_MP_SEGMENT,
@@ -5130,7 +5190,9 @@ def mp_data_view():
             downtime_closed=_dt_closed,
             all_downtime_records=_all_dt,
             deleted_downtime_records=_del_dt,
-            all_machine_names=_ALL_PIPE_MACHINES,
+            machine_roster_extrusion=_nr_ext,
+            machine_roster_moulding=_nr_mol,
+            machine_roster_note=_nr_note,
             today_iso=_dt_now2.date.today().isoformat(),
         )
 
@@ -5199,11 +5261,11 @@ def mp_data_view():
     downtime_closed = [r for r in downtime_records if r.get("resolved", False)]
     today_iso = _dt_now.date.today().isoformat()
 
-    # All machine names for the downtime dropdowns (extrusion + moulding)
-    all_machine_names = sorted(set(
-        [m["machine"] for m in pipe_machines_data] +
-        [m["machine"] for m in fitting_machines_data]
-    )) or _ALL_PIPE_MACHINES
+    # Roster-based machine list for dropdowns and fallback display.
+    # Always sourced from mp_machine table (the seeded authoritative roster),
+    # never from observed production records.  Falls back through months if
+    # the queried month has no rows, so this is never silently empty.
+    _roster_ext, _roster_mol, _roster_note = _mp_resolve_roster(_MP_SEGMENT, em)
 
     return render_template(
         "machine_planning_data.html",
@@ -5222,7 +5284,7 @@ def mp_data_view():
         estimated_count=len(estimated_items),
         pipe_items=pipe_items,
         pipe_machines=pipe_machines_data,
-        pipe_machine_names=_ALL_PIPE_MACHINES,
+        pipe_machine_names=_ALL_PIPE_MACHINES,   # routing table cols only — intentionally 9 fixed
         fitting_machines=fitting_machines_data,
         fitting_std_rows=[
             {"item_code": r["item_code"], "machine": r["machine"],
@@ -5235,7 +5297,9 @@ def mp_data_view():
         downtime_closed=downtime_closed,
         all_downtime_records=downtime_records,
         deleted_downtime_records=deleted_downtime_records,
-        all_machine_names=all_machine_names,
+        machine_roster_extrusion=_roster_ext,
+        machine_roster_moulding=_roster_mol,
+        machine_roster_note=_roster_note,
         today_iso=today_iso,
     )
 
@@ -5283,9 +5347,11 @@ def mp_settings_view():
     downtime_open   = [r for r in downtime_records if not r.get("resolved", False)]
     downtime_closed = [r for r in downtime_records if r.get("resolved", False)]
     today_iso = _dt_s.date.today().isoformat()
-    all_machine_names = sorted(set(
-        r.get("machine", "") for r in all_incl if r.get("machine", "")
-    )) or _ALL_PIPE_MACHINES
+
+    # Always resolve from the seeded roster, never from observed downtime records.
+    # A broken machine never appears in production records — building the picker
+    # from those records creates a circular gap where broken machines can't be logged.
+    _roster_ext, _roster_mol, _roster_note = _mp_resolve_roster(_MP_SEGMENT, em)
 
     return render_template(
         "machine_planning_settings.html",
@@ -5311,7 +5377,9 @@ def mp_settings_view():
         downtime_closed=downtime_closed,
         all_downtime_records=downtime_records,
         deleted_downtime_records=deleted_downtime_records,
-        all_machine_names=all_machine_names,
+        machine_roster_extrusion=_roster_ext,
+        machine_roster_moulding=_roster_mol,
+        machine_roster_note=_roster_note,
         today_iso=today_iso,
     )
 

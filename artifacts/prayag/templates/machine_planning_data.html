@@ -507,6 +507,26 @@
         </div>
         {% endfor %}
       </div>
+      {# Roster-vs-activity distinction: show when the card grid is empty #}
+      {% if not pipe_machines %}
+        {% if machine_roster_extrusion %}
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:.4rem;padding:.45rem .75rem;font-size:.78rem;display:flex;align-items:flex-start;gap:.5rem;margin-top:.35rem;">
+          <span style="flex-shrink:0;">ℹ️</span>
+          <div>
+            <strong>Roster present — no capacity rows for {{ effective_month }}.</strong>
+            {{ machine_roster_extrusion|length }} extrusion machine{{ 's' if machine_roster_extrusion|length != 1 else '' }} in roster
+            ({{ machine_roster_extrusion | join(', ') }}).
+            {% if machine_roster_note %}<br><em>{{ machine_roster_note }}.</em>{% endif %}
+            Navigate to the seeded month or use ↺ Reset to create rows for this month.
+          </div>
+        </div>
+        {% else %}
+        <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.4rem;padding:.45rem .75rem;font-size:.78rem;display:flex;align-items:center;gap:.5rem;margin-top:.35rem;">
+          <span>⚠️</span>
+          <span><strong>No extrusion roster found.</strong> Use ↺ Reset (pipe routing) to seed machines.</span>
+        </div>
+        {% endif %}
+      {% endif %}
 
       <!-- Item routing table -->
       <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.5rem 0 .35rem;">Item → Machine Routing (checkboxes)</h3>
@@ -586,6 +606,25 @@
         </div>
         {% endfor %}
       </div>
+      {# Roster-vs-activity distinction: show when the card grid is empty #}
+      {% if not fitting_machines %}
+        {% if machine_roster_moulding %}
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:.4rem;padding:.45rem .75rem;font-size:.78rem;display:flex;align-items:flex-start;gap:.5rem;margin-top:.35rem;">
+          <span style="flex-shrink:0;">ℹ️</span>
+          <div>
+            <strong>Roster present — no capacity rows for {{ effective_month }}.</strong>
+            {{ machine_roster_moulding|length }} moulding machine{{ 's' if machine_roster_moulding|length != 1 else '' }} in roster.
+            {% if machine_roster_note %}<br><em>{{ machine_roster_note }}.</em>{% endif %}
+            Navigate to the seeded month or use ↺ Reset to create rows for this month.
+          </div>
+        </div>
+        {% else %}
+        <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:.4rem;padding:.45rem .75rem;font-size:.78rem;display:flex;align-items:center;gap:.5rem;margin-top:.35rem;">
+          <span>⚠️</span>
+          <span><strong>No moulding roster found.</strong> Use ↺ Reset (fitting routing) to seed machines.</span>
+        </div>
+        {% endif %}
+      {% endif %}
 
       <!-- Fitting std table -->
       <h3 style="font-size:.82rem;font-weight:700;color:var(--navy);margin:.5rem 0 .35rem;">Fitting Standards (item × machine)</h3>
