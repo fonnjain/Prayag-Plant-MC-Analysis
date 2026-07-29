@@ -507,6 +507,25 @@
         </div>
       </div>
       {% endif %}
+
+      <!-- ── Section quick-nav tiles ── -->
+      {# Compute active section so the matching tile gets terra highlight #}
+      {% set _ht_perf = _p == '/performance' or _p.startswith('/plant') or (_p.startswith('/machine') and not _p.startswith('/machine-planning')) or _p in ('/reports','/losses') or _p.startswith('/management') %}
+      {% set _ht_plan = _p.startswith('/machine-planning') %}
+      {% set _ht_cost = _p.startswith('/costing') %}
+      {% set _ht_cap  = _p.startswith('/planning') %}
+      {% set _ht_ops  = _p in ('/materials','/maintenance','/manpower','/yield','/mixer','/toolroom','/wastage','/compound','/labour') %}
+      {% set _ht_data = _p in ('/data','/manifest','/input','/segment-input','/sources','/confirmation','/verify') %}
+      {% macro _ht(href, icon, label, active) %}<a href="{{ href }}" class="flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-{{ 'semibold' if active else 'medium' }}" style="{% if active %}background:var(--terra);color:#fff{% else %}background:rgba(255,255,255,0.13);color:rgba(255,255,255,0.85){% endif %}">{{ icon }} {{ label }}</a>{% endmacro %}
+      <div class="flex gap-1.5 mt-2 pb-0.5 overflow-x-auto" style="scrollbar-width:none;-webkit-overflow-scrolling:touch;">
+        {{ _ht('/',                '🏠', 'Home',        _p == '/') }}
+        {{ _ht('/performance',     '📊', 'Performance', _ht_perf) }}
+        {{ _ht('/machine-planning','⚙️', 'Planning',    _ht_plan) }}
+        {{ _ht('/costing',         '💰', 'Costing',     _ht_cost) }}
+        {{ _ht('/planning',        '📋', 'Capacity',    _ht_cap) }}
+        {{ _ht('/materials',       '🏭', 'Operations',  _ht_ops) }}
+        {{ _ht('/data',            '🔍', 'Data',        _ht_data) }}
+      </div>
     </form>
   </div>
 </header>
@@ -642,8 +661,9 @@
       {{ _nb('/costing', 'Costing', _i_cost, false) }}
 
     {% elif _in_planning %}
-      {# Machine Planning section #}
-      {{ _nb('/machine-planning', 'Planning', _i_plan, _path == '/machine-planning') }}
+      {# Machine Planning section — 6 items including Home #}
+      {{ _nb('/', 'Home', _i_home, false) }}
+      {{ _nb('/machine-planning', 'Hub', _i_plan, _path == '/machine-planning') }}
       {{ _nb('/machine-planning/upload', 'Upload', _i_upload, _path.startswith('/machine-planning/upload') or _path.startswith('/machine-planning/results')) }}
       {{ _nb('/machine-planning/data', 'Data', _i_data, _path.startswith('/machine-planning/data')) }}
       {{ _nb('/machine-planning/settings', 'Settings', _i_mach, _path.startswith('/machine-planning/settings')) }}
