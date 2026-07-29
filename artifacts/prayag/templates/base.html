@@ -157,26 +157,73 @@
     }
 
     /* ===== DESKTOP PERSISTENT SIDEBAR ===== */
+    .nd-foot { display: none; } /* hidden on mobile */
+
     @media (min-width: 900px) {
-      /* Sidebar always visible — no overlay, no transform */
+      /* Sidebar always visible — no overlay, no transform; smooth width transition */
       #nav-drawer {
         transform: translateX(0) !important;
         box-shadow: 1px 0 10px rgba(0,0,0,.07);
         border-right: 1px solid #e5e7eb;
+        transition: transform .25s cubic-bezier(.32,.72,0,1), width .22s ease;
       }
       /* Backdrop never needed on desktop */
       #nav-overlay { display: none !important; }
-      /* Header & bottom nav start after the sidebar */
-      #app-header    { left: 280px !important; }
-      #bottom-nav-bar { left: 280px !important; }
-      /* Body padding so page content clears the sidebar */
-      body { padding-left: 280px; }
+      /* Header & bottom nav — smooth left transition */
+      #app-header     { left: 280px !important; transition: left .22s ease; }
+      #bottom-nav-bar { left: 280px !important; transition: left .22s ease; }
+      /* Body padding — smooth transition */
+      body { padding-left: 280px; transition: padding-left .22s ease; }
       /* Hamburger not needed on desktop */
       #nav-open-btn { display: none !important; }
+
+      /* Collapse toggle footer */
+      .nd-foot { display: block; flex-shrink: 0; border-top: 1px solid #f0f0f0; }
+      #sidebar-collapse-btn {
+        width: 100%; padding: .6rem .85rem;
+        display: flex; align-items: center; justify-content: flex-end; gap: .4rem;
+        background: none; border: none; cursor: pointer;
+        font-size: .72rem; font-weight: 600; color: #9ca3af;
+        transition: color .12s, background .12s;
+      }
+      #sidebar-collapse-btn:hover { color: var(--terra); background: #f8fafc; }
+      .sidebar-collapse-icon {
+        font-size: .95rem; line-height: 1; display: inline-block;
+        transition: transform .22s ease;
+      }
+
+      /* ── COLLAPSED STATE ── */
+      body.nav-collapsed #nav-drawer     { width: 52px; }
+      body.nav-collapsed #app-header     { left: 52px !important; }
+      body.nav-collapsed #bottom-nav-bar { left: 52px !important; }
+      body.nav-collapsed                 { padding-left: 52px; }
+
+      /* Icon-only nav items: font-size:0 hides text nodes; nd-icon restores */
+      body.nav-collapsed .nd-item {
+        padding: .6rem 0; justify-content: center; gap: 0; font-size: 0;
+      }
+      body.nav-collapsed .nd-icon { font-size: .95rem; width: 1.5rem; text-align: center; }
+
+      /* Hide section labels and dividers */
+      body.nav-collapsed .nd-group   { display: none; }
+      body.nav-collapsed .nd-divider { display: none; }
+
+      /* Header: shrink to center the icon, hide close button + title text */
+      body.nav-collapsed .nd-head { padding: .75rem .25rem; justify-content: center; }
+      body.nav-collapsed .nd-head > div:first-child {
+        font-size: 0; gap: 0; justify-content: center;
+      }
+      body.nav-collapsed .nd-head > div:first-child svg { display: block; }
+      body.nav-collapsed .nd-head > button[aria-label="Close navigation"] { display: none; }
+
+      /* Toggle button in collapsed mode: center icon, hide label; flip arrow */
+      body.nav-collapsed #sidebar-collapse-btn { justify-content: center; padding: .6rem 0; }
+      body.nav-collapsed .sidebar-collapse-label { display: none; }
+      body.nav-collapsed .sidebar-collapse-icon { transform: rotate(180deg); }
     }
   </style>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen"><script>try{if(localStorage.getItem('prayag_sb_collapsed')==='1')document.body.classList.add('nav-collapsed');}catch(e){}</script>
 
 <!-- ===== LOADING OVERLAY ===== -->
 <div id="loading-overlay" role="status" aria-live="polite" aria-label="Fetching data">
@@ -360,6 +407,14 @@
     </a>
 
   </div>{# /nd-body #}
+
+  <!-- Collapse toggle — desktop only -->
+  <div class="nd-foot">
+    <button id="sidebar-collapse-btn" onclick="sidebarToggle()" aria-label="Toggle sidebar width">
+      <span class="sidebar-collapse-label">Collapse</span>
+      <span class="sidebar-collapse-icon">‹</span>
+    </button>
+  </div>
 </nav>
 
 <!-- ===== STICKY HEADER ===== -->
@@ -725,6 +780,35 @@ document.addEventListener('keydown', function(e) {
 document.querySelectorAll('#nav-drawer a').forEach(function(a) {
   a.addEventListener('click', navClose);
 });
+
+// ---- Sidebar collapse (desktop) ----
+var _SB_KEY = 'prayag_sb_collapsed';
+function sidebarToggle() {
+  if (document.body.classList.contains('nav-collapsed')) {
+    _sidebarExpand();
+  } else {
+    _sidebarCollapse();
+  }
+}
+function _sidebarCollapse() {
+  document.body.classList.add('nav-collapsed');
+  try { localStorage.setItem(_SB_KEY, '1'); } catch(e) {}
+  var lbl = document.querySelector('.sidebar-collapse-label');
+  if (lbl) lbl.textContent = 'Expand';
+}
+function _sidebarExpand() {
+  document.body.classList.remove('nav-collapsed');
+  try { localStorage.setItem(_SB_KEY, '0'); } catch(e) {}
+  var lbl = document.querySelector('.sidebar-collapse-label');
+  if (lbl) lbl.textContent = 'Collapse';
+}
+// Sync label text on load (collapsed state was set by inline script before body)
+(function() {
+  if (document.body.classList.contains('nav-collapsed')) {
+    var lbl = document.querySelector('.sidebar-collapse-label');
+    if (lbl) lbl.textContent = 'Expand';
+  }
+})();
 
 function syncHeaderOffset() {
   var header = document.getElementById('app-header');
