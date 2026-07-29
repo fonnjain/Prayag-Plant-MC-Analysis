@@ -4995,6 +4995,24 @@ _ALL_PIPE_MACHINES = [
 # Seed-default slot used when month-specific rows are absent
 _MP_ROSTER_SEED_DEFAULT = "1900-01"
 
+# Built-in constant roster — mirrors the seeded data; used as the absolute
+# last resort so the machine list is NEVER empty, even on a fresh environment
+# before seeding has run.  Update this when physical machines are added/removed.
+_PLUMBING_BUILTIN_ROSTER: dict = {
+    "extrusion": [
+        "M/C-1", "M/C-2", "M/C-3", "M/C-4", "M/C-5",
+        "M/C-6", "M/C-7", "M/C-8", "M/C-9",
+    ],
+    "moulding": [
+        "A01(NU-200)", "A02(U-150)", "A03(U-150)", "A04(NU-150)",
+        "A05(U-150)", "A06(C-150)", "B01(C-275)", "B02(C-200)",
+        "B03(C-200)", "B04(C-200)", "B05(C-150)", "B06(NU-200)",
+        "C01(U-250)", "C02(U-250)", "C04(U-250)", "C05(U-250)",
+        "C06(U-250)", "C07(U-250)", "D01(U-450)", "D02(U-350)",
+        "D03(U-250)", "D05(U-200)", "D06(U-250)", "D07(U-250)",
+    ],
+}
+
 
 def _mp_resolve_roster(segment: str, effective_month: str) -> tuple:
     """Return (extrusion_list, moulding_list, note) from the mp_machine roster.
@@ -5049,7 +5067,14 @@ def _mp_resolve_roster(segment: str, effective_month: str) -> tuple:
         note = "Showing seed-default roster (no month-specific rows found)"
         return ext, mol, note
 
-    return [], [], "No machine roster seeded — visit Data → ↺ Reset / Seed All"
+    # Absolute last resort: built-in constant — present even before any seeding.
+    # Matches sources.PTMT_GROUPS in reliability: always returns a usable list.
+    return (
+        list(_PLUMBING_BUILTIN_ROSTER["extrusion"]),
+        list(_PLUMBING_BUILTIN_ROSTER["moulding"]),
+        "No seeded roster found — showing built-in defaults. "
+        "Run Seed All on the Data page to load the live roster.",
+    )
 
 
 def _mp_build_compound_cards(recipes: list) -> list:
@@ -5353,6 +5378,43 @@ def mp_settings_view():
     # from those records creates a circular gap where broken machines can't be logged.
     _roster_ext, _roster_mol, _roster_note = _mp_resolve_roster(_MP_SEGMENT, em)
 
+    # ── Roster-anchored machine status summary ────────────────────────────────
+    # Every roster machine gets a row; zero values for machines with no events.
+    # This is the "rejection breakdown" view — all 33 machines always appear.
+    _mc_type_map = {m: "Extrusion" for m in _roster_ext}
+    _mc_type_map.update({m: "Moulding" for m in _roster_mol})
+    _mc_stats: dict = {
+        m: {"machine": m, "mc_type": _mc_type_map[m],
+            "bd_count": 0, "bd_days": 0, "mt_count": 0, "mt_days": 0,
+            "is_down": False, "in_maint": False}
+        for m in _roster_ext + _roster_mol
+    }
+    for _r in downtime_records:          # non-deleted active records only
+        _mc = _r.get("machine", "")
+        if not _mc:
+            continue
+        if _mc not in _mc_stats:          # machine in records but not in roster
+            _mc_stats[_mc] = {"machine": _mc, "mc_type": "—",
+                               "bd_count": 0, "bd_days": 0, "mt_count": 0, "mt_days": 0,
+                               "is_down": False, "in_maint": False}
+        _s = _mc_stats[_mc]
+        _kd = _r.get("kind", "")
+        _days = _r.get("days_down") or 0
+        if _kd == "breakdown":
+            _s["bd_count"] += 1
+            _s["bd_days"] += _days
+            if not _r.get("resolved"):
+                _s["is_down"] = True
+        elif _kd == "maintenance":
+            _s["mt_count"] += 1
+            _s["mt_days"] += _days
+            if not _r.get("resolved"):
+                _s["in_maint"] = True
+    machine_status_summary = sorted(
+        _mc_stats.values(),
+        key=lambda x: ({"Extrusion": 0, "Moulding": 1}.get(x["mc_type"], 2), x["machine"])
+    )
+
     return render_template(
         "machine_planning_settings.html",
         segment=_MP_SEGMENT,
@@ -5380,6 +5442,7 @@ def mp_settings_view():
         machine_roster_extrusion=_roster_ext,
         machine_roster_moulding=_roster_mol,
         machine_roster_note=_roster_note,
+        machine_status_summary=machine_status_summary,
         today_iso=today_iso,
     )
 
