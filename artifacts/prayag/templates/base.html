@@ -628,7 +628,7 @@
       {{ _nb('/machine-planning/upload', 'Upload', _i_upload, _path.startswith('/machine-planning/upload') or _path.startswith('/machine-planning/results')) }}
       {{ _nb('/machine-planning/data', 'Data', _i_data, _path.startswith('/machine-planning/data')) }}
       {{ _nb('/machine-planning/settings', 'Settings', _i_mach, _path.startswith('/machine-planning/settings')) }}
-      {{ _nb('/machine-planning/runs', 'Runs', _i_runs, _path.startswith('/machine-planning/runs') or _path.startswith('/machine-planning/report') or _path.startswith('/machine-planning/freeze')) }}
+      {{ _nb('/machine-planning/runs', 'Runs', _i_runs, _path.startswith('/machine-planning/runs') or _path.startswith('/machine-planning/report') or _path.startswith('/machine-planning/freeze') or _path.startswith('/machine-planning/followup') or _path.startswith('/machine-planning/schedule')) }}
 
     {% elif _in_costing %}
       {# Costing section #}
