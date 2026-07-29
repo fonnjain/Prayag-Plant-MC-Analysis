@@ -155,6 +155,25 @@
       font-size: 13px; font-weight: 600;
       padding: 8px 18px; border-radius: 8px; text-decoration: none;
     }
+
+    /* ===== DESKTOP PERSISTENT SIDEBAR ===== */
+    @media (min-width: 900px) {
+      /* Sidebar always visible — no overlay, no transform */
+      #nav-drawer {
+        transform: translateX(0) !important;
+        box-shadow: 1px 0 10px rgba(0,0,0,.07);
+        border-right: 1px solid #e5e7eb;
+      }
+      /* Backdrop never needed on desktop */
+      #nav-overlay { display: none !important; }
+      /* Header & bottom nav start after the sidebar */
+      #app-header    { left: 280px !important; }
+      #bottom-nav-bar { left: 280px !important; }
+      /* Body padding so page content clears the sidebar */
+      body { padding-left: 280px; }
+      /* Hamburger not needed on desktop */
+      #nav-open-btn { display: none !important; }
+    }
   </style>
 </head>
 <body class="min-h-screen">
@@ -348,7 +367,7 @@
   <div class="max-w-2xl mx-auto px-3 pt-3 pb-2">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <button onclick="navOpen()" aria-label="Open navigation"
+        <button id="nav-open-btn" onclick="navOpen()" aria-label="Open navigation"
                 style="background:rgba(255,255,255,.15);border:none;border-radius:.45rem;
                        width:2rem;height:2rem;display:flex;align-items:center;justify-content:center;
                        cursor:pointer;flex-shrink:0;padding:0;">
@@ -581,7 +600,7 @@
 </main>
 
 <!-- ===== BOTTOM NAV ===== -->
-<nav class="bg-white border-t border-gray-200 fixed bottom-0 left-0 right-0 z-50 shadow-lg">
+<nav id="bottom-nav-bar" class="bg-white border-t border-gray-200 fixed bottom-0 left-0 right-0 z-50 shadow-lg">
   {# ── Section detection ── #}
   {% set _path = request.path %}
   {% set _in_planning   = _path.startswith('/machine-planning') %}
