@@ -574,6 +574,79 @@
     </div>
   </div>
   <div class="section-body">
+
+    <!-- Roster-anchored maintenance summary — every machine always has a row -->
+    <details style="margin-bottom:.85rem;">
+      <summary style="cursor:pointer;font-size:.78rem;font-weight:700;color:var(--navy);
+                      padding:.35rem .5rem;background:#f8fafc;border-radius:.35rem;
+                      border:1px solid #e2e8f0;list-style:none;display:flex;
+                      align-items:center;justify-content:space-between;">
+        <span>
+          🔧 Maintenance Status — All {{ machine_status_summary | length }} Plumbing Machines
+          {% set n_maint = machine_status_summary | selectattr('in_maint') | list | length %}
+          {% set n_ever  = machine_status_summary | selectattr('mt_count') | list | length %}
+          {% if n_maint %}
+            <span class="badge" style="background:#fef3c7;color:#92400e;margin-left:.4rem;">{{ n_maint }} in maint</span>
+          {% endif %}
+        </span>
+        <span style="font-size:.7rem;color:#6b7280;font-weight:400;">click to expand ▾</span>
+      </summary>
+      <div style="margin-top:.5rem;overflow-x:auto;">
+        <table class="tbl" style="font-size:.75rem;min-width:440px;">
+          <thead>
+            <tr>
+              <th>Machine</th>
+              <th style="width:70px;">Type</th>
+              <th style="width:110px;">Status</th>
+              <th class="num" style="width:140px;">Maintenance Events</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set _prev_type = namespace(v='') %}
+            {% for ms in machine_status_summary %}
+            {% if ms.mc_type != _prev_type.v %}
+              {% set _prev_type.v = ms.mc_type %}
+              <tr style="background:#f1f5f9;">
+                <td colspan="4" style="font-size:.7rem;font-weight:700;color:#475569;
+                                       padding:.25rem .5rem;letter-spacing:.04em;">
+                  {{ ms.mc_type | upper }}
+                </td>
+              </tr>
+            {% endif %}
+            <tr>
+              <td style="font-weight:600;">{{ ms.machine }}</td>
+              <td style="font-size:.68rem;color:#6b7280;">{{ ms.mc_type }}</td>
+              <td>
+                {% if ms.in_maint %}
+                  <span style="font-size:.68rem;font-weight:700;color:#92400e;
+                               background:#fef3c7;padding:.1rem .35rem;border-radius:.2rem;">
+                    🟡 In Maint
+                  </span>
+                {% elif ms.mt_count > 0 %}
+                  <span style="font-size:.68rem;font-weight:600;color:#059669;
+                               background:#d1fae5;padding:.1rem .35rem;border-radius:.2rem;">
+                    🟢 OK
+                  </span>
+                {% else %}
+                  <span style="font-size:.68rem;color:#9ca3af;padding:.1rem .35rem;">No events</span>
+                {% endif %}
+              </td>
+              <td class="num" style="color:{% if ms.mt_count > 0 %}#92400e{% else %}#9ca3af{% endif %};">
+                {% if ms.mt_count > 0 %}
+                  {{ ms.mt_count }}× · {{ ms.mt_days }}d
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div style="font-size:.69rem;color:#9ca3af;margin-top:.35rem;">
+          Maintenance counts include all non-deleted records.
+          "No events" means the machine is in the roster but has had no maintenance logged yet.
+        </div>
+      </div>
+    </details>
+
     {% if db_available %}
     <!-- Add maintenance form (includes end_date upfront) -->
     <div id="dt-form-maintenance" class="dt-form" style="display:none;">
