@@ -584,9 +584,14 @@
 <nav class="bg-white border-t border-gray-200 fixed bottom-0 left-0 right-0 z-50 shadow-lg">
   {# ── Section detection ── #}
   {% set _path = request.path %}
-  {% set _in_planning = _path.startswith('/machine-planning') %}
-  {% set _in_costing  = _path.startswith('/labour') or _path.startswith('/costing') %}
-  {% set _in_hub      = _path == '/' %}
+  {% set _in_planning   = _path.startswith('/machine-planning') %}
+  {% set _in_costing    = _path.startswith('/costing') %}
+  {% set _in_hub        = _path == '/' %}
+  {% set _ops_paths     = ['/losses','/materials','/maintenance','/manpower',
+                            '/yield','/mixer','/toolroom','/wastage',
+                            '/compound','/labour'] %}
+  {% set _in_operations = _path in _ops_paths %}
+  {% set _in_capacity   = _path.startswith('/planning') %}
 
   {# ── Period query string — performance section only ── #}
   {% set _pqs = '?period=' ~ (period or 'last_updated') %}
@@ -628,8 +633,24 @@
     {% elif _in_costing %}
       {# Costing section #}
       {{ _nb('/', 'Home', _i_home, false) }}
-      {{ _nb('/costing?tab=labour', 'Labour', _i_labour, 'tab=labour' in request.query_string.decode() or request.path == '/labour') }}
+      {{ _nb('/costing?tab=labour', 'Labour', _i_labour, 'tab=labour' in request.query_string.decode()) }}
       {{ _nb('/costing?tab=rm', 'Materials', _i_mach, 'tab=rm' in request.query_string.decode()) }}
+
+    {% elif _in_operations %}
+      {# Operations section — 5 anchors; active highlights the current page #}
+      {# Pre-compute manpower-slot active: catches overflow pages not in the first 4 slots #}
+      {% set _manpower_active = _path == '/manpower' or _path == '/yield' or _path == '/mixer' or _path == '/toolroom' or _path == '/wastage' or _path == '/compound' or _path == '/labour' %}
+      {{ _nb('/', 'Home', _i_home, false) }}
+      {{ _nb('/losses',      'Losses',   _i_rep,   _path == '/losses') }}
+      {{ _nb('/materials',   'Materials',_i_data,  _path == '/materials') }}
+      {{ _nb('/maintenance', 'Maint',    _i_mach,  _path == '/maintenance') }}
+      {{ _nb('/manpower',    'Manpower', _i_labour, _manpower_active) }}
+
+    {% elif _in_capacity %}
+      {# Capacity Planning section #}
+      {{ _nb('/', 'Home', _i_home, false) }}
+      {{ _nb('/planning',              'Planning', _i_plan, _path == '/planning') }}
+      {{ _nb('/planning/ptmt-capacity','PTMT Cap', _i_mach, _path.startswith('/planning/ptmt-capacity')) }}
 
     {% else %}
       {# Machine Performance (everything else) #}
