@@ -1289,10 +1289,11 @@ def insert_downtime(record: MpMachineDowntime) -> int:
     init_mp_tables()
     try:
         with _conn() as conn, conn.cursor() as cur:
-            # Check for overlapping open (unresolved) record on same (segment, machine, kind)
+            # Check for overlapping open (unresolved, non-deleted) record on same (segment, machine, kind)
             cur.execute(
                 """SELECT id FROM mp_machine_downtime
-                   WHERE segment=%s AND machine=%s AND kind=%s AND resolved=false""",
+                   WHERE segment=%s AND machine=%s AND kind=%s
+                         AND resolved=false AND NOT deleted""",
                 (record.segment, record.machine, record.kind),
             )
             existing = cur.fetchone()
