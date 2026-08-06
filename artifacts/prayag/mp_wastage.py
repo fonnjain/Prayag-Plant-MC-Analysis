@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 WASTE_CAP    = 0.20    # 20% cap — anything higher is implausible data
 SAFE_DEFAULT = 0.0051  # measured overall; used before first recompute (~0.51%)
+STALE_DAYS   = 14      # badge fires when any seed table is older than this
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -214,13 +215,13 @@ def recompute_wastage(segment: str) -> dict:
             for tk, v in acc.items():
                 cur.execute(
                     """INSERT INTO mp_wastage_summary
-                               (segment, type_key, prod_kg, wastage_kg, n_months, seeded_at)
+                               (segment, type_key, prod_kg, wastage_kg, n_months, computed_at)
                        VALUES (%s, %s, %s, %s, %s, now())
                        ON CONFLICT (segment, type_key) DO UPDATE
-                           SET prod_kg    = EXCLUDED.prod_kg,
-                               wastage_kg = EXCLUDED.wastage_kg,
-                               n_months   = EXCLUDED.n_months,
-                               seeded_at  = now()""",
+                           SET prod_kg     = EXCLUDED.prod_kg,
+                               wastage_kg  = EXCLUDED.wastage_kg,
+                               n_months    = EXCLUDED.n_months,
+                               computed_at = now()""",
                     (segment, tk, v["prod"], v["waste"], months_with_data),
                 )
             cur.execute(
@@ -236,7 +237,7 @@ def recompute_wastage(segment: str) -> dict:
         return {"ok": False, "error": str(exc)}
 
     # Record provenance (wastage reads from many PIPE monthly workbooks, so
-    # no single Drive file ID — seeded_at timestamp is the freshness signal)
+    # no single Drive file ID — computed_at timestamp is the freshness signal)
     try:
         import mp_seed_provenance as _prov
         _prov.record_seed(
@@ -264,9 +265,76 @@ def recompute_wastage(segment: str) -> dict:
         "summary": summary,
     }
 
+def get_seed_staleness(segment: str) -> list:
+    """Return freshness rows for every MP seed table, scoped to *segment*.
 
-# ── Display helpers ───────────────────────────────────────────────────────────
+    Each row is a dict::
 
+        {
+            "table":        str,   # postgres table name
+            "label":        str,   # human-readable name
+            "last_updated": str|None,  # "DD-MM-YYYY" or None when never seeded
+            "age_days":     int|None,
+            "stale":        bool,  # True when age >= STALE_DAYS or never seeded
+        }
+
+    The badge should fire whenever ``any(r["stale"] for r in rows)``.
+    """
+    import datetime
+
+    if not store.AVAILABLE:
+        return []
+
+    # (table_name, display_label, timestamp_col)
+    TABLES = [
+        ("mp_bom_weight",        "BOM Weights",      "updated_at"),
+        ("mp_routing",           "Routing",           "updated_at"),
+        ("mp_per_hour",          "Per-Hour Rates",    "updated_at"),
+        ("mp_compound_recipe",   "Compound Recipe",   "updated_at"),
+        ("mp_machine",           "Machine Roster",    "updated_at"),
+        ("mp_wastage_summary",   "Wastage",           "computed_at"),
+        ("mp_rejection_summary", "Rejection Rates",   "computed_at"),
+    ]
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    results = []
+    try:
+        with store._conn() as conn, conn.cursor() as cur:
+            for table, label, ts_col in TABLES:
+                try:
+                    cur.execute(
+                        f"SELECT MAX({ts_col}) FROM {table} WHERE segment = %s",
+                        (segment,),
+                    )
+                    row = cur.fetchone()
+                    ts = row[0] if row else None
+                except Exception:
+                    ts = None
+
+                if ts is None:
+                    results.append({
+                        "table":        table,
+                        "label":        label,
+                        "last_updated": None,
+                        "age_days":     None,
+                        "stale":        True,
+                    })
+                else:
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=datetime.timezone.utc)
+                    age = (now - ts).days
+                    results.append({
+                        "table":        table,
+                        "label":        label,
+                        "last_updated": ts.strftime("%d-%m-%Y"),
+                        "age_days":     age,
+                        "stale":        age >= STALE_DAYS,
+                    })
+    except Exception:
+        logger.exception("get_seed_staleness failed for segment=%s", segment)
+        return []
+
+    return results
 def get_wastage_summary(segment: str) -> list:
     """Return rows for display on the Settings page (sorted by type_key)."""
     if not store.AVAILABLE:

@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS mp_wastage_summary (
     prod_kg     NUMERIC(18,3) NOT NULL DEFAULT 0,
     wastage_kg  NUMERIC(18,3) NOT NULL DEFAULT 0,
     n_months    INT         NOT NULL DEFAULT 0,
+    computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT mp_wastage_summary_natural UNIQUE (segment, type_key)
 );
 
@@ -413,7 +414,7 @@ ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS mp_machine_downtime_resolved ON mp_machine_downtime (segment, resolved) WHERE resolved = false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted     BOOLEAN     NOT NULL DEFAULT false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted_at  TIMESTAMPTZ;
-ALTER TABLE mp_wastage_summary  ADD COLUMN IF NOT EXISTS seeded_at   TIMESTAMPTZ;
+ALTER TABLE mp_wastage_summary  ADD COLUMN IF NOT EXISTS computed_at TIMESTAMPTZ NOT NULL DEFAULT now();
 """
 
 # Backfill: old records closed via close_downtime have end_date set but resolved=false.

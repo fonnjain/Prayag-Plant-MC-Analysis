@@ -6175,10 +6175,17 @@ def mp_home():
         runs = list_plan_runs(_mp_seed.SEGMENT, limit=10)
     except Exception:
         runs = []
+    try:
+        seed_staleness = _mp_wastage.get_seed_staleness(_mp_seed.SEGMENT)
+    except Exception:
+        seed_staleness = []
+    any_stale = any(r.get("stale") for r in seed_staleness)
     return render_template(
         "machine_planning_home.html",
         runs=runs,
         segment=_mp_seed.SEGMENT,
+        seed_staleness=seed_staleness,
+        any_stale=any_stale,
     )
 
 
@@ -6205,6 +6212,10 @@ def mp_upload():
     fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months or [em], em)
 
     if request.method == "GET":
+        try:
+            _ss = _mp_wastage.get_seed_staleness(_mp_seed.SEGMENT)
+        except Exception:
+            _ss = []
         return render_template(
             "machine_planning_upload.html",
             effective_month=em,
@@ -6214,6 +6225,8 @@ def mp_upload():
             all_month_opts=all_month_opts,
             db_available=db_available,
             error=None,
+            seed_staleness=_ss,
+            any_stale=any(r.get("stale") for r in _ss),
         )
 
     # POST — process upload
@@ -6240,6 +6253,10 @@ def mp_upload():
 
     if error:
         err_fy_groups, err_effective_fy, err_all_opts = _mp_fy_selectors(available_months or [em], month)
+        try:
+            _ss = _mp_wastage.get_seed_staleness(_mp_seed.SEGMENT)
+        except Exception:
+            _ss = []
         return render_template(
             "machine_planning_upload.html",
             effective_month=month,
@@ -6249,6 +6266,8 @@ def mp_upload():
             all_month_opts=err_all_opts,
             db_available=db_available,
             error=error,
+            seed_staleness=_ss,
+            any_stale=any(r.get("stale") for r in _ss),
         )
 
     # Store pipe + fitting demand & run_id in session
