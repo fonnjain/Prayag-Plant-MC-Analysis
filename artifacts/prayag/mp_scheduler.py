@@ -556,3 +556,255 @@ def run_shift_schedule(
         downtime_machine_days=downtime_machine_days_count,
         downtime_hours_lost=round(downtime_hours_lost_total, 1),
     )
+
+
+# ── Fitting scheduler entry point ─────────────────────────────────────────────
+
+def run_fitting_schedule(
+    fitting_items: list,    # List[FittingItemResult] from mp_engine.FittingEngineResult
+    fitting_demand: list,   # List[FittingDemandItem] from mp_engine.parse_fitting_demand
+    segment: str,
+    effective_month: str,
+    downtime_records: Optional[list] = None,
+) -> ScheduleResult:
+    """
+    Build a day-by-day, shift-level schedule for fitting (moulding) machines.
+
+    Analogous to run_shift_schedule but targets kind='moulding' machines.
+    FittingDemandItem has no week_qty so all items default to first_requested_week=1.
+
+    The rate stored in each _WorkItem is material_kg / machine_hrs — this makes
+    remaining_kg in UnfinishedItem track deferred material kg proportionally,
+    so the same _split() logic in mp_reports.py works without modification.
+    """
+    # ── Load DB params ────────────────────────────────────────────────────────
+    params_row = _mp.get_params(segment, effective_month)
+    if params_row:
+        min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
+        week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
+    else:
+        min_run_block = 2.0
+        week_days_str = "[6,6,6,7]"
+
+    try:
+        week_days: List[int] = json.loads(week_days_str)
+    except Exception:
+        week_days = [6, 6, 6, 7]
+    while len(week_days) < 4:
+        week_days.append(7)
+    week_days = [max(1, d) for d in week_days[:4]]
+    total_days = sum(week_days)
+
+    # ── Load moulding machine configs ─────────────────────────────────────────
+    mc_rows = _mp.get_machines(segment, effective_month, kind="moulding")
+    mc_params: Dict[str, dict] = {r["machine"]: r for r in mc_rows}
+
+    def _hps(r: dict) -> float:
+        return float(r.get("hours_per_shift") or 10.0)
+
+    def _cap(r: dict) -> float:
+        return float(r.get("capacity_hrs_month") or 500.0)
+
+    # ── Build work items from fitting engine output ────────────────────────────
+    # rate_kg_per_hr = material_kg / machine_hrs so that remaining_kg tracks
+    # deferred material kg proportionally (used by _split in mp_reports.py).
+    work_items: List[_WorkItem] = []
+    for it in fitting_items:
+        if not (getattr(it, "has_weight", False) and getattr(it, "has_machine", False)):
+            continue
+        hrs = float(getattr(it, "machine_hrs", 0.0) or 0.0)
+        if hrs <= 1e-6:
+            continue
+        mat_kg = float(getattr(it, "material_kg", 0.0) or 0.0)
+        rate_kg_hr = mat_kg / hrs if hrs > 0 else 0.0
+
+        capable = [
+            mc for mc in (getattr(it, "capable_machines", []) or [])
+            if mc in mc_params
+        ]
+        if not capable:
+            continue
+
+        work_items.append(_WorkItem(
+            item_code=it.item_code,
+            raw_code=it.raw_code,
+            material=it.material,
+            first_requested_week=1,   # FittingDemandItem has no week split
+            remaining_hrs=hrs,
+            rate_kg_per_hr=rate_kg_hr,
+            capable_machines=capable,
+        ))
+
+    work_items.sort(key=lambda w: w.sort_key())
+
+    # ── Downtime map ──────────────────────────────────────────────────────────
+    down_days = _build_down_days(downtime_records or [], mc_params, effective_month, total_days)
+    downtime_machine_days_count = sum(len(v) for v in down_days.values())
+    downtime_hours_lost_total = 0.0
+
+    # ── Day plan ──────────────────────────────────────────────────────────────
+    day_to_week: List[int] = []
+    for week_num, n_days in enumerate(week_days, start=1):
+        day_to_week.extend([week_num] * n_days)
+
+    machines = sorted(mc_params.keys())
+    blocks: List[ShiftBlock] = []
+    idle_by_mc: Dict[str, float] = defaultdict(float)
+    excess_kg_by_mc: Dict[str, float] = defaultdict(float)
+    changeovers_by_mc_week: Dict[Tuple[str, int], int] = defaultdict(int)
+
+    # ── Per-machine capacity budget (hard constraint) ─────────────────────────
+    # capacity_hrs_month is the declared capacity ceiling; once used up the
+    # machine idles for the rest of the month regardless of remaining work days.
+    # This guarantees weekly_fill.scheduled_hrs ≤ weekly_fill.capacity_hrs for
+    # every row, which is required for the Machine Load tab assertion to hold.
+    cap_remaining: Dict[str, float] = {mc: _cap(mc_params[mc]) for mc in machines}
+
+    for day_idx, week in enumerate(day_to_week, start=1):
+        for mc in machines:
+            if mc not in mc_params:
+                continue
+            hps = _hps(mc_params[mc])
+            if day_idx in down_days.get(mc, set()):
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="DAY",
+                    item_code="DOWN", raw_code="DOWN", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="NIGHT",
+                    item_code="DOWN", raw_code="DOWN", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                downtime_hours_lost_total += 2 * hps
+                continue
+
+            # Capacity-budget gate: if this machine has less declared capacity
+            # remaining than a full day's production (2 shifts × hps), idle it.
+            # _schedule_machine_day always fills both shifts, so we must ensure
+            # the full day's output fits in the budget before scheduling.
+            # This guarantees weekly_fill.scheduled_hrs ≤ weekly_fill.capacity_hrs,
+            # which is required for the Machine Load tab assertion to hold.
+            full_day_hrs = 2.0 * hps
+            if cap_remaining.get(mc, 0.0) < full_day_hrs - 1e-6:
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="DAY",
+                    item_code="", raw_code="", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="NIGHT",
+                    item_code="", raw_code="", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
+                ))
+                idle_by_mc[mc] += 2 * hps
+                continue
+
+            blocks_before = len(blocks)
+            _schedule_machine_day(
+                machine=mc,
+                day=day_idx,
+                week=week,
+                hours_per_shift=hps,
+                min_run_block=min_run_block,
+                work_items=work_items,
+                blocks=blocks,
+                idle_by_mc=idle_by_mc,
+                excess_kg_by_mc=excess_kg_by_mc,
+                changeovers_by_mc_week=changeovers_by_mc_week,
+            )
+            # Subtract actual production hours placed this day from the budget.
+            prod_this_day = sum(
+                b.planned_hours - b.excess_hours
+                for b in blocks[blocks_before:]
+                if not b.is_idle
+            )
+            cap_remaining[mc] = max(0.0, cap_remaining[mc] - prod_this_day)
+
+    # ── Unfinished items ──────────────────────────────────────────────────────
+    all_down_machines: Set[str] = {
+        mc for mc, days in down_days.items()
+        if len(days) >= total_days
+    }
+    unfinished: List[UnfinishedItem] = [
+        UnfinishedItem(
+            item_code=w.item_code,
+            raw_code=w.raw_code,
+            material=w.material,
+            remaining_hours=round(w.remaining_hrs, 3),
+            remaining_kg=round(w.remaining_hrs * w.rate_kg_per_hr, 1),
+            capable_machines=w.capable_machines,
+            origin_week=w.first_requested_week,
+            downtime_reason=(
+                "only capable machine(s) are down (breakdown/maintenance)"
+                if w.capable_machines and all(mc in all_down_machines for mc in w.capable_machines)
+                else ""
+            ),
+        )
+        for w in work_items if w.remaining_hrs > 0.01
+    ]
+    unfinished.sort(key=lambda u: (-u.remaining_hours, u.item_code))
+
+    # ── Weekly fill table ─────────────────────────────────────────────────────
+    sched_by_mc_wk: Dict[Tuple[str, int], float] = defaultdict(float)
+    origin_by_mc_wk: Dict[Tuple[str, int], Dict[int, float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
+    for b in blocks:
+        if b.is_idle:
+            continue
+        key = (b.machine, b.week)
+        hrs = b.planned_hours - b.excess_hours
+        sched_by_mc_wk[key] += hrs
+        origin_by_mc_wk[key][b.origin_week] += hrs
+
+    weekly_fill: List[WeekFillRow] = []
+    for mc in machines:
+        if mc not in mc_params:
+            continue
+        monthly_cap = _cap(mc_params[mc])
+        for wk in range(1, 5):
+            wk_days = week_days[wk - 1]
+            wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
+            sched = round(sched_by_mc_wk.get((mc, wk), 0.0), 2)
+            idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)
+            util = round(sched / wk_cap * 100, 1) if wk_cap > 0 else 0.0
+            ob = {ow: round(h, 2) for ow, h in origin_by_mc_wk.get((mc, wk), {}).items()}
+            weekly_fill.append(WeekFillRow(
+                week=wk,
+                machine=mc,
+                capacity_hrs=wk_cap,
+                scheduled_hrs=sched,
+                idle_hrs=idle,
+                utilisation_pct=util,
+                changeovers=changeovers_by_mc_week.get((mc, wk), 0),
+                excess_kg=round(excess_kg_by_mc.get(mc, 0.0) * wk_days / total_days, 1),
+                origin_breakdown=ob,
+            ))
+
+    # ── Aggregate totals ──────────────────────────────────────────────────────
+    total_cap = sum(_cap(p) for p in mc_params.values())
+    total_sched = sum(r.scheduled_hrs for r in weekly_fill)
+    total_idle = sum(idle_by_mc.values())
+    total_excess_kg = sum(excess_kg_by_mc.values())
+    total_changeovers = sum(changeovers_by_mc_week.values())
+
+    return ScheduleResult(
+        segment=segment,
+        effective_month=effective_month,
+        blocks=blocks,
+        weekly_fill=weekly_fill,
+        unfinished=unfinished,
+        total_capacity_hrs=round(total_cap, 1),
+        total_scheduled_hrs=round(total_sched, 1),
+        total_idle_hrs=round(total_idle, 1),
+        total_excess_kg=round(total_excess_kg, 1),
+        total_changeovers=total_changeovers,
+        week_days=week_days,
+        params_used={
+            "min_run_block_hours": min_run_block,
+            "week_days": week_days,
+        },
+        downtime_machine_days=downtime_machine_days_count,
+        downtime_hours_lost=round(downtime_hours_lost_total, 1),
+    )

@@ -6185,7 +6185,38 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
         app.logger.error("mp_shift_schedule failed: %s", exc)
         return None
 
+def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
+    """Run fitting shift scheduler from stored fitting demand in session."""
+    run_id = session.get("mp2_run_id")
+    if not run_id:
+        return None
+    payload = _mp2_load_run(run_id)
+    if not payload:
+        return None
+    fit_dicts = payload.get("fitting_demand") or []
+    if not fit_dicts:
+        return None
 
+    fitting_result = _mp3_fitting_result_from_session()
+    if fitting_result is None:
+        return None
+    em  = payload["effective_month"]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    try:
+        dt_recs = _mp_model.get_downtime_affecting_month(seg, em)
+    except Exception:
+        dt_recs = []
+    try:
+        return _mp_scheduler.run_fitting_schedule(
+            fitting_items=fitting_result.items,
+            fitting_demand=[_mp_engine.FittingDemandItem(**d) for d in fit_dicts],
+            segment=seg,
+            effective_month=em,
+            downtime_records=dt_recs,
+        )
+    except Exception as exc:
+        app.logger.error("mp_fitting_schedule failed: %s", exc)
+        return None
 @app.route("/machine-planning")
 def mp_home():
     """Machine Planning landing — category selector + recent plan runs."""
@@ -6449,9 +6480,10 @@ def mp_report_capacity_feasible_plan():
     """
     _ensure_session_run_id()
     import mp_reports as _mp_reports
-    result          = _mp2_result_from_session()
-    fitting_result  = _mp3_fitting_result_from_session()
-    schedule_result = _mp_schedule_from_session()
+    result                 = _mp2_result_from_session()
+    fitting_result         = _mp3_fitting_result_from_session()
+    schedule_result        = _mp_schedule_from_session()
+    fitting_schedule_result = _mp_fitting_schedule_from_session()
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6461,7 +6493,8 @@ def mp_report_capacity_feasible_plan():
 
     try:
         data = _mp_reports.capacity_feasible_plan_bytes(
-            result, fitting_result, schedule_result, month
+            result, fitting_result, schedule_result, month,
+            fitting_schedule=fitting_schedule_result,
         )
     except AssertionError as exc:
         app.logger.error("capacity_feasible_plan assertion: %s", exc)

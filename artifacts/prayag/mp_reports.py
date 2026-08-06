@@ -1812,25 +1812,26 @@ FEASIBLE_TRIM_RULE = "earliest-week-first / largest-remaining-hrs-first (LPT)"
 
 
 def capacity_feasible_plan_bytes(
-    pipe_result,      # mp_engine.EngineResult | None
-    fitting_result,   # mp_engine.FittingEngineResult | None
-    schedule,         # mp_scheduler.ScheduleResult | None  (pipe only)
+    pipe_result,           # mp_engine.EngineResult | None
+    fitting_result,        # mp_engine.FittingEngineResult | None
+    schedule,              # mp_scheduler.ScheduleResult | None  (pipe)
     month: str,
+    fitting_schedule=None, # mp_scheduler.ScheduleResult | None  (fittings)
 ) -> bytes:
     """Return .xlsx bytes for the Capacity-Feasible Production Plan.
 
-    The scheduler (run_shift_schedule) enforces capacity day-by-day.  Items
-    that run out of working days land in schedule.unfinished with their
-    remaining machine-hours.  This report converts that to pieces/kg so the
-    planner gets the maximum achievable this month plus a clear shortfall list.
+    The scheduler (run_shift_schedule / run_fitting_schedule) enforces capacity
+    day-by-day.  Items that run out of working days land in schedule.unfinished
+    with their remaining machine-hours.  This report converts that to pieces/kg
+    so the planner gets the maximum achievable this month plus a clear shortfall list.
 
     Tabs
     ----
     1. Summary                 — requested / feasible / shortfall totals by material
     2. Pipe Plan               — per-item split
-    3. Fitting Plan            — per-item (all feasible — no fitting scheduler yet)
-    4. Machine Load (Feasible) — scheduler hours, always ≤ 100%
-    5. Shortfall               — unmet demand that cannot be made this month
+    3. Fitting Plan            — per-item split (capacity-enforced when fitting_schedule supplied)
+    4. Machine Load (Feasible) — scheduler hours, always ≤ 100% (pipe + fitting)
+    5. Shortfall               — unmet demand that cannot be made this month (pipe + fitting)
     """
     wb = Workbook()
     wb.remove(wb.active)
@@ -1871,15 +1872,21 @@ def capacity_feasible_plan_bytes(
         c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         ws.row_dimensions[row].height = 24
 
-    # ── Build unfinished lookup: item_code → UnfinishedItem ──────────────────
-    unfinished_by_code: dict = {}
+    # ── Build unfinished lookups: item_code → UnfinishedItem ─────────────────
+    unfinished_by_code: dict = {}       # pipe shortfall items
     if schedule:
         for u in schedule.unfinished:
             unfinished_by_code[u.item_code] = u
 
+    fit_unfinished_by_code: dict = {}   # fitting shortfall items
+    if fitting_schedule:
+        for u in fitting_schedule.unfinished:
+            fit_unfinished_by_code[u.item_code] = u
+
     # ── Build per-machine scheduled load from weekly_fill ────────────────────
     # Scheduled hours = actual production hours placed within the working days.
     # These are ALWAYS ≤ machine capacity (the scheduler's hard constraint).
+    # Pipe machines come from pipe schedule; fitting machines from fitting schedule.
     sched_by_mc: dict = {}
     if schedule:
         for wf in schedule.weekly_fill:
@@ -1889,16 +1896,31 @@ def capacity_feasible_plan_bytes(
             # weekly_fill rows are per-week — sum both sides to get monthly totals
             sched_by_mc[mc]["scheduled_hrs"] += wf.scheduled_hrs
             sched_by_mc[mc]["capacity_hrs"]  += wf.capacity_hrs
+    if fitting_schedule:
+        for wf in fitting_schedule.weekly_fill:
+            mc = wf.machine
+            if mc not in sched_by_mc:
+                sched_by_mc[mc] = {"scheduled_hrs": 0.0, "capacity_hrs": 0.0}
+            sched_by_mc[mc]["scheduled_hrs"] += wf.scheduled_hrs
+            sched_by_mc[mc]["capacity_hrs"]  += wf.capacity_hrs
 
     # ── Per-item feasible / shortfall split ──────────────────────────────────
-    def _split(item):
+    def _split(item, undef_map: dict = None):
         """Return (feasible_pcs, shortfall_pcs, feasible_kg, shortfall_kg).
 
-        Feasible = what the scheduler placed within working days this month.
-        Shortfall = unmet demand that cannot be made this month (NOT deferred to future).
-        feasible + shortfall = requested (gross_qty_pcs / material_kg) exactly.
+        undef_map: the unfinished lookup to use — defaults to pipe unfinished_by_code.
+        The fitting variant passes fit_unfinished_by_code instead.
+        Remaining_kg in UnfinishedItem is stored as material_kg × shortfall_fraction
+        (rate_kg_per_hr = material_kg / machine_hrs in run_fitting_schedule), so
+        the kg-based pro-rating gives the correct split for both pipe and fitting items.
+
+        Shortfall = unmet demand that cannot be achieved within this month's working days.
+        It is NOT automatically rolled to a future month — the planner acts on it.
+        feasible + shortfall == requested exactly.
         """
-        u = unfinished_by_code.get(item.item_code)
+        if undef_map is None:
+            undef_map = unfinished_by_code
+        u = undef_map.get(item.item_code)
         if u is None:
             return item.gross_qty_pcs, 0.0, item.material_kg, 0.0
         shortfall_kg  = min(float(u.remaining_kg), float(item.material_kg))
@@ -1978,21 +2000,32 @@ def capacity_feasible_plan_bytes(
                 continue
             mat = it.material
             if mat not in mat_acc:
-                mat_acc[mat] = dict(req_pcs=0.0, req_kg=0.0)
-            mat_acc[mat]["req_pcs"] += float(getattr(it, "gross_qty_pcs", it.qty_pcs))
-            mat_acc[mat]["req_kg"]  += float(it.material_kg)
+                mat_acc[mat] = dict(req_pcs=0.0, feas_pcs=0.0, sf_pcs=0.0,
+                                    req_kg=0.0,  feas_kg=0.0,  sf_kg=0.0)
+            fp, sp, fk, sk = _split(it, fit_unfinished_by_code)
+            a = mat_acc[mat]
+            a["req_pcs"]  += float(getattr(it, "gross_qty_pcs", it.qty_pcs))
+            a["feas_pcs"] += fp
+            a["sf_pcs"]   += sp
+            a["req_kg"]   += float(it.material_kg)
+            a["feas_kg"]  += fk
+            a["sf_kg"]    += sk
         for i, (mat, a) in enumerate(sorted(mat_acc.items())):
+            req = a["req_pcs"]
+            sf_pct = a["sf_pcs"] / req * 100 if req > 0 else 0.0
             rf = _EFILL if i % 2 == 0 else None
             vals = [label, mat,
-                    round(a["req_pcs"]), round(a["req_pcs"]), 0,
-                    "0.0%",
-                    round(a["req_kg"], 1), round(a["req_kg"], 1), 0.0]
+                    round(a["req_pcs"]), round(a["feas_pcs"]), round(a["sf_pcs"]),
+                    f"{sf_pct:.1f}%",
+                    round(a["req_kg"], 1), round(a["feas_kg"], 1), round(a["sf_kg"], 1)]
             for ci, v in enumerate(vals, 1):
                 c = ws1.cell(row=sr, column=ci, value=v)
                 c.alignment = Alignment(horizontal="left" if ci <= 2 else "right",
                                         vertical="center")
                 if rf:
                     c.fill = rf
+                if a["sf_pcs"] > 0 and ci in (5, 6):
+                    c.fill = _AFILL
             sr += 1
 
     _summary_pipe(pipe_result, "PIPE")
@@ -2028,7 +2061,7 @@ def capacity_feasible_plan_bytes(
         for it in sorted(pipe_result.items, key=lambda x: (x.material, x.item_code)):
             if not getattr(it, "has_weight", False):
                 continue
-            fp, dp, fk, dk = _split(it)
+            fp, sp, fk, sk = _split(it)
             u = unfinished_by_code.get(it.item_code)
             mcs = ", ".join(it.capable_machines) if it.capable_machines else "—"
             note = ""
@@ -2038,8 +2071,8 @@ def capacity_feasible_plan_bytes(
                 )
             row_data = [
                 it.item_code, it.material,
-                round(float(it.gross_qty_pcs)), round(fp), round(dp),
-                round(float(it.material_kg), 1), round(fk, 1), round(dk, 1),
+                round(float(it.gross_qty_pcs)), round(fp), round(sp),
+                round(float(it.material_kg), 1), round(fk, 1), round(sk, 1),
                 mcs, note,
             ]
             fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.0", "0.0", "", ""]
@@ -2048,7 +2081,7 @@ def capacity_feasible_plan_bytes(
                 if fmt:
                     c.number_format = fmt
                 c.alignment = Alignment(horizontal=al, vertical="center")
-                if dp > 0 and ci in (5, 8):
+                if sp > 0 and ci in (5, 8):
                     c.fill = _AFILL
             pr += 1
 
@@ -2058,41 +2091,58 @@ def capacity_feasible_plan_bytes(
     ws3 = wb.create_sheet("Fitting Plan")
     ws3.sheet_view.showGridLines = False
     _title(ws3, f"Capacity-Feasible Fitting Plan — {month}")
-    _note(ws3, 3,
-          "Fitting scheduler not yet implemented — all fitting demand is treated as "
-          "feasible.  Capacity constraint is applied to pipe machines only.")
+    if not fitting_schedule:
+        _note(ws3, 3,
+              "No fitting schedule available — all fitting demand is treated as feasible.  "
+              "Upload fitting demand and ensure moulding machine data is seeded to enforce capacity.")
+    # (no banner when fitting_schedule is present — the tab is now capacity-enforced)
 
     FH = [
         ("Item Code",     16, "left"),
         ("Material",      11, "center"),
         ("Requested pcs", 13, "right"),
         ("Feasible pcs",  13, "right"),
+        ("Shortfall pcs", 13, "right"),
         ("Requested kg",  13, "right"),
         ("Feasible kg",   12, "right"),
+        ("Shortfall kg",  12, "right"),
+        ("Machine(s)",    14, "center"),
+        ("Note",          35, "left"),
     ]
+    hdr_row_f = 4 if not fitting_schedule else 3
     for ci, (h, w, _) in enumerate(FH, 1):
-        _hdr(ws3, 4, ci, h, w)
+        _hdr(ws3, hdr_row_f, ci, h, w)
 
-    fr3 = 5
+    fr3 = hdr_row_f + 1
     if fitting_result:
         for it in sorted(fitting_result.items, key=lambda x: (x.material, x.item_code)):
             if not getattr(it, "has_weight", False):
                 continue
-            gross = float(getattr(it, "gross_qty_pcs", it.qty_pcs))
+            fp, sp, fk, sk = _split(it, fit_unfinished_by_code)
+            u   = fit_unfinished_by_code.get(it.item_code)
+            mcs = ", ".join(it.capable_machines) if it.capable_machines else "—"
+            note = ""
+            if u:
+                note = u.downtime_reason or (
+                    f"{it.material} — only {mcs} routed, capacity exhausted"
+                )
             row_data = [
                 it.item_code, it.material,
-                round(gross), round(gross),
-                round(float(it.material_kg), 1), round(float(it.material_kg), 1),
+                round(float(getattr(it, "gross_qty_pcs", it.qty_pcs))), round(fp), round(sp),
+                round(float(it.material_kg), 1), round(fk, 1), round(sk, 1),
+                mcs, note,
             ]
-            fmts = ["", "", "#,##0", "#,##0", "0.0", "0.0"]
+            fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.0", "0.0", "", ""]
             for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, FH), 1):
                 c = ws3.cell(row=fr3, column=ci, value=v)
                 if fmt:
                     c.number_format = fmt
                 c.alignment = Alignment(horizontal=al, vertical="center")
+                if sp > 0 and ci in (5, 8):
+                    c.fill = _AFILL
             fr3 += 1
     else:
-        ws3.cell(row=5, column=1).value = "No fitting demand in this plan."
+        ws3.cell(row=hdr_row_f + 1, column=1).value = "No fitting demand in this plan."
 
     # ═══════════════════════════════════════════════════════════════════════
     # Sheet 4 — Machine Load (Feasible)
@@ -2147,20 +2197,45 @@ def capacity_feasible_plan_bytes(
     _title(ws5, f"Shortfall — Unmet Demand This Month — {month}")
 
     DEF_HDRS = [
-        ("Item Code",       16, "left"),
-        ("Material",        11, "center"),
-        ("Requested pcs",   13, "right"),
-        ("Feasible pcs",    13, "right"),
-        ("Shortfall pcs",   13, "right"),
-        ("Shortfall kg",    12, "right"),
-        ("Shortfall hrs",   12, "right"),
+        ("Item Code",        16, "left"),
+        ("Material",         11, "center"),
+        ("Requested pcs",    13, "right"),
+        ("Feasible pcs",     13, "right"),
+        ("Shortfall pcs",    13, "right"),
+        ("Shortfall kg",     12, "right"),
+        ("Shortfall hrs",    12, "right"),
         ("Capable Machines", 20, "left"),
-        ("Reason",          38, "left"),
+        ("Reason",           38, "left"),
     ]
     for ci, (h, w, _) in enumerate(DEF_HDRS, 1):
         _hdr(ws5, 3, ci, h, w)
 
     dr = 4
+
+    def _write_shortfall_row(ws, row: int, it, undef_map: dict) -> int:
+        """Write one shortfall row; return the next available row number."""
+        u    = undef_map[it.item_code]
+        fp, sp, fk, sk = _split(it, undef_map)
+        mcs  = ", ".join(it.capable_machines) if it.capable_machines else "—"
+        note = u.downtime_reason or (
+            f"{it.material} — only {mcs} routed, capacity insufficient this month"
+        )
+        row_data = [
+            it.item_code, it.material,
+            round(float(getattr(it, "gross_qty_pcs", it.qty_pcs))),
+            round(fp), round(sp),
+            round(sk, 1), round(float(u.remaining_hours), 2),
+            mcs, note,
+        ]
+        fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.00", "", ""]
+        for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, DEF_HDRS), 1):
+            c = ws.cell(row=row, column=ci, value=v)
+            if fmt:
+                c.number_format = fmt
+            c.alignment = Alignment(horizontal=al, vertical="center")
+            c.fill = _AFILL
+        return row + 1
+
     if pipe_result:
         shortfall_items = [
             it for it in pipe_result.items
@@ -2170,26 +2245,18 @@ def capacity_feasible_plan_bytes(
             -unfinished_by_code[x.item_code].remaining_kg, x.material, x.item_code
         ))
         for it in shortfall_items:
-            u    = unfinished_by_code[it.item_code]
-            fp, sp, fk, sk = _split(it)
-            mcs  = ", ".join(it.capable_machines) if it.capable_machines else "—"
-            note = u.downtime_reason or (
-                f"{it.material} — only {mcs} routed, capacity insufficient this month"
-            )
-            row_data = [
-                it.item_code, it.material,
-                round(float(it.gross_qty_pcs)), round(fp), round(sp),
-                round(sk, 1), round(float(u.remaining_hours), 2),
-                mcs, note,
-            ]
-            fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.00", "", ""]
-            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, DEF_HDRS), 1):
-                c = ws5.cell(row=dr, column=ci, value=v)
-                if fmt:
-                    c.number_format = fmt
-                c.alignment = Alignment(horizontal=al, vertical="center")
-                c.fill = _AFILL
-            dr += 1
+            dr = _write_shortfall_row(ws5, dr, it, unfinished_by_code)
+
+    if fitting_result and fitting_schedule:
+        fit_shortfall = [
+            it for it in fitting_result.items
+            if getattr(it, "has_weight", False) and it.item_code in fit_unfinished_by_code
+        ]
+        fit_shortfall.sort(key=lambda x: (
+            -fit_unfinished_by_code[x.item_code].remaining_kg, x.material, x.item_code
+        ))
+        for it in fit_shortfall:
+            dr = _write_shortfall_row(ws5, dr, it, fit_unfinished_by_code)
 
     if dr == 4:
         c = ws5.cell(row=4, column=1,
