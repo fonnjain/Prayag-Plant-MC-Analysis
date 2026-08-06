@@ -1822,15 +1822,15 @@ def capacity_feasible_plan_bytes(
     The scheduler (run_shift_schedule) enforces capacity day-by-day.  Items
     that run out of working days land in schedule.unfinished with their
     remaining machine-hours.  This report converts that to pieces/kg so the
-    planner gets a crisp feasible plan + a deferred list.
+    planner gets the maximum achievable this month plus a clear shortfall list.
 
     Tabs
     ----
-    1. Summary             — requested / feasible / deferred totals by material
-    2. Pipe Plan           — per-item split
-    3. Fitting Plan        — per-item (all feasible — no fitting scheduler yet)
+    1. Summary                 — requested / feasible / shortfall totals by material
+    2. Pipe Plan               — per-item split
+    3. Fitting Plan            — per-item (all feasible — no fitting scheduler yet)
     4. Machine Load (Feasible) — scheduler hours, always ≤ 100%
-    5. Deferred            — items that spill to next period
+    5. Shortfall               — unmet demand that cannot be made this month
     """
     wb = Workbook()
     wb.remove(wb.active)
@@ -1838,7 +1838,7 @@ def capacity_feasible_plan_bytes(
     _NAVY  = "1F3864"
     _NFONT = Font(name="Calibri", bold=True, size=9, color="FFFFFF")
     _NFILL = PatternFill("solid", fgColor=_NAVY)
-    _AFILL = PatternFill("solid", fgColor="FFF2CC")   # amber — deferred
+    _AFILL = PatternFill("solid", fgColor="FFF2CC")   # amber — shortfall
     _GFILL = PatternFill("solid", fgColor="E2EFDA")   # green — ok
     _RFILL = PatternFill("solid", fgColor="FCE4D6")   # red   — over (should never happen)
     _EFILL = PatternFill("solid", fgColor="F5F5F5")   # even row stripe
@@ -1890,22 +1890,27 @@ def capacity_feasible_plan_bytes(
             sched_by_mc[mc]["scheduled_hrs"] += wf.scheduled_hrs
             sched_by_mc[mc]["capacity_hrs"]  += wf.capacity_hrs
 
-    # ── Per-item feasible / deferred split ───────────────────────────────────
+    # ── Per-item feasible / shortfall split ──────────────────────────────────
     def _split(item):
-        """Return (feasible_pcs, deferred_pcs, feasible_kg, deferred_kg)."""
+        """Return (feasible_pcs, shortfall_pcs, feasible_kg, shortfall_kg).
+
+        Feasible = what the scheduler placed within working days this month.
+        Shortfall = unmet demand that cannot be made this month (NOT deferred to future).
+        feasible + shortfall = requested (gross_qty_pcs / material_kg) exactly.
+        """
         u = unfinished_by_code.get(item.item_code)
         if u is None:
             return item.gross_qty_pcs, 0.0, item.material_kg, 0.0
-        deferred_kg  = min(float(u.remaining_kg), float(item.material_kg))
-        feasible_kg  = float(item.material_kg) - deferred_kg
-        # Pro-rate pieces proportional to kg so feasible + deferred == requested exactly.
+        shortfall_kg  = min(float(u.remaining_kg), float(item.material_kg))
+        feasible_kg   = float(item.material_kg) - shortfall_kg
+        # Pro-rate pieces proportional to kg so feasible + shortfall == requested exactly.
         if item.material_kg > 0:
             ratio = feasible_kg / float(item.material_kg)
             feasible_pcs = round(float(item.gross_qty_pcs) * ratio, 2)
         else:
             feasible_pcs = 0.0
-        deferred_pcs = round(float(item.gross_qty_pcs) - feasible_pcs, 2)
-        return feasible_pcs, deferred_pcs, round(feasible_kg, 2), round(deferred_kg, 2)
+        shortfall_pcs = round(float(item.gross_qty_pcs) - feasible_pcs, 2)
+        return feasible_pcs, shortfall_pcs, round(feasible_kg, 2), round(shortfall_kg, 2)
 
     # ═══════════════════════════════════════════════════════════════════════
     # Sheet 1 — Summary
@@ -1915,10 +1920,11 @@ def capacity_feasible_plan_bytes(
     _title(ws1, f"Capacity-Feasible Production Plan — {month}")
     _note(ws1, 3,
           f"Trim rule: {FEASIBLE_TRIM_RULE}. "
-          "Deferred items are the lowest-priority tail that did not fit within working days.")
+          "Shortfall = unmet demand that cannot be achieved within this month's working days. "
+          "It is NOT rolled to a future month — the planner acts on it.")
 
-    S_HDRS = ["Type", "Material", "Requested pcs", "Feasible pcs", "Deferred pcs",
-              "Deferred %", "Requested kg", "Feasible kg", "Deferred kg"]
+    S_HDRS = ["Type", "Material", "Requested pcs", "Feasible pcs", "Shortfall pcs",
+              "Shortfall %", "Requested kg", "Feasible kg", "Shortfall kg"]
     for ci, h in enumerate(S_HDRS, 1):
         _hdr(ws1, 4, ci, h, 14)
 
@@ -1934,31 +1940,31 @@ def capacity_feasible_plan_bytes(
                 continue
             mat = it.material
             if mat not in mat_acc:
-                mat_acc[mat] = dict(req_pcs=0.0, feas_pcs=0.0, def_pcs=0.0,
-                                    req_kg=0.0,  feas_kg=0.0,  def_kg=0.0)
-            fp, dp, fk, dk = _split(it)
+                mat_acc[mat] = dict(req_pcs=0.0, feas_pcs=0.0, sf_pcs=0.0,
+                                    req_kg=0.0,  feas_kg=0.0,  sf_kg=0.0)
+            fp, sp, fk, sk = _split(it)
             a = mat_acc[mat]
             a["req_pcs"]  += float(it.gross_qty_pcs)
             a["feas_pcs"] += fp
-            a["def_pcs"]  += dp
+            a["sf_pcs"]   += sp
             a["req_kg"]   += float(it.material_kg)
             a["feas_kg"]  += fk
-            a["def_kg"]   += dk
+            a["sf_kg"]    += sk
         for i, (mat, a) in enumerate(sorted(mat_acc.items())):
             req = a["req_pcs"]
-            def_pct = a["def_pcs"] / req * 100 if req > 0 else 0.0
+            sf_pct = a["sf_pcs"] / req * 100 if req > 0 else 0.0
             rf = _EFILL if i % 2 == 0 else None
             vals = [label, mat,
-                    round(a["req_pcs"]), round(a["feas_pcs"]), round(a["def_pcs"]),
-                    f"{def_pct:.1f}%",
-                    round(a["req_kg"], 1), round(a["feas_kg"], 1), round(a["def_kg"], 1)]
+                    round(a["req_pcs"]), round(a["feas_pcs"]), round(a["sf_pcs"]),
+                    f"{sf_pct:.1f}%",
+                    round(a["req_kg"], 1), round(a["feas_kg"], 1), round(a["sf_kg"], 1)]
             for ci, v in enumerate(vals, 1):
                 c = ws1.cell(row=sr, column=ci, value=v)
                 c.alignment = Alignment(horizontal="left" if ci <= 2 else "right",
                                         vertical="center")
                 if rf:
                     c.fill = rf
-                if a["def_pcs"] > 0 and ci in (5, 6):
+                if a["sf_pcs"] > 0 and ci in (5, 6):
                     c.fill = _AFILL
             sr += 1
 
@@ -2003,16 +2009,16 @@ def capacity_feasible_plan_bytes(
     _title(ws2, f"Capacity-Feasible Pipe Plan — {month}")
 
     P_HDRS = [
-        ("Item Code",     16, "left"),
-        ("Material",      11, "center"),
-        ("Requested pcs", 13, "right"),
-        ("Feasible pcs",  13, "right"),
-        ("Deferred pcs",  13, "right"),
-        ("Requested kg",  13, "right"),
-        ("Feasible kg",   12, "right"),
-        ("Deferred kg",   12, "right"),
-        ("Machine(s)",    14, "center"),
-        ("Note",          35, "left"),
+        ("Item Code",      16, "left"),
+        ("Material",       11, "center"),
+        ("Requested pcs",  13, "right"),
+        ("Feasible pcs",   13, "right"),
+        ("Shortfall pcs",  13, "right"),
+        ("Requested kg",   13, "right"),
+        ("Feasible kg",    12, "right"),
+        ("Shortfall kg",   12, "right"),
+        ("Machine(s)",     14, "center"),
+        ("Note",           35, "left"),
     ]
     for ci, (h, w, _) in enumerate(P_HDRS, 1):
         _hdr(ws2, 3, ci, h, w)
@@ -2134,46 +2140,46 @@ def capacity_feasible_plan_bytes(
     )
 
     # ═══════════════════════════════════════════════════════════════════════
-    # Sheet 5 — Deferred
+    # Sheet 5 — Shortfall (unmet demand this month)
     # ═══════════════════════════════════════════════════════════════════════
-    ws5 = wb.create_sheet("Deferred")
+    ws5 = wb.create_sheet("Shortfall")
     ws5.sheet_view.showGridLines = False
-    _title(ws5, f"Deferred Items — spill to next period — {month}")
+    _title(ws5, f"Shortfall — Unmet Demand This Month — {month}")
 
     DEF_HDRS = [
-        ("Item Code",      16, "left"),
-        ("Material",       11, "center"),
-        ("Requested pcs",  13, "right"),
-        ("Feasible pcs",   13, "right"),
-        ("Deferred pcs",   13, "right"),
-        ("Deferred kg",    12, "right"),
-        ("Deferred hrs",   12, "right"),
+        ("Item Code",       16, "left"),
+        ("Material",        11, "center"),
+        ("Requested pcs",   13, "right"),
+        ("Feasible pcs",    13, "right"),
+        ("Shortfall pcs",   13, "right"),
+        ("Shortfall kg",    12, "right"),
+        ("Shortfall hrs",   12, "right"),
         ("Capable Machines", 20, "left"),
-        ("Reason",         38, "left"),
+        ("Reason",          38, "left"),
     ]
     for ci, (h, w, _) in enumerate(DEF_HDRS, 1):
         _hdr(ws5, 3, ci, h, w)
 
     dr = 4
     if pipe_result:
-        deferred = [
+        shortfall_items = [
             it for it in pipe_result.items
             if getattr(it, "has_weight", False) and it.item_code in unfinished_by_code
         ]
-        deferred.sort(key=lambda x: (
+        shortfall_items.sort(key=lambda x: (
             -unfinished_by_code[x.item_code].remaining_kg, x.material, x.item_code
         ))
-        for it in deferred:
+        for it in shortfall_items:
             u    = unfinished_by_code[it.item_code]
-            fp, dp, fk, dk = _split(it)
+            fp, sp, fk, sk = _split(it)
             mcs  = ", ".join(it.capable_machines) if it.capable_machines else "—"
             note = u.downtime_reason or (
-                f"{it.material} — only {mcs} routed, capacity exhausted"
+                f"{it.material} — only {mcs} routed, capacity insufficient this month"
             )
             row_data = [
                 it.item_code, it.material,
-                round(float(it.gross_qty_pcs)), round(fp), round(dp),
-                round(dk, 1), round(float(u.remaining_hours), 2),
+                round(float(it.gross_qty_pcs)), round(fp), round(sp),
+                round(sk, 1), round(float(u.remaining_hours), 2),
                 mcs, note,
             ]
             fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.00", "", ""]
@@ -2187,7 +2193,7 @@ def capacity_feasible_plan_bytes(
 
     if dr == 4:
         c = ws5.cell(row=4, column=1,
-                     value="No deferred items — all demand fits within capacity.")
+                     value="No shortfall — all demand fits within this month's capacity.")
         c.font = Font(name="Calibri", italic=True, size=10, color="065f46")
 
     buf = io.BytesIO()

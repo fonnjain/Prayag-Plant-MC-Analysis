@@ -6442,9 +6442,10 @@ def mp_report_capacity_feasible_plan():
     """FILE 3 — Capacity-Feasible Production Plan (.xlsx).
 
     Driven by the shift scheduler output: items that exceed machine capacity
-    are split into a feasible portion (what fits within working days) and a
-    deferred portion (spills to next period).  Every machine in the Machine Load
-    tab is guaranteed ≤ 100%.
+    are split into a feasible portion (maximum achievable this month by running
+    every machine at full capacity) and a shortfall (unmet demand for this month
+    that is NOT rolled to a future period — the planner acts on it).  Every
+    machine in the Machine Load tab is guaranteed ≤ 100%.
     """
     _ensure_session_run_id()
     import mp_reports as _mp_reports

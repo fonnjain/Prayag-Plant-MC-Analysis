@@ -439,8 +439,8 @@
          style="background:#065f46;color:#fff;text-decoration:none;
                 padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
                 display:inline-flex;align-items:center;gap:.35rem;"
-         title="FILE 3 — Scheduler-enforced plan: items that exceed machine capacity are split into Feasible (this period) and Deferred (next period). Every machine ≤ 100%.">
-        📐 Capacity-Feasible Plan (scheduler-capped + deferred list)
+         title="FILE 3 — Scheduler-enforced plan: maximum achievable this month at full capacity. Items that cannot be made this month appear in the Shortfall tab (NOT rolled to a future month — planner acts on them). Every machine ≤ 100%.">
+        📐 Capacity-Feasible Plan (max achievable this month + shortfall)
       </a>
     </div>
     {# Context note explaining the two load types shown in the Machine Load table #}
@@ -449,7 +449,7 @@
       <strong>Demand % vs Sched %:</strong>
       <em>Demand</em> = LPT-optimised hours from the quantity plan — may exceed 100% when total demand exceeds capacity.
       <em>Sched</em> = hours the day-by-day scheduler placed within working days — always ≤ 100%.
-      Download the <strong>Capacity-Feasible Plan</strong> above to see the per-item feasible/deferred split.
+      Download the <strong>Capacity-Feasible Plan</strong> above to see the per-item feasible/shortfall split.
     </div>
   </div>
   {% endif %}

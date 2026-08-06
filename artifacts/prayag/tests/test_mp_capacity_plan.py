@@ -3,7 +3,8 @@ Tests for:
   A1 — machine_plan_comparison_bytes uses correct MachineLoad field names
   A2 — report routes fall back to latest persisted run when session is empty
   B  — capacity_feasible_plan_bytes: reconciliation, ≤100% machine load,
-       deferred list populated when demand > capacity
+       shortfall list populated when demand > capacity; no machine idles
+       while it still has an assignable item and days remaining.
 """
 from __future__ import annotations
 
@@ -222,18 +223,18 @@ class TestCapacityFeasiblePlan:
         schedule = _make_schedule_from_engine(items)
         return result, schedule
 
-    def test_deferred_populated_when_overcapacity(self):
-        """When demand > capacity, schedule.unfinished is non-empty."""
+    def test_shortfall_populated_when_overcapacity(self):
+        """When demand > capacity, schedule.unfinished is non-empty (shortfall exists)."""
         result, schedule = self._overcapacity_fixture()
         assert len(schedule.unfinished) > 0, (
-            "Expected deferred items when 1,200h demand on 1,000h capacity"
+            "Expected shortfall items when 1,200h demand on 1,000h capacity"
         )
 
-    def test_deferred_empty_when_fits(self):
-        """When demand fits in capacity, schedule.unfinished is empty."""
+    def test_shortfall_empty_when_fits(self):
+        """When demand fits in capacity, schedule.unfinished is empty (no shortfall)."""
         result, schedule = self._fits_fixture()
         assert schedule.unfinished == [], (
-            f"Expected no deferred items, got: {schedule.unfinished}"
+            f"Expected no shortfall items, got: {schedule.unfinished}"
         )
 
     def test_feasible_machine_load_never_exceeds_100(self):
@@ -244,8 +245,8 @@ class TestCapacityFeasiblePlan:
         data = rpt.capacity_feasible_plan_bytes(result, None, schedule, "2026-07")
         assert isinstance(data, bytes) and len(data) > 1000
 
-    def test_feasible_plus_deferred_equals_requested_per_item(self):
-        """For every item: feasible_pcs + deferred_pcs == requested_pcs (gross_qty_pcs)."""
+    def test_feasible_plus_shortfall_equals_requested_per_item(self):
+        """For every item: feasible_pcs + shortfall_pcs == requested_pcs (gross_qty_pcs)."""
         result, schedule = self._overcapacity_fixture()
         unfinished_by_code = {u.item_code: u for u in schedule.unfinished}
 
@@ -254,60 +255,105 @@ class TestCapacityFeasiblePlan:
                 continue
             u = unfinished_by_code.get(it.item_code)
             if u is None:
-                # Fully feasible: deferred = 0
+                # Fully feasible: shortfall = 0
                 continue
-            deferred_kg = min(u.remaining_kg, it.material_kg)
-            feasible_kg = it.material_kg - deferred_kg
+            shortfall_kg = min(u.remaining_kg, it.material_kg)
+            feasible_kg  = it.material_kg - shortfall_kg
             if it.material_kg > 0:
                 ratio = feasible_kg / it.material_kg
                 feasible_pcs = round(it.gross_qty_pcs * ratio, 2)
             else:
                 feasible_pcs = 0.0
-            deferred_pcs = round(it.gross_qty_pcs - feasible_pcs, 2)
-            total = round(feasible_pcs + deferred_pcs, 2)
+            shortfall_pcs = round(it.gross_qty_pcs - feasible_pcs, 2)
+            total = round(feasible_pcs + shortfall_pcs, 2)
             assert abs(total - round(it.gross_qty_pcs, 2)) < 0.02, (
-                f"{it.item_code}: feasible {feasible_pcs} + deferred {deferred_pcs} "
+                f"{it.item_code}: feasible {feasible_pcs} + shortfall {shortfall_pcs} "
                 f"= {total} ≠ requested {it.gross_qty_pcs:.2f}"
             )
 
-    def test_deferred_items_named_bottleneck(self):
-        """Deferred tab entries include capable machine names in the reason."""
+    def test_shortfall_items_named_bottleneck(self):
+        """Shortfall tab entries include capable machine names in the reason."""
         result, schedule = self._overcapacity_fixture()
         data = rpt.capacity_feasible_plan_bytes(result, None, schedule, "2026-07")
-        # Verify xlsx contains machine name in deferred sheet
         import zipfile, io as _io
         with zipfile.ZipFile(_io.BytesIO(data)) as zf:
-            # openpyxl-written files contain xl/sharedStrings.xml
             names = zf.namelist()
             assert any("sharedStrings" in n or "sheet" in n for n in names)
-        # Verify the Deferred sheet is in the workbook
         import openpyxl
         wb = openpyxl.load_workbook(filename=_io.BytesIO(data))
-        assert "Deferred" in wb.sheetnames
-        ws = wb["Deferred"]
+        assert "Shortfall" in wb.sheetnames, (
+            f"Expected 'Shortfall' tab, found: {wb.sheetnames}"
+        )
+        ws = wb["Shortfall"]
         cell_vals = [str(ws.cell(row=r, column=c).value or "")
                      for r in range(4, ws.max_row + 1)
                      for c in range(1, ws.max_column + 1)]
         full_text = " ".join(cell_vals)
         assert "M/C-1" in full_text or "M/C-2" in full_text, (
-            "Deferred tab should mention capable machines"
+            "Shortfall tab should mention capable machines"
         )
 
     def test_all_five_sheets_present(self):
-        """Workbook has the five required tabs."""
+        """Workbook has the five required tabs (Shortfall replaces Deferred)."""
         result, schedule = self._overcapacity_fixture()
         data = rpt.capacity_feasible_plan_bytes(result, None, schedule, "2026-07")
         import openpyxl, io as _io
         wb = openpyxl.load_workbook(filename=_io.BytesIO(data))
-        required = {"Summary", "Pipe Plan", "Fitting Plan", "Machine Load (Feasible)", "Deferred"}
+        required = {"Summary", "Pipe Plan", "Fitting Plan", "Machine Load (Feasible)", "Shortfall"}
         assert required.issubset(set(wb.sheetnames)), (
             f"Missing tabs: {required - set(wb.sheetnames)}"
+        )
+        assert "Deferred" not in wb.sheetnames, (
+            "Tab should be named 'Shortfall', not 'Deferred'"
+        )
+
+    def test_no_machine_idles_while_work_remains(self):
+        """Scheduler must run every machine at full capacity until demand is exhausted.
+
+        The scheduler's _schedule_machine_day only idles a machine when the
+        eligible list (items routable to that machine with remaining_hrs > 0) is
+        empty.  This test verifies that: after the scheduler runs, total scheduled
+        hours + shortfall hours == total demand hours (no hours are lost to idle
+        while eligible work remained).
+        """
+        result, schedule = self._overcapacity_fixture()
+
+        # Total demand hours from the engine items
+        total_demand_hrs = sum(it.machine_hrs for it in result.items)
+
+        # Scheduled hours = sum of non-idle planned_hours across all blocks
+        scheduled_hrs = sum(
+            (b.planned_hours - b.excess_hours)
+            for b in schedule.blocks
+            if not b.is_idle
+        )
+
+        # Shortfall hours = sum of remaining hours for unfinished items
+        shortfall_hrs = sum(u.remaining_hours for u in schedule.unfinished)
+
+        # scheduled + shortfall must account for all demand.
+        # Allow a small tolerance for min_run_block padding (excess_hours).
+        total_accounted = scheduled_hrs + shortfall_hrs
+        assert total_accounted <= total_demand_hrs + 1.0, (
+            f"Accounted {total_accounted:.1f}h > demand {total_demand_hrs:.1f}h "
+            "(excess exceeds tolerance)"
+        )
+
+        # In the overcapacity fixture (1,200h demand, 1,000h capacity), scheduled
+        # hours must be close to full capacity — machines should not sit idle while
+        # the remaining items still had eligible hours.
+        total_capacity = sum(
+            _wf.capacity_hrs for _wf in schedule.weekly_fill
+        )
+        assert scheduled_hrs >= total_capacity * 0.95, (
+            f"Scheduled {scheduled_hrs:.1f}h < 95% of capacity {total_capacity:.1f}h "
+            "— machines appear to be idling while work remained"
         )
 
     def test_no_schedule_renders_gracefully(self):
         """When schedule is None, the report still renders (no machine load data)."""
         items = [_item("SWR-001", "SWR", 200.0, 0.3, 60.0, 300.0, 0.2)]
         result = _engine_result(items)
-        # schedule=None → no machine load rows, no deferred items
+        # schedule=None → no machine load rows, no shortfall items
         data = rpt.capacity_feasible_plan_bytes(result, None, None, "2026-07")
         assert isinstance(data, bytes) and len(data) > 0
