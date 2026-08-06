@@ -6230,7 +6230,8 @@ def mp_upload():
             if not demand and not fitting_demand:
                 error = ("No pipe or fitting items found in the uploaded file. "
                          "Check that the file has CPVC/UPVC/SWR/AGRI Pipe or "
-                         "Fitting tabs with data in cols A and D.")
+                         "Fitting tabs with an 'Item Code' column and a "
+                         "'Production Plan' column in the header row.")
         except Exception as exc:
             error = f"Failed to parse Excel: {exc}"
 

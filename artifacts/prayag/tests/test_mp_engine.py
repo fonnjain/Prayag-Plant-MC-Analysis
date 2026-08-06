@@ -337,8 +337,21 @@ class TestCoverageGaps:
 class TestDemandParsing:
     """Test parse_demand_excel using a real in-memory xlsx workbook."""
 
+    # July layout: A=Item Code, D=Production Plan, E=W1, F=W2, G=W3, H=W4
+    _JULY_HEADER = ["Item Code", None, None, "Production Plan", "W1", "W2", "W3", "W4"]
+    # August layout: A=Item Code, I=Production Plan (no weekly cols)
+    _AUG_HEADER  = ["Item Code", "Colour", "Avg 3-Mo Sale", "Pending Order",
+                    "Pending Last Mo", "Buffer Req", "Stock", "Min Production",
+                    "Production Plan", "Order"]
+
     def _make_xlsx(self, tab_data: dict) -> bytes:
-        """Build an xlsx in-memory with given {tab_name: [(col_a, col_d), ...]} rows."""
+        """July layout: A=Item Code, D=Production Plan, E..H=W1..W4.
+
+        tab_data = {tab_name: [(col_a, col_d), ...]}
+        Automatically prepends the July header row so the header-based parser
+        can locate columns.  Weekly columns are left empty (no W1..W4 data in
+        the data rows), which exercises the no-weekly-cols fallback.
+        """
         import openpyxl
         wb = openpyxl.Workbook()
         first = True
@@ -349,10 +362,56 @@ class TestDemandParsing:
                 first = False
             else:
                 ws = wb.create_sheet(title=tab_name)
+            ws.append(self._JULY_HEADER)          # header row required by parser
             for col_a, col_d in rows:
-                row_data = [None] * 4
+                row_data = [None] * 8
                 row_data[0] = col_a
-                row_data[3] = col_d
+                row_data[3] = col_d               # col D = Production Plan
+                ws.append(row_data)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _make_xlsx_july_weekly(self, tab_data: dict) -> bytes:
+        """July layout WITH per-week quantities (col D total, E..H weekly).
+
+        tab_data = {tab_name: [(col_a, col_d, w1, w2, w3, w4), ...]}
+        """
+        import openpyxl
+        wb = openpyxl.Workbook()
+        first = True
+        for tab_name, rows in tab_data.items():
+            if first:
+                ws = wb.active; ws.title = tab_name; first = False
+            else:
+                ws = wb.create_sheet(title=tab_name)
+            ws.append(self._JULY_HEADER)
+            for row_vals in rows:
+                col_a, col_d = row_vals[0], row_vals[1]
+                w1, w2, w3, w4 = (list(row_vals[2:6]) + [0, 0, 0, 0])[:4]
+                ws.append([col_a, None, None, col_d, w1, w2, w3, w4])
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _make_xlsx_august(self, tab_data: dict) -> bytes:
+        """August layout: A=Item Code, I=Production Plan (no weekly cols).
+
+        tab_data = {tab_name: [(col_a, col_i), ...]}
+        """
+        import openpyxl
+        wb = openpyxl.Workbook()
+        first = True
+        for tab_name, rows in tab_data.items():
+            if first:
+                ws = wb.active; ws.title = tab_name; first = False
+            else:
+                ws = wb.create_sheet(title=tab_name)
+            ws.append(self._AUG_HEADER)           # col I (idx 8) = Production Plan
+            for col_a, col_i in rows:
+                row_data = [None] * 10
+                row_data[0] = col_a
+                row_data[8] = col_i               # col I = Production Plan
                 ws.append(row_data)
         buf = io.BytesIO()
         wb.save(buf)
@@ -461,6 +520,108 @@ class TestDemandParsing:
         assert "5110" in codes, "5110 must be kept by the demand parser"
         assert "5111" in codes, "5111 must be kept by the demand parser"
         assert len(items) == 2
+
+    # ── Layout-aware parsing (header-based column detection) ──────────────────
+
+    def test_august_layout_col_i(self):
+        """August file: Production Plan in col I (index 8); no weekly cols."""
+        xlsx = self._make_xlsx_august({
+            "CPVC Pipe": [("PS2", 160_466), ("PW11", 500)],
+            "UPVC Pipe": [("UX10", 92_690)],
+            "SWR Pipe":  [("SW20", 75_647)],
+            "AGRI Pipe": [("AG10", 16_362)],
+        })
+        items = eng.parse_demand_excel(xlsx)
+        by_code = {it.item_code: it for it in items}
+        assert "PS2" in by_code
+        assert by_code["PS2"].qty_pcs == 160_466
+        assert by_code["UX10"].qty_pcs == 92_690
+        # No weekly cols → whole qty is W1, no per-week breakdown
+        assert by_code["PS2"].week_qty == {}
+        assert by_code["PS2"].first_requested_week == 1
+
+    def test_august_fitting_layout_col_i(self):
+        """August fitting tabs also use col I for Production Plan."""
+        from mp_engine import parse_fitting_demand
+        xlsx = self._make_xlsx_august({
+            "CPVC Fitting": [("CF1", 1_000)],
+            "UPVC Fitting": [("UF1", 2_000)],
+        })
+        items = parse_fitting_demand(xlsx)
+        by_code = {it.item_code: it for it in items}
+        assert by_code["CF1"].qty_pcs == 1_000
+        assert by_code["UF1"].qty_pcs == 2_000
+
+    def test_july_layout_with_weekly_cols(self):
+        """July file: Production Plan in col D, W1..W4 in cols E..H."""
+        xlsx = self._make_xlsx_july_weekly({
+            "CPVC Pipe": [
+                ("PS2",  1000, 250, 250, 250, 250),  # evenly split
+                ("PW11",  500,   0, 500,   0,   0),  # all in W2
+            ],
+        })
+        items = eng.parse_demand_excel(xlsx)
+        by_code = {it.item_code: it for it in items}
+
+        ps2 = by_code["PS2"]
+        assert ps2.qty_pcs == 1000
+        assert ps2.week_qty == {1: 250, 2: 250, 3: 250, 4: 250}
+        assert ps2.first_requested_week == 1   # min of non-zero weeks
+
+        pw11 = by_code["PW11"]
+        assert pw11.qty_pcs == 500
+        assert pw11.week_qty == {2: 500}
+        assert pw11.first_requested_week == 2  # only W2 is non-zero
+
+    def test_missing_production_plan_header_raises(self):
+        """When 'Production Plan' is absent, raise ValueError naming tab + headers."""
+        import openpyxl, io as _io
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "CPVC Pipe"
+        ws.append(["Item Code", "Colour", "Pending Order", "Stock"])  # no Production Plan
+        ws.append(["PS2", "White", 0, 100])
+        buf = _io.BytesIO(); wb.save(buf)
+
+        import pytest
+        with pytest.raises(ValueError, match="CPVC Pipe"):
+            eng.parse_demand_excel(buf.getvalue())
+
+    def test_no_weekly_cols_sets_first_week_1(self):
+        """When file has no W1..W4 header columns at all, first_requested_week=1."""
+        # August layout has no W1..W4 columns → week_cols={} → first_week=1
+        xlsx = self._make_xlsx_august({
+            "SWR Pipe": [("SW1", 300)],
+        })
+        items = eng.parse_demand_excel(xlsx)
+        assert len(items) == 1
+        assert items[0].first_requested_week == 1
+        assert items[0].week_qty == {}
+
+    def test_july_empty_weekly_data_first_week_zero(self):
+        """July header has W1..W4 cols but item has all-zero weekly qty → first_week=0."""
+        # week_cols present in header, but data cells are all None/zero
+        # → week_qty={} → first_week=0 (scheduler treats 0 as W1)
+        xlsx = self._make_xlsx({  # July header includes W1..W4
+            "CPVC Pipe": [("PS2", 500)],  # no weekly values in data row
+        })
+        items = eng.parse_demand_excel(xlsx)
+        assert len(items) == 1
+        assert items[0].week_qty == {}
+        assert items[0].first_requested_week == 0  # unspecified → scheduler uses W1
+
+    def test_july_and_august_give_same_pipe_totals(self):
+        """Same demand expressed in July vs August layout → identical totals."""
+        demand_data = [("PS2", 1000), ("PW11", 500)]
+        xlsx_jul = self._make_xlsx({"CPVC Pipe": demand_data})
+        xlsx_aug = self._make_xlsx_august({"CPVC Pipe": demand_data})
+
+        items_jul = eng.parse_demand_excel(xlsx_jul)
+        items_aug = eng.parse_demand_excel(xlsx_aug)
+
+        total_jul = sum(it.qty_pcs for it in items_jul)
+        total_aug = sum(it.qty_pcs for it in items_aug)
+        assert total_jul == total_aug == 1500
 
 
 # ── Serialisation round-trip ──────────────────────────────────────────────────

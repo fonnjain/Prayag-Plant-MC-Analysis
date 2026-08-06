@@ -36,11 +36,8 @@ PIPE_TABS: Dict[str, str] = {
     "SWR Pipe":  "SWR",
     "AGRI Pipe": "AGRI",
 }
-_COL_ITEM = 0   # Col A — Item Code (0-indexed)
-_COL_QTY  = 3   # Col D — Production Plan pcs (0-indexed)
-# Weekly columns E..H → W1..W4 (0-indexed 4..7)
-_COL_W1   = 4
-_COL_W4   = 7
+# Column positions are NOT fixed — located by header text at parse time.
+# See _locate_plan_columns().
 
 # Default machine-group config for Report-11A–D (overridable via DB later)
 REPORT_11_GROUPS: Dict[str, List[str]] = {
@@ -276,13 +273,54 @@ def _safe_float(val) -> float:
         return 0.0
 
 
+def _locate_plan_columns(
+    header_row: tuple,
+) -> Tuple[Optional[int], Optional[int], Dict[int, int]]:
+    """Scan a header row; return (item_col, qty_col, week_cols).
+
+    item_col  — index of "Item Code" / "Item" header; None if absent
+                (caller defaults to column 0).
+    qty_col   — index of "Production Plan" or "Production Plan (pcs)";
+                None when not found in this row.
+    week_cols — {week_number: col_index} for W1..W4; empty when absent.
+
+    Column layout changed between monthly release-plan files (July: col D;
+    August: col I).  This function makes parsing layout-independent.
+    """
+    _ITEM_HDR = {"item code", "item"}
+    _QTY_HDR  = {"production plan", "production plan (pcs)"}
+    _WEEK_HDR = {"w1": 1, "w2": 2, "w3": 3, "w4": 4}
+
+    item_col:  Optional[int]  = None
+    qty_col:   Optional[int]  = None
+    week_cols: Dict[int, int] = {}
+
+    for i, cell in enumerate(header_row):
+        if cell is None:
+            continue
+        h = str(cell).strip().lower()
+        if h in _ITEM_HDR and item_col is None:
+            item_col = i
+        elif h in _QTY_HDR and qty_col is None:
+            qty_col = i
+        elif h in _WEEK_HDR and _WEEK_HDR[h] not in week_cols:
+            week_cols[_WEEK_HDR[h]] = i
+
+    return item_col, qty_col, week_cols
+
+
 def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
     """Parse the weekly release plan Excel and return DemandItem list.
 
-    Reads only the four Pipe tabs (CPVC Pipe / UPVC Pipe / SWR Pipe / AGRI Pipe).
-    Col A = Item Code, Col D = Production Plan pcs (total).
-    Cols E–H = W1..W4 per-week quantities (optional; zero if column absent).
-    Normalises all codes. Skips TOTAL rows, blank rows, and non-item rows.
+    Reads the four Pipe tabs (CPVC/UPVC/SWR/AGRI Pipe).
+    Locates "Item Code" and "Production Plan" columns by HEADER TEXT in
+    the first non-blank row — the column layout differs between monthly files
+    (July: Production Plan = col D; August: col I).
+    Weekly columns W1..W4 are optional: when absent the full Production Plan
+    quantity is placed at first_requested_week=1 so the scheduler spreads it
+    across the month normally.
+    Raises ValueError naming the tab and observed headers when the
+    Production Plan column cannot be found.
     """
     if not _OPENPYXL:
         raise RuntimeError("openpyxl is required for demand upload.")
@@ -300,30 +338,57 @@ def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
         if ws is None:
             continue  # tab absent — skip gracefully
 
-        for row in ws.iter_rows(values_only=True):
-            raw_a = str(row[_COL_ITEM]).strip() if row[_COL_ITEM] is not None else ""
-            raw_d = row[_COL_QTY] if len(row) > _COL_QTY else None
+        item_col:         Optional[int]  = None
+        qty_col:          Optional[int]  = None
+        week_cols:        Dict[int, int] = {}
+        header_row_seen:  List[str]      = []
 
-            if _is_skip_row(raw_a, str(raw_d or "")):
+        for row in ws.iter_rows(values_only=True):
+            # ── Header row: locate columns by text ──────────────────────────
+            if qty_col is None:
+                _ic, _qc, _wc = _locate_plan_columns(row)
+                # Keep first non-trivial row for error reporting
+                if not header_row_seen:
+                    header_row_seen = [str(c).strip() for c in row if c is not None][:14]
+                if _qc is not None:
+                    item_col  = _ic if _ic is not None else 0
+                    qty_col   = _qc
+                    week_cols = _wc
+                continue  # always skip; if header not yet found, keep scanning
+
+            # ── Data rows ───────────────────────────────────────────────────
+            raw_a = (
+                str(row[item_col]).strip()
+                if len(row) > item_col and row[item_col] is not None
+                else ""
+            )
+            raw_qty = row[qty_col] if len(row) > qty_col else None
+
+            if _is_skip_row(raw_a, ""):
                 continue
 
             try:
-                qty = float(str(raw_d).replace(",", "").strip())
+                qty = float(str(raw_qty).replace(",", "").strip())
             except (ValueError, TypeError):
                 continue
             if qty <= 0:
                 continue
 
-            # Read W1..W4 from cols E–H (indices 4–7); zero if column absent
+            # Weekly quantities from W1..W4 columns (may be absent in file)
             week_qty: Dict[int, float] = {}
-            for wk_idx, col in enumerate(range(_COL_W1, _COL_W4 + 1), start=1):
+            for wk_num, col in week_cols.items():
                 v = row[col] if len(row) > col else None
                 wq = _safe_float(v)
                 if wq > 0:
-                    week_qty[wk_idx] = wq
+                    week_qty[wk_num] = wq
 
-            # First week with non-zero quantity
-            first_week = min(week_qty) if week_qty else 0
+            # first_requested_week:
+            #   no weekly cols in file  → treat whole qty as W1 (month-level)
+            #   weekly cols present     → earliest non-zero week; 0 if all zero
+            if not week_cols:
+                first_week = 1
+            else:
+                first_week = min(week_qty) if week_qty else 0
 
             items.append(DemandItem(
                 item_code=_norm_code(raw_a),
@@ -333,6 +398,17 @@ def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
                 week_qty=week_qty,
                 first_requested_week=first_week,
             ))
+
+        # ── Production Plan column must be found in every Pipe tab ──────────
+        if qty_col is None:
+            seen_str = (
+                ", ".join(repr(h) for h in header_row_seen)
+                if header_row_seen else "(no rows read)"
+            )
+            raise ValueError(
+                f"Tab '{tab_name}': 'Production Plan' column not found. "
+                f"Headers seen: {seen_str}"
+            )
 
     return items
 
@@ -903,8 +979,11 @@ class FittingEngineResult:
 def parse_fitting_demand(file_bytes: bytes) -> List[FittingDemandItem]:
     """Parse fitting tabs from the weekly release plan Excel.
 
-    Reads CPVC/UPVC/SWR/AGRI Fitting tabs. Col A = Item Code, Col D = pcs.
+    Reads CPVC/UPVC/SWR/AGRI Fitting tabs. Locates Item Code and Production
+    Plan columns by HEADER TEXT — not fixed column position.
     Skips TOTAL rows and zero-qty rows. Normalises all codes.
+    Raises ValueError naming the tab and observed headers when the
+    Production Plan column cannot be found.
     """
     if not _OPENPYXL:
         raise RuntimeError("openpyxl is required for demand upload.")
@@ -921,9 +1000,28 @@ def parse_fitting_demand(file_bytes: bytes) -> List[FittingDemandItem]:
         if ws is None:
             continue
 
+        item_col:        Optional[int] = None
+        qty_col:         Optional[int] = None
+        header_row_seen: List[str]     = []
+
         for row in ws.iter_rows(values_only=True):
-            raw_a = str(row[_COL_ITEM]).strip() if row[_COL_ITEM] is not None else ""
-            raw_d = row[_COL_QTY] if len(row) > _COL_QTY else None
+            # ── Header row: locate columns by text ──────────────────────────
+            if qty_col is None:
+                _ic, _qc, _wc = _locate_plan_columns(row)
+                if not header_row_seen:
+                    header_row_seen = [str(c).strip() for c in row if c is not None][:14]
+                if _qc is not None:
+                    item_col = _ic if _ic is not None else 0
+                    qty_col  = _qc
+                continue
+
+            # ── Data rows ───────────────────────────────────────────────────
+            raw_a = (
+                str(row[item_col]).strip()
+                if len(row) > item_col and row[item_col] is not None
+                else ""
+            )
+            raw_d = row[qty_col] if len(row) > qty_col else None
 
             if _is_skip_row(raw_a, str(raw_d or "")):
                 continue
@@ -940,6 +1038,18 @@ def parse_fitting_demand(file_bytes: bytes) -> List[FittingDemandItem]:
                 material=material,
                 qty_pcs=qty,
             ))
+
+        # ── Production Plan column must be found in every Fitting tab ────────
+        if qty_col is None:
+            seen_str = (
+                ", ".join(repr(h) for h in header_row_seen)
+                if header_row_seen else "(no rows read)"
+            )
+            raise ValueError(
+                f"Tab '{tab_name}': 'Production Plan' column not found. "
+                f"Headers seen: {seen_str}"
+            )
+
     return items
 
 
