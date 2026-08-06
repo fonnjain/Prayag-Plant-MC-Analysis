@@ -5467,11 +5467,12 @@ def mp_settings_recompute_wastage():
 @app.route("/machine-planning/report/revised-plan")
 def mp_report_revised_plan():
     """FILE 1 — Revised Production Plan (.xlsx) showing rejection + waste per item."""
+    _ensure_session_run_id()
     import mp_reports as _mp_reports
     result         = _mp2_result_from_session()
     fitting_result = _mp3_fitting_result_from_session()
     if not result and not fitting_result:
-        return "No plan in session — upload a demand file first.", 400
+        return redirect(url_for("mp_upload"))
     payload = _mp2_load_run(session.get("mp2_run_id") or "") or {}
     month   = payload.get("effective_month", "unknown")
     try:
@@ -5490,10 +5491,11 @@ def mp_report_revised_plan():
 @app.route("/machine-planning/report/machine-plan-comparison")
 def mp_report_machine_plan_comparison():
     """FILE 2 — Machine Plan Comparison (.xlsx): without vs with rejection+waste."""
+    _ensure_session_run_id()
     import mp_reports as _mp_reports
     run_id = session.get("mp2_run_id")
     if not run_id:
-        return "No plan in session — upload a demand file first.", 400
+        return redirect(url_for("mp_upload"))
     payload = _mp2_load_run(run_id) or {}
     month = payload.get("effective_month", "unknown")
     seg   = payload.get("segment", _mp_seed.SEGMENT)
@@ -6125,6 +6127,24 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
         return None
 
 
+def _ensure_session_run_id() -> None:
+    """Populate session["mp2_run_id"] from the latest persisted run when the session is empty.
+
+    Called at the top of every report-download route so that planners can still
+    download reports after a server restart or a session expiry, without needing
+    to re-upload their demand file.  Best-effort: silently does nothing when
+    mp_model is unavailable or no runs exist.
+    """
+    if session.get("mp2_run_id"):
+        return
+    try:
+        runs = _mp_model.list_plan_runs(_mp_seed.SEGMENT, limit=1)
+        if runs:
+            session["mp2_run_id"] = str(runs[0]["id"])
+    except Exception:
+        pass
+
+
 def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
     """Run shift scheduler from stored pipe demand in session."""
     run_id = session.get("mp2_run_id")
@@ -6335,6 +6355,18 @@ def mp_results():
 
     schedule_result = _mp_schedule_from_session()
 
+    # Per-machine scheduled load (always ≤ 100%) from shift scheduler.
+    # Keyed by machine name; value = actual production hours within working days.
+    # Distinct from the LPT "demand load" (ml.assigned_hrs) which can exceed 100%.
+    sched_load_by_mc: dict = {}   # {machine: total_scheduled_hrs_over_month}
+    if schedule_result:
+        for _wf in schedule_result.weekly_fill:
+            mc = _wf.machine
+            # weekly_fill rows are per-week; accumulate to monthly totals
+            if mc not in sched_load_by_mc:
+                sched_load_by_mc[mc] = 0.0
+            sched_load_by_mc[mc] += _wf.scheduled_hrs
+
     # Staleness warnings — best-effort, never blocks render
     try:
         _drive_tok = sheets._get_drive_token()
@@ -6376,6 +6408,7 @@ def mp_results():
         frozen=False,
         run_status="pending",
         schedule_result=schedule_result,
+        sched_load_by_mc=sched_load_by_mc,
         staleness_warnings=staleness_warnings,
         rej_missing=rej_missing,
     )
@@ -6404,9 +6437,50 @@ def mp_schedule_view():
     )
 
 
+@app.route("/machine-planning/report/capacity-feasible-plan")
+def mp_report_capacity_feasible_plan():
+    """FILE 3 — Capacity-Feasible Production Plan (.xlsx).
+
+    Driven by the shift scheduler output: items that exceed machine capacity
+    are split into a feasible portion (what fits within working days) and a
+    deferred portion (spills to next period).  Every machine in the Machine Load
+    tab is guaranteed ≤ 100%.
+    """
+    _ensure_session_run_id()
+    import mp_reports as _mp_reports
+    result          = _mp2_result_from_session()
+    fitting_result  = _mp3_fitting_result_from_session()
+    schedule_result = _mp_schedule_from_session()
+
+    if result is None and fitting_result is None:
+        return redirect(url_for("mp_upload"))
+
+    payload = _mp2_load_run(session.get("mp2_run_id") or "") or {}
+    month   = payload.get("effective_month", "unknown")
+
+    try:
+        data = _mp_reports.capacity_feasible_plan_bytes(
+            result, fitting_result, schedule_result, month
+        )
+    except AssertionError as exc:
+        app.logger.error("capacity_feasible_plan assertion: %s", exc)
+        return f"Scheduler invariant error — {exc}", 500
+    except Exception as exc:
+        app.logger.error("capacity_feasible_plan failed: %s", exc)
+        return f"Report generation failed: {exc}", 500
+
+    fname = f"capacity_feasible_plan_{month}.xlsx"
+    return current_app.response_class(
+        data,
+        mimetype=_XLSX_MIME,
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 @app.route("/machine-planning/report/consolidated")
 def mp_report_consolidated():
     """Download the 7-tab consolidated plan workbook as .xlsx."""
+    _ensure_session_run_id()
     from flask import send_file as _send_file
 
     result         = _mp2_result_from_session()
@@ -6439,6 +6513,7 @@ def mp_report_consolidated():
 @app.route("/machine-planning/report/zip")
 def mp_report_zip():
     """Download all available report files (11, 11A-D, 12, consolidated) as ZIP."""
+    _ensure_session_run_id()
     from flask import send_file as _send_file
 
     result          = _mp2_result_from_session()
@@ -6506,6 +6581,7 @@ def mp_report_download(report_id: str):
     Allowed: '11', '11A', '11B', '11C', '11D', '12'.
     Re-runs the engine from stored demand so the file is always fresh.
     """
+    _ensure_session_run_id()
     from flask import send_file as _send_file
 
     allowed = {"11", "11A", "11B", "11C", "11D", "12"}

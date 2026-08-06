@@ -1640,14 +1640,14 @@ def machine_plan_comparison_bytes(
     def _safe_peak(res):
         if not res or not res.machine_loads:
             return ("—", 0.0)
-        top = max(res.machine_loads, key=lambda ml: ml.total_hours)
-        return (top.machine, top.total_hours)
+        top = max(res.machine_loads, key=lambda ml: ml.assigned_hrs)
+        return (top.machine, top.assigned_hrs)
 
     def _fleet_util(res) -> float:
         if not res or not res.machine_loads:
             return 0.0
-        cap = sum(ml.capacity_hours for ml in res.machine_loads if ml.capacity_hours > 0)
-        load = sum(ml.total_hours for ml in res.machine_loads)
+        cap = sum(ml.capacity_hrs for ml in res.machine_loads if ml.capacity_hrs > 0)
+        load = sum(ml.assigned_hrs for ml in res.machine_loads)
         return load / cap * 100 if cap > 0 else 0.0
 
     # ── Sheet 1: Summary ─────────────────────────────────────────────────────
@@ -1731,10 +1731,10 @@ def machine_plan_comparison_bytes(
 
     r2 = 4
     for mc in all_mcs:
-        f_hrs = flat_ml[mc].total_hours if mc in flat_ml else 0.0
-        w_hrs = with_ml[mc].total_hours if mc in with_ml else 0.0
-        cap   = (with_ml[mc].capacity_hours if mc in with_ml else
-                 flat_ml[mc].capacity_hours if mc in flat_ml else 0.0)
+        f_hrs = flat_ml[mc].assigned_hrs if mc in flat_ml else 0.0
+        w_hrs = with_ml[mc].assigned_hrs if mc in with_ml else 0.0
+        cap   = (with_ml[mc].capacity_hrs if mc in with_ml else
+                 flat_ml[mc].capacity_hrs if mc in flat_ml else 0.0)
         util  = w_hrs / cap * 100 if cap > 0 else 0.0
         for ci, v in enumerate([mc, round(f_hrs, 1), round(w_hrs, 1),
                                   round(w_hrs - f_hrs, 1), round(cap, 1),
@@ -1801,4 +1801,395 @@ def machine_plan_comparison_bytes(
     wb.save(buf)
     return buf.getvalue()
 
-    return _wb_bytes(wb)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FILE 3 — Capacity-Feasible Production Plan
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Named constant that encodes the scheduler's item-priority order.
+# Change this string if the scheduler trim rule is ever swapped.
+FEASIBLE_TRIM_RULE = "earliest-week-first / largest-remaining-hrs-first (LPT)"
+
+
+def capacity_feasible_plan_bytes(
+    pipe_result,      # mp_engine.EngineResult | None
+    fitting_result,   # mp_engine.FittingEngineResult | None
+    schedule,         # mp_scheduler.ScheduleResult | None  (pipe only)
+    month: str,
+) -> bytes:
+    """Return .xlsx bytes for the Capacity-Feasible Production Plan.
+
+    The scheduler (run_shift_schedule) enforces capacity day-by-day.  Items
+    that run out of working days land in schedule.unfinished with their
+    remaining machine-hours.  This report converts that to pieces/kg so the
+    planner gets a crisp feasible plan + a deferred list.
+
+    Tabs
+    ----
+    1. Summary             — requested / feasible / deferred totals by material
+    2. Pipe Plan           — per-item split
+    3. Fitting Plan        — per-item (all feasible — no fitting scheduler yet)
+    4. Machine Load (Feasible) — scheduler hours, always ≤ 100%
+    5. Deferred            — items that spill to next period
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    _NAVY  = "1F3864"
+    _NFONT = Font(name="Calibri", bold=True, size=9, color="FFFFFF")
+    _NFILL = PatternFill("solid", fgColor=_NAVY)
+    _AFILL = PatternFill("solid", fgColor="FFF2CC")   # amber — deferred
+    _GFILL = PatternFill("solid", fgColor="E2EFDA")   # green — ok
+    _RFILL = PatternFill("solid", fgColor="FCE4D6")   # red   — over (should never happen)
+    _EFILL = PatternFill("solid", fgColor="F5F5F5")   # even row stripe
+
+    def _title(ws, text: str) -> None:
+        ws.merge_cells("A1:K1")
+        c = ws["A1"]
+        c.value = text
+        c.font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
+        c.fill = _NFILL
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 28
+        ws.row_dimensions[2].height = 4
+
+    def _hdr(ws, row: int, col: int, txt: str, w: int = 14) -> None:
+        c = ws.cell(row=row, column=col, value=txt)
+        c.font = _NFONT
+        c.fill = _NFILL
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(col)].width = max(
+            ws.column_dimensions[get_column_letter(col)].width or 0, w
+        )
+
+    def _note(ws, row: int, text: str, ncols: int = 11) -> None:
+        end = get_column_letter(ncols)
+        ws.merge_cells(f"A{row}:{end}{row}")
+        c = ws[f"A{row}"]
+        c.value = text
+        c.font = Font(name="Calibri", italic=True, size=9, color="555555")
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 24
+
+    # ── Build unfinished lookup: item_code → UnfinishedItem ──────────────────
+    unfinished_by_code: dict = {}
+    if schedule:
+        for u in schedule.unfinished:
+            unfinished_by_code[u.item_code] = u
+
+    # ── Build per-machine scheduled load from weekly_fill ────────────────────
+    # Scheduled hours = actual production hours placed within the working days.
+    # These are ALWAYS ≤ machine capacity (the scheduler's hard constraint).
+    sched_by_mc: dict = {}
+    if schedule:
+        for wf in schedule.weekly_fill:
+            mc = wf.machine
+            if mc not in sched_by_mc:
+                sched_by_mc[mc] = {"scheduled_hrs": 0.0, "capacity_hrs": 0.0}
+            # weekly_fill rows are per-week — sum both sides to get monthly totals
+            sched_by_mc[mc]["scheduled_hrs"] += wf.scheduled_hrs
+            sched_by_mc[mc]["capacity_hrs"]  += wf.capacity_hrs
+
+    # ── Per-item feasible / deferred split ───────────────────────────────────
+    def _split(item):
+        """Return (feasible_pcs, deferred_pcs, feasible_kg, deferred_kg)."""
+        u = unfinished_by_code.get(item.item_code)
+        if u is None:
+            return item.gross_qty_pcs, 0.0, item.material_kg, 0.0
+        deferred_kg  = min(float(u.remaining_kg), float(item.material_kg))
+        feasible_kg  = float(item.material_kg) - deferred_kg
+        # Pro-rate pieces proportional to kg so feasible + deferred == requested exactly.
+        if item.material_kg > 0:
+            ratio = feasible_kg / float(item.material_kg)
+            feasible_pcs = round(float(item.gross_qty_pcs) * ratio, 2)
+        else:
+            feasible_pcs = 0.0
+        deferred_pcs = round(float(item.gross_qty_pcs) - feasible_pcs, 2)
+        return feasible_pcs, deferred_pcs, round(feasible_kg, 2), round(deferred_kg, 2)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Sheet 1 — Summary
+    # ═══════════════════════════════════════════════════════════════════════
+    ws1 = wb.create_sheet("Summary")
+    ws1.sheet_view.showGridLines = False
+    _title(ws1, f"Capacity-Feasible Production Plan — {month}")
+    _note(ws1, 3,
+          f"Trim rule: {FEASIBLE_TRIM_RULE}. "
+          "Deferred items are the lowest-priority tail that did not fit within working days.")
+
+    S_HDRS = ["Type", "Material", "Requested pcs", "Feasible pcs", "Deferred pcs",
+              "Deferred %", "Requested kg", "Feasible kg", "Deferred kg"]
+    for ci, h in enumerate(S_HDRS, 1):
+        _hdr(ws1, 4, ci, h, 14)
+
+    sr = 5
+
+    def _summary_pipe(res, label: str) -> None:
+        nonlocal sr
+        if not res:
+            return
+        mat_acc: dict = {}
+        for it in res.items:
+            if not getattr(it, "has_weight", False):
+                continue
+            mat = it.material
+            if mat not in mat_acc:
+                mat_acc[mat] = dict(req_pcs=0.0, feas_pcs=0.0, def_pcs=0.0,
+                                    req_kg=0.0,  feas_kg=0.0,  def_kg=0.0)
+            fp, dp, fk, dk = _split(it)
+            a = mat_acc[mat]
+            a["req_pcs"]  += float(it.gross_qty_pcs)
+            a["feas_pcs"] += fp
+            a["def_pcs"]  += dp
+            a["req_kg"]   += float(it.material_kg)
+            a["feas_kg"]  += fk
+            a["def_kg"]   += dk
+        for i, (mat, a) in enumerate(sorted(mat_acc.items())):
+            req = a["req_pcs"]
+            def_pct = a["def_pcs"] / req * 100 if req > 0 else 0.0
+            rf = _EFILL if i % 2 == 0 else None
+            vals = [label, mat,
+                    round(a["req_pcs"]), round(a["feas_pcs"]), round(a["def_pcs"]),
+                    f"{def_pct:.1f}%",
+                    round(a["req_kg"], 1), round(a["feas_kg"], 1), round(a["def_kg"], 1)]
+            for ci, v in enumerate(vals, 1):
+                c = ws1.cell(row=sr, column=ci, value=v)
+                c.alignment = Alignment(horizontal="left" if ci <= 2 else "right",
+                                        vertical="center")
+                if rf:
+                    c.fill = rf
+                if a["def_pcs"] > 0 and ci in (5, 6):
+                    c.fill = _AFILL
+            sr += 1
+
+    def _summary_fitting(res, label: str) -> None:
+        nonlocal sr
+        if not res:
+            return
+        mat_acc: dict = {}
+        for it in res.items:
+            if not getattr(it, "has_weight", False):
+                continue
+            mat = it.material
+            if mat not in mat_acc:
+                mat_acc[mat] = dict(req_pcs=0.0, req_kg=0.0)
+            mat_acc[mat]["req_pcs"] += float(getattr(it, "gross_qty_pcs", it.qty_pcs))
+            mat_acc[mat]["req_kg"]  += float(it.material_kg)
+        for i, (mat, a) in enumerate(sorted(mat_acc.items())):
+            rf = _EFILL if i % 2 == 0 else None
+            vals = [label, mat,
+                    round(a["req_pcs"]), round(a["req_pcs"]), 0,
+                    "0.0%",
+                    round(a["req_kg"], 1), round(a["req_kg"], 1), 0.0]
+            for ci, v in enumerate(vals, 1):
+                c = ws1.cell(row=sr, column=ci, value=v)
+                c.alignment = Alignment(horizontal="left" if ci <= 2 else "right",
+                                        vertical="center")
+                if rf:
+                    c.fill = rf
+            sr += 1
+
+    _summary_pipe(pipe_result, "PIPE")
+    _summary_fitting(fitting_result, "FITTING")
+
+    if sr == 5:
+        ws1.cell(row=5, column=1).value = "No routable items found."
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Sheet 2 — Pipe Plan
+    # ═══════════════════════════════════════════════════════════════════════
+    ws2 = wb.create_sheet("Pipe Plan")
+    ws2.sheet_view.showGridLines = False
+    _title(ws2, f"Capacity-Feasible Pipe Plan — {month}")
+
+    P_HDRS = [
+        ("Item Code",     16, "left"),
+        ("Material",      11, "center"),
+        ("Requested pcs", 13, "right"),
+        ("Feasible pcs",  13, "right"),
+        ("Deferred pcs",  13, "right"),
+        ("Requested kg",  13, "right"),
+        ("Feasible kg",   12, "right"),
+        ("Deferred kg",   12, "right"),
+        ("Machine(s)",    14, "center"),
+        ("Note",          35, "left"),
+    ]
+    for ci, (h, w, _) in enumerate(P_HDRS, 1):
+        _hdr(ws2, 3, ci, h, w)
+
+    pr = 4
+    if pipe_result:
+        for it in sorted(pipe_result.items, key=lambda x: (x.material, x.item_code)):
+            if not getattr(it, "has_weight", False):
+                continue
+            fp, dp, fk, dk = _split(it)
+            u = unfinished_by_code.get(it.item_code)
+            mcs = ", ".join(it.capable_machines) if it.capable_machines else "—"
+            note = ""
+            if u:
+                note = u.downtime_reason or (
+                    f"{it.material} — only {mcs} routed, capacity exhausted"
+                )
+            row_data = [
+                it.item_code, it.material,
+                round(float(it.gross_qty_pcs)), round(fp), round(dp),
+                round(float(it.material_kg), 1), round(fk, 1), round(dk, 1),
+                mcs, note,
+            ]
+            fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.0", "0.0", "", ""]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, P_HDRS), 1):
+                c = ws2.cell(row=pr, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+                if dp > 0 and ci in (5, 8):
+                    c.fill = _AFILL
+            pr += 1
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Sheet 3 — Fitting Plan
+    # ═══════════════════════════════════════════════════════════════════════
+    ws3 = wb.create_sheet("Fitting Plan")
+    ws3.sheet_view.showGridLines = False
+    _title(ws3, f"Capacity-Feasible Fitting Plan — {month}")
+    _note(ws3, 3,
+          "Fitting scheduler not yet implemented — all fitting demand is treated as "
+          "feasible.  Capacity constraint is applied to pipe machines only.")
+
+    FH = [
+        ("Item Code",     16, "left"),
+        ("Material",      11, "center"),
+        ("Requested pcs", 13, "right"),
+        ("Feasible pcs",  13, "right"),
+        ("Requested kg",  13, "right"),
+        ("Feasible kg",   12, "right"),
+    ]
+    for ci, (h, w, _) in enumerate(FH, 1):
+        _hdr(ws3, 4, ci, h, w)
+
+    fr3 = 5
+    if fitting_result:
+        for it in sorted(fitting_result.items, key=lambda x: (x.material, x.item_code)):
+            if not getattr(it, "has_weight", False):
+                continue
+            gross = float(getattr(it, "gross_qty_pcs", it.qty_pcs))
+            row_data = [
+                it.item_code, it.material,
+                round(gross), round(gross),
+                round(float(it.material_kg), 1), round(float(it.material_kg), 1),
+            ]
+            fmts = ["", "", "#,##0", "#,##0", "0.0", "0.0"]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, FH), 1):
+                c = ws3.cell(row=fr3, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+            fr3 += 1
+    else:
+        ws3.cell(row=5, column=1).value = "No fitting demand in this plan."
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Sheet 4 — Machine Load (Feasible)
+    # ═══════════════════════════════════════════════════════════════════════
+    ws4 = wb.create_sheet("Machine Load (Feasible)")
+    ws4.sheet_view.showGridLines = False
+    _title(ws4, f"Scheduler Machine Load (Capacity-Enforced) — {month}")
+    _note(ws4, 3,
+          "Scheduled hours = actual production hours placed by the day-by-day scheduler "
+          "within working days.  These are always ≤ machine capacity (hard constraint).", 6)
+
+    ML_HDRS = ["Machine", "Capacity hrs", "Scheduled hrs", "Util %",
+               "Headroom hrs", "Status"]
+    for ci, h in enumerate(ML_HDRS, 1):
+        _hdr(ws4, 4, ci, h, 14)
+
+    mr = 5
+    over_capacity = False
+    if sched_by_mc:
+        for mc, d in sorted(sched_by_mc.items()):
+            cap   = float(d["capacity_hrs"])
+            sched = round(float(d["scheduled_hrs"]), 1)
+            util  = round(sched / cap * 100, 1) if cap > 0 else 0.0
+            head  = round(cap - sched, 1)
+            if util > 100.0:
+                over_capacity = True
+            status   = "✓ OK" if util <= 100.0 else "⚠ OVER"
+            row_fill = _GFILL if util <= 100.0 else _RFILL
+            vals = [mc, round(cap, 1), sched, f"{util:.1f}%", head, status]
+            for ci, v in enumerate(vals, 1):
+                c = ws4.cell(row=mr, column=ci, value=v)
+                c.alignment = Alignment(
+                    horizontal="left" if ci == 1 else "right", vertical="center")
+                c.fill = row_fill
+            mr += 1
+    else:
+        c = ws4.cell(row=mr, column=1,
+                     value="No scheduler data — upload a demand file to run the shift scheduler.")
+        c.font = Font(name="Calibri", italic=True, size=10, color="6B7280")
+
+    # Assert the scheduler invariant: no machine should exceed capacity.
+    assert not over_capacity, (
+        "Scheduler produced utilisation > 100% for at least one machine, "
+        "violating the capacity constraint.  Machine data: " + str(sched_by_mc)
+    )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Sheet 5 — Deferred
+    # ═══════════════════════════════════════════════════════════════════════
+    ws5 = wb.create_sheet("Deferred")
+    ws5.sheet_view.showGridLines = False
+    _title(ws5, f"Deferred Items — spill to next period — {month}")
+
+    DEF_HDRS = [
+        ("Item Code",      16, "left"),
+        ("Material",       11, "center"),
+        ("Requested pcs",  13, "right"),
+        ("Feasible pcs",   13, "right"),
+        ("Deferred pcs",   13, "right"),
+        ("Deferred kg",    12, "right"),
+        ("Deferred hrs",   12, "right"),
+        ("Capable Machines", 20, "left"),
+        ("Reason",         38, "left"),
+    ]
+    for ci, (h, w, _) in enumerate(DEF_HDRS, 1):
+        _hdr(ws5, 3, ci, h, w)
+
+    dr = 4
+    if pipe_result:
+        deferred = [
+            it for it in pipe_result.items
+            if getattr(it, "has_weight", False) and it.item_code in unfinished_by_code
+        ]
+        deferred.sort(key=lambda x: (
+            -unfinished_by_code[x.item_code].remaining_kg, x.material, x.item_code
+        ))
+        for it in deferred:
+            u    = unfinished_by_code[it.item_code]
+            fp, dp, fk, dk = _split(it)
+            mcs  = ", ".join(it.capable_machines) if it.capable_machines else "—"
+            note = u.downtime_reason or (
+                f"{it.material} — only {mcs} routed, capacity exhausted"
+            )
+            row_data = [
+                it.item_code, it.material,
+                round(float(it.gross_qty_pcs)), round(fp), round(dp),
+                round(dk, 1), round(float(u.remaining_hours), 2),
+                mcs, note,
+            ]
+            fmts = ["", "", "#,##0", "#,##0", "#,##0", "0.0", "0.00", "", ""]
+            for ci, (v, fmt, (_, _, al)) in enumerate(zip(row_data, fmts, DEF_HDRS), 1):
+                c = ws5.cell(row=dr, column=ci, value=v)
+                if fmt:
+                    c.number_format = fmt
+                c.alignment = Alignment(horizontal=al, vertical="center")
+                c.fill = _AFILL
+            dr += 1
+
+    if dr == 4:
+        c = ws5.cell(row=4, column=1,
+                     value="No deferred items — all demand fits within capacity.")
+        c.font = Font(name="Calibri", italic=True, size=10, color="065f46")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

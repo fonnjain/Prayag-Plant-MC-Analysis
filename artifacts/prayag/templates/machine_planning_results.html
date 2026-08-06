@@ -275,8 +275,14 @@
         <tr style="background:var(--navy);color:#fff;">
           <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
           <th style="padding:.35rem .5rem;text-align:right;">Capacity hrs</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt hrs</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;"
+              title="Demand load (pre-capacity): LPT-optimised hours. May exceed 100% when total demand exceeds machine capacity.">Demand hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;"
+              title="Demand load %. May exceed 100% — reflects planned quantity, not achievable output.">Demand %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#14532d;"
+              title="Scheduled load (capacity-enforced): hours the shift scheduler actually placed within working days. Always ≤ 100%.">Sched hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#14532d;"
+              title="Scheduled load %. Always ≤ 100% — this is what the machine can actually run.">Sched %</th>
           <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base hrs</th>
           <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
           <th style="padding:.35rem .5rem;text-align:right;">Machine-days</th>
@@ -288,22 +294,42 @@
         {% for ml in result.machine_loads %}
         {% set bl = baseline_by_mc.get(ml.machine) %}
         {% set over = ml.utilisation_pct > 100 %}
+        {% set sched_hrs = sched_load_by_mc.get(ml.machine, none) %}
+        {% set sched_pct = (sched_hrs / ml.capacity_hrs * 100) if (sched_hrs is not none and ml.capacity_hrs > 0) else none %}
         <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index % 2 == 0 else '#fff') }};">
           <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
           <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
+          {# Demand load — pre-capacity, may exceed 100% #}
           <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
-                     color:{{ '#c55a11' if over else '#065f46' }};">
+                     color:{{ '#c55a11' if over else '#065f46' }};"
+              title="Demand load (pre-capacity) — may exceed 100%">
             {{ "{:,.1f}".format(ml.assigned_hrs) }}
           </td>
-          <td style="padding:.3rem .5rem;text-align:right;">
+          <td style="padding:.3rem .5rem;text-align:right;"
+              title="Demand load % — may exceed 100%">
             <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
-              {{ "{:.1f}".format(ml.utilisation_pct) }}%
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%{% if over %} ⚠{% endif %}
             </div>
             <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
               <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
                           background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
             </div>
           </td>
+          {# Scheduled load — capacity-enforced, always ≤ 100% #}
+          {% if sched_hrs is not none %}
+          <td style="padding:.3rem .5rem;text-align:right;color:#065f46;font-weight:600;"
+              title="Scheduled load (capacity-enforced) — always ≤ 100%">
+            {{ "{:,.1f}".format(sched_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;"
+              title="Scheduled load % — always ≤ 100%">
+            <div style="font-weight:700;color:{% if sched_pct < 85 %}#6b7280{% elif sched_pct <= 100 %}#065f46{% else %}#991b1b{% endif %};">
+              {{ "{:.1f}".format(sched_pct) }}%
+            </div>
+          </td>
+          {% else %}
+          <td colspan="2" style="padding:.3rem .5rem;text-align:center;color:#9ca3af;font-size:.73rem;">—</td>
+          {% endif %}
           {% if bl %}
           {% set b_over = bl.utilisation_pct > 100 %}
           <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if b_over else '#4b5563' }};">
@@ -390,25 +416,40 @@
         📊 Consolidated Plan Report (7 tabs — Summary · Machine Load · Weekly Fill · Shift Schedule · Item Assignment · Material &amp; Cost · Coverage)
       </a>
     </div>
-    {# ── Rejection + Waste reports ─────────────────────────────────────── #}
+    {# ── Rejection + Waste + Capacity-Feasible reports ─────────────────── #}
     <div style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
       <span style="font-size:.73rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">
-        Rejection &amp; Wastage:
+        Rejection &amp; Capacity:
       </span>
       <a href="{{ url_for('mp_report_revised_plan') }}"
          style="background:#7c3aed;color:#fff;text-decoration:none;
                 padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
                 display:inline-flex;align-items:center;gap:.35rem;"
-         title="FILE 1 — Shows net demand, rejection gross-up and waste fraction per item">
-        📋 Revised Production Plan
+         title="FILE 1 — Net demand inflated for rejection and waste fraction. Does NOT cap to capacity.">
+        📋 Revised Production Plan (rejection + waste gross-up)
       </a>
       <a href="{{ url_for('mp_report_machine_plan_comparison') }}"
          style="background:#b45309;color:#fff;text-decoration:none;
                 padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
                 display:inline-flex;align-items:center;gap:.35rem;"
-         title="FILE 2 — Side-by-side: old flat-waste vs new rejection+measured-waste">
-        📊 Machine Plan Comparison
+         title="FILE 2 — Side-by-side: old flat-waste (no rejection) vs new rejection + measured-waste">
+        📊 Machine Plan Comparison (without vs with losses)
       </a>
+      <a href="{{ url_for('mp_report_capacity_feasible_plan') }}"
+         style="background:#065f46;color:#fff;text-decoration:none;
+                padding:.4rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;"
+         title="FILE 3 — Scheduler-enforced plan: items that exceed machine capacity are split into Feasible (this period) and Deferred (next period). Every machine ≤ 100%.">
+        📐 Capacity-Feasible Plan (scheduler-capped + deferred list)
+      </a>
+    </div>
+    {# Context note explaining the two load types shown in the Machine Load table #}
+    <div style="margin-top:.45rem;padding:.4rem .6rem;background:#f0fdf4;border:1px solid #bbf7d0;
+                border-radius:.35rem;font-size:.72rem;color:#14532d;line-height:1.5;">
+      <strong>Demand % vs Sched %:</strong>
+      <em>Demand</em> = LPT-optimised hours from the quantity plan — may exceed 100% when total demand exceeds capacity.
+      <em>Sched</em> = hours the day-by-day scheduler placed within working days — always ≤ 100%.
+      Download the <strong>Capacity-Feasible Plan</strong> above to see the per-item feasible/deferred split.
     </div>
   </div>
   {% endif %}
