@@ -51,13 +51,26 @@ def _make_mp_model_stub():
 
 @pytest.fixture(autouse=True)
 def patch_mp_model(monkeypatch):
-    """Inject the mp_model stub before importing mp_scheduler."""
+    """Inject the mp_model stub before importing mp_scheduler.
+
+    Saves and restores the REAL mp_scheduler around the test so that
+    subsequent test files get a clean scheduler bound to the real mp_model,
+    not the stub.  Without this, the stub-bound scheduler leaks into the
+    process-wide sys.modules and causes other tests to see get_params→5.0.
+    """
     stub = _make_mp_model_stub()
+    # Stash the real scheduler (may be None if not yet imported)
+    real_scheduler = sys.modules.get("mp_scheduler")
     monkeypatch.setitem(sys.modules, "mp_model", stub)
-    # Force re-import of mp_scheduler with stub
-    if "mp_scheduler" in sys.modules:
-        del sys.modules["mp_scheduler"]
+    # Force re-import of mp_scheduler so it binds _mp to the stub
+    sys.modules.pop("mp_scheduler", None)
     yield
+    # After the test: evict the stub-bound scheduler and put the real one back.
+    # monkeypatch will restore sys.modules["mp_model"] itself; we only need to
+    # clean up mp_scheduler so the next test gets the real version.
+    sys.modules.pop("mp_scheduler", None)
+    if real_scheduler is not None:
+        sys.modules["mp_scheduler"] = real_scheduler
 
 
 # ── Minimal ItemResult / DemandItem stubs ─────────────────────────────────

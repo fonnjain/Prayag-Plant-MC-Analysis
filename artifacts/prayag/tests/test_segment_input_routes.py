@@ -124,7 +124,17 @@ def test_seg_input_summary_lists_awaiting_months():
 def test_reports_page_is_ai_only_no_management_content():
     # The /reports page is now AI Insights & Analytics only — the power & labour
     # (segment-input) banner and the "Management Reports" framing were moved off
-    # it. The awaiting-months banner lives on /management-entries instead.
+    # the main content area.  The awaiting-months banner lives on
+    # /management-entries instead.
+    #
+    # NOTE: Both "Management Reports" and "/segment-input" now appear in the
+    # global nav drawer (base.html) on every page, so we cannot assert their
+    # absence from the full page body.  Instead we verify:
+    #   1. The page renders the AI Insights section.
+    #   2. The management-reports section HEADING (h2) is absent from the main
+    #      content — management_reports.html renders it; reports.html must not.
+    #   3. No segment-input FORM action or inline button points to /segment-input
+    #      (nav hrefs are expected; form POSTs are not).
     store.AVAILABLE = True
     store.seg_inputs_for = lambda months: {}
     appmod.get_daily_records = lambda months: ([], [], [])
@@ -132,10 +142,17 @@ def test_reports_page_is_ai_only_no_management_content():
     resp = client.get("/reports")
     assert resp.status_code == 200, resp.status_code
     body = resp.get_data(as_text=True)
-    assert "AI Insights" in body
-    assert "Management Reports" not in body
-    assert "/segment-input" not in body
-    print("ok: /reports is AI-only, no management-report content")
+    assert "AI Insights" in body, "reports page must contain AI Insights section"
+    # management_reports.html renders an h2 heading; reports.html must not
+    assert "Management Reports</h2>" not in body, (
+        "/reports must not render a Management Reports section heading"
+    )
+    # Segment-input appears as a nav link (href); a form action would indicate
+    # the segment-input banner was incorrectly included on this page
+    assert 'action="/segment-input"' not in body, (
+        "/reports must not POST to /segment-input"
+    )
+    print("ok: /reports is AI-only, no management-report section heading")
 
 
 def test_gom_and_tank_have_validation_badge():

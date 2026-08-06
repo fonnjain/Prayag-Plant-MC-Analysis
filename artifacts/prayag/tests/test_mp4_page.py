@@ -23,12 +23,18 @@ from mp_engine import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _minimal_xlsx() -> bytes:
-    """Build a minimal in-memory .xlsx with CPVC Pipe and CPVC Fitting tabs."""
+    """Build a minimal in-memory .xlsx with CPVC Pipe and CPVC Fitting tabs.
+
+    Uses the header layout that ``parse_demand_excel`` / ``parse_fitting_demand``
+    require: col A = "Item Code", col D = "Production Plan" (header-based
+    detection, July layout).  Previously used "PLAN QTY" which was only valid
+    when the parser used fixed column indices.
+    """
     wb = openpyxl.Workbook()
     for tab in ["CPVC Pipe", "UPVC Pipe", "SWR Pipe", "AGRI Pipe",
                 "CPVC Fitting", "UPVC Fitting", "SWR Fitting", "AGRI Fitting"]:
         ws = wb.create_sheet(tab)
-        ws["A1"] = "ITEM CODE"; ws["D1"] = "PLAN QTY"
+        ws["A1"] = "Item Code"; ws["D1"] = "Production Plan"
         ws["A2"] = "PIPE-001";  ws["D2"] = 500
     del wb["Sheet"]
     buf = io.BytesIO()
