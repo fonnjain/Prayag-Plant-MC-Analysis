@@ -6325,6 +6325,14 @@ def mp_results():
     except Exception:
         staleness_warnings = []
 
+    # Check rejection data availability — warn if the table is empty so the
+    # planner knows rejection gross-up was NOT applied (0% fallback used).
+    _rej_seg = result.segment if result else (
+        fitting_result.segment if fitting_result else _mp_seed.SEGMENT
+    )
+    _rej_lkp  = _mp_rej_plan.build_rejection_lookup(_rej_seg)
+    rej_missing = not _rej_lkp.get("has_data", False)
+
     return render_template(
         "machine_planning_results.html",
         result=result,
@@ -6350,6 +6358,7 @@ def mp_results():
         run_status="pending",
         schedule_result=schedule_result,
         staleness_warnings=staleness_warnings,
+        rej_missing=rej_missing,
     )
 
 
@@ -6667,6 +6676,13 @@ def mp_run_detail(run_id: int):
             **_empty,
         )
     vars_ = _reconstruct_display_vars(row)
+    # Derive rej_missing from stored items: if all weighted pipe items used
+    # rej_basis="none", rejection data was absent when this plan was run.
+    _pipe_items = (vars_.get("result") or {}).get("items") or []
+    _weighted   = [it for it in _pipe_items if it.get("has_weight")]
+    vars_["rej_missing"] = bool(_weighted) and all(
+        (it.get("rej_basis") or "none") == "none" for it in _weighted
+    )
     return render_template(
         "machine_planning_run_detail.html",
         run_row=row,

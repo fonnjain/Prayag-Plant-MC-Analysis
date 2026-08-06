@@ -32,6 +32,19 @@
     </a>
   </div>
 
+  {# ── Rejection-data missing banner ─────────────────────────────────── #}
+  {% if rej_missing %}
+  <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:.5rem;
+              padding:.65rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#991b1b;">
+    🚫 <strong>Rejection data not seeded</strong> — 0% rejection rate was assumed
+    for every item. Gross-up has NOT been applied, so planned quantities may be
+    understated. Run <strong>Reseed Rejection</strong> on the
+    <a href="{{ url_for('mp_settings_view') }}" style="color:#991b1b;font-weight:700;">
+      MP&nbsp;Settings</a> page, then re-upload the demand file to get
+    rejection-adjusted quantities before freezing.
+  </div>
+  {% endif %}
+
   {# ── Estimated-rate notice ──────────────────────────────────────────── #}
   {% if n_estimated > 0 %}
   <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:.5rem;

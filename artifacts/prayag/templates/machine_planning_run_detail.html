@@ -91,6 +91,19 @@
   </div>
   {% endif %}
 
+  {# ── Rejection-data missing banner ────────────────────────────────────── #}
+  {% if rej_missing is defined and rej_missing %}
+  <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:.5rem;
+              padding:.65rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#991b1b;">
+    🚫 <strong>Rejection data was absent</strong> when this plan was frozen — 0%
+    rejection rate was applied to all items. Planned quantities may be understated.
+    Seed rejection data on the
+    <a href="{{ url_for('mp_settings_view') }}" style="color:#991b1b;font-weight:700;">
+      MP&nbsp;Settings</a> page and create a new run to get rejection-adjusted
+    quantities.
+  </div>
+  {% endif %}
+
   {# ── Combined material summary ─────────────────────────────────────────── #}
   {% if combined_material_kg %}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
