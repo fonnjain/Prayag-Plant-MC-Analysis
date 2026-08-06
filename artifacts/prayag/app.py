@@ -5481,7 +5481,7 @@ def mp_report_revised_plan():
         app.logger.error("revised_plan generation failed: %s", exc)
         return f"Report generation failed: {exc}", 500
     fname = f"revised_production_plan_{month}.xlsx"
-    return current_app.response_class(
+    return app.response_class(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fname}"},
@@ -5531,7 +5531,7 @@ def mp_report_machine_plan_comparison():
         return f"Report generation failed: {exc}", 500
 
     fname = f"machine_plan_comparison_{month}.xlsx"
-    return current_app.response_class(
+    return app.response_class(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fname}"},
@@ -6504,7 +6504,7 @@ def mp_report_capacity_feasible_plan():
         return f"Report generation failed: {exc}", 500
 
     fname = f"capacity_feasible_plan_{month}.xlsx"
-    return current_app.response_class(
+    return app.response_class(
         data,
         mimetype=_XLSX_MIME,
         headers={"Content-Disposition": f"attachment; filename={fname}"},

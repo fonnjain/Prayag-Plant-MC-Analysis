@@ -357,3 +357,63 @@ class TestCapacityFeasiblePlan:
         # schedule=None → no machine load rows, no shortfall items
         data = rpt.capacity_feasible_plan_bytes(result, None, None, "2026-07")
         assert isinstance(data, bytes) and len(data) > 0
+
+
+# ─── Route success paths (would have caught the missing current_app import) ──
+
+class TestReportRouteSuccessPaths:
+    """Hit the three download routes end-to-end with a mocked session run so
+    the final response-construction line actually executes (a NameError there
+    slipped to production once because tests only covered the redirect path)."""
+
+    def _client(self, monkeypatch, result, schedule=None):
+        import app as flask_app
+        flask_app.app.config["TESTING"] = True
+        flask_app.app.config["SECRET_KEY"] = "test"
+        monkeypatch.setattr(flask_app, "_ensure_session_run_id", lambda: None)
+        monkeypatch.setattr(flask_app, "_mp2_result_from_session", lambda: result)
+        monkeypatch.setattr(flask_app, "_mp3_fitting_result_from_session", lambda: None)
+        monkeypatch.setattr(flask_app, "_mp_schedule_from_session", lambda: schedule)
+        if hasattr(flask_app, "_mp_fitting_schedule_from_session"):
+            monkeypatch.setattr(flask_app, "_mp_fitting_schedule_from_session", lambda: None)
+        monkeypatch.setattr(
+            flask_app, "_mp2_load_run",
+            lambda rid: {"effective_month": "2026-07", "segment": "PLUMBING",
+                         "demand": [], "fitting_demand": []},
+        )
+        monkeypatch.setattr("store.get_api_key", lambda: None)
+        return flask_app.app.test_client()
+
+    def _xlsx_ok(self, resp):
+        assert resp.status_code == 200, resp.get_data(as_text=True)[:300]
+        assert resp.data[:2] == b"PK"  # xlsx zip magic
+        assert "spreadsheetml" in resp.mimetype
+
+    def test_revised_plan_route_success(self, monkeypatch):
+        items = [_item("SWR-001", "SWR", 1000.0, 0.3, 300.0, 295.0, 1.0)]
+        c = self._client(monkeypatch, _engine_result(items))
+        with c as client:
+            from flask import session as _s
+            with client.session_transaction() as s:
+                s["mp2_run_id"] = "1"
+            self._xlsx_ok(client.get("/machine-planning/report/revised-plan"))
+
+    def test_machine_plan_comparison_route_success(self, monkeypatch):
+        import app as flask_app
+        items = [_item("SWR-001", "SWR", 1000.0, 0.3, 300.0, 295.0, 1.0)]
+        res = _engine_result(items)
+        c = self._client(monkeypatch, res)
+        monkeypatch.setattr("mp_model.get_params", lambda *a, **kw: None)
+        monkeypatch.setattr("mp_engine.run_engine", lambda *a, **kw: res)
+        with c as client:
+            with client.session_transaction() as s:
+                s["mp2_run_id"] = "1"
+            self._xlsx_ok(client.get("/machine-planning/report/machine-plan-comparison"))
+
+    def test_capacity_feasible_plan_route_success(self, monkeypatch):
+        items = [_item("SWR-001", "SWR", 200.0, 0.3, 60.0, 300.0, 0.2)]
+        c = self._client(monkeypatch, _engine_result(items))
+        with c as client:
+            with client.session_transaction() as s:
+                s["mp2_run_id"] = "1"
+            self._xlsx_ok(client.get("/machine-planning/report/capacity-feasible-plan"))
