@@ -298,6 +298,82 @@
   {% endif %}
 
   <!-- ═══════════════════════════════════════════════════════
+       SEED STATUS PANEL
+  ═══════════════════════════════════════════════════════ -->
+  {% if seed_status_panel %}
+  <details id="seed-status-panel" style="margin-bottom:1rem;">
+    <summary style="cursor:pointer;font-size:.8rem;font-weight:700;color:var(--navy);
+                    padding:.45rem .6rem;background:#f9fafb;border:1px solid #e5e7eb;
+                    border-radius:.45rem;list-style:none;display:flex;align-items:center;gap:.5rem;">
+      <span>🗄 Seed Status</span>
+      {% set n_red     = seed_status_panel | selectattr('status','equalto','red')     | list | length %}
+      {% set n_missing = seed_status_panel | selectattr('status','equalto','missing') | list | length %}
+      {% set n_amber   = seed_status_panel | selectattr('status','equalto','amber')   | list | length %}
+      {% if n_red > 0 or n_missing > 0 %}
+        <span style="background:#fee2e2;color:#991b1b;border-radius:99px;
+                     padding:.1rem .5rem;font-size:.72rem;">
+          {{ n_red + n_missing }} issue{{ 's' if (n_red + n_missing) > 1 else '' }}
+        </span>
+      {% elif n_amber > 0 %}
+        <span style="background:#fef3c7;color:#78350f;border-radius:99px;
+                     padding:.1rem .5rem;font-size:.72rem;">{{ n_amber }} amber</span>
+      {% else %}
+        <span style="background:#d1fae5;color:#065f46;border-radius:99px;
+                     padding:.1rem .5rem;font-size:.72rem;">all fresh</span>
+      {% endif %}
+      <span style="margin-left:auto;font-size:.7rem;color:#9ca3af;">▾ expand</span>
+    </summary>
+    <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 .45rem .45rem;
+                padding:.6rem;background:#fff;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead>
+          <tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;">
+            <th style="text-align:left;padding:.3rem .4rem;">Table</th>
+            <th style="text-align:right;padding:.3rem .4rem;">Rows</th>
+            <th style="text-align:left;padding:.3rem .4rem;">Last seeded</th>
+            <th style="text-align:left;padding:.3rem .4rem;">Source modified</th>
+            <th style="text-align:center;padding:.3rem .4rem;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in seed_status_panel %}
+          {% set dot = {'green':'🟢','amber':'🟡','red':'🔴','missing':'⚫'}[row.status] %}
+          <tr style="border-bottom:1px solid #f3f4f6;">
+            <td style="padding:.3rem .4rem;font-weight:600;">{{ row.label }}</td>
+            <td style="padding:.3rem .4rem;text-align:right;color:#374151;">
+              {{ '{:,}'.format(row.row_count) if row.row_count else '—' }}
+            </td>
+            <td style="padding:.3rem .4rem;color:#374151;">
+              {% if row.seeded_at %}
+                {{ row.seeded_at.strftime('%Y-%m-%d %H:%M') }} UTC
+              {% else %}—{% endif %}
+            </td>
+            <td style="padding:.3rem .4rem;color:#374151;">
+              {% if row.source_modified_time %}
+                {{ row.source_modified_time.strftime('%Y-%m-%d %H:%M') }} UTC
+              {% elif row.has_file %}—{% else %}
+                <span style="color:#9ca3af;">multi-source</span>
+              {% endif %}
+            </td>
+            <td style="padding:.3rem .4rem;text-align:center;">
+              {{ dot }}
+              {% if row.days_behind %}
+                <span style="font-size:.68rem;color:#991b1b;">{{ row.days_behind|int }}d behind</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p style="margin:.5rem 0 0;font-size:.68rem;color:#9ca3af;">
+        🟢 fresh &nbsp;·&nbsp; 🟡 &gt;14 days old &nbsp;·&nbsp;
+        🔴 source updated after seed &nbsp;·&nbsp; ⚫ never seeded
+      </p>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════
        SECTION 1 — COMPOUND RECIPES
   ═══════════════════════════════════════════════════════ -->
   <div class="section-card" id="sec-compound">

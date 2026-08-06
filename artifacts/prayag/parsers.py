@@ -2691,12 +2691,18 @@ def parse_maintenance(values: list, plant: str) -> list:
 # ---------------------------------------------------------------------------
 
 def _parse_date_cell_manpower(v) -> str:
-    """Return ISO date string from a cell value, or '' if not a recognisable date."""
+    """Return ISO date string from a cell value, or '' if not a recognisable date.
+
+    Handles:
+    - Google Sheets text-prefix apostrophe (strips leading "'")
+    - Excel serial numbers
+    - Common text formats including "Jul 1, 2026" (Month Day, Year)
+    """
     import datetime
-    s = str(v).strip()
+    s = str(v).strip().lstrip("'")   # strip Sheets text-prefix apostrophe
     if not s or len(s) < 3:
         return ""
-    # Excel serial number (approx. 2000-2040 range)
+    # Excel serial number (approx. 2000-2060 range)
     try:
         n = float(s)
         if 36526 < n < 58849:   # ~2000-01-01 to ~2061-01-01
@@ -2705,9 +2711,10 @@ def _parse_date_cell_manpower(v) -> str:
         return ""
     except (ValueError, TypeError):
         pass
-    # Text formats
+    # Text formats — include "Jul 1, 2026" / "Jul 01, 2026" variants
     for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%b-%y",
-                "%Y-%m-%d", "%d.%m.%Y", "%d %b %Y", "%d %b %y"):
+                "%Y-%m-%d", "%d.%m.%Y", "%d %b %Y", "%d %b %y",
+                "%b %d, %Y", "%b %d, %y"):
         try:
             dt = datetime.datetime.strptime(s, fmt).date()
             return dt.isoformat()

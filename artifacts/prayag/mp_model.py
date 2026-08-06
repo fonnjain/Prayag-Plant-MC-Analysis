@@ -413,6 +413,7 @@ ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS mp_machine_downtime_resolved ON mp_machine_downtime (segment, resolved) WHERE resolved = false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted     BOOLEAN     NOT NULL DEFAULT false;
 ALTER TABLE mp_machine_downtime ADD COLUMN IF NOT EXISTS deleted_at  TIMESTAMPTZ;
+ALTER TABLE mp_wastage_summary  ADD COLUMN IF NOT EXISTS seeded_at   TIMESTAMPTZ;
 """
 
 # Backfill: old records closed via close_downtime have end_date set but resolved=false.
@@ -439,6 +440,13 @@ def init_mp_tables() -> None:
             # Backfill: any record closed before resolved column existed
             cur.execute(_BACKFILL_DOWNTIME_RESOLVED)
         _INITIALISED = True
+        # Provenance table lives in its own module; call lazily to avoid
+        # circular imports while still ensuring it is always created.
+        try:
+            import mp_seed_provenance as _prov
+            _prov.init_provenance_table()
+        except Exception:
+            pass
     except Exception as e:
         raise MpModelError(f"init_mp_tables failed: {e}") from e
 

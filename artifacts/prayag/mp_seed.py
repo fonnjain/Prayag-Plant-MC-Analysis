@@ -1309,6 +1309,80 @@ def seed_all(effective_month: str = "") -> dict:
     # ── 7. Params ───────────────────────────────────────────────────────────
     report["params"] = seed_params(em)
 
+    # ── 8. Provenance recording ─────────────────────────────────────────────
+    # Best-effort; failure is logged but never aborts a successful seed run.
+    try:
+        import mp_seed_provenance as _prov
+        drive_token = sheets._get_drive_token()
+
+        # Fetch Drive modifiedTime for every source file (best-effort)
+        file_meta: Dict[str, dict] = {}
+        if drive_token:
+            for _key, _fid in _FILE_IDS.items():
+                file_meta[_key] = sheets.drive_file_meta(_fid, drive_token)
+            file_meta["june_pipe"] = sheets.drive_file_meta(_JUNE_PIPE_FILE_ID, drive_token)
+
+        def _max_mod(*keys: str) -> Optional[str]:
+            times = [file_meta.get(k, {}).get("modified_time") for k in keys]
+            return max((t for t in times if t), default=None)
+
+        def _fids(*keys: str) -> str:
+            parts = []
+            for k in keys:
+                fid = _FILE_IDS.get(k) or (_JUNE_PIPE_FILE_ID if k == "june_pipe" else "")
+                if fid:
+                    parts.append(fid)
+            return ",".join(parts)
+
+        def _fnames(*keys: str) -> str:
+            return ", ".join(file_meta.get(k, {}).get("file_name") or k for k in keys)
+
+        # Combine machine/routing counts from pipe + fitting seeds
+        mc_total = (report.get("pipe_routing", {}).get("machines_loaded", 0)
+                    + report.get("fitting", {}).get("machines_loaded", 0))
+        rt_total = (report.get("pipe_routing", {}).get("routing_rows_loaded", 0)
+                    + report.get("fitting", {}).get("routing_rows_loaded", 0))
+
+        _prov.record_seed(
+            "mp_bom_weight",
+            source_file_ids=_fids("bom"),
+            source_file_names=_fnames("bom"),
+            source_modified_time=_max_mod("bom"),
+            row_count=report.get("bom", {}).get("rows_loaded", 0),
+        )
+        _prov.record_seed(
+            "mp_machine",
+            source_file_ids=_fids("pipe_routing", "fitting"),
+            source_file_names=_fnames("pipe_routing", "fitting"),
+            source_modified_time=_max_mod("pipe_routing", "fitting"),
+            row_count=mc_total,
+        )
+        _prov.record_seed(
+            "mp_routing",
+            source_file_ids=_fids("pipe_routing", "fitting"),
+            source_file_names=_fnames("pipe_routing", "fitting"),
+            source_modified_time=_max_mod("pipe_routing", "fitting"),
+            row_count=rt_total,
+        )
+        _prov.record_seed(
+            "mp_per_hour",
+            source_file_ids=_fids("per_hour", "june_pipe"),
+            source_file_names=_fnames("per_hour", "june_pipe"),
+            source_modified_time=_max_mod("per_hour", "june_pipe"),
+            row_count=report.get("per_hour", {}).get("rows_loaded", 0),
+        )
+        _prov.record_seed(
+            "mp_compound_recipe",
+            source_file_ids=_fids("compound"),
+            source_file_names=_fnames("compound"),
+            source_modified_time=_max_mod("compound"),
+            row_count=report.get("compound", {}).get("rows_loaded", 0),
+        )
+        report["provenance"] = "recorded"
+    except Exception:
+        logger.warning("seed_all: provenance recording failed (non-fatal)")
+        report["provenance"] = "failed"
+
     return report
 
 

@@ -4952,6 +4952,7 @@ import mp_model as _mp_model               # noqa: E402
 import mp_rejection as _mp_rejection       # noqa: E402
 import mp_rejection_plan as _mp_rej_plan   # noqa: E402
 import mp_seed as _mp_seed                 # noqa: E402
+import mp_seed_provenance as _mp_seed_prov # noqa: E402
 import mp_wastage as _mp_wastage           # noqa: E402
 
 _MP_SEGMENT = "PLUMBING"
@@ -5219,6 +5220,7 @@ def mp_data_view():
             machine_roster_moulding=_nr_mol,
             machine_roster_note=_nr_note,
             today_iso=_dt_now2.date.today().isoformat(),
+            seed_status_panel=[],
         )
 
     # Load data for plumbing tab
@@ -5326,6 +5328,7 @@ def mp_data_view():
         machine_roster_moulding=_roster_mol,
         machine_roster_note=_roster_note,
         today_iso=today_iso,
+        seed_status_panel=_mp_seed_prov.get_status_panel(),
     )
 
 
@@ -6313,6 +6316,15 @@ def mp_results():
 
     schedule_result = _mp_schedule_from_session()
 
+    # Staleness warnings — best-effort, never blocks render
+    try:
+        _drive_tok = sheets._get_drive_token()
+        staleness_warnings = _mp_seed_prov.build_staleness_warnings(
+            _MP_SEGMENT, drive_token=_drive_tok
+        )
+    except Exception:
+        staleness_warnings = []
+
     return render_template(
         "machine_planning_results.html",
         result=result,
@@ -6337,6 +6349,7 @@ def mp_results():
         frozen=False,
         run_status="pending",
         schedule_result=schedule_result,
+        staleness_warnings=staleness_warnings,
     )
 
 

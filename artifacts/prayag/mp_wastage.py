@@ -214,12 +214,13 @@ def recompute_wastage(segment: str) -> dict:
             for tk, v in acc.items():
                 cur.execute(
                     """INSERT INTO mp_wastage_summary
-                               (segment, type_key, prod_kg, wastage_kg, n_months)
-                       VALUES (%s, %s, %s, %s, %s)
+                               (segment, type_key, prod_kg, wastage_kg, n_months, seeded_at)
+                       VALUES (%s, %s, %s, %s, %s, now())
                        ON CONFLICT (segment, type_key) DO UPDATE
                            SET prod_kg    = EXCLUDED.prod_kg,
                                wastage_kg = EXCLUDED.wastage_kg,
-                               n_months   = EXCLUDED.n_months""",
+                               n_months   = EXCLUDED.n_months,
+                               seeded_at  = now()""",
                     (segment, tk, v["prod"], v["waste"], months_with_data),
                 )
             cur.execute(
@@ -233,6 +234,20 @@ def recompute_wastage(segment: str) -> dict:
     except Exception as exc:
         logger.exception("recompute_wastage: DB write failed")
         return {"ok": False, "error": str(exc)}
+
+    # Record provenance (wastage reads from many PIPE monthly workbooks, so
+    # no single Drive file ID — seeded_at timestamp is the freshness signal)
+    try:
+        import mp_seed_provenance as _prov
+        _prov.record_seed(
+            "mp_wastage_summary",
+            source_file_ids="",
+            source_file_names="PIPE monthly workbooks (Report-15)",
+            source_modified_time=None,
+            row_count=len(acc),
+        )
+    except Exception:
+        logger.warning("recompute_wastage: provenance record failed (non-fatal)")
 
     summary = []
     for tk, v in sorted(acc.items()):

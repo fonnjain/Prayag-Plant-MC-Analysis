@@ -393,6 +393,21 @@ def recompute_rejection(segment: str = "PLUMBING") -> dict:
                 "fitting_months": len(fitting_months_covered),
                 "errors": errors}
 
+    # Record provenance (rejection reads from many PIPE monthly workbooks;
+    # no single Drive file ID — seeded_at is the freshness signal)
+    try:
+        import mp_seed_provenance as _prov
+        total_rows = len(pipe_agg) + len(fitting_agg)
+        _prov.record_seed(
+            "mp_rejection_summary",
+            source_file_ids="",
+            source_file_names="PIPE monthly workbooks (Report-11, Report-12)",
+            source_modified_time=None,
+            row_count=total_rows,
+        )
+    except Exception:
+        logger.warning("mp_rejection: provenance record failed (non-fatal)")
+
     return {"ok": True,
             "pipe_months": len(pipe_months_covered),
             "fitting_months": len(fitting_months_covered),
