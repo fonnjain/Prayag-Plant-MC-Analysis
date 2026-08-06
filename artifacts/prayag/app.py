@@ -6911,7 +6911,12 @@ def mp_run_finalize(run_id: int):
 
 @app.route("/machine-planning/runs/<int:run_id>/report/<report_id>")
 def mp_frozen_run_report(run_id: int, report_id: str):
-    """Download a report from a frozen run (re-runs engine from stored demand)."""
+    """Download a report from a plan run (re-runs engine from stored demand).
+
+    Works for BOTH frozen and pending (unfrozen) runs — the report is always
+    regenerated fresh from the stored demand, so freezing is not required to
+    download the machine plan Excel.
+    """
     from flask import send_file as _send_file2
     from mp_model import get_plan_run_by_id
 

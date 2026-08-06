@@ -82,6 +82,37 @@
         ▶ Re-run &amp; Freeze
       </button>
     </form>
+
+    {# ── Download without freezing ──────────────────────────────────────── #}
+    <div style="margin-top:.85rem;padding-top:.7rem;border-top:1px dashed #fde68a;">
+      <div style="font-size:.74rem;font-weight:700;color:#92400e;margin-bottom:.4rem;">
+        📥 Or download the machine plan Excel without freezing
+        <span style="font-weight:400;">(reports are regenerated from the stored demand — nothing is saved)</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:.45rem;">
+        {% if demand_count %}
+        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11') }}"
+           style="background:var(--navy);color:#fff;text-decoration:none;
+                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:700;">
+          📥 Report-11 (Machine Plan)
+        </a>
+        {% for g in ['A','B','C','D'] %}
+        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11'+g) }}"
+           style="background:var(--terra);color:#fff;text-decoration:none;
+                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:600;">
+          📥 11{{ g }}
+        </a>
+        {% endfor %}
+        {% endif %}
+        {% if fitting_count %}
+        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='12') }}"
+           style="background:var(--navy);color:#fff;text-decoration:none;
+                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:700;">
+          📥 Report-12 (Moulding Plan)
+        </a>
+        {% endif %}
+      </div>
+    </div>
     {% else %}
     <div style="font-size:.76rem;color:#991b1b;">
       No demand data found for this run.
