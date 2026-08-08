@@ -889,12 +889,15 @@ def _init_manifest_log() -> None:
         empty_count    INTEGER     NOT NULL DEFAULT 0,
         not_found_count INTEGER    NOT NULL DEFAULT 0,
         schema_flag_count INTEGER  NOT NULL DEFAULT 0,
+        parse_note_count  INTEGER  NOT NULL DEFAULT 0,
         advisory_ok   BOOLEAN      NOT NULL DEFAULT FALSE,
         coverage      JSONB,
         schema_flags  JSONB,
         advisory      JSONB,
         created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
     );
+    ALTER TABLE {_ML_TABLE} ADD COLUMN IF NOT EXISTS
+        parse_note_count INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS {_ML_TABLE}_lookup
         ON {_ML_TABLE} (as_of, created_at DESC);
     """
@@ -913,6 +916,7 @@ def save_manifest_log(
     fingerprint: str = "",
     coverage: dict,
     schema_flags: list,
+    parse_note_count: int = 0,
     advisory: Optional[dict] = None,
 ) -> Optional[int]:
     """Persist one manifest run. Returns the new row id, or None on failure."""
@@ -925,8 +929,8 @@ def save_manifest_log(
             INSERT INTO {_ML_TABLE}
                 (as_of, fy, fingerprint, expected_count, fetched_count,
                  empty_count, not_found_count, schema_flag_count,
-                 advisory_ok, coverage, schema_flags, advisory)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 parse_note_count, advisory_ok, coverage, schema_flags, advisory)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING id
         """
         params = (
@@ -936,6 +940,7 @@ def save_manifest_log(
             len(cov.get("present_but_empty", [])),
             len(cov.get("not_found_at_all", [])),
             len(schema_flags or []),
+            int(parse_note_count),
             advisory is not None,
             json.dumps(cov) if cov else None,
             json.dumps(schema_flags) if schema_flags else None,
@@ -961,7 +966,8 @@ def recent_manifest_logs(limit: int = 10) -> List[Dict]:
             cur.execute(
                 f"""SELECT id, as_of, fy, fingerprint, expected_count,
                            fetched_count, empty_count, not_found_count,
-                           schema_flag_count, advisory_ok, created_at
+                           schema_flag_count, parse_note_count,
+                           advisory_ok, created_at
                     FROM {_ML_TABLE}
                     ORDER BY created_at DESC LIMIT %s""",
                 (limit,),

@@ -1637,6 +1637,13 @@ def manifest_view():
         adv = advisory_review(summary, man["coverage"], man["as_of"])
         _manifest_cache[adv_key] = adv  # None is a valid cached result (API unavailable)
 
+    # Count distinct parse notes across all source reports.
+    _seen_pn: set[str] = set()
+    for _rep in all_reports:
+        for _n in (_rep.get("notes") or []):
+            _seen_pn.add(_n)
+    _parse_note_count = len(_seen_pn)
+
     # Persist run log (best-effort — never block the render).
     try:
         store.save_manifest_log(
@@ -1645,6 +1652,7 @@ def manifest_view():
             fingerprint=fp,
             coverage=man["coverage"],
             schema_flags=man["schema_flags"],
+            parse_note_count=_parse_note_count,
             advisory=adv,
         )
     except Exception:
@@ -1655,6 +1663,7 @@ def manifest_view():
         "advisory": adv,
         "coverage": man["coverage"],
         "schema_flags": man["schema_flags"],
+        "parse_note_count": _parse_note_count,
         "recent_logs": store.recent_manifest_logs(5),
         "plant_names": PLANT_NAMES,
         "fy": man["fy"],
