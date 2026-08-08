@@ -736,11 +736,12 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
     matrices = batch_get(file_id, want, token)
 
     records: List[Record] = []
+    mc_notes: List[str] = []
     for t in detail_tabs:
         records.extend(parsers.parse_mc_detail(
             matrices.get(t, []),
             plant=src["plant"], segment=src["segment"], unit=src["unit"],
-            source_file=file_id, source_tab=t,
+            source_file=file_id, source_tab=t, notes=mc_notes,
         ))
 
     recon = None
@@ -756,13 +757,18 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
         }
 
     months = sorted({r.period for r in records})
-    return records, {
+    report = {
         "family": src["family"], "title": src["title"], "file_id": file_id,
         "tab": src["tab"], "detail_tabs": detail_tabs, "grain": "monthly",
         "months_available": months, "record_count": len(records),
         "segment": src["segment"], "plant": src["plant"],
         "reconcile": recon, "field_map": parsers.MC_DETAIL_FIELD_MAP,
     }
+    # Rejection-column drift on the per-machine tabs (dedup — every M/C tab
+    # shares one layout, one message per distinct note is enough).
+    if mc_notes:
+        report["notes"] = list(dict.fromkeys(mc_notes))
+    return records, report
 
 def _load_live_monthly(token: str) -> dict:
   all_records: List[Record] = []
@@ -799,6 +805,12 @@ def _load_live_monthly(token: str) -> dict:
       recs, report = loaded
       all_records.extend(recs)
       reports.append(report)
+
+      # Parser-emitted notes (e.g. a rejection column that stopped matching
+      # the header) are surfaced alongside the reconciliation warnings so
+      # layout drift is visible immediately instead of showing a plausible 0%.
+      for n in report.get("notes") or []:
+          warnings.append(n)
 
       # Surface silent layout drift: a family that parses nothing despite
       # having detail tabs almost certainly means the parser/header detection
@@ -1492,10 +1504,18 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           any_header = True
       mnum = _PTMT_TAB_NUM.search(str(t))
       machine = f"{prefix}{mnum.group(1)}".strip() if mnum else f"{prefix}{t}".strip()
+      block_notes: List[str] = []
       raw.extend(parsers.parse_daily_blocks(
           values, plant=emit, segment=seg, unit=unit, year_month=ym,
           source_file=file_id, source_tab=t, machine=machine,
+          notes=block_notes,
       ))
+      # Rejection-header-present-but-unmatched drift per tab (dedup — many
+      # machine tabs share one layout, one message per distinct note is enough).
+      for n in block_notes:
+          existing = report.setdefault("notes", [])
+          if n not in existing:
+              existing.append(n)
 
   # ----- Run hours from a separate per-date matrix tab (GARDEN) --------------
   # The block tabs are the OUTPUT source of truth; some plants (GARDEN) ALSO
@@ -1733,10 +1753,17 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
       str(c).strip() for c in (values[0] if values else []) if str(c).strip()
   ][:40]
   if layout == "long":
+      parse_notes: List[str] = []
       raw = parsers.parse_daily_long(
           values, plant=emit, segment=seg, unit=unit, year_month=ym,
-          source_file=file_id, source_tab=tab, **spec["long"],
+          source_file=file_id, source_tab=tab, notes=parse_notes,
+          **spec["long"],
       )
+      # A configured rejection/runner column that stopped matching the header
+      # (layout drift) must be visible on the dashboard/manifest — output still
+      # parses, so the month would otherwise look genuinely rejection-free.
+      if parse_notes:
+          report.setdefault("notes", []).extend(parse_notes)
   else:
       raw = parsers.parse_daily_matrix(
           values, plant=emit, segment=seg, unit=unit, year_month=ym,

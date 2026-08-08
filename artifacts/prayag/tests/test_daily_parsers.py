@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from parsers import (
     parse_daily_long, parse_daily_blocks, parse_daily_matrix,
-    parse_tank_prod, _long_date_day,
+    parse_mc_detail, parse_tank_prod, _long_date_day,
 )
 from sheets import _mc_key
 
@@ -441,6 +441,155 @@ def test_matrix_no_reject_column_does_not_fabricate_zero_rows():
     print("PASS: matrix still drops fully-empty days when no reject column exists")
 
 
+# ---------------------------------------------------------------------------
+# rejection-column-not-found warnings (layout drift must never show a silent 0%)
+# ---------------------------------------------------------------------------
+
+def test_long_parser_warns_when_configured_rej_col_not_matched():
+    # Report-12 style: rej_col/runner_col are CONFIGURED but the header shifted
+    # so neither matches. Output still parses — the note is the only signal.
+    values = [
+        ["DATE", "MOULDING MACHINE", "Wt in Kgs", "Some Other Col"],
+        ["Jun 1, 2026", "A01(NU-200)", "1000", ""],
+    ]
+    notes = []
+    recs = parse_daily_long(
+        values,
+        plant="MOULDING", segment="MOULDING", unit="kg", year_month="2026-06",
+        source_file="f", source_tab="Report-12",
+        machine_col=("startswith", "MOULDING MACHI"),
+        out_col=("contains", "WT IN KGS"),
+        rej_col=("contains", "ACTUAL REJECTION"),
+        runner_col=("startswith", "RUNNER PRODUCE"),
+        machine_prefix="MOULDING ", notes=notes,
+    )
+    assert len(recs) == 1, "output must still parse"
+    assert len(notes) == 2, f"expected rejection + runner notes, got {notes}"
+    assert any("rejection column" in n and "Report-12" in n and "2026-06" in n
+               for n in notes), notes
+    assert any("runner column" in n for n in notes), notes
+    print("PASS: long parser warns when configured rejection/runner columns "
+          "are not matched")
+
+
+def test_long_parser_no_warning_when_rej_col_matches_or_not_configured():
+    values = [
+        ["DATE", "MOULDING MACHINE", "Wt in Kgs", "Actual Rejection Weight",
+         "Runner Produced"],
+        ["Jun 1, 2026", "A01", "1000", "10", "5"],
+    ]
+    notes = []
+    parse_daily_long(
+        values,
+        plant="MOULDING", segment="MOULDING", unit="kg", year_month="2026-06",
+        source_file="f", source_tab="Report-12",
+        machine_col=("startswith", "MOULDING MACHI"),
+        out_col=("contains", "WT IN KGS"),
+        rej_col=("contains", "ACTUAL REJECTION"),
+        runner_col=("startswith", "RUNNER PRODUCE"),
+        notes=notes,
+    )
+    assert notes == [], f"matched columns must not warn: {notes}"
+    # A source configured WITHOUT rejection/runner specs is genuinely
+    # rejection-free and must stay silent.
+    notes2 = []
+    parse_daily_long(
+        [["DATE", "MACHINE NO.", "PCS"],
+         ["Jun 1, 2026", "M/C-1", "100"]],
+        plant="PIPE", segment="PIPE", unit="kg", year_month="2026-06",
+        source_file="f", source_tab="Report-11",
+        machine_col=("contains", "MACHINE"), out_col=("eq", "PCS"),
+        notes=notes2,
+    )
+    assert notes2 == [], f"unconfigured rejection spec must not warn: {notes2}"
+    print("PASS: long parser stays silent when columns match or no spec is set")
+
+
+def test_blocks_parser_warns_when_reject_header_exists_but_unmatched():
+    # A REJECT header exists in the sheet's top rows but NOT in the header band
+    # the parser matches (DATE row + sub-row) → layout drift, must warn.
+    values = [
+        ["", "REJECTION (KG)", "", ""],   # stranded above the band
+        ["", "", "", ""],
+        ["DATE", "SIZE", "TOTAL(KG)", ""],
+        ["01/06/2026", "100mm", "1500", ""],
+    ]
+    notes = []
+    recs = parse_daily_blocks(
+        values,
+        plant="GARDEN", segment="Garden", unit="kg", year_month="2026-06",
+        source_file="f", source_tab="MACHINE 2", machine="GARDEN M/C - 2",
+        notes=notes,
+    )
+    assert len(recs) == 1, "output must still parse"
+    assert len(notes) == 1 and "rejection" in notes[0] and "MACHINE 2" in notes[0], notes
+    print("PASS: blocks parser warns when a reject header exists but is unmatched")
+
+
+def test_blocks_parser_silent_when_genuinely_rejection_free():
+    values = [
+        ["DATE", "SIZE", "TOTAL(KG)"],
+        ["01/06/2026", "100mm", "1500"],
+    ]
+    notes = []
+    recs = parse_daily_blocks(
+        values,
+        plant="GARDEN", segment="Garden", unit="kg", year_month="2026-06",
+        source_file="f", source_tab="MACHINE 2", machine="GARDEN M/C - 2",
+        notes=notes,
+    )
+    assert len(recs) == 1
+    assert notes == [], f"no REJECT header anywhere → must not warn: {notes}"
+    print("PASS: blocks parser stays silent on genuinely rejection-free tabs")
+
+
+def test_mc_detail_warns_when_only_reject_ratio_column_exists():
+    # Header mentions rejection only as a stored %age ratio — the absolute
+    # rejection column is gone (layout drift) → must warn, but still parse.
+    values = [
+        ["S.NO", "MACHINE", "MONTH", "IDEAL HOURS", "ACTUAL HOURS",
+         "OUTPUT (KG)", "REJECTION %AGE"],
+        ["1", "M/C-1", "Apr-26", "500", "400", "9000", "1.5"],
+    ]
+    notes = []
+    recs = parse_mc_detail(
+        values, plant="PIPE", segment="PIPE", unit="kg",
+        source_file="f", source_tab="M/C-1", notes=notes,
+    )
+    assert len(recs) == 1, "rows must still parse"
+    assert len(notes) == 1 and "rejection" in notes[0] and "M/C-1" in notes[0], notes
+    print("PASS: mc_detail warns when only a rejection ratio column exists")
+
+
+def test_mc_detail_silent_when_rej_matched_or_absent():
+    # Absolute rejection column present → silent.
+    with_rej = [
+        ["S.NO", "MACHINE", "MONTH", "IDEAL HOURS", "ACTUAL HOURS",
+         "OUTPUT (KG)", "REJECTION (KG)"],
+        ["1", "M/C-1", "Apr-26", "500", "400", "9000", "12"],
+    ]
+    notes = []
+    recs = parse_mc_detail(
+        with_rej, plant="PIPE", segment="PIPE", unit="kg",
+        source_file="f", source_tab="M/C-1", notes=notes,
+    )
+    assert len(recs) == 1 and recs[0].reject_count == 12.0
+    assert notes == [], notes
+    # No REJECT header at all → genuinely rejection-free layout, silent.
+    no_rej = [
+        ["S.NO", "MACHINE", "MONTH", "IDEAL HOURS", "ACTUAL HOURS",
+         "OUTPUT (KG)"],
+        ["1", "M/C-1", "Apr-26", "500", "400", "9000"],
+    ]
+    notes2 = []
+    parse_mc_detail(
+        no_rej, plant="GARDEN", segment="Garden", unit="kg",
+        source_file="f", source_tab="M/C-1", notes=notes2,
+    )
+    assert notes2 == [], notes2
+    print("PASS: mc_detail stays silent when rejection matches or is absent")
+
+
 if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
@@ -455,4 +604,10 @@ if __name__ == "__main__":
     test_mc_key_joins_main_machines_only()
     test_matrix_keeps_reject_only_last_day_when_machine_idle()
     test_matrix_no_reject_column_does_not_fabricate_zero_rows()
+    test_long_parser_warns_when_configured_rej_col_not_matched()
+    test_long_parser_no_warning_when_rej_col_matches_or_not_configured()
+    test_blocks_parser_warns_when_reject_header_exists_but_unmatched()
+    test_blocks_parser_silent_when_genuinely_rejection_free()
+    test_mc_detail_warns_when_only_reject_ratio_column_exists()
+    test_mc_detail_silent_when_rej_matched_or_absent()
     print("\nAll daily parser/normalisation unit tests passed.")

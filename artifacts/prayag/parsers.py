@@ -76,6 +76,7 @@ def parse_mc_detail(
     unit: str,
     source_file: str,
     source_tab: str,
+    notes: Optional[List[str]] = None,
 ) -> List[Record]:
     """Parse a per-machine detail tab (M/C-n) into monthly Records.
 
@@ -114,6 +115,17 @@ def parse_mc_detail(
     irate_c = find(lambda h: "IDEAL" in h and "OUTPUT" in h)
     rej_c = find(lambda h: "REJECT" in h and "%" not in h and "AGE" not in h)
     run_c = find(lambda h: "RUNNER" in h)
+    # A header that mentions REJECT (e.g. a stored "Rejection %age" ratio cell)
+    # but exposes NO absolute rejection column means the layout shifted: the
+    # sheet clearly tracks rejection, yet we would silently book 0. Surface it.
+    # Headers with no REJECT cell at all are genuinely rejection-free layouts
+    # (e.g. Pipe/Garden grids without a rejection column) and stay silent.
+    if notes is not None and rej_c < 0 and any("REJECT" in h for h in U):
+        notes.append(
+            f"{plant} '{source_tab}': the header mentions rejection but no "
+            "rejection amount column was matched — rejection is being read as "
+            "0 and may be understated (sheet layout may have changed)."
+        )
     mc_c = find(lambda h: h == "MACHINE" or "MOULD MACHINE" in h)
     if mc_c < 0:
         mc_c = 1
@@ -285,6 +297,7 @@ def parse_daily_long(
     rej_col=None,
     runner_col=None,
     machine_prefix: str = "",
+    notes: Optional[List[str]] = None,
 ) -> List[Record]:
     """Parse a long (one row per machine per date) daily tab into Records.
 
@@ -350,6 +363,26 @@ def parse_daily_long(
     runner_c = find_col(runner_col)
     if mc_c < 0 or out_c < 0:
         return []
+    # A configured rejection/runner spec that fails to match the header band
+    # means the layout shifted (seen: Report-12 Jul-2026): output still parses,
+    # so the month would look genuinely rejection-free at a plausible 0%.
+    # Warn instead of silently booking 0. Sources configured without a spec
+    # (rej_col/runner_col=None) genuinely track no rejection and stay silent.
+    if notes is not None:
+        if rej_col and rej_c < 0:
+            notes.append(
+                f"{plant} {year_month}: rejection column matching "
+                f"'{rej_col[1]}' was not found in tab '{source_tab}' — "
+                "rejection is being read as 0 and may be understated "
+                "(sheet layout may have changed)."
+            )
+        if runner_col and runner_c < 0:
+            notes.append(
+                f"{plant} {year_month}: runner column matching "
+                f"'{runner_col[1]}' was not found in tab '{source_tab}' — "
+                "runner production is being read as 0 and may be understated "
+                "(sheet layout may have changed)."
+            )
 
     # Aggregate every (machine, day) — a machine can have several item rows per
     # day. Sum run hours/output/rejection/runner so the day rolls up correctly.
@@ -538,6 +571,7 @@ def parse_daily_blocks(
     source_tab: str,
     machine: str,
     date_col=("eq", "DATE"),
+    notes: Optional[List[str]] = None,
 ) -> List[Record]:
     """Parse ONE per-machine 'block' tab (one tab == one machine) into daily Records.
 
@@ -613,6 +647,22 @@ def parse_daily_blocks(
             break
     if data_start < 0:
         return []
+
+    # The header band scanned above is only the DATE row + one sub-row. If a
+    # REJECT header exists elsewhere in the sheet's top rows but was NOT
+    # matched to a column, the layout shifted and rejection would silently
+    # book as 0. Tabs with no REJECT header anywhere are genuinely
+    # rejection-free and stay silent.
+    if notes is not None and rej_c < 0 and any(
+        "REJECT" in str(c).strip().upper()
+        for row in values[:12] for c in row
+    ):
+        notes.append(
+            f"{plant} {year_month}: a rejection header exists in tab "
+            f"'{source_tab}' but no rejection column was matched — rejection "
+            "is being read as 0 and may be understated (sheet layout may "
+            "have changed)."
+        )
 
     agg: dict = {}
     for row in values[data_start:]:

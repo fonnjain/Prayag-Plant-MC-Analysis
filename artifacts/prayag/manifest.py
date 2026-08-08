@@ -242,6 +242,20 @@ def build_schema_flags(enriched_reports: list) -> list:
                 "severity": "error",
             })
 
+        # Parser-emitted notes (e.g. a configured rejection/runner column that
+        # stopped matching the header band) are layout-drift signals: output
+        # still parses, so without a flag the month looks plausibly
+        # rejection-free at 0%.
+        for note in rep.get("notes") or []:
+            flags.append({
+                "plant": plant_name,
+                "month": month,
+                "file_id": fid,
+                "type": "parser_note",
+                "issue": note,
+                "severity": "warning",
+            })
+
         # Required columns present.
         # Guard: only check when cols_seen has ≥4 entries — a single-entry list
         # is a title row (e.g. "PTMT DAILY PRODUCTION REPORT - APRIL 2026"), not
@@ -334,6 +348,7 @@ def manifest_summary(manifest: dict) -> dict:
             "columns_seen": (rep.get("columns_seen") or [])[:12],
             "aggregates": agg,
             "warning": rep.get("warning"),
+            "notes": rep.get("notes") or [],
         })
     return {
         "fy": manifest["fy"],
