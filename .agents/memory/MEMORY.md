@@ -49,3 +49,4 @@
 - [Report-15 date parsing quirk](prayag-r15-date-quirk.md) — Sheets returns "Jul 1, 2026" format with leading apostrophe; _parse_date_cell_manpower must strip "'" and include "%b %d, %Y" fmt; affects yield_report15 + all _parse_date_cell_manpower callers.
 - [MP seed provenance module](prayag-mp-seed-provenance.md) — mp_seed_provenance.py tracks per-table seed freshness; Drive tests must wipe+restore all provenance rows (build_staleness_warnings queries ALL tables, not per-segment).
 - [PIPE monthly workbook auto-discovery](prayag-pipe-source-registry.md) — source_registry.py: pinned sources.py ID wins; else DB cache; else Drive title search. Titles contain "Pipe"+"Fitting"+MON_ABBREV+YEAR. Tie-break: preeti@, else newest. Never overwrites a pin.
+- [Corrective Re-plan engine](prayag-corrective-replan.md) — mp_corrective_replan.py: p90(≥5 days)→mean→NDC; Issue #5 date fix in mp_followup._parse_date; route at /planning/corrective-replan; 45 regression tests.

@@ -7,11 +7,21 @@
     <h2 class="text-lg font-bold" style="color:var(--navy)">Demand Planning</h2>
     <div class="text-xs text-gray-400 mt-0.5">Stock snapshot vs requirement — recomputed from Report-1 tabs</div>
   </div>
-  <a href="/planning/ptmt-capacity?month={{ month }}"
-     class="ml-auto text-xs font-semibold px-3 py-1.5 rounded-lg border"
-     style="color:var(--navy);border-color:rgba(31,56,100,0.3)">
-    PTMT Capacity →
-  </a>
+  <div class="ml-auto flex items-center gap-2">
+    {% if plant == "PIPE" %}
+    <a href="/planning/corrective-replan?month={{ month }}"
+       class="text-xs font-semibold px-3 py-1.5 rounded-lg border"
+       style="color:var(--terra);border-color:rgba(197,90,17,0.35);background:rgba(197,90,17,0.06);"
+       title="Download Corrective Re-plan (.xlsx) — Cap/Day × remaining working days vs plan shortfall">
+      ⬇ Corrective Re-plan
+    </a>
+    {% endif %}
+    <a href="/planning/ptmt-capacity?month={{ month }}"
+       class="text-xs font-semibold px-3 py-1.5 rounded-lg border"
+       style="color:var(--navy);border-color:rgba(31,56,100,0.3)">
+      PTMT Capacity →
+    </a>
+  </div>
 </div>
 
 <!-- Month + Plant selector -->

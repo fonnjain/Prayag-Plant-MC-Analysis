@@ -3790,6 +3790,68 @@ def planning_view():
         **_ctx)
 
 
+@app.route("/planning/corrective-replan")
+def planning_corrective_replan():
+    """Download Corrective Re-plan (.xlsx) for Plumbing (PIPE + Fitting).
+
+    Reads daily production actuals from Report-11 (pipe pcs) and Report-12
+    (fitting pcs), computes Cap/Day (p90 or mean fallback), and projects
+    feasible output for the remaining working days vs plan remaining demand.
+
+    Query params: month (YYYY-MM), as_of (YYYY-MM-DD, default today).
+    """
+    import mp_corrective_replan as _mcr
+
+    all_months = _planning_months_union()
+    default_month = all_months[0] if all_months else "2026-08"
+    month  = request.args.get("month", default_month)
+    as_of  = request.args.get("as_of", _today())
+
+    # ── Load planning demand (Report-1) ──────────────────────────────────────
+    try:
+        plan_recs = load_planning("PIPE", month)
+    except Exception as exc:
+        app.logger.warning("corrective_replan: load_planning failed: %s", exc)
+        plan_recs = []
+
+    # ── Load Report-11 + Report-12 actuals ───────────────────────────────────
+    import sheets as _sheets_cr
+    actuals = _sheets_cr.load_corrective_replan_actuals(month)
+    if actuals.get("error") and not actuals["r11"] and not actuals["r12"]:
+        return (
+            f"Could not load Report-11/12 for {month}: {actuals['error']}",
+            503,
+        )
+
+    # ── Compute re-plan ──────────────────────────────────────────────────────
+    try:
+        result = _mcr.compute_corrective_replan(
+            month    = month,
+            plan_recs = plan_recs,
+            r11_values = actuals["r11"],
+            r12_values = actuals["r12"],
+            as_of_date = as_of,
+            file_id    = actuals.get("file_id", ""),
+        )
+    except Exception as exc:
+        app.logger.error("corrective_replan: compute failed: %s", exc, exc_info=True)
+        return f"Re-plan computation failed: {exc}", 500
+
+    # ── Export ───────────────────────────────────────────────────────────────
+    try:
+        data = _mcr.corrective_replan_bytes(result)
+    except Exception as exc:
+        app.logger.error("corrective_replan: export failed: %s", exc, exc_info=True)
+        return f"Report export failed: {exc}", 500
+
+    fname = f"corrective_replan_{month}_{as_of}.xlsx"
+    return app.response_class(
+        data,
+        mimetype=_XLSX_MIME,
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 @app.route("/planning/ptmt-capacity")
 def ptmt_capacity_view():
     ptmt_months = planning_months("PTMT")

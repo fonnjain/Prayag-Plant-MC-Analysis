@@ -395,14 +395,36 @@ def parse_report12(values: list, month: str) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 def _parse_date(raw: str, year: int, month: int) -> Optional[str]:
-    """Parse a date cell into 'YYYY-MM-DD'. raw may be '1', '01', '01-07-2026',
-    '2026-07-01', or a numeric serial (skipped)."""
-    raw = str(raw).strip()
+    """Parse a date cell into 'YYYY-MM-DD'.
+
+    Supported formats (Issue #5 fix — both Plumbing and PTMT):
+      'Aug 1, 2026'   — Plumbing Report-11/12 format (Google Sheets returns month-name)
+      '1-Aug-2026'    — PTMT master format
+      '01-07-2026'    — dd-mm-yyyy
+      '2026-07-01'    — ISO
+      '1'             — plain day number, combined with year/month arg
+
+    Unknown formats return None (silent skip) rather than raising — callers
+    treat None as "row has no date yet" and carry the last known date forward.
+    """
+    raw = str(raw).strip().lstrip("'").strip()
     if not raw:
         return None
     # Already ISO
     if re.match(r'^\d{4}-\d{2}-\d{2}$', raw):
         return raw
+    # "Aug 1, 2026" or "Aug 01, 2026"  (Plumbing Report-11/12 — Issue #5)
+    for fmt in ("%b %d, %Y", "%b %d,%Y", "%B %d, %Y", "%B %d,%Y"):
+        try:
+            return datetime.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            pass
+    # "1-Aug-2026" or "1 Aug 2026"  (PTMT master — Issue #5)
+    for fmt in ("%d-%b-%Y", "%d %b %Y", "%d-%B-%Y", "%d %B %Y"):
+        try:
+            return datetime.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            pass
     # dd-mm-yyyy or dd/mm/yyyy
     m = re.match(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$', raw)
     if m:
@@ -417,7 +439,7 @@ def _parse_date(raw: str, year: int, month: int) -> Optional[str]:
             return datetime.date(year, month, int(raw)).isoformat()
         except ValueError:
             return None
-    # Numeric float (Excel serial) — skip
+    # Numeric float / Excel serial — skip silently
     return None
 
 

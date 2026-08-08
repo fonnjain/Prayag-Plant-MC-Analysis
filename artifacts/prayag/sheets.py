@@ -3123,3 +3123,73 @@ def load_wastage_records(plant: str, ym: str) -> list:
                     continue
         _wastage_cache[key] = (now, recs)
         return recs
+
+
+# ---------------------------------------------------------------------------
+# Corrective re-plan actuals (Report-11 + Report-12 raw values)
+# ---------------------------------------------------------------------------
+
+_replan_cache: dict = {}
+_replan_lock  = threading.Lock()
+_REPLAN_TTL   = 15 * 60  # 15 min — same as planning TTL
+
+
+def load_corrective_replan_actuals(ym: str) -> dict:
+    """Return raw Report-11 and Report-12 values for *ym* (PIPE workbook).
+
+    Returns a dict:
+      {
+        "file_id": str,
+        "r11": list[list],   # raw values from Report-11
+        "r12": list[list],   # raw values from Report-12
+        "error": str | None,
+      }
+
+    Cached 15 min. Used only by /planning/corrective-replan (never on '/').
+    """
+    now = time.time()
+    c = _replan_cache.get(ym)
+    if c and now - c[0] < _REPLAN_TTL:
+        return c[1]
+    with _replan_lock:
+        c = _replan_cache.get(ym)
+        if c and now - c[0] < _REPLAN_TTL:
+            return c[1]
+
+        token = _get_access_token()
+        if not token:
+            result: dict = {
+                "file_id": "", "r11": [], "r12": [],
+                "error": "Google Sheets connection not authorized.",
+            }
+            _replan_cache[ym] = (now, result)
+            return result
+
+        fid = sources.planning_file_id("PIPE", ym)
+        if not fid:
+            import source_registry as _sr
+            reg = _sr.get_pipe_file_id(ym)
+            fid = reg["file_id"] if reg else None
+
+        if not fid:
+            result = {
+                "file_id": "", "r11": [], "r12": [],
+                "error": f"No PIPE workbook registered for {ym}.",
+            }
+            _replan_cache[ym] = (now, result)
+            return result
+
+        r11, r12 = [], []
+        error = None
+        try:
+            r11 = read_values(fid, "Report-11", token)
+        except Exception as exc:
+            error = f"Report-11 read failed: {exc}"
+        try:
+            r12 = read_values(fid, "Report-12", token)
+        except Exception as exc:
+            error = (error + "; " if error else "") + f"Report-12 read failed: {exc}"
+
+        result = {"file_id": fid, "r11": r11, "r12": r12, "error": error}
+        _replan_cache[ym] = (now, result)
+        return result

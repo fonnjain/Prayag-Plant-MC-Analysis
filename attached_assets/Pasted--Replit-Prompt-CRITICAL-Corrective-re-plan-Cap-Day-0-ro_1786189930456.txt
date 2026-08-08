@@ -1,0 +1,96 @@
+# Replit Prompt — CRITICAL: Corrective re-plan Cap/Day = 0 (root cause verified + format checks)
+
+The August Plumbing corrective re-plan (as-of 2026-08-08, 18 working days remaining) reports **Cap/Day = 0 for all 12 categories → Feasible = 0 → Shortfall = 100% of remaining (2,138,947 pcs)**. Unusable — do not let anyone act on it.
+
+It is self-contradictory: the same report shows **205,566 pieces produced this month**, so capacity cannot be zero.
+
+---
+
+## ROOT CAUSE (verified independently against the live sheet)
+
+**August has only TWO production days recorded in Sheet3 — Aug 1 and Aug 3.** The p90 calculation appears to have a minimum-days threshold and returns **0** below it, rather than falling back to a usable estimate.
+
+**This will recur every month**, in the first week or two, when there are too few production days for a p90 — precisely when planners run the re-plan.
+
+**Confirmed NOT the cause:** the Plumbing Sheet3 structure has **not** shifted. Header verified directly as `DATE | CODE | Prod. Qty` in columns A/B/C, identical to July, and the file read was not truncated. The 2-day finding is real, not a parsing artifact.
+
+---
+
+## TARGET VALUES — computed independently from Sheet3 August production
+
+| Category | Aug 1 | Aug 3 | p90 | Feasible (x18 days) |
+|---|--:|--:|--:|--:|
+| CPVC Pipe | 2,420 | 3,075 | 2,420 | 43,560 |
+| CPVC Fitting | 25,176 | 19,580 | 19,580 | 352,440 |
+| UPVC Pipe | 3,480 | 1,423 | 1,423 | 25,614 |
+| UPVC Fitting | 19,525 | 0 | 19,525 | 351,450 |
+| SWR Pipe | 1,782 | 1,790 | 1,782 | 32,076 |
+| SWR Fitting | 7,635 | 8,621 | 7,635 | 137,430 |
+| AGRI Pipe | 350 | 0 | 350 | 6,300 |
+| AGRI Fitting | 570 | 0 | 570 | 10,260 |
+| CPVC / UPVC / SWR / AGRI Solvent | 0 | 0 | - | NO_DEMONSTRATED_CAPACITY |
+| **TOTAL** | | | | **~959,130** |
+
+**Correct outcome:** feasible ~ **959,130** vs remaining **2,138,947** -> shortfall ~ **1,179,817**. A serious but actionable number - not "everything is unfulfillable".
+
+(If the fallback uses the **mean** rather than p90 with two data points, totals will be somewhat higher - e.g. CPVC Fitting 22,378/day. Either is defensible; what matters is that it is non-zero and the method used is visible.)
+
+---
+
+## FIXES REQUIRED
+
+**1. Never return Cap/Day = 0 for a category that has production.** Fallback chain:
+- p90 of demonstrated daily output when there are enough days;
+- otherwise the **mean** of available production days (with 1-2 days this is the only sensible estimate);
+- only when there is genuinely **no production at all**, set capacity 0 and flag `NO_DEMONSTRATED_CAPACITY`.
+Surface which method was used per category.
+
+**2. Distinguish the two zero cases.** Eight categories produced but reported zero capacity - that is the bug. The four Solvent categories have genuinely zero production - legitimately `NO_DEMONSTRATED_CAPACITY`. The output must not treat them identically.
+
+**3. Return the same value used to compute feasibility** in `capacityPerDay`, so capacity and feasible can never disagree. (Reported fixed as P4 on 28 July - verify the fix covers *this* endpoint and export path; it has regressed.)
+
+---
+
+## ALSO INVESTIGATE - three source/format issues found
+
+**4. Produced-figure gap (~62k unexplained).** The export reports **205,566** produced. An independent parse of Sheet3 August gives **119,214** across Aug 1 and Aug 3, plus **23,787** on codes not mapped to any category (143,001 total). The remainder must come from somewhere else - most likely Report-11 / Report-12 in the Pipe & Fitting workbook, or a **stale July workbook read**. Report the **workbook ID and date range** used for `producedToDate` and separately for the p90 capacity calculation. They may not be the same source.
+
+**5. Date formats differ between the two masters.** Verified:
+- Plumbing AUG Sheet3 uses **`Aug 1, 2026`**
+- PTMT AUG master uses **`1-Aug-2026`** (343 occurrences)
+
+If a shared date parser is used across segments, one format will silently yield zero rows. Confirm both formats parse correctly, and that an unrecognised date format **fails loudly** rather than returning an empty result - this is the same silent-zero class as the `Closing Stock` / `Qty.` header bugs.
+
+**6. Report-5 appears empty.** In the Pipe & Fitting AUG workbook, the Comparison tab shows 1-Aug through 23-Aug with zeros throughout. If machine hours or output are read from Report-5, that is another zero source. Confirm what the app reads from Report-5 and whether it is populated.
+
+---
+
+## WHAT IS WORKING - do not change
+
+- Item-level arithmetic: `remaining = plan - produced` (PS-12: 28,847 - 10,535 = 18,312)
+- Per-category tab totals reconcile to the Summary sheet
+- `Stock` correctly shows *stockNow* (opening + produced)
+- As-of date (2026-08-08) and 18 working days remaining are correct
+- Sheet3 column structure unchanged from July
+
+---
+
+## REGRESSION ASSERTIONS TO ADD
+
+1. **No-zero-capacity-with-production:** if `producedToDate > 0` for a category, `capacityPerDay` must be `> 0`. Would have caught this and the July occurrence.
+2. **Few-days fallback:** with only 1-2 production days in the month, capacity must still resolve to a non-zero estimate.
+3. **Feasibility consistency:** `feasible === capacityPerDay x workingDaysRemaining` per category (exact).
+4. **Not-everything-unfulfillable:** total shortfall must not equal total remaining when production exists.
+5. **Source agreement:** the workbook used for `producedToDate` and for p90 must be the same and match the month being planned.
+6. **Date-format guard:** unrecognised date formats raise a named error rather than yielding zero rows; both `Aug 1, 2026` and `1-Aug-2026` parse correctly.
+
+---
+
+## REPORT AFTER FIX
+
+- Cap/Day, Feasible, Shortfall per category against the target table.
+- Which capacity method (p90 / mean / none) was used per category.
+- Workbook ID and date range for produced and for p90, plus reconciliation of 205,566 vs 119,214.
+- What the app reads from Report-5 and whether it is populated.
+- Confirmation that total shortfall is ~1.18M, not 100% of remaining.
+- New suite count and pass/fail.
