@@ -2259,12 +2259,26 @@ def read_index(file_id: str, token: Optional[str] = None) -> List[dict]:
 
 
 def _daily_file_id(plant: str, ym: Optional[str]) -> Optional[str]:
-  """The daily workbook file id for a plant, for ``ym`` or the latest month."""
+  """The daily workbook file id for a plant, for ``ym`` or the latest month.
+
+  For PIPE, any month not explicitly pinned in sources.py is resolved via
+  ``source_registry.get_pipe_file_id`` (title-based Drive search → Postgres
+  cache → in-process cache).  Other plants still require an explicit pin.
+  """
   files = sources.DAILY_SOURCES.get(plant, {}).get("files", {})
+  if ym and ym in (files or {}):
+      return files[ym]
+  # PIPE: auto-discover months not pinned in sources.py
+  if plant == "PIPE" and ym:
+      try:
+          import source_registry as _reg
+          result = _reg.get_pipe_file_id(ym)
+          if result and result.get("file_id"):
+              return result["file_id"]
+      except Exception:
+          pass
   if not files:
       return None
-  if ym and ym in files:
-      return files[ym]
   return files[sorted(files)[-1]]
 
 

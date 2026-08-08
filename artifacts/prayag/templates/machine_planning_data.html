@@ -298,6 +298,81 @@
   {% endif %}
 
   <!-- ═══════════════════════════════════════════════════════
+       PIPE MONTHLY WORKBOOKS PANEL
+  ═══════════════════════════════════════════════════════ -->
+  {% if monthly_workbooks_panel %}
+  <details id="pipe-workbooks-panel" style="margin-bottom:1rem;">
+    <summary style="cursor:pointer;font-size:.8rem;font-weight:700;color:var(--navy);
+                    padding:.45rem .6rem;background:#f9fafb;border:1px solid #e5e7eb;
+                    border-radius:.45rem;list-style:none;display:flex;align-items:center;gap:.5rem;">
+      <span>📋 Registered PIPE Workbooks</span>
+      {% set n_disc = monthly_workbooks_panel | selectattr('source','equalto','discovered') | list | length %}
+      {% if n_disc > 0 %}
+        <span style="background:#dbeafe;color:#1e40af;border-radius:99px;
+                     padding:.1rem .5rem;font-size:.72rem;">{{ n_disc }} auto-discovered</span>
+      {% else %}
+        <span style="background:#d1fae5;color:#065f46;border-radius:99px;
+                     padding:.1rem .5rem;font-size:.72rem;">all pinned</span>
+      {% endif %}
+      <span style="margin-left:auto;font-size:.7rem;color:#9ca3af;">▾ expand</span>
+    </summary>
+    <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 .45rem .45rem;
+                padding:.6rem;background:#fff;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead>
+          <tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;">
+            <th style="text-align:left;padding:.3rem .4rem;">Month</th>
+            <th style="text-align:left;padding:.3rem .4rem;">File name</th>
+            <th style="text-align:left;padding:.3rem .4rem;">File ID</th>
+            <th style="text-align:left;padding:.3rem .4rem;">Source modified</th>
+            <th style="text-align:center;padding:.3rem .4rem;">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in monthly_workbooks_panel %}
+          <tr style="border-bottom:1px solid #f3f4f6;{% if row.empty %}opacity:.5;{% endif %}">
+            <td style="padding:.3rem .4rem;font-weight:600;">
+              {{ row.year_month }}
+              {% if row.empty %}<span style="color:#9ca3af;font-weight:400;">(empty)</span>{% endif %}
+            </td>
+            <td style="padding:.3rem .4rem;color:#374151;max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ row.file_name }}">
+              {{ row.file_name or '—' }}
+            </td>
+            <td style="padding:.3rem .4rem;">
+              {% if row.file_id %}
+              <a href="https://docs.google.com/spreadsheets/d/{{ row.file_id }}"
+                 target="_blank" rel="noopener"
+                 style="font-family:monospace;font-size:.7rem;color:#2563eb;text-decoration:none;">
+                {{ row.file_id[:20] }}…
+              </a>
+              {% else %}—{% endif %}
+            </td>
+            <td style="padding:.3rem .4rem;color:#374151;">
+              {{ row.modified_time[:10] if row.modified_time else '—' }}
+            </td>
+            <td style="padding:.3rem .4rem;text-align:center;">
+              {% if row.source == 'pinned' %}
+                <span style="background:#f3f4f6;color:#374151;border-radius:99px;
+                             padding:.1rem .45rem;font-size:.68rem;">📌 pinned</span>
+              {% else %}
+                <span style="background:#dbeafe;color:#1e40af;border-radius:99px;
+                             padding:.1rem .45rem;font-size:.68rem;">🔍 discovered</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p style="margin:.5rem 0 0;font-size:.68rem;color:#9ca3af;">
+        📌 pinned = explicit ID in sources.py &nbsp;·&nbsp;
+        🔍 discovered = resolved from Drive title search and cached
+      </p>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ═══════════════════════════════════════════════════════
        SEED STATUS PANEL
   ═══════════════════════════════════════════════════════ -->
   {% if seed_status_panel %}

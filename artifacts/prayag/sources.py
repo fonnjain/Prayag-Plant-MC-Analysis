@@ -2,14 +2,21 @@
 Source registry — the single place that maps each report "family" to a live
 Google Sheet file ID, the data tab(s) to read, and the parser layout to use.
 
-Why explicit file IDs (not folder discovery): the connected Google account's
-scope is `drive.file`, which CANNOT list arbitrary Drive folders or run a
-`files.list` search (verified: returns 0). So auto-discovery of "the whole
-daily folder" is impossible with the current connection. We read each workbook
-by its pinned ID. When a new monthly file is added to Drive, its ID must be
-added here (see DAILY_SOURCES) — this is documented in the README.
+MONTHLY WORKBOOK RESOLUTION POLICY (DAILY_SOURCES)
+  1. Pinned IDs in this file are authoritative and are never overwritten.
+  2. For PIPE monthly workbooks, source_registry.py performs automatic
+     title-based Drive discovery for months not pinned here.  Resolved IDs are
+     cached in Postgres (daily_source_registry) and in-process memory so
+     subsequent requests are fast.  Callers use sheets._daily_file_id() which
+     falls through to source_registry when no pin is present.
 
-All IDs below were verified accessible via the `google-sheet` connection.
+Why some months are still pinned explicitly:
+  - Some workbooks live in non-standard folders or are owned by accounts
+    whose files are not returned by a plain title search.
+  - Pinning freezes a specific verified file — useful to prevent accidentally
+    picking up a renamed or duplicate workbook.
+
+All pinned IDs were verified accessible via the `google-sheet` connection.
 """
 from __future__ import annotations
 
@@ -219,6 +226,9 @@ DAILY_SOURCES: dict[str, dict] = {
           # readable because it was shared with the connected account — discovery
           # by folder is impossible (drive.file scope), so it is pinned by ID.
           "2026-07": "1y2HRoJNQmE2BthE0f18YU1w0ly1LMvyqP98f2_4Wero",
+          # Aug-2026 owned by preeti.chauhan@prayagindia.com.
+          # Title: "5. Pipe & Fitting Plant Date Sheet & Monthly Report - AUG ' 2026"
+          "2026-08": "1Crlyfg8EpBRwR5sylgqCxF7r1boeD3UjSDQwLB10g7E",
           # FY2025-26 (prior year). The header-based Report-5/Report-11/Report-12
           # readers parse the older FY2025-26 layout with no code change, so these
           # feed PIPE (Report-5 ↔ Report-11 reconciliation) AND MOULDING (Report-12)

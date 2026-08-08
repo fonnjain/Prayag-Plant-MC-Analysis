@@ -4953,6 +4953,7 @@ import mp_rejection as _mp_rejection       # noqa: E402
 import mp_rejection_plan as _mp_rej_plan   # noqa: E402
 import mp_seed as _mp_seed                 # noqa: E402
 import mp_seed_provenance as _mp_seed_prov # noqa: E402
+import source_registry as _mp_source_reg   # noqa: E402
 import mp_wastage as _mp_wastage           # noqa: E402
 
 _MP_SEGMENT = "PLUMBING"
@@ -5329,6 +5330,7 @@ def mp_data_view():
         machine_roster_note=_roster_note,
         today_iso=today_iso,
         seed_status_panel=_mp_seed_prov.get_status_panel(),
+        monthly_workbooks_panel=_mp_source_reg.get_monthly_workbook_panel(),
     )
 
 

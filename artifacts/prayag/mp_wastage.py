@@ -165,6 +165,13 @@ def recompute_wastage(segment: str) -> dict:
     """
     import sheets as _sh  # noqa: PLC0415 – intentional late import
 
+    # Auto-register any FY months not yet pinned in sources.py (e.g. Aug 2026+).
+    try:
+        import source_registry as _reg
+        _reg.ensure_fy_months_registered()
+    except Exception:
+        pass
+
     months = sources.planning_months("PIPE")
     if not months:
         return {"ok": False, "error": "No PIPE months in sources."}

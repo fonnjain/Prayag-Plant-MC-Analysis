@@ -259,6 +259,14 @@ def recompute_rejection(segment: str = "PLUMBING") -> dict:
     """
     import sheets as _sheets  # local import avoids circular at module level
 
+    # Auto-register any FY months not yet pinned in sources.py (e.g. Aug 2026+).
+    # Best-effort: failures are silently logged, never fatal to the recompute.
+    try:
+        import source_registry as _reg
+        _reg.ensure_fy_months_registered()
+    except Exception:
+        pass
+
     errors: List[str] = []
 
     pipe_months_covered: List[str] = []
