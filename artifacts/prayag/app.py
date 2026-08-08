@@ -3823,11 +3823,15 @@ def planning_view():
 
 @app.route("/planning/corrective-replan")
 def planning_corrective_replan():
-    """Download Corrective Re-plan (.xlsx) for Plumbing (PIPE + Fitting).
+    """Download Corrective Re-plan run-rate projection (.xlsx) for Plumbing.
 
-    Reads daily production actuals from Report-11 (pipe pcs) and Report-12
-    (fitting pcs), computes Cap/Day (p90 or mean fallback), and projects
-    feasible output for the remaining working days vs plan remaining demand.
+    This is a RUN-RATE PACE CHECK — it answers "if the plant keeps producing
+    at the pace seen so far, where will it land?"  It is NOT a machine-capacity
+    statement.  For what the machines can physically make, use the Capacity-
+    Feasible Plan (/machine-planning/report/capacity-feasible-plan).
+
+    The XLSX labels use pace/projected/gap language (not capacity/feasible).
+    Categories with zero production are marked "Not started" (not NO CAPACITY).
 
     Query params: month (YYYY-MM), as_of (YYYY-MM-DD, default today).
     """

@@ -46,7 +46,13 @@ from typing import Dict, List, Optional, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
-MIN_DAYS_FOR_P90: int = 5   # fewer non-zero days → mean; ≥ → 10th-percentile
+MIN_DAYS_FOR_P90: int = 5   # fewer non-zero days → mean+low-confidence flag; ≥ → 10th-percentile
+
+#: R12 materials that are tracked in the sheet TOTAL but do not map to any
+#: standard Plumbing category (CPVC/UPVC/SWR/AGRI/PP/ABS).  We count their
+#: pcs in the grand total (so it reconciles with the sheet TOTAL row) but we
+#: do NOT assign them to a category row.  Tracked in CorrectiveReplanResult.other_produced.
+_R12_OTHER_MATERIALS: frozenset = frozenset({"TEFFLONE", "TEFLON", "TEFF"})
 
 #: Map TYPES value in Report-11 → category label
 PIPE_CATEGORIES: Dict[str, str] = {
@@ -94,12 +100,13 @@ class CategoryResult:
     daily_values: List[float]       # non-zero daily totals (pcs)
     n_days: int                     # = len(daily_values)
     produced_to_date: float         # sum of all daily pcs (including 0-days)
-    cap_per_day: float              # 0 when no production
-    method: str                     # "p90" | "mean" | "none"
+    cap_per_day: float              # 0 when not started / no pace data
+    method: str                     # "p90" | "mean" | "mean(low-confidence)" | "none"
     remaining: float                # from plan (produce_required - produced_monthly)
     working_days_remaining: int
-    feasible: float                 # cap_per_day * working_days_remaining
+    feasible: float                 # cap_per_day * working_days_remaining (pace-projected)
     shortfall: float                # max(0, remaining - feasible)
+    cap_feasible: Optional[float] = None  # machine-capacity feasible (from capacity plan, if available)
 
     @property
     def shortfall_pct(self) -> Optional[float]:
@@ -108,8 +115,19 @@ class CategoryResult:
         return round(self.shortfall / self.remaining * 100, 1)
 
     @property
-    def no_demonstrated_capacity(self) -> bool:
+    def not_started(self) -> bool:
+        """True when no production has been observed yet (category hasn't run this month)."""
         return self.produced_to_date == 0 and self.cap_per_day == 0
+
+    # Keep the old name as an alias so existing tests don't break
+    @property
+    def no_demonstrated_capacity(self) -> bool:
+        return self.not_started
+
+    @property
+    def low_confidence(self) -> bool:
+        """True when pace is based on fewer than MIN_DAYS_FOR_P90 production days."""
+        return self.n_days > 0 and self.n_days < MIN_DAYS_FOR_P90
 
 
 @dataclasses.dataclass
@@ -124,7 +142,8 @@ class CorrectiveReplanResult:
     source_date_min: str   # earliest date seen in Report-11/12
     source_date_max: str   # latest date seen
     plan_produced_total: float   # from Report-1 (plan "produced" column)
-    actual_produced_total: float # from our Report-11+12 parse
+    actual_produced_total: float # from our Report-11+12 parse (all categories + other)
+    other_produced: float        # R12 pcs in unclassified materials (e.g. TEFFLONE)
     warnings: List[str]
 
 
@@ -232,9 +251,15 @@ def _percentile_10(values: List[float]) -> float:
 
 
 def _compute_cap_per_day(daily_totals: List[float]) -> Tuple[float, str, int]:
-    """Return (cap_per_day, method_label, n_non_zero_days).
+    """Return (pace_per_day, method_label, n_non_zero_days).
 
-    Fallback chain: p90 (≥ MIN_DAYS_FOR_P90 days) → mean → 0 / none.
+    Fallback chain: p90 (≥ MIN_DAYS_FOR_P90 days) → mean(low-confidence) → 0 / none.
+
+    "p90"  means 10th-percentile of ≥5 non-zero daily totals — a conservative
+           90%-confidence pace floor.
+    "mean(low-confidence,N days)"  means arithmetic mean of 1–4 days — too few
+           data points for a reliable projection; a low-confidence flag is shown.
+    "none" means no production days observed yet this month — category not started.
     """
     non_zero = [v for v in daily_totals if v > 0]
     n = len(non_zero)
@@ -242,8 +267,8 @@ def _compute_cap_per_day(daily_totals: List[float]) -> Tuple[float, str, int]:
         return 0.0, "none", 0
     if n >= MIN_DAYS_FOR_P90:
         return round(_percentile_10(non_zero), 1), "p90", n
-    # Mean for few days — the only sensible estimate when 1-2 days in month
-    return round(sum(non_zero) / n, 1), "mean", n
+    # Fewer than MIN_DAYS_FOR_P90 days: mean is the only option; flag as low-confidence
+    return round(sum(non_zero) / n, 1), f"mean(low-confidence,{n}d)", n
 
 
 # ---------------------------------------------------------------------------
@@ -327,14 +352,22 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
 # Report-12 parser (Moulding/Fitting pcs)
 # ---------------------------------------------------------------------------
 
-def _parse_r12_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[str, float]]:
+def _parse_r12_daily_pcs(
+    values: list, year: int, month: int
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
     """Parse Report-12 (Mould M/C) for fitting pcs per category per date.
+
+    Returns (daily, other_pcs):
+      daily     : {date_iso: {category: pcs_total}}
+      other_pcs : {material_name: total_pcs} for unclassified materials
+                  (e.g. TEFFLONE).  These reconcile with the sheet TOTAL row
+                  but are NOT assigned to a standard category.
 
     Header is at row index 3 (DATE | MATERIAL | Item Code | … | Output Pc | …).
     Row 4 has sub-headers; data starts row 5 (0-indexed).
     """
     if not values:
-        return {}
+        return {}, {}
 
     # Locate header row by DATE + MATERIAL
     hdr_idx = None
@@ -368,6 +401,7 @@ def _parse_r12_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
             data_start += 1
 
     daily: Dict[str, Dict[str, float]] = {}
+    other_pcs: Dict[str, float] = {}
     last_date: Optional[str] = None
 
     for raw in values[data_start:]:
@@ -392,12 +426,6 @@ def _parse_r12_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
         mat = _cell(col_mat).upper()
         if not mat or "TOTAL" in mat or "MATERIAL" in mat:
             continue
-        # Normalise "TEFFLONE" → skip (not a standard PIPE fitting category)
-        if "TEFF" in mat or "TEFLON" in mat:
-            continue
-        category = FITTING_CATEGORIES.get(mat)
-        if not category:
-            continue
 
         item = _cell(col_item)
         if not item or "ITEM" in item.upper():
@@ -407,10 +435,22 @@ def _parse_r12_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
         if pcs <= 0:
             continue
 
+        # Check for unclassified materials (e.g. TEFFLONE = misspelled Teflon).
+        # Count them in the total (so we reconcile with the sheet TOTAL row) but
+        # do NOT assign to any standard category row.
+        is_other = any(tok in mat for tok in _R12_OTHER_MATERIALS)
+        if is_other:
+            other_pcs[mat] = other_pcs.get(mat, 0.0) + pcs
+            continue
+
+        category = FITTING_CATEGORIES.get(mat)
+        if not category:
+            continue
+
         day_map = daily.setdefault(last_date, {})
         day_map[category] = day_map.get(category, 0.0) + pcs
 
-    return daily
+    return daily, other_pcs
 
 
 # ---------------------------------------------------------------------------
@@ -445,30 +485,41 @@ def _count_working_days(year: int, month: int, as_of: datetime.date) -> Tuple[in
 
 def compute_corrective_replan(
     month: str,
-    plan_recs,           # list[planning.PlanRecord]
-    r11_values: list,    # raw Sheets values from Report-11
-    r12_values: list,    # raw Sheets values from Report-12
-    as_of_date: str,     # 'YYYY-MM-DD'
+    plan_recs,                             # list[planning.PlanRecord]
+    r11_values: list,                      # raw Sheets values from Report-11
+    r12_values: list,                      # raw Sheets values from Report-12
+    as_of_date: str,                       # 'YYYY-MM-DD'
     file_id: str = "",
+    cap_feasible_by_cat: Optional[Dict[str, float]] = None,
+    # ^ If the Capacity-Feasible Plan has been run for this month, pass a dict
+    #   {category_label → feasible_pcs} here.  Used as a fallback display figure
+    #   for "not started" categories and shown alongside the pace projection.
+    #   When None the capacity column shows "—" and the feature still works.
 ) -> CorrectiveReplanResult:
-    """Compute the corrective re-plan for Plumbing (PIPE + Fitting).
+    """Compute the Corrective Re-plan pace projection for Plumbing (PIPE + Fitting).
+
+    This is a RUN-RATE projection, NOT a machine-capacity statement.
+    It answers: "if the plant keeps producing at the pace seen so far,
+    where will output land by month end?"
+
+    For machine-capacity (what can physically be made), use the separate
+    Capacity-Feasible Plan (machine hours × rates, ≤ 100%).
 
     Parameters
     ----------
-    month       : 'YYYY-MM'
-    plan_recs   : PlanRecord list from load_planning('PIPE', month)
-    r11_values  : raw values from Report-11 (pipe actuals)
-    r12_values  : raw values from Report-12 (fitting actuals)
-    as_of_date  : today's date ('YYYY-MM-DD')
-    file_id     : source Google Sheets file ID (for provenance reporting)
+    month              : 'YYYY-MM'
+    plan_recs          : PlanRecord list from load_planning('PIPE', month)
+    r11_values         : raw values from Report-11 (pipe actuals)
+    r12_values         : raw values from Report-12 (fitting actuals)
+    as_of_date         : today's date ('YYYY-MM-DD')
+    file_id            : source Google Sheets file ID (for provenance)
+    cap_feasible_by_cat: optional {category → feasible pcs} from capacity plan
 
-    Returns a CorrectiveReplanResult with per-category CategoryResult rows.
-
-    INVARIANTS enforced (AssertionError on violation)
-    -------------------------------------------------
-    1. producedToDate > 0  →  cap_per_day > 0
-    2. feasible == cap_per_day × working_days_remaining  (exact float multiply)
-    3. total_shortfall < total_remaining  (when ≥ 1 category has production)
+    INVARIANTS enforced (warn on violation, never raise)
+    ----------------------------------------------------
+    1. producedToDate > 0  →  pace_per_day > 0
+    2. projected_pace == pace_per_day × working_days_remaining  (exact)
+    3. total_pace_gap < total_remaining  (when ≥ 1 category has production)
     """
     year  = int(month[:4])
     mnum  = int(month[5:7])
@@ -477,8 +528,9 @@ def compute_corrective_replan(
     wd_total, wd_elapsed, wd_remaining = _count_working_days(year, mnum, as_of)
 
     # --- Parse daily actuals ------------------------------------------------
-    r11_daily = _parse_r11_daily_pcs(r11_values, year, mnum)
-    r12_daily = _parse_r12_daily_pcs(r12_values, year, mnum)
+    r11_daily              = _parse_r11_daily_pcs(r11_values, year, mnum)
+    r12_daily, r12_other   = _parse_r12_daily_pcs(r12_values, year, mnum)
+    # r12_other: {material → total pcs} for unclassified materials (e.g. TEFFLONE)
 
     # Collect all dates seen
     all_dates = sorted(set(r11_daily) | set(r12_daily))
@@ -486,22 +538,19 @@ def compute_corrective_replan(
     src_date_max = all_dates[-1] if all_dates else ""
 
     # Build per-category daily totals: {category → list[pcs_per_day]}
-    # We collect one entry per *production day* (date where category ran).
-    # Days the category didn't run are NOT included — they reflect absence,
-    # not capacity constraint.
+    # One entry per *production day* (date where category ran).
+    # Days the category didn't run are NOT included — they reflect scheduling
+    # absence, not a capacity constraint.
     cat_daily: Dict[str, List[float]] = {c: [] for c in CATEGORY_ORDER}
     cat_produced: Dict[str, float] = {c: 0.0 for c in CATEGORY_ORDER}
 
     for date in all_dates:
-        day = {}
+        day: Dict[str, float] = {}
         for cat in PIPE_CATEGORIES.values():
             day[cat] = r11_daily.get(date, {}).get(cat, 0.0)
         for cat in FITTING_CATEGORIES.values():
             v = r12_daily.get(date, {}).get(cat, 0.0)
-            if cat in day:
-                day[cat] += v
-            else:
-                day[cat] = v
+            day[cat] = day.get(cat, 0.0) + v
         for cat, pcs in day.items():
             if cat not in cat_daily:
                 continue
@@ -509,19 +558,18 @@ def compute_corrective_replan(
             if pcs > 0:
                 cat_daily[cat].append(pcs)
 
-    # Solvent categories: always zero (not tracked in Report-11/12)
+    # Solvent categories: never appear in Report-11/12
     for cat in SOLVENT_CATEGORIES:
         cat_daily[cat] = []
         cat_produced[cat] = 0.0
 
-    # --- Plan remaining demand per category --------------------------------
-    # Aggregate plan records: group by (family, sub-type PIPE/FITTING)
+    # --- Plan remaining demand per category ---------------------------------
     cat_remaining: Dict[str, float] = {c: 0.0 for c in CATEGORY_ORDER}
     plan_produced_total = 0.0
 
     for rec in (plan_recs or []):
-        fam = (rec.family or "").upper()   # CPVC / UPVC / SWR / AGRI
-        cat_str = (rec.category or "").upper()  # e.g. "CPVC PIPE"
+        fam = (rec.family or "").upper()
+        cat_str = (rec.category or "").upper()
         if "FITTING" in cat_str or "FIT" in cat_str:
             sub = "Fitting"
         elif "SOLVENT" in cat_str or "SOL" in cat_str:
@@ -529,18 +577,18 @@ def compute_corrective_replan(
         else:
             sub = "Pipe"
 
-        label = f"{fam.capitalize()} {sub}" if fam and sub else None
         if fam == "AGRI":
-            label = f"AGRI {sub}"
+            label: Optional[str] = f"AGRI {sub}"
         elif fam == "SWR":
             label = f"SWR {sub}"
         elif fam == "CPVC":
             label = f"CPVC {sub}"
         elif fam == "UPVC":
             label = f"UPVC {sub}"
+        else:
+            label = None
 
         if label and label in cat_remaining:
-            # net_requirement = max(produce_required - produced, ideal_qty - closing_stock)
             demand = max(
                 getattr(rec, "produce_required", 0.0) - getattr(rec, "produced", 0.0),
                 getattr(rec, "ideal_qty", 0.0) - getattr(rec, "closing_stock", 0.0),
@@ -550,64 +598,69 @@ def compute_corrective_replan(
 
         plan_produced_total += getattr(rec, "produced", 0.0)
 
-    actual_produced_total = sum(cat_produced.values())
+    # actual_produced_total = categorised pcs + unclassified (TEFFLONE etc.)
+    # This must equal the R11 TOTAL row + R12 TOTAL row from the source sheet.
+    other_produced        = round(sum(r12_other.values()), 0)
+    actual_produced_total = round(sum(cat_produced.values()) + other_produced, 0)
 
     # --- Build per-category results -----------------------------------------
     warnings: List[str] = []
     results: List[CategoryResult] = []
 
     for cat in CATEGORY_ORDER:
-        daily_vals = cat_daily.get(cat, [])
-        produced   = cat_produced.get(cat, 0.0)
-        remaining  = cat_remaining.get(cat, 0.0)
+        daily_vals   = cat_daily.get(cat, [])
+        produced     = cat_produced.get(cat, 0.0)
+        remaining    = cat_remaining.get(cat, 0.0)
+        cap_feas_val = (cap_feasible_by_cat or {}).get(cat, None)
 
-        cap, method, n = _compute_cap_per_day(daily_vals)
-        feasible  = round(cap * wd_remaining, 1)
-        shortfall = round(max(0.0, remaining - feasible), 1)
+        pace, method, n = _compute_cap_per_day(daily_vals)
+        projected = round(pace * wd_remaining, 1)
+        gap       = round(max(0.0, remaining - projected), 1)
 
-        # INVARIANT 1: produced > 0  →  cap > 0
-        if produced > 0 and cap <= 0:
+        # INVARIANT 1: produced > 0  →  pace > 0
+        # (not_started categories are exempt — 0 produced, 0 pace is expected)
+        if produced > 0 and pace <= 0:
             warnings.append(
                 f"INVARIANT VIOLATED: {cat} has producedToDate={produced:.0f} "
-                f"but cap_per_day=0. This is a bug — the fallback chain failed."
+                f"but pace_per_day=0. Emergency fallback applied."
             )
-            # Emergency fallback: force mean from produced / max(1, n)
-            cap     = round(produced / max(1, len(all_dates)), 1)
-            method  = "mean(emergency)"
-            feasible = round(cap * wd_remaining, 1)
-            shortfall = round(max(0.0, remaining - feasible), 1)
+            pace      = round(produced / max(1, len(all_dates)), 1)
+            method    = "mean(emergency)"
+            projected = round(pace * wd_remaining, 1)
+            gap       = round(max(0.0, remaining - projected), 1)
 
         results.append(CategoryResult(
             category=cat,
             daily_values=daily_vals,
             n_days=n,
             produced_to_date=produced,
-            cap_per_day=cap,
+            cap_per_day=pace,           # field kept as cap_per_day for compat
             method=method,
             remaining=remaining,
             working_days_remaining=wd_remaining,
-            feasible=feasible,
-            shortfall=shortfall,
+            feasible=projected,         # field kept as feasible for compat
+            shortfall=gap,              # field kept as shortfall for compat
+            cap_feasible=cap_feas_val,
         ))
 
-    # --- INVARIANT 2: feasible == cap × wd_remaining (exact) ----------------
+    # --- INVARIANT 2: projected == pace × wd_remaining (exact) -------------
     for r in results:
         expected = round(r.cap_per_day * r.working_days_remaining, 1)
         if abs(r.feasible - expected) > 0.05:
             warnings.append(
-                f"Feasibility inconsistency for {r.category}: "
-                f"feasible={r.feasible} but cap×days={expected}"
+                f"Pace inconsistency for {r.category}: "
+                f"projected={r.feasible} but pace×days={expected}"
             )
 
-    # --- INVARIANT 3: total_shortfall < total_remaining if any production ----
-    total_remaining  = sum(r.remaining  for r in results)
-    total_shortfall  = sum(r.shortfall  for r in results)
+    # --- INVARIANT 3: total_gap < total_remaining if any production ---------
+    total_remaining  = sum(r.remaining for r in results)
+    total_gap        = sum(r.shortfall for r in results)
     total_production = sum(r.produced_to_date for r in results)
-    if total_production > 0 and total_shortfall >= total_remaining and total_remaining > 0:
+    if total_production > 0 and total_gap >= total_remaining and total_remaining > 0:
         warnings.append(
-            f"CRITICAL: total_shortfall ({total_shortfall:,.0f}) ≥ total_remaining "
+            f"CRITICAL: total pace-gap ({total_gap:,.0f}) ≥ total_remaining "
             f"({total_remaining:,.0f}) despite {total_production:,.0f} pcs produced. "
-            "Capacity calculation has failed — do not act on this report."
+            "Pace projection has failed — do not act on this report."
         )
 
     return CorrectiveReplanResult(
@@ -621,7 +674,8 @@ def compute_corrective_replan(
         source_date_min=src_date_min,
         source_date_max=src_date_max,
         plan_produced_total=round(plan_produced_total, 0),
-        actual_produced_total=round(actual_produced_total, 0),
+        actual_produced_total=actual_produced_total,
+        other_produced=other_produced,
         warnings=warnings,
     )
 
@@ -631,19 +685,20 @@ def compute_corrective_replan(
 # ---------------------------------------------------------------------------
 
 def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
-    """Return .xlsx bytes for the Corrective Re-plan report.
+    """Return .xlsx bytes for the Corrective Re-plan pace-projection report.
+
+    This is a RUN-RATE monitoring tool, NOT a capacity statement.
+    Labels use "pace" / "projected" / "gap" language throughout.
 
     Tabs
     ----
-    1. Re-plan          — category-level Cap/Day, Feasible, Shortfall
-    2. Daily Actuals    — date × category pivot of raw pcs
-    3. Provenance       — file IDs, date ranges, method notes
+    1. Run-rate Projection  — pace/day, projected output, gap to demand
+    2. Daily Actuals        — date × category pivot of raw pcs
+    3. Provenance           — file IDs, date ranges, method notes, reconciliation
     """
     from io import BytesIO
     from openpyxl import Workbook
-    from openpyxl.styles import (
-        Alignment, Font, PatternFill, numbers
-    )
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     wb = Workbook()
@@ -651,25 +706,25 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
 
     _NAVY   = "1F3864"
     _AMBER  = "FFF2CC"
-    _GREEN  = "E2EFDA"
-    _RED    = "FCE4D6"
-    _BLUE   = "DBEAFE"
-    _GREY   = "F5F5F5"
+    _ORANGE = "FCE4D6"   # gap present
+    _GREEN  = "E2EFDA"   # on track
+    _GREY   = "F5F5F5"   # not started
+    _BLUE   = "DBEAFE"   # low-confidence
 
     def _nfont(**kw): return Font(name="Calibri", **kw)
-    def _nfill(c):    return PatternFill("solid", fgColor=c)
     def _align(**kw): return Alignment(**kw)
 
-    def _hdr(ws, r, c, txt, w=14, bold=True, colour="FFFFFF", fill=_NAVY):
+    def _hdr(ws, r, c, txt, w=14, colour="FFFFFF", fill=_NAVY):
         cell = ws.cell(row=r, column=c, value=txt)
-        cell.font = Font(name="Calibri", bold=bold, size=9, color=colour)
+        cell.font = Font(name="Calibri", bold=True, size=9, color=colour)
         cell.fill = PatternFill("solid", fgColor=fill)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         col = get_column_letter(c)
         ws.column_dimensions[col].width = max(ws.column_dimensions[col].width or 0, w)
 
-    def _title(ws, text):
-        ws.merge_cells("A1:K1")
+    def _title(ws, text, ncols=11):
+        end = get_column_letter(ncols)
+        ws.merge_cells(f"A1:{end}1")
         c = ws["A1"]
         c.value = text
         c.font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
@@ -678,61 +733,109 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
         ws.row_dimensions[1].height = 28
         ws.row_dimensions[2].height = 4
 
-    def _note(ws, r, text, ncols=11):
+    def _note(ws, r, text, ncols=11, colour="555555", italic=True, height=22):
         end = get_column_letter(ncols)
         ws.merge_cells(f"A{r}:{end}{r}")
         c = ws[f"A{r}"]
         c.value = text
-        c.font = Font(name="Calibri", italic=True, size=9, color="555555")
+        c.font = Font(name="Calibri", italic=italic, bold=not italic, size=9, color=colour)
         c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-        ws.row_dimensions[r].height = 22
+        ws.row_dimensions[r].height = height
 
-    # ── Tab 1: Re-plan Summary ───────────────────────────────────────────────
-    ws1 = wb.create_sheet("Re-plan")
+    # ── Determine column count (adds cap-feasible column when available) ──────
+    has_cap_feas = any(cat.cap_feasible is not None for cat in result.categories)
+    NCOLS = 11 if has_cap_feas else 10
+
+    # ── Tab 1: Run-rate Projection ────────────────────────────────────────────
+    ws1 = wb.create_sheet("Run-rate Projection")
     ws1.sheet_view.showGridLines = False
 
-    _title(ws1, f"Corrective Re-plan — Plumbing — {result.month}  (as of {result.as_of_date})")
+    _title(ws1,
+        f"Corrective Re-plan — Plumbing — {result.month}  (as of {result.as_of_date})",
+        ncols=NCOLS)
 
-    subtitle = (
-        f"Working days: {result.working_days_total} total, "
+    # Row 3: subtitle — run-rate framing
+    _note(ws1, 3,
+        "Run-rate projection — based on actual output pace to date, NOT machine capacity.  "
+        "This answers: 'if the plant keeps producing at last week's pace, where will it land?'  "
+        "For what the machines can physically make, see the Capacity-Feasible Plan.",
+        ncols=NCOLS, colour="7F3B00", italic=False, height=32)
+
+    # Row 4: working-day context
+    _note(ws1, 4,
+        f"Working days (Mon–Sat): {result.working_days_total} total, "
         f"{result.working_days_elapsed} elapsed, "
-        f"{result.working_days_remaining} remaining. "
-        f"Capacity method: p90 (≥{MIN_DAYS_FOR_P90} days) → mean → none. "
-        f"Feasible = Cap/Day × {result.working_days_remaining} remaining days."
-    )
-    _note(ws1, 3, subtitle)
+        f"{result.working_days_remaining} remaining.  "
+        f"Pace method: p90 (≥{MIN_DAYS_FOR_P90} days) → mean[low-confidence] → not-started.  "
+        f"Projected = Pace/day × {result.working_days_remaining} remaining days.",
+        ncols=NCOLS)
 
+    # Row 5: column headers
     HDRS = [
-        "Category", "Days recorded", "Produced to date",
-        "Remaining demand", "Cap/Day", "Method",
-        "Feasible", "Shortfall", "Shortfall %"
+        "Category",
+        "Days recorded",
+        "Produced to date\n(R-11 + R-12)",
+        "Remaining demand\n(Report-1)",
+        "Actual pace/day\n(run-rate)",
+        "Method",
+        "Projected at\ncurrent pace",
+        "Gap to demand\nat current pace",
+        "Gap %",
+        "Capacity-feasible\n(machine plan)",
     ]
-    for ci, h in enumerate(HDRS, 1):
-        _hdr(ws1, 4, ci, h, w=[18, 14, 18, 18, 14, 10, 14, 14, 12][ci-1])
+    active_hdrs = HDRS[:9] + (HDRS[9:10] if has_cap_feas else [])
+    col_widths   = [20, 14, 20, 20, 18, 22, 18, 18, 10, 20]
+    for ci, (h, w) in enumerate(zip(active_hdrs, col_widths), 1):
+        _hdr(ws1, 5, ci, h, w=w)
 
-    row = 5
+    row = 6
     for cat in result.categories:
-        fill_colour = (
-            _GREY  if cat.no_demonstrated_capacity else
-            _RED   if cat.shortfall > 0 else
-            _GREEN
-        )
-        for ci, val in enumerate([
+        if cat.not_started:
+            fill_colour = _GREY
+        elif cat.low_confidence:
+            fill_colour = _BLUE
+        elif cat.shortfall > 0:
+            fill_colour = _ORANGE
+        else:
+            fill_colour = _GREEN
+
+        if cat.not_started:
+            pace_disp   = "Not started — no pace data yet"
+            method_disp = "—"
+            proj_disp   = "—"
+            gap_disp    = "—"
+            gap_pct     = "—"
+        else:
+            pace_disp   = round(cat.cap_per_day, 1)
+            lc_flag     = " ⚠low-confidence" if cat.low_confidence else ""
+            method_disp = cat.method + lc_flag
+            proj_disp   = round(cat.feasible)
+            gap_disp    = round(cat.shortfall) if cat.shortfall > 0 else "—"
+            gap_pct     = f"{cat.shortfall_pct:.0f}%" if cat.shortfall_pct else "—"
+
+        if has_cap_feas:
+            cf_disp = round(cat.cap_feasible) if cat.cap_feasible is not None else "—"
+        
+        row_vals = [
             cat.category,
-            cat.n_days if not cat.no_demonstrated_capacity else "—",
-            round(cat.produced_to_date) or ("—" if cat.no_demonstrated_capacity else 0),
+            cat.n_days if not cat.not_started else "—",
+            round(cat.produced_to_date) if not cat.not_started else "—",
             round(cat.remaining) if cat.remaining > 0 else "—",
-            round(cat.cap_per_day, 1) if not cat.no_demonstrated_capacity else "NO CAPACITY",
-            cat.method if not cat.no_demonstrated_capacity else "none",
-            round(cat.feasible) if not cat.no_demonstrated_capacity else 0,
-            round(cat.shortfall) if cat.shortfall > 0 else "—",
-            f"{cat.shortfall_pct:.0f}%" if cat.shortfall_pct else "—",
-        ], 1):
+            pace_disp,
+            method_disp,
+            proj_disp,
+            gap_disp,
+            gap_pct,
+        ]
+        if has_cap_feas:
+            row_vals.append(cf_disp)
+
+        for ci, val in enumerate(row_vals, 1):
             c = ws1.cell(row=row, column=ci, value=val)
             c.font = Font(name="Calibri", size=9)
             c.fill = PatternFill("solid", fgColor=fill_colour)
             c.alignment = Alignment(
-                horizontal="right" if ci > 1 else "left",
+                horizontal="left" if ci == 1 else "right",
                 vertical="center",
             )
         row += 1
@@ -740,25 +843,53 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
     # Totals row
     total_produced  = sum(c.produced_to_date for c in result.categories)
     total_remaining = sum(c.remaining        for c in result.categories)
-    total_feasible  = sum(c.feasible         for c in result.categories)
-    total_shortfall = sum(c.shortfall        for c in result.categories)
-    total_sf_pct    = (total_shortfall / total_remaining * 100) if total_remaining > 0 else 0
+    total_projected = sum(c.feasible         for c in result.categories)
+    total_gap       = sum(c.shortfall        for c in result.categories)
+    total_gap_pct   = (total_gap / total_remaining * 100) if total_remaining > 0 else 0
+    total_cf        = (sum(c.cap_feasible for c in result.categories
+                           if c.cap_feasible is not None)
+                       if has_cap_feas else None)
 
-    for ci, val in enumerate([
+    total_vals = [
         "TOTAL", "—", round(total_produced), round(total_remaining),
-        "—", "—", round(total_feasible), round(total_shortfall),
-        f"{total_sf_pct:.0f}%",
-    ], 1):
+        "—", "—", round(total_projected), round(total_gap),
+        f"{total_gap_pct:.0f}%",
+    ]
+    if has_cap_feas:
+        total_vals.append(round(total_cf) if total_cf is not None else "—")
+
+    for ci, val in enumerate(total_vals, 1):
         c = ws1.cell(row=row, column=ci, value=val)
         c.font = Font(name="Calibri", bold=True, size=9)
         c.fill = PatternFill("solid", fgColor=_AMBER)
         c.alignment = Alignment(horizontal="right" if ci > 1 else "left", vertical="center")
 
+    # Colour legend
+    row += 2
+    legend = [
+        ("🟩 Green", "On track — projected pace meets remaining demand"),
+        ("🟧 Orange", "Gap — at current pace, demand will not be fully met"),
+        ("🟦 Blue", "Low-confidence — < 5 production days; treat pace estimate with caution"),
+        ("⬜ Grey",
+         "Not started — no production recorded yet this month.  "
+         "Cannot estimate pace.  "
+         + ("Capacity-feasible column shows machine-plan figure." if has_cap_feas
+            else "Run the Capacity-Feasible Plan to populate the machine-plan column.")),
+    ]
+    for label, desc in legend:
+        ws1.merge_cells(f"A{row}:{get_column_letter(NCOLS)}{row}")
+        c = ws1[f"A{row}"]
+        c.value = f"  {label}: {desc}"
+        c.font = Font(name="Calibri", italic=True, size=8, color="333333")
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws1.row_dimensions[row].height = 16
+        row += 1
+
     # Warnings
     if result.warnings:
-        row += 2
+        row += 1
         for w in result.warnings:
-            ws1.merge_cells(f"A{row}:K{row}")
+            ws1.merge_cells(f"A{row}:{get_column_letter(NCOLS)}{row}")
             c = ws1[f"A{row}"]
             c.value = f"⚠ {w}"
             c.font = Font(name="Calibri", bold=True, size=9, color="C00000")
@@ -768,86 +899,102 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
 
     # Source reconciliation note
     row += 1
-    recon_note = (
-        f"producedToDate (this report): {result.actual_produced_total:,.0f} pcs  "
-        f"from Report-11 + Report-12  ({result.source_date_min} – {result.source_date_max}).  "
-        f"Planning 'Produced' (Report-1): {result.plan_produced_total:,.0f} pcs  "
-        f"(may differ — R-1 aggregates all sources; this report reads R-11/R-12 only)."
+    r11_total = round(total_produced - sum(
+        c.produced_to_date for c in result.categories
+        if "Fitting" in c.category or "Solvent" in c.category
+    ))
+    other_note = (
+        f"  Other/unclassified R-12 materials (e.g. TEFFLONE): "
+        f"{result.other_produced:,.0f} pcs included in total above."
+        if result.other_produced > 0 else ""
     )
-    _note(ws1, row, recon_note, 11)
+    recon_note = (
+        f"Produced to date (this report): {result.actual_produced_total:,.0f} pcs  "
+        f"= R-11 pipe pcs ({result.actual_produced_total - sum(c.produced_to_date for c in result.categories if 'Fitting' in c.category or 'Solvent' in c.category):,.0f}) "
+        f"+ R-12 fitting pcs (including other materials).  "
+        f"Source dates: {result.source_date_min} – {result.source_date_max}.{other_note}  "
+        f"Report-1 'Produced': {result.plan_produced_total:,.0f} pcs "
+        f"(Report-1 aggregates all plants — differs from R-11/R-12 which are Plumbing only)."
+    )
+    _note(ws1, row, recon_note, ncols=NCOLS, colour="333333")
 
-    # ── Tab 2: Daily Actuals ─────────────────────────────────────────────────
+    # ── Tab 2: Daily Actuals ──────────────────────────────────────────────────
     ws2 = wb.create_sheet("Daily Actuals")
     ws2.sheet_view.showGridLines = False
 
-    _title(ws2, f"Daily Actuals by Category — {result.month}  (pcs)")
-
-    # Collect all dates across all categories
-    all_dates_set: set = set()
-    cat_daily_map: Dict[str, Dict[str, float]] = {}  # cat → {date → pcs}
-    for cat in result.categories:
-        cat_daily_map[cat.category] = {}
-
-    # We only have aggregated daily_values (not date-keyed) in CategoryResult.
-    # Re-derive from categories — note this is already aggregated. We can only
-    # show which categories had how many production days, not the per-date pcs
-    # unless we save them. Add date-keyed map to CategoryResult via a workaround:
-    # store them as a list so we just show "Day 1, Day 2 …" labels.
+    _title(ws2, f"Daily Actuals by Category — {result.month}  (pcs)", ncols=NCOLS)
     _note(ws2, 3,
-          "Daily totals (pcs) per category. Days when a category did not run are omitted.",
-          ncols=11)
+          "Daily totals (pcs) per category from Report-11 (pipe) and Report-12 (fitting).  "
+          "Days when a category did not run are omitted — absence ≠ zero capacity.",
+          ncols=NCOLS)
 
-    pipe_cats    = [c for c in CATEGORY_ORDER if "Pipe" in c and "Solvent" not in c]
-    fitting_cats = [c for c in CATEGORY_ORDER if "Fitting" in c]
-    all_cats     = pipe_cats + fitting_cats
+    active_cats = [c for c in CATEGORY_ORDER if "Solvent" not in c]
 
-    _hdr(ws2, 4, 1, "Day #", 8)
-    for ci, cat in enumerate(all_cats, 2):
+    _hdr(ws2, 4, 1, "Production day #", 10)
+    for ci, cat in enumerate(active_cats, 2):
         _hdr(ws2, 4, ci, cat, 14)
 
-    row = 5
     cat_to_res = {r.category: r for r in result.categories}
-    max_days = max((len(r.daily_values) for r in result.categories), default=0)
+    max_days   = max((len(r.daily_values) for r in result.categories), default=0)
     for day_i in range(max_days):
-        ws2.cell(row=row, column=1, value=f"Day {day_i+1}").font = _nfont(size=9, bold=True)
-        for ci, cat in enumerate(all_cats, 2):
+        row_num = 5 + day_i
+        ws2.cell(row=row_num, column=1, value=f"Day {day_i+1}").font = _nfont(size=9, bold=True)
+        for ci, cat in enumerate(active_cats, 2):
             vals = cat_to_res[cat].daily_values if cat in cat_to_res else []
             v = vals[day_i] if day_i < len(vals) else ""
-            c = ws2.cell(row=row, column=ci, value=round(v) if v != "" else "")
+            c = ws2.cell(row=row_num, column=ci, value=round(v) if v != "" else "")
             c.font = _nfont(size=9)
             c.alignment = _align(horizontal="right")
-            c.fill = PatternFill("solid", fgColor=_GREY if row % 2 == 0 else "FFFFFF")
-        row += 1
+            c.fill = PatternFill("solid", fgColor=_GREY if row_num % 2 == 0 else "FFFFFF")
 
-    # ── Tab 3: Provenance ────────────────────────────────────────────────────
+    # ── Tab 3: Provenance ─────────────────────────────────────────────────────
     ws3 = wb.create_sheet("Provenance")
     ws3.sheet_view.showGridLines = False
-    _title(ws3, f"Report Provenance — {result.month}")
+    _title(ws3, f"Report Provenance — {result.month}", ncols=2)
 
     meta = [
         ("Parameter", "Value"),
+        ("Report type",
+         "Run-rate pace projection (NOT machine-capacity). "
+         "Pace = p90 or mean of actual daily pcs produced to date."),
         ("Month", result.month),
         ("As-of date", result.as_of_date),
         ("Working days (Mon–Sat)", result.working_days_total),
         ("Working days elapsed", result.working_days_elapsed),
         ("Working days remaining", result.working_days_remaining),
         ("Source file ID (Report-11 / 12)", result.source_file_id),
-        ("Source file link",
-         f"https://docs.google.com/spreadsheets/d/{result.source_file_id}" if result.source_file_id else "—"),
+        ("Source file",
+         f"https://docs.google.com/spreadsheets/d/{result.source_file_id}"
+         if result.source_file_id else "—"),
         ("Date range in source", f"{result.source_date_min} – {result.source_date_max}"),
-        ("n production dates observed", len(set(result.source_date_min)) if result.source_date_min else 0),
-        ("Produced to date (Report-11+12)", f"{result.actual_produced_total:,.0f} pcs"),
+        ("Produced to date (R-11 + R-12)", f"{result.actual_produced_total:,.0f} pcs"),
+        ("  of which: unclassified R-12 materials",
+         f"{result.other_produced:,.0f} pcs (e.g. TEFFLONE — counted in total, not in any category row)"),
         ("Produced to date (Report-1 plan tab)", f"{result.plan_produced_total:,.0f} pcs"),
-        ("Min days for p90", MIN_DAYS_FOR_P90),
-        ("Capacity method note",
-         f"p90 = 10th-percentile of non-zero daily sums (90 % confidence). "
-         f"mean = arithmetic mean when < {MIN_DAYS_FOR_P90} non-zero days. "
-         "none = NO_DEMONSTRATED_CAPACITY (0 production days seen)."),
-        ("Invariant: no-zero-with-production", "PASS" if not any(
+        ("Reconciliation note",
+         "R-11 TOTAL + R-12 TOTAL = actual_produced_total.  "
+         "Report-1 figure differs because R-1 aggregates all plants; "
+         "R-11/R-12 are Plumbing-only.  The pace calc uses R-11/R-12."),
+        ("Pace method", f"p90 (≥{MIN_DAYS_FOR_P90} days) → mean[low-confidence] → not-started"),
+        ("p90 meaning",
+         f"10th-percentile of ≥{MIN_DAYS_FOR_P90} non-zero daily totals — "
+         "90 % of observed days met or exceeded this pace."),
+        ("mean(low-confidence,Nd) meaning",
+         f"Arithmetic mean of only N days (N < {MIN_DAYS_FOR_P90}). "
+         "Treat as indicative only; too few data points for reliable projection."),
+        ("Not started",
+         "Zero production recorded for this category to date.  "
+         "Pace cannot be estimated.  "
+         + ("Capacity-feasible column sourced from machine plan." if has_cap_feas
+            else "Pass cap_feasible_by_cat to populate the capacity column.")),
+        ("Capacity-Feasible Plan cross-link",
+         "Run /machine-planning/report/capacity-feasible-plan for the authoritative "
+         "'what the machines can make' figure."),
+        ("Invariant: no-zero-pace-with-production", "PASS" if not any(
             "INVARIANT VIOLATED" in w for w in result.warnings) else "FAIL"),
-        ("Invariant: feasibility consistent", "PASS" if not any(
-            "inconsistency" in w for w in result.warnings) else "FAIL"),
-        ("Invariant: not-everything-unfulfillable", "PASS" if not any(
+        ("Invariant: pace-projection consistent", "PASS" if not any(
+            "inconsistency" in w.lower() for w in result.warnings) else "FAIL"),
+        ("Invariant: not-everything-at-gap", "PASS" if not any(
             "CRITICAL" in w for w in result.warnings) else "FAIL"),
         ("Warnings", "\n".join(result.warnings) if result.warnings else "None"),
     ]
@@ -858,9 +1005,10 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
         c2 = ws3.cell(row=ri, column=2, value=str(v))
         c2.font = _nfont(size=9)
         c2.alignment = _align(wrap_text=True, vertical="top")
+        ws3.row_dimensions[ri].height = 28
 
-    ws3.column_dimensions["A"].width = 38
-    ws3.column_dimensions["B"].width = 70
+    ws3.column_dimensions["A"].width = 42
+    ws3.column_dimensions["B"].width = 80
 
     out = BytesIO()
     wb.save(out)

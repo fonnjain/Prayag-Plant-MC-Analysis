@@ -137,7 +137,11 @@ class TestNoZeroCapacityWithProduction(unittest.TestCase):
         )
         c = _cat(result, "SWR Pipe")
         self.assertGreater(c.cap_per_day, 0)
-        self.assertEqual(c.method, "mean")
+        # method should be mean-based (low-confidence when < MIN_DAYS_FOR_P90)
+        self.assertTrue(c.method.startswith("mean"),
+            f"Expected mean-based method, got {c.method!r}")
+        self.assertTrue(c.low_confidence,
+            "1 production day must set low_confidence=True")
 
     def test_no_invariant_warnings_with_2_days(self):
         result = _run(
@@ -168,23 +172,26 @@ class TestNoZeroCapacityWithProduction(unittest.TestCase):
 class TestFewDaysFallback(unittest.TestCase):
     """Assertion 2: with 1-2 production days → method='mean', cap > 0."""
 
-    def _assert_mean(self, n_days):
+    def _assert_mean_low_conf(self, n_days):
         rows = [("Aug 1, 2026", "UPVC", f"PU-{i}", 3000) for i in range(n_days)]
         result = _run(r11_rows=rows, r12_rows=[])
         c = _cat(result, "UPVC Pipe")
-        self.assertEqual(c.method, "mean",
-            f"With {n_days} production day(s), method must be 'mean'")
+        self.assertTrue(c.method.startswith("mean"),
+            f"With {n_days} day(s), method must be mean-based, got {c.method!r}")
+        self.assertTrue(c.low_confidence,
+            f"With {n_days} day(s) (< MIN_DAYS_FOR_P90={mcr.MIN_DAYS_FOR_P90}), "
+            "low_confidence must be True")
         self.assertGreater(c.cap_per_day, 0)
 
     def test_one_day(self):
-        self._assert_mean(1)
+        self._assert_mean_low_conf(1)
 
     def test_two_days(self):
-        self._assert_mean(2)
+        self._assert_mean_low_conf(2)
 
     def test_four_days_still_mean(self):
-        # MIN_DAYS_FOR_P90 = 5, so 4 days → still mean
-        self._assert_mean(min(4, mcr.MIN_DAYS_FOR_P90 - 1))
+        # MIN_DAYS_FOR_P90 = 5, so 4 days → mean + low-confidence
+        self._assert_mean_low_conf(min(4, mcr.MIN_DAYS_FOR_P90 - 1))
 
     def test_mean_value_correct_with_two_days(self):
         """mean([2420, 3075]) = 2747.5."""
@@ -199,7 +206,7 @@ class TestFewDaysFallback(unittest.TestCase):
         self.assertAlmostEqual(cpvc.cap_per_day, 2747.5, delta=1.0)
 
     def test_fitting_two_days(self):
-        """CPVC Fitting with 2 days via Report-12."""
+        """CPVC Fitting with 2 days via Report-12: mean + low-confidence."""
         result = _run(
             r11_rows=[],
             r12_rows=[
@@ -208,7 +215,10 @@ class TestFewDaysFallback(unittest.TestCase):
             ],
         )
         c = _cat(result, "CPVC Fitting")
-        self.assertEqual(c.method, "mean")
+        self.assertTrue(c.method.startswith("mean"),
+            f"2-day fitting should be mean-based, got {c.method!r}")
+        self.assertTrue(c.low_confidence,
+            "2 production days must set low_confidence=True")
         self.assertAlmostEqual(c.cap_per_day, 22378.0, delta=5.0)
 
 
@@ -607,13 +617,15 @@ class TestTargetValues(unittest.TestCase):
             self.assertGreater(c.produced_to_date, 0, f"{cat} should have production")
             self.assertGreater(c.cap_per_day, 0, f"{cat} must have non-zero cap_per_day")
 
-    def test_all_methods_are_mean(self):
-        """With only 2 days, all categories must use mean (not p90)."""
+    def test_all_methods_are_mean_low_confidence(self):
+        """With only 2 days, all categories must use mean (low-confidence), not p90."""
         for cat_name in ["CPVC Pipe", "CPVC Fitting", "UPVC Pipe",
                          "SWR Pipe", "SWR Fitting", "AGRI Pipe", "AGRI Fitting"]:
             c = _cat(self.result, cat_name)
-            self.assertEqual(c.method, "mean",
-                f"{cat_name}: expected method=mean with 2 days, got {c.method}")
+            self.assertTrue(c.method.startswith("mean"),
+                f"{cat_name}: expected mean-based method with 2 days, got {c.method!r}")
+            self.assertTrue(c.low_confidence,
+                f"{cat_name}: 2 production days must set low_confidence=True")
 
     def test_upvc_fitting_one_day_only_still_nonzero(self):
         """UPVC Fitting only ran Aug 1 (0 on Aug 3). Must still get cap > 0."""
@@ -632,6 +644,266 @@ class TestTargetValues(unittest.TestCase):
     def test_no_invariant_violations(self):
         inv = [w for w in self.result.warnings if "INVARIANT VIOLATED" in w]
         self.assertEqual(inv, [])
+
+
+# ---------------------------------------------------------------------------
+# New spec-required tests (Fix 1–4)
+# ---------------------------------------------------------------------------
+
+class TestNoCapacityLabel(unittest.TestCase):
+    """Fix 1: no "capacity" language in method or status fields."""
+
+    def test_not_started_never_says_no_capacity(self):
+        """Zero production → 'not_started=True', never the string 'NO CAPACITY'."""
+        result = _run(r11_rows=[], r12_rows=[])
+        for cat in result.categories:
+            # The not_started property must be True when no production
+            if cat.produced_to_date == 0:
+                self.assertTrue(cat.not_started,
+                    f"{cat.category}: zero production must set not_started=True")
+                # Crucially: no "NO CAPACITY" string in the method field
+                self.assertNotIn("NO CAPACITY", cat.method,
+                    f"{cat.category}: method must not contain 'NO CAPACITY'")
+                self.assertNotIn("NO CAPACITY", str(cat.cap_per_day),
+                    f"{cat.category}: cap_per_day must not be the string 'NO CAPACITY'")
+
+    def test_not_started_shows_zero_pace(self):
+        """Not-started categories have pace=0 and method='none' (numeric, not sentinel string)."""
+        result = _run(r11_rows=[], r12_rows=[])
+        agri = _cat(result, "AGRI Pipe")
+        self.assertEqual(agri.cap_per_day, 0.0)  # numeric zero, not a string
+        self.assertEqual(agri.method, "none")
+        self.assertTrue(agri.not_started)
+
+    def test_low_confidence_flag_on_few_days(self):
+        """< MIN_DAYS_FOR_P90 production days → low_confidence=True, method contains flag."""
+        result = _run(
+            r11_rows=[("Aug 1, 2026", "CPVC", "PS-1", 3000)],
+            r12_rows=[],
+        )
+        c = _cat(result, "CPVC Pipe")
+        self.assertTrue(c.low_confidence, "1 day must be low-confidence")
+        self.assertIn("low-confidence", c.method,
+            f"method must contain 'low-confidence', got {c.method!r}")
+
+    def test_p90_is_not_low_confidence(self):
+        """≥ MIN_DAYS_FOR_P90 days → low_confidence=False."""
+        n = mcr.MIN_DAYS_FOR_P90
+        rows = []
+        d = datetime.date(2026, 8, 1)
+        for i in range(n):
+            while d.weekday() == 6:
+                d += datetime.timedelta(1)
+            rows.append((d.strftime("%b %-d, %Y"), "CPVC", f"PS-{i}", 3000))
+            d += datetime.timedelta(1)
+        result = _run(r11_rows=rows, r12_rows=[])
+        c = _cat(result, "CPVC Pipe")
+        self.assertFalse(c.low_confidence, "≥5 days must not be low-confidence")
+        self.assertEqual(c.method, "p90")
+
+    def test_cap_feasible_column_optional(self):
+        """When cap_feasible_by_cat not passed, all cap_feasible fields are None."""
+        result = _run(r11_rows=[], r12_rows=[])
+        for cat in result.categories:
+            self.assertIsNone(cat.cap_feasible)
+
+    def test_cap_feasible_column_populated(self):
+        """When cap_feasible_by_cat passed, values appear in CategoryResult."""
+        r11 = _r11([])
+        r12 = _r12([])
+        cap_feas = {
+            "CPVC Pipe": 50_000.0,
+            "CPVC Solvent": 12_000.0,
+        }
+        result = mcr.compute_corrective_replan(
+            month="2026-08",
+            plan_recs=[],
+            r11_values=r11,
+            r12_values=r12,
+            as_of_date="2026-08-08",
+            file_id="",
+            cap_feasible_by_cat=cap_feas,
+        )
+        cpvc_pipe = _cat(result, "CPVC Pipe")
+        self.assertEqual(cpvc_pipe.cap_feasible, 50_000.0)
+        solvent = _cat(result, "CPVC Solvent")
+        self.assertEqual(solvent.cap_feasible, 12_000.0)
+        # Category with no entry in cap_feas → None
+        upvc_pipe = _cat(result, "UPVC Pipe")
+        self.assertIsNone(upvc_pipe.cap_feasible)
+
+
+class TestProducedToDateReconciliation(unittest.TestCase):
+    """Fix 4: produced-to-date must equal R-11 total + R-12 total (including TEFFLONE)."""
+
+    def _r11_with_total(self, pcs):
+        """Build R11 grid with a TOTAL row that matches pcs."""
+        hdr = ["", "DATE", "MACHINE NAME", "MACHINE NO.", "TYPES", "ITEM CODE",
+               "Running Hour", "Ideal Weight (KG)", "Pcs", "Weight"]
+        return [
+            ["url"],
+            ["", "TOTAL", "", "", "", "", "100", "", str(pcs), ""],
+            ["", "PIPE M/C"],
+            ["", "", "", "", "", "", ""],
+            hdr,
+            ["", "Aug 1, 2026", "CON-63-1", "PIPE M/C - 1", "CPVC", "PS-3",
+             "8", "1.0", str(pcs), "100"],
+        ]
+
+    def _r12_with_tefflone(self, cpvc_pcs, tefflone_pcs):
+        hdr = ["DATE", "MATERIAL", "Item Code", "SAP Code", "Moulding Machine",
+               "Run Cavity", "Mould Cavity (F)", "Cycle Time Per Pcs Standard (F)",
+               "Output Production", ""]
+        sub = ["", "", "", "", "", "", "", "", " Pc ", " Wt in Kgs "]
+        total_pcs = cpvc_pcs + tefflone_pcs
+        return [
+            ["Mr. Jitendra"],
+            ["Mould M/C"],
+            ["TOTAL", "", "", "", "", "", "", "", str(total_pcs), ""],
+            hdr,
+            sub,
+            ["Aug 1, 2026", "CPVC", "U531", "", "A02", "4", "4", "25", str(cpvc_pcs), ""],
+            ["Aug 1, 2026", "TEFFLONE", "T01", "", "A02", "4", "4", "25",
+             str(tefflone_pcs), ""],
+        ]
+
+    def test_actual_produced_total_includes_tefflone(self):
+        """actual_produced_total = R-11 pcs + R-12 CPVC pcs + R-12 TEFFLONE pcs."""
+        r11_pcs     = 2420
+        cpvc_pcs    = 25176
+        tefflone_pcs= 17600
+
+        r11 = self._r11_with_total(r11_pcs)
+        r12 = self._r12_with_tefflone(cpvc_pcs, tefflone_pcs)
+
+        result = mcr.compute_corrective_replan(
+            month="2026-08",
+            plan_recs=[],
+            r11_values=r11,
+            r12_values=r12,
+            as_of_date="2026-08-08",
+            file_id="",
+        )
+
+        expected_total = r11_pcs + cpvc_pcs + tefflone_pcs
+        self.assertAlmostEqual(result.actual_produced_total, expected_total, delta=1,
+            msg=f"actual_produced_total should be {expected_total} "
+                f"(R-11={r11_pcs} + R-12 CPVC={cpvc_pcs} + TEFFLONE={tefflone_pcs})")
+
+    def test_other_produced_tracks_tefflone(self):
+        """result.other_produced must equal the TEFFLONE pcs (not 0)."""
+        r11  = self._r11_with_total(2420)
+        r12  = self._r12_with_tefflone(25176, 17600)
+        result = mcr.compute_corrective_replan(
+            month="2026-08", plan_recs=[], r11_values=r11, r12_values=r12,
+            as_of_date="2026-08-08", file_id="",
+        )
+        self.assertAlmostEqual(result.other_produced, 17600, delta=1,
+            msg=f"other_produced should be 17600 (TEFFLONE), got {result.other_produced}")
+
+    def test_tefflone_not_assigned_to_any_category(self):
+        """TEFFLONE pcs must not appear in any per-category produced_to_date."""
+        r11  = self._r11_with_total(0)
+        r12  = self._r12_with_tefflone(0, 17600)
+        result = mcr.compute_corrective_replan(
+            month="2026-08", plan_recs=[], r11_values=r11, r12_values=r12,
+            as_of_date="2026-08-08", file_id="",
+        )
+        for cat in result.categories:
+            self.assertEqual(cat.produced_to_date, 0.0,
+                f"{cat.category}: TEFFLONE must not appear in per-category produced_to_date "
+                f"(got {cat.produced_to_date})")
+
+    def test_aug_actual_total_reconciles(self):
+        """Live-fixture reconciliation: pipe 50,293 + fitting 191,630 = 241,923.
+
+        The test synthesises the exact structure of the Aug 2026 workbook
+        using stub totals (not live sheet data) to avoid network dependence.
+        """
+        r11 = self._r11_with_total(50_293)
+        r12 = self._r12_with_tefflone(174_030, 17_600)  # 174k classified + 17.6k TEFFLONE
+        result = mcr.compute_corrective_replan(
+            month="2026-08", plan_recs=[], r11_values=r11, r12_values=r12,
+            as_of_date="2026-08-08", file_id="",
+        )
+        self.assertAlmostEqual(result.actual_produced_total, 241_923, delta=5,
+            msg=f"Aug total should be 241,923; got {result.actual_produced_total}")
+        self.assertAlmostEqual(result.other_produced, 17_600, delta=5)
+
+
+class TestXlsxLabels(unittest.TestCase):
+    """Fix 1: XLSX must use run-rate / pace language, not capacity language."""
+
+    def setUp(self):
+        r11 = _r11([("Aug 1, 2026", "CPVC", "PS-1", 3000)])
+        r12 = _r12([])
+        result = mcr.compute_corrective_replan(
+            month="2026-08", plan_recs=[], r11_values=r11, r12_values=r12,
+            as_of_date="2026-08-08", file_id="TESTID",
+        )
+        from io import BytesIO
+        from openpyxl import load_workbook
+        data = mcr.corrective_replan_bytes(result)
+        self.wb = load_workbook(BytesIO(data))
+
+    def _all_text(self):
+        text = []
+        for ws in self.wb.worksheets:
+            for row in ws.iter_rows(values_only=True):
+                for v in row:
+                    if v:
+                        text.append(str(v).upper())
+        return " ".join(text)
+
+    def test_sheet_not_named_replan(self):
+        """Tab must not be named just 'Re-plan' — now 'Run-rate Projection'."""
+        self.assertIn("RUN-RATE", " ".join(self.wb.sheetnames).upper(),
+            f"Expected 'Run-rate Projection' tab, got {self.wb.sheetnames}")
+
+    def test_no_cap_per_day_header(self):
+        text = self._all_text()
+        self.assertNotIn("CAP/DAY", text,
+            "XLSX must not contain 'Cap/Day' (use 'Pace/day' instead)")
+
+    def test_no_feasible_header(self):
+        text = self._all_text()
+        # "Feasible" as a column header must be gone; "projected" must appear
+        self.assertIn("PROJECTED", text,
+            "XLSX must contain 'Projected' column header")
+        self.assertNotIn("CAP-FEASIBLE PLAN", text.replace(" ", "-"))
+
+    def test_no_capacity_in_data_cells(self):
+        """'NO CAPACITY' string must not appear anywhere in the output."""
+        text = self._all_text()
+        self.assertNotIn("NO CAPACITY", text,
+            "XLSX must not contain 'NO CAPACITY' — use 'Not started' instead")
+
+    def test_not_started_appears_for_zero_production_categories(self):
+        """Not-started categories must show 'Not started' text (not 'NO CAPACITY')."""
+        text = self._all_text()
+        self.assertIn("NOT STARTED", text,
+            "XLSX must contain 'Not started' for zero-production categories")
+
+    def test_run_rate_framing_in_subtitle(self):
+        text = self._all_text()
+        self.assertIn("RUN-RATE", text,
+            "XLSX must contain run-rate framing in subtitle/notes")
+        self.assertIn("NOT MACHINE CAPACITY", text.replace(",", "").replace(".", ""),
+            "XLSX must explicitly state 'not machine capacity'")
+
+    def test_provenance_tab_exists(self):
+        self.assertIn("Provenance", self.wb.sheetnames)
+
+    def test_gap_language_in_provenance(self):
+        ws = self.wb["Provenance"]
+        prov_text = " ".join(
+            str(v).upper()
+            for row in ws.iter_rows(values_only=True)
+            for v in (row or [])
+            if v is not None and str(v).strip() not in ("", "NONE")
+        )
+        self.assertIn("RUN-RATE", prov_text,
+            "Provenance tab must document run-rate nature of the report")
 
 
 if __name__ == "__main__":
