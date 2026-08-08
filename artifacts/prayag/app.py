@@ -1635,13 +1635,29 @@ def manifest_view():
     if cached and (now - cached["ts"]) < _MANIFEST_TTL:
         return render_template("manifest.html", **cached["ctx"])
 
+    # Prune stale entries so the cache doesn't grow without bound when
+    # fingerprints rotate frequently (e.g. a sheet edited many times per session).
+    # Both result_* and adv_* entries are stored as {"ts": ..., ...} dicts so
+    # the same age check covers both kinds.
+    stale_keys = [
+        k for k, v in list(_manifest_cache.items())
+        if isinstance(v, dict) and (now - v.get("ts", now)) >= _MANIFEST_TTL
+    ]
+    for k in stale_keys:
+        _manifest_cache.pop(k, None)
+
     # Advisory pass: cached per fingerprint so a re-load doesn't re-call Claude.
+    # Stored as {"adv": <value>, "ts": <epoch>} so the pruning loop above can
+    # evict it once it ages past _MANIFEST_TTL (None is a valid adv result when
+    # the Claude API is unavailable).
     adv_key = f"adv_{fp}"
-    adv = _manifest_cache.get(adv_key)
-    if adv is None:
+    adv_entry = _manifest_cache.get(adv_key)
+    if adv_entry is None:
         summary = manifest_mod.manifest_summary(man)
         adv = advisory_review(summary, man["coverage"], man["as_of"])
-        _manifest_cache[adv_key] = adv  # None is a valid cached result (API unavailable)
+        _manifest_cache[adv_key] = {"adv": adv, "ts": now}
+    else:
+        adv = adv_entry["adv"]
 
     # Count distinct parse notes across all source reports.
     _seen_pn: set[str] = set()
