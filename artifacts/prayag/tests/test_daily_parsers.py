@@ -119,6 +119,33 @@ def test_long_parser_without_run_col_is_no_baseline_safe():
     print("PASS: long parser without a run column emits output and leaves hours zero")
 
 
+def test_long_parser_shifted_header_band_still_finds_rejection():
+    # Report-12 Jul-2026 layout quirk: the row-label headers (DATE / Moulding
+    # Machine) shifted DOWN into the sub-row while measure headers (Actual
+    # Rejection Weight) stayed one row ABOVE the DATE row. The parser must
+    # still find the rejection column by scanning that row too — otherwise
+    # rejection silently parses as 0 while output still reads correctly.
+    values = [
+        ["", "", "Output Production", "", "Actual Rejection Weight (in Kgs)"],
+        ["DATE", "Moulding Machine", " Pc ", " Wt in Kgs ", ""],
+        ["Jul 1, 2026", "A02(U-150)", "1800", "160.20", "1.78"],
+        ["Jul 1, 2026", "A03(U-150)", "2290", "76.72", "0.74"],
+    ]
+    recs = parse_daily_long(
+        values,
+        plant="MOULDING", segment="MOULDING", unit="kg", year_month="2026-07",
+        source_file="f", source_tab="Report-12",
+        date_col=("eq", "DATE"), machine_col=("startswith", "MOULDING MACHI"),
+        out_col=("contains", "WT IN KGS"), rej_col=("contains", "ACTUAL REJECTION"),
+        machine_prefix="MOULDING ",
+    )
+    assert len(recs) == 2, f"expected 2 records, got {len(recs)}"
+    by_m = {r.machine: r for r in recs}
+    assert by_m["MOULDING A02(U-150)"].reject_count == 1.78
+    assert by_m["MOULDING A02(U-150)"].total_count == 160.20
+    assert by_m["MOULDING A03(U-150)"].reject_count == 0.74
+
+
 # ---------------------------------------------------------------------------
 # parse_daily_blocks (GARDEN / HDPE per-machine tabs)
 # ---------------------------------------------------------------------------
@@ -418,6 +445,7 @@ if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
     test_long_parser_without_run_col_is_no_baseline_safe()
+    test_long_parser_shifted_header_band_still_finds_rejection()
     test_blocks_parser_single_row_header_total_kg_column()
     test_blocks_parser_two_row_header_plain_kg()
     test_blocks_parser_picks_total_kg_over_per_metre_and_consumption_decoys()

@@ -326,6 +326,13 @@ def parse_daily_long(
         return []
 
     band = values[header_idx:first_data]  # header + sub-header rows
+    # Some months shift the row-label headers (DATE / Moulding Machine / …)
+    # DOWN into the sub-row while the measure headers (e.g. "Actual Rejection
+    # Weight (in Kgs)") stay one row ABOVE the DATE row (seen in Report-12
+    # Jul-2026). Scan that row too — after the anchored band, so the anchored
+    # rows always win when a token appears in both.
+    if header_idx > 0:
+        band = band + [values[header_idx - 1]]
 
     def find_col(spec) -> int:
         if not spec:

@@ -44,3 +44,9 @@ description: Durable layout traps in the daily parsers (parse_daily_long / parse
 **Why:** if the two readers key off different columns, the `sheet_rate`/`sheet_hours` dicts are keyed on one label set and the Records on another, so the join silently misses — HDPE's in-sheet baseline falls through to grid/none and `ideal_source` is no longer "sheet" (utilisation/efficiency silently wrong, not an error).
 
 **How to apply:** when a matrix plant's `ideal_source` unexpectedly isn't "sheet" despite the sheet publishing its rate, suspect a machine-column mismatch between the two readers; ensure the layout's `summary_mc_header` is threaded into `parse_daily_matrix` (`mc_header_spec`), not just the summary reader.
+
+## Long-parser header band must include the row ABOVE the DATE row
+Some months shift the row-label headers (DATE / Moulding Machine) DOWN into the sub-row while measure headers (e.g. "Actual Rejection Weight (in Kgs)") stay one row above (seen Report-12 Jul-2026). parse_daily_long's band now also scans header_idx-1 at lowest precedence.
+**Why:** anchoring only on the DATE row silently dropped the rejection column — output parsed fine but rejection read 0, so a broken parse looked like a genuine 0% month.
+**How to apply:** any header-anchored parser change must keep the row-above scan; when a plant shows 0 rejection with real output for one month only, suspect a header-row shift before suspecting data.
+

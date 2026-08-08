@@ -18,3 +18,6 @@ hardcoded list, or MOULDING/CP get inverted.
 summary/annual set from `{s["plant"] for s in ANNUAL_SOURCES}`. A daily-capable plant
 with zero daily rows in a closed FY window is a genuine red gap; an annual-only plant
 with no posted monthly figures is gray "awaiting" (never red), per the status rule.
+
+**Correction (Aug 2026):** MOULDING IS daily-capable — its daily records come from the PIPE workbook's Report-12 tab (emit MOULDING, long layout), not its own DAILY_SOURCES entry. DAILY_SOURCES.keys() lists workbooks, not emitted plants; evicting daily_PIPE_<ym> also refreshes MOULDING daily data.
+
