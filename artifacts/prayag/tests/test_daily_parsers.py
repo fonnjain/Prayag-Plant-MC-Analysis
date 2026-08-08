@@ -658,6 +658,107 @@ def test_matrix_silent_when_reject_column_matched():
     print("PASS: matrix stays silent when rejection sub-columns are properly matched")
 
 
+# ---------------------------------------------------------------------------
+# PTMT Report-5 real-world layout: trailing monthly reject column inside the
+# last date-group span.
+#
+# PTMT Report-5 has NO per-day rejection sub-column.  Instead the LAST date
+# group's span is extended so it also contains an "Actual Rejection Weight
+# (in Kgs)" column — the whole month's rejection lands on the last day's row.
+# The drift detector must:
+#   (a) stay silent when that trailing column contains "REJECT" (it is matched),
+#   (b) stay silent when NO column contains "REJECT" (genuinely free layout),
+#   (c) fire when a "REJECTION" sub-header exists but is stranded outside every
+#       date-group's span (e.g. in the machine-label/ideal-hours region).
+# ---------------------------------------------------------------------------
+
+def test_matrix_ptmt_trailing_actual_rejection_weight_silent():
+    # Real PTMT Report-5 shape: two date groups; the second group's span
+    # extends to include "Actual Rejection Weight (in Kgs)" and
+    # "100 % Wastage" columns.  The trailing column name contains "REJECT",
+    # so the parser assigns rej_c for that group → any_rej_matched is True →
+    # no drift note should fire.
+    values = [
+        # date row
+        ["MACHINE",  "Apr, 1",  "",        "Apr, 2",  "",       "",                              ""],
+        # sub-header row — only the last group has a REJECT-bearing column
+        ["",         "RUN HRS", "OUTPUT",  "RUN HRS", "OUTPUT", "Actual Rejection Weight (in Kgs)", "100 % Wastage"],
+        # data row: machine ran day 1, was idle on day 2, but owns monthly reject
+        ["80-1",     "8",       "120",     "0",       "0",      "45.5",                          "0"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Report-5",
+        notes=notes,
+    )
+    assert len(recs) > 0, "records must be produced"
+    monthly_rej = sum(r.reject_count for r in recs)
+    assert monthly_rej == 45.5, \
+        f"trailing monthly reject must be read; got {monthly_rej}"
+    assert notes == [], \
+        f"trailing 'Actual Rejection Weight' is matched → no drift note, got {notes}"
+    print("PASS: PTMT trailing 'Actual Rejection Weight' column is matched; "
+          "no drift note fires")
+
+
+def test_matrix_ptmt_trailing_actual_weight_genuinely_free():
+    # Same layout, but the trailing column is renamed to "Actual Weight" — no
+    # "REJECT" text appears anywhere in the date/sub rows.  The layout is
+    # genuinely rejection-free, so the drift detector must stay silent.
+    values = [
+        ["MACHINE",  "Apr, 1",  "",        "Apr, 2",  "",       "",              ""],
+        ["",         "RUN HRS", "OUTPUT",  "RUN HRS", "OUTPUT", "Actual Weight", "100 % Wastage"],
+        ["80-1",     "8",       "120",     "0",       "0",      "0",             "0"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Report-5",
+        notes=notes,
+    )
+    assert len(recs) > 0, "records must still parse"
+    assert notes == [], \
+        f"no REJECT text anywhere → genuinely free layout → no drift note, got {notes}"
+    print("PASS: PTMT with renamed trailing column ('Actual Weight') stays silent — "
+          "genuinely rejection-free")
+
+
+def test_matrix_ptmt_rejection_outside_group_span_warns():
+    # "REJECTION" appears in the sub-header row, but at a column that is to the
+    # LEFT of the first date group (in the machine-label / ideal-hours region).
+    # The parser's group-span loop never visits that column, so rej_c stays -1
+    # for every group.  The drift detector scans both header rows for "REJECT"
+    # text, finds it, and MUST emit a warning note.
+    #
+    # This mirrors what would happen if the sheet were restructured so that the
+    # monthly rejection column drifted out of the last date-group's span.
+    values = [
+        # date row — "IDEAL HRS" occupies col 1 (left of the first date group)
+        ["MACHINE",  "IDEAL HRS", "Apr, 1",  "",        "Apr, 2",  "",       ""],
+        # sub row — "REJECTION" lands at col 1 (outside every date-group span)
+        ["",         "REJECTION", "RUN HRS", "OUTPUT",  "RUN HRS", "OUTPUT", "Actual Weight"],
+        ["80-1",     "40",        "8",       "120",     "8",       "90",     "0"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-05",
+        source_file="f", source_tab="Report-5",
+        notes=notes,
+    )
+    assert len(recs) > 0, "output must still parse"
+    assert all(r.reject_count == 0.0 for r in recs), \
+        "no rej column inside any span → reject reads 0"
+    assert len(notes) == 1, \
+        f"exactly one drift note expected, got {notes}"
+    assert "rejection" in notes[0] and "Report-5" in notes[0] and "2026-05" in notes[0], notes
+    print("PASS: PTMT 'REJECTION' stranded outside every date-group span "
+          "→ drift note fires correctly")
+
+
 if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
@@ -681,4 +782,7 @@ if __name__ == "__main__":
     test_matrix_warns_when_reject_header_exists_but_unmatched()
     test_matrix_silent_when_genuinely_rejection_free()
     test_matrix_silent_when_reject_column_matched()
+    test_matrix_ptmt_trailing_actual_rejection_weight_silent()
+    test_matrix_ptmt_trailing_actual_weight_genuinely_free()
+    test_matrix_ptmt_rejection_outside_group_span_warns()
     print("\nAll daily parser/normalisation unit tests passed.")
