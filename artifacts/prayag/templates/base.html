@@ -869,7 +869,28 @@ window.addEventListener('orientationchange', syncHeaderOffset);
     });
   }
 
-  // Show on any navigating <a> click (skip anchors, new-tab, non-href, glossary buttons).
+  // File-download routes: clicking these keeps the page in place so pageshow
+  // never fires and the overlay would get stuck permanently.  Skip the overlay
+  // for any href that maps to a known download endpoint.
+  var _DL_PREFIXES = [
+    '/machine-planning/report/',   // all MP report XLSXs + ZIP
+    '/machine-planning/runs/',     // per-run report XLSXs
+    '/machine-planning/followup/', // follow-up download
+    '/planning/corrective-replan', // corrective re-plan XLSX
+    '/management-reports/',        // individual report XLSX + all.zip
+    '/management-entries/export',  // management entries XLSX
+    '/export-pdf/',                // PDF exports
+    '/export-ai-pdf/',             // AI PDF exports
+    '/verify.csv',                 // CSV verification export
+  ];
+  function _isFileDownload(href) {
+    return _DL_PREFIXES.some(function(p) {
+      return href.indexOf(p) !== -1;
+    });
+  }
+
+  // Show on any navigating <a> click (skip anchors, new-tab, non-href, glossary
+  // buttons, and known file-download links).
   document.addEventListener('click', function(e) {
     var a = e.target.closest('a[href]');
     if (!a) return;
@@ -877,8 +898,13 @@ window.addEventListener('orientationchange', syncHeaderOffset);
     if (a.getAttribute('target') === '_blank') return;
     var href = a.getAttribute('href') || '';
     if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+    if (_isFileDownload(href)) return;  // file download — page stays, no navigation
     showLoader();
   });
+
+  // Safety net: if the window regains focus after a download dialog or any other
+  // non-navigation event, always clear the overlay so it can never get stuck.
+  window.addEventListener('focus', resetLoader);
 
   // Show on any form submit (period selector "Go", confirmation sign-off, etc.)
   document.addEventListener('submit', function() { showLoader(); });
