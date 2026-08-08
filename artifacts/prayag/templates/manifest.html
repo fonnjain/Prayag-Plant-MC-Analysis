@@ -399,6 +399,13 @@
       {% if log.not_found_count > 0 %}<span class="text-red-600">{{ log.not_found_count }} missing</span>{% endif %}
       {% if log.schema_flag_count > 0 %}<span class="text-amber-600">{{ log.schema_flag_count }} flags</span>{% endif %}
       {% if log.parse_note_count > 0 %}<span class="text-amber-500">{{ log.parse_note_count }} note{{ 's' if log.parse_note_count != 1 else '' }}</span>{% endif %}
+      {% if log.parse_note_delta is not none %}
+        {% if log.parse_note_delta > 0 %}
+          <span class="px-1 rounded text-[10px] font-semibold bg-amber-100 text-amber-700" title="parse notes increased vs previous run">+{{ log.parse_note_delta }}</span>
+        {% elif log.parse_note_delta < 0 %}
+          <span class="px-1 rounded text-[10px] font-semibold bg-green-100 text-green-700" title="parse notes decreased vs previous run">{{ log.parse_note_delta }}</span>
+        {% endif %}
+      {% endif %}
       {% if log.advisory_ok %}<span class="text-purple-600">+adv</span>{% endif %}
     </div>
   </div>

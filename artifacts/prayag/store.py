@@ -982,6 +982,15 @@ def recent_manifest_logs(limit: int = 10) -> List[Dict]:
         if isinstance(ts, datetime.datetime):
             d["created_at_disp"] = ts.strftime("%d-%m-%Y %H:%M")
         out.append(d)
+    # Compute parse_note_delta for each row: current count minus the next-older run.
+    # Rows are newest-first, so row[i] is newer than row[i+1].
+    for i, d in enumerate(out):
+        if i + 1 < len(out):
+            prev_count = out[i + 1].get("parse_note_count") or 0
+            curr_count = d.get("parse_note_count") or 0
+            d["parse_note_delta"] = curr_count - prev_count
+        else:
+            d["parse_note_delta"] = None  # no older run to compare
     return out
 
 
