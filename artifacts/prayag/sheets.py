@@ -1765,11 +1765,18 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
       if parse_notes:
           report.setdefault("notes", []).extend(parse_notes)
   else:
+      parse_notes: List[str] = []
       raw = parsers.parse_daily_matrix(
           values, plant=emit, segment=seg, unit=unit, year_month=ym,
           source_file=file_id, source_tab=tab,
           mc_header_spec=spec.get("summary_mc_header"),
+          notes=parse_notes,
       )
+      # A rejection sub-header that stopped matching any date group (layout
+      # drift) must surface via the existing daily warnings channel — output
+      # still parses so the month would otherwise look rejection-free.
+      if parse_notes:
+          report.setdefault("notes", []).extend(parse_notes)
 
   # PIPE's Report-5 matrix carries multiple machine families in one tab. Keep
   # only the primary extruder rows (M/C-n) as PIPE output — the Socket / Mixer /

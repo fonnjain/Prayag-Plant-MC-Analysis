@@ -448,6 +448,7 @@ def parse_daily_matrix(
     source_file: str,
     source_tab: str,
     mc_header_spec=None,
+    notes: Optional[List[str]] = None,
 ) -> List[Record]:
     """Parse a wide per-date daily matrix into raw daily-grain Records.
 
@@ -499,6 +500,27 @@ def parse_daily_matrix(
             elif rej_c < 0 and "REJECT" in h:
                 rej_c = c
         groups.append((day, run_c, out_c, rej_c))
+
+    # Warn if a REJECT-ish sub-header exists somewhere in the sheet's date/sub
+    # rows but no date group's span matched a rejection column. Without this guard
+    # a header drift shows a plausible rejection-free month with no visible alert
+    # (exactly the pattern of the July 2026 Report-12 incident).
+    # Genuinely rejection-free matrices — no REJECT text anywhere — stay silent.
+    if notes is not None:
+        any_rej_matched = any(rc >= 0 for (_, _, _, rc) in groups)
+        if not any_rej_matched:
+            reject_header_in_sheet = any(
+                "REJECT" in str(cell).strip().upper()
+                for row in values[date_row_idx: date_row_idx + 2]
+                for cell in row
+            )
+            if reject_header_in_sheet:
+                notes.append(
+                    f"{plant} {year_month}: a rejection sub-header exists in tab "
+                    f"'{source_tab}' but no rejection column was matched in any "
+                    "date group — rejection is being read as 0 and may be "
+                    "understated (sheet layout may have shifted)."
+                )
 
     # Machine label column. When the layout names its canonical machine-id header
     # (e.g. HDPE "MACHINE"), match it exactly via ``mc_header_spec`` so this daily

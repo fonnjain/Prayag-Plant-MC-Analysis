@@ -590,6 +590,74 @@ def test_mc_detail_silent_when_rej_matched_or_absent():
     print("PASS: mc_detail stays silent when rejection matches or is absent")
 
 
+# ---------------------------------------------------------------------------
+# parse_daily_matrix rejection-column-drift warnings
+# ---------------------------------------------------------------------------
+
+def test_matrix_warns_when_reject_header_exists_but_unmatched():
+    # The sheet has "REJECTION" in the date-row area (stranded in the machine-label
+    # region or shifted out of any date-group span) so no date group picks it up.
+    # The parser must warn rather than silently book 0% rejection.
+    values = [
+        # "REJECTION" sits between the machine col and the first date — outside
+        # every date-group span, so rej_c stays -1 for all groups.
+        ["MACHINE", "REJECTION", "Apr, 1", "", "Apr, 2", ""],
+        ["",         "",          "RUN HRS", "OUTPUT", "RUN HRS", "OUTPUT"],
+        ["M/C-1",    "5.0",       "8", "100", "8", "120"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="PIPE", segment="PIPE", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Report-5",
+        notes=notes,
+    )
+    assert len(recs) > 0, "output must still parse"
+    assert all(r.reject_count == 0.0 for r in recs), "no rej column → 0"
+    assert len(notes) == 1, f"expected exactly one drift note, got {notes}"
+    assert "rejection" in notes[0] and "Report-5" in notes[0] and "2026-04" in notes[0], notes
+    print("PASS: matrix warns when a rejection header exists but no date group matched it")
+
+
+def test_matrix_silent_when_genuinely_rejection_free():
+    # No REJECT text anywhere in the sheet → genuinely rejection-free, no note.
+    values = [
+        ["MACHINE", "Apr, 1", "", "Apr, 2", ""],
+        ["",        "RUN HRS", "OUTPUT", "RUN HRS", "OUTPUT"],
+        ["M/C-1",   "8", "100", "8", "120"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="HDPE", segment="HDPE", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Daily Report",
+        notes=notes,
+    )
+    assert len(recs) > 0
+    assert notes == [], f"no REJECT header → must not warn: {notes}"
+    print("PASS: matrix stays silent when no rejection header exists anywhere")
+
+
+def test_matrix_silent_when_reject_column_matched():
+    # REJECT sub-header is properly matched in every date group → no note.
+    values = [
+        ["MACHINE", "Apr, 1", "", "", "Apr, 2", "", ""],
+        ["",        "RUN HRS", "OUTPUT", "REJECT", "RUN HRS", "OUTPUT", "REJECT"],
+        ["M/C-1",   "8", "100", "5", "8", "120", "3"],
+    ]
+    notes: list = []
+    recs = parse_daily_matrix(
+        values,
+        plant="PTMT", segment="PTMT", unit="kg", year_month="2026-04",
+        source_file="f", source_tab="Report-5",
+        notes=notes,
+    )
+    assert len(recs) > 0
+    assert sum(r.reject_count for r in recs) == 8.0, "rejection must be read"
+    assert notes == [], f"matched columns must not warn: {notes}"
+    print("PASS: matrix stays silent when rejection sub-columns are properly matched")
+
+
 if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
@@ -610,4 +678,7 @@ if __name__ == "__main__":
     test_blocks_parser_silent_when_genuinely_rejection_free()
     test_mc_detail_warns_when_only_reject_ratio_column_exists()
     test_mc_detail_silent_when_rej_matched_or_absent()
+    test_matrix_warns_when_reject_header_exists_but_unmatched()
+    test_matrix_silent_when_genuinely_rejection_free()
+    test_matrix_silent_when_reject_column_matched()
     print("\nAll daily parser/normalisation unit tests passed.")
