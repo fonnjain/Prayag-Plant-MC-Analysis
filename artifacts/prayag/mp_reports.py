@@ -939,17 +939,47 @@ def consolidated_plan_bytes(
     # ── TAB 2: Machine Load ───────────────────────────────────────────────────
     ws2 = wb.create_sheet("2. Machine Load")
     _ws_header(ws2, "Machine Load — Pipe Extrusion")
+
+    # Row 3 — clarifying note: demand (may exceed 100%) vs scheduled (≤100%)
+    _N_COLS2 = 13
+    ws2.merge_cells(start_row=3, start_column=1, end_row=3, end_column=_N_COLS2)
+    _nc = ws2["A3"]
+    _nc.value = (
+        "Demand load may exceed 100% (over-subscribed — total demand > machine capacity).  "
+        "Scheduled load is capacity-enforced (≤100%) — this is what can actually run this month.  "
+        "See the Capacity-Feasible Plan report for the item-level feasible / shortfall split."
+    )
+    _nc.font      = Font(name=_FONT, size=8.5, italic=True, color="5C4A00")
+    _nc.fill      = PatternFill("solid", fgColor="FFF9C4")
+    _nc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws2.row_dimensions[3].height = 30
+
     col_hdrs2 = [
-        ("Machine", 14), ("Capacity (hrs)", 14), ("Assigned (hrs)", 14),
-        ("Utilisation %", 14), ("Machine Days", 13), ("Material (kg)", 14),
+        ("Machine", 14),       ("Capacity (hrs)", 14),
+        ("Demand (hrs)", 14),  ("Demand util %", 14),
+        ("Scheduled (hrs)", 15), ("Scheduled util %", 15),
+        ("Machine Days", 13),  ("Material (kg)", 14),
         ("Fresh Comp (kg)", 15), ("Pulverizer (kg)", 15),
-        ("Staffing OK", 12), ("OT Operators", 13), ("Support (W)", 12),
+        ("Staffing OK", 12),   ("OT Operators", 13), ("Support (W)", 12),
     ]
+    assert len(col_hdrs2) == _N_COLS2  # keep column count in sync
+
     r2 = 4
     for ci, (h, w) in enumerate(col_hdrs2, start=1):
         _hdr_cell(ws2, r2, ci, h, w)
     ws2.row_dimensions[r2].height = 32
     r2 += 1
+
+    # Build per-machine scheduled hours from schedule_result.weekly_fill.
+    # weekly_fill rows are per-week; sum across weeks to get the monthly total.
+    # This matches exactly how the results page and Capacity-Feasible Plan derive
+    # the scheduled load (sched_load_by_mc in app.py:mp_results).
+    _sched_hrs_by_mc: dict = {}
+    if schedule_result:
+        for _wf in schedule_result.weekly_fill:
+            _sched_hrs_by_mc[_wf.machine] = (
+                _sched_hrs_by_mc.get(_wf.machine, 0.0) + _wf.scheduled_hrs
+            )
 
     if engine_result:
         for ml in engine_result.machine_loads:
@@ -957,31 +987,45 @@ def consolidated_plan_bytes(
             row_fill = PatternFill("solid", fgColor="FFE0E0") if over else (
                 _LIGHT_FILL if r2 % 2 == 0 else None
             )
+            sched_hrs  = round(_sched_hrs_by_mc.get(ml.machine, 0.0), 1)
+            sched_util = (
+                round(sched_hrs / ml.capacity_hrs * 100, 1)
+                if ml.capacity_hrs > 0 else 0.0
+            )
             vals2 = [
-                ml.machine, ml.capacity_hrs, round(ml.assigned_hrs, 1),
-                round(ml.utilisation_pct, 1), round(ml.machine_days, 1),
-                round(ml.material_kg, 0), round(ml.fresh_compound_kg, 0),
-                round(ml.pulverizer_kg, 0), "Yes" if ml.staffing_ok else "No",
-                ml.operators_ot, ml.support_w,
+                ml.machine, ml.capacity_hrs,
+                round(ml.assigned_hrs, 1),  round(ml.utilisation_pct, 1),
+                sched_hrs,                   sched_util,
+                round(ml.machine_days, 1),
+                round(ml.material_kg, 0),    round(ml.fresh_compound_kg, 0),
+                round(ml.pulverizer_kg, 0),  "Yes" if ml.staffing_ok else "No",
+                ml.operators_ot,             ml.support_w,
             ]
-            fmts2 = ["General", '#,##0.0', '#,##0.0', '0.0', '0.00',
-                     '#,##0', '#,##0', '#,##0', "General", "General", "General"]
-            alns2 = ["left"] + ["right"] * 7 + ["center", "center", "center"]
+            fmts2 = [
+                "General", '#,##0.0',
+                '#,##0.0', '0.0',
+                '#,##0.0', '0.0',
+                '0.00',
+                '#,##0', '#,##0', '#,##0',
+                "General", "General", "General",
+            ]
+            alns2 = ["left"] + ["right"] * 9 + ["center", "center", "center"]
             for ci, (v, fmt, aln) in enumerate(zip(vals2, fmts2, alns2), start=1):
                 _data_cell(ws2, r2, ci, v, fmt, aln, fill=row_fill)
             r2 += 1
 
         # Totals
         ml_list = engine_result.machine_loads
-        _terra_total(ws2, r2, len(col_hdrs2), 1, "TOTAL", {
+        _terra_total(ws2, r2, _N_COLS2, 1, "TOTAL", {
             2: sum(ml.capacity_hrs for ml in ml_list),
             3: sum(ml.assigned_hrs for ml in ml_list),
-            6: sum(ml.material_kg for ml in ml_list),
-            7: sum(ml.fresh_compound_kg for ml in ml_list),
-            8: sum(ml.pulverizer_kg for ml in ml_list),
+            5: sum(_sched_hrs_by_mc.get(ml.machine, 0.0) for ml in ml_list),
+            8: sum(ml.material_kg for ml in ml_list),
+            9: sum(ml.fresh_compound_kg for ml in ml_list),
+            10: sum(ml.pulverizer_kg for ml in ml_list),
         })
     else:
-        ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=11)
+        ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=_N_COLS2)
         ws2["A" + str(r2)].value = "(pipe engine result not available)"
 
     # ── TAB 3: Weekly Fill ────────────────────────────────────────────────────

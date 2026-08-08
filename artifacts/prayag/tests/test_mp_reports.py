@@ -318,6 +318,280 @@ def test_consolidated_plan_bytes_all_tabs():
         assert name.startswith(prefix), f"Tab {name!r} should start with {prefix!r}"
 
 
+def test_consolidated_machine_load_tab_has_demand_and_scheduled_columns():
+    """Tab '2. Machine Load' must have both Demand and Scheduled column headers."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+    result   = _make_engine_result()
+    schedule = _make_schedule_result()
+    data = r.consolidated_plan_bytes(
+        engine_result=result,
+        fitting_result=None,
+        schedule_result=schedule,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+    # Row 4 is the column-header row; collect all header text
+    headers = {
+        ws.cell(row=4, column=c).value
+        for c in range(1, 20)
+        if ws.cell(row=4, column=c).value
+    }
+    assert any("Demand" in (h or "") for h in headers), (
+        f"Expected a 'Demand' column in tab 2 headers; got: {headers}"
+    )
+    assert any("Scheduled" in (h or "") for h in headers), (
+        f"Expected a 'Scheduled' column in tab 2 headers; got: {headers}"
+    )
+    # Old label must be gone — no plain "Assigned (hrs)" or "Utilisation %"
+    assert "Assigned (hrs)" not in headers, "Old 'Assigned (hrs)' label must be renamed to 'Demand (hrs)'"
+    assert "Utilisation %" not in headers,  "Old 'Utilisation %' label must be renamed to 'Demand util %'"
+
+
+def test_consolidated_machine_load_scheduled_util_never_exceeds_100():
+    """Scheduled util % must be ≤ 100% for every machine row in tab '2. Machine Load'.
+
+    The scheduler enforces a capacity ceiling so this must always hold.  A value
+    > 100 here would contradict the Capacity-Feasible Plan — the whole point of
+    adding the scheduled column.
+    """
+    import mp_reports as r
+    from openpyxl import load_workbook
+    from mp_scheduler import ScheduleResult, WeekFillRow, ShiftBlock
+
+    # Build a schedule where one machine runs at exactly full capacity (100%)
+    # and another is partially used (50%).
+    wf1 = WeekFillRow(
+        week=1, machine="M/C-1", capacity_hrs=500.0,
+        scheduled_hrs=500.0, idle_hrs=0.0, utilisation_pct=100.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 500.0},
+    )
+    wf2 = WeekFillRow(
+        week=1, machine="M/C-2", capacity_hrs=400.0,
+        scheduled_hrs=200.0, idle_hrs=200.0, utilisation_pct=50.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 200.0},
+    )
+    schedule = ScheduleResult(
+        segment="PIPE", effective_month="2026-08",
+        blocks=[], weekly_fill=[wf1, wf2], unfinished=[],
+        total_capacity_hrs=900.0, total_scheduled_hrs=700.0,
+        total_idle_hrs=200.0, total_excess_kg=0.0,
+        total_changeovers=0, week_days=[6, 6, 6, 7], params_used={},
+    )
+    from mp_engine import EngineResult, MachineLoad, CoverageGaps, PlanTotals
+    ml1 = MachineLoad(
+        machine="M/C-1", capacity_hrs=500.0,
+        assigned_hrs=750.0,  # demand > capacity (150%)
+        utilisation_pct=150.0, machine_days=25.0,
+        material_kg=10000.0, fresh_compound_kg=7500.0, pulverizer_kg=2500.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    ml2 = MachineLoad(
+        machine="M/C-2", capacity_hrs=400.0,
+        assigned_hrs=590.0,  # demand > capacity (147.5%)
+        utilisation_pct=147.5, machine_days=20.0,
+        material_kg=8000.0, fresh_compound_kg=6000.0, pulverizer_kg=2000.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    item = _make_item()
+    result = EngineResult(
+        segment="PIPE", effective_month="2026-08",
+        items=[item], machine_loads=[ml1, ml2],
+        coverage_gaps=CoverageGaps(no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]),
+        totals=PlanTotals(
+            total_qty_pcs=1000.0, total_material_kg=18000.0,
+            total_fresh_compound_kg=13500.0, total_pulverizer_kg=4500.0,
+            routable_material_kg=18000.0, routable_fresh_compound_kg=13500.0,
+            routable_pulverizer_kg=4500.0,
+        ),
+        baseline_machine_loads=[ml1, ml2],
+        params_used={}, effective_costs={}, cost_by_material={}, n_unpriced=0,
+    )
+
+    data = r.consolidated_plan_bytes(
+        engine_result=result, fitting_result=None, schedule_result=schedule,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+
+    # Locate "Scheduled util %" column
+    hdr_row = 4
+    sched_util_col = None
+    for c in range(1, 20):
+        v = ws.cell(row=hdr_row, column=c).value or ""
+        if "Scheduled util" in v:
+            sched_util_col = c
+            break
+    assert sched_util_col is not None, "Could not find 'Scheduled util %' column"
+
+    # Collect scheduled util values from data rows (row 5 onwards, stop at TOTAL)
+    sched_utils = []
+    for row in range(hdr_row + 1, hdr_row + 20):
+        machine_val = ws.cell(row=row, column=1).value
+        if machine_val == "TOTAL" or machine_val is None:
+            break
+        util_val = ws.cell(row=row, column=sched_util_col).value
+        if util_val is not None:
+            sched_utils.append(float(util_val))
+
+    assert sched_utils, "No scheduled-util data rows found"
+    for u in sched_utils:
+        assert u <= 100.0 + 0.01, (
+            f"Scheduled util % {u} exceeds 100% — breaks capacity guarantee"
+        )
+
+    # Also verify demand util IS above 100% for M/C-1 (so the two columns are distinct)
+    demand_util_col = None
+    for c in range(1, 20):
+        v = ws.cell(row=hdr_row, column=c).value or ""
+        if "Demand util" in v:
+            demand_util_col = c
+            break
+    assert demand_util_col is not None
+    demand_utils = []
+    for row in range(hdr_row + 1, hdr_row + 20):
+        machine_val = ws.cell(row=row, column=1).value
+        if machine_val == "TOTAL" or machine_val is None:
+            break
+        v = ws.cell(row=row, column=demand_util_col).value
+        if v is not None:
+            demand_utils.append(float(v))
+    assert any(u > 100.0 for u in demand_utils), (
+        "Expected at least one machine with demand util > 100% in this test fixture"
+    )
+
+
+def test_consolidated_machine_load_scheduled_values_match_schedule_result():
+    """Scheduled hrs in tab 2 must equal the sum of weekly_fill.scheduled_hrs per machine.
+
+    This pins the exact numbers so that the consolidated report and the
+    Capacity-Feasible Plan (which derives sched_load_by_mc the same way) are
+    guaranteed to agree.
+    """
+    import mp_reports as r
+    from openpyxl import load_workbook
+    from mp_scheduler import ScheduleResult, WeekFillRow
+
+    # Two machines, two weeks of weekly_fill each
+    # M/C-1: W1=120.0 + W2=130.0 = 250.0 total scheduled hrs
+    # M/C-2: W1=80.0  + W2=70.0  = 150.0 total scheduled hrs
+    wf_rows = [
+        WeekFillRow(week=1, machine="M/C-1", capacity_hrs=250.0,
+                    scheduled_hrs=120.0, idle_hrs=130.0, utilisation_pct=48.0,
+                    changeovers=0, excess_kg=0.0, origin_breakdown={1: 120.0}),
+        WeekFillRow(week=2, machine="M/C-1", capacity_hrs=250.0,
+                    scheduled_hrs=130.0, idle_hrs=120.0, utilisation_pct=52.0,
+                    changeovers=0, excess_kg=0.0, origin_breakdown={2: 130.0}),
+        WeekFillRow(week=1, machine="M/C-2", capacity_hrs=200.0,
+                    scheduled_hrs=80.0, idle_hrs=120.0, utilisation_pct=40.0,
+                    changeovers=0, excess_kg=0.0, origin_breakdown={1: 80.0}),
+        WeekFillRow(week=2, machine="M/C-2", capacity_hrs=200.0,
+                    scheduled_hrs=70.0, idle_hrs=130.0, utilisation_pct=35.0,
+                    changeovers=0, excess_kg=0.0, origin_breakdown={2: 70.0}),
+    ]
+    schedule = ScheduleResult(
+        segment="PIPE", effective_month="2026-08",
+        blocks=[], weekly_fill=wf_rows, unfinished=[],
+        total_capacity_hrs=900.0, total_scheduled_hrs=400.0,
+        total_idle_hrs=500.0, total_excess_kg=0.0, total_changeovers=0,
+        week_days=[6, 6, 6, 7], params_used={},
+    )
+    from mp_engine import EngineResult, MachineLoad, CoverageGaps, PlanTotals
+    ml1 = MachineLoad(
+        machine="M/C-1", capacity_hrs=500.0, assigned_hrs=300.0,
+        utilisation_pct=60.0, machine_days=25.0,
+        material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    ml2 = MachineLoad(
+        machine="M/C-2", capacity_hrs=400.0, assigned_hrs=200.0,
+        utilisation_pct=50.0, machine_days=20.0,
+        material_kg=4000.0, fresh_compound_kg=3000.0, pulverizer_kg=1000.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    item = _make_item()
+    result = EngineResult(
+        segment="PIPE", effective_month="2026-08",
+        items=[item], machine_loads=[ml1, ml2],
+        coverage_gaps=CoverageGaps(no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]),
+        totals=PlanTotals(
+            total_qty_pcs=1000.0, total_material_kg=9000.0,
+            total_fresh_compound_kg=6750.0, total_pulverizer_kg=2250.0,
+            routable_material_kg=9000.0, routable_fresh_compound_kg=6750.0,
+            routable_pulverizer_kg=2250.0,
+        ),
+        baseline_machine_loads=[ml1, ml2],
+        params_used={}, effective_costs={}, cost_by_material={}, n_unpriced=0,
+    )
+    data = r.consolidated_plan_bytes(
+        engine_result=result, fitting_result=None, schedule_result=schedule,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+
+    # Locate Scheduled (hrs) column
+    hdr_row = 4
+    sched_col = None
+    for c in range(1, 20):
+        v = ws.cell(row=hdr_row, column=c).value or ""
+        if v == "Scheduled (hrs)":
+            sched_col = c
+            break
+    assert sched_col is not None, "Could not find 'Scheduled (hrs)' column"
+
+    # Read machine → scheduled hrs from the report
+    sched_in_report = {}
+    for row in range(hdr_row + 1, hdr_row + 20):
+        mc = ws.cell(row=row, column=1).value
+        if mc == "TOTAL" or mc is None:
+            break
+        sched_in_report[mc] = float(ws.cell(row=row, column=sched_col).value or 0)
+
+    assert abs(sched_in_report.get("M/C-1", -1) - 250.0) < 0.1, (
+        f"M/C-1 scheduled hrs should be 250.0 (120+130), got {sched_in_report.get('M/C-1')}"
+    )
+    assert abs(sched_in_report.get("M/C-2", -1) - 150.0) < 0.1, (
+        f"M/C-2 scheduled hrs should be 150.0 (80+70), got {sched_in_report.get('M/C-2')}"
+    )
+
+
+def test_consolidated_machine_load_note_present():
+    """Tab '2. Machine Load' row 3 must contain the demand-vs-scheduled clarifying note."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+    result   = _make_engine_result()
+    schedule = _make_schedule_result()
+    data = r.consolidated_plan_bytes(
+        engine_result=result, fitting_result=None, schedule_result=schedule,
+    )
+    wb   = load_workbook(io.BytesIO(data))
+    ws   = wb["2. Machine Load"]
+    note = ws["A3"].value or ""
+    assert "100%" in note, f"Note should mention 100%; got: {note!r}"
+    assert "Demand" in note or "demand" in note, f"Note should mention demand; got: {note!r}"
+    assert "Scheduled" in note or "scheduled" in note, f"Note should mention scheduled; got: {note!r}"
+    assert "Capacity-Feasible" in note or "capacity" in note.lower(), (
+        f"Note should reference the Capacity-Feasible Plan; got: {note!r}"
+    )
+
+
+def test_consolidated_other_tabs_unchanged():
+    """The six tabs other than '2. Machine Load' must still be present and named correctly."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+    result   = _make_engine_result()
+    schedule = _make_schedule_result()
+    data = r.consolidated_plan_bytes(
+        engine_result=result, fitting_result=None, schedule_result=schedule,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    assert len(wb.sheetnames) == 7, f"Still expect 7 tabs; got {wb.sheetnames}"
+    for prefix in ["1.", "3.", "4.", "5.", "6.", "7."]:
+        assert any(n.startswith(prefix) for n in wb.sheetnames), (
+            f"Tab starting with {prefix!r} missing; sheets: {wb.sheetnames}"
+        )
+
+
 def test_consolidated_plan_bytes_no_data_graceful():
     """consolidated_plan_bytes handles all-None inputs without crashing."""
     import mp_reports as r
