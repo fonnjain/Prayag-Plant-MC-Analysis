@@ -760,12 +760,15 @@ def consolidated_plan_bytes(
     engine_result: Optional[EngineResult] = None,
     fitting_result=None,                # Optional[FittingEngineResult]
     schedule_result=None,               # Optional[ScheduleResult]
+    fitting_schedule=None,              # Optional[mp_scheduler.ScheduleResult] (fittings)
 ) -> bytes:
     """
     Build the 7-tab consolidated plan workbook.
 
-    Any of the three inputs may be None; tabs that require unavailable data
+    Any of the four inputs may be None; tabs that require unavailable data
     are labelled "(no data)" rather than raising.
+    fitting_schedule supplies capacity-enforced scheduled hrs for fitting machines
+    (same source as capacity_feasible_plan_bytes).
     """
     wb = Workbook()
     # Remove default sheet
@@ -1027,6 +1030,75 @@ def consolidated_plan_bytes(
     else:
         ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=_N_COLS2)
         ws2["A" + str(r2)].value = "(pipe engine result not available)"
+        r2 += 1
+
+    # ── Fitting machine section ────────────────────────────────────────────────
+    # Build per-fitting-machine scheduled hours from fitting_schedule.weekly_fill
+    # (same approach as pipe scheduled hrs above).
+    _fit_sched_hrs_by_mc: dict = {}
+    if fitting_schedule:
+        for _wf in fitting_schedule.weekly_fill:
+            _fit_sched_hrs_by_mc[_wf.machine] = (
+                _fit_sched_hrs_by_mc.get(_wf.machine, 0.0) + _wf.scheduled_hrs
+            )
+
+    # Section separator + sub-header
+    r2 += 1
+    ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=_N_COLS2)
+    _fh = ws2["A" + str(r2)]
+    _fh.value     = "FITTING MACHINES"
+    _fh.font      = Font(name=_FONT, bold=True, size=9, color=WHITE)
+    _fh.fill      = PatternFill("solid", fgColor="2E6B3E")
+    _fh.alignment = Alignment(horizontal="left", vertical="center")
+    ws2.row_dimensions[r2].height = 18
+    r2 += 1
+
+    if fitting_result and fitting_result.machine_loads:
+        for ml in fitting_result.machine_loads:
+            over      = ml.utilisation_pct > 100
+            row_fill  = PatternFill("solid", fgColor="FFE0E0") if over else (
+                _LIGHT_FILL if r2 % 2 == 0 else None
+            )
+            sched_hrs  = round(_fit_sched_hrs_by_mc.get(ml.machine, 0.0), 1)
+            sched_util = (
+                round(sched_hrs / ml.capacity_hrs * 100, 1)
+                if ml.capacity_hrs > 0 else 0.0
+            )
+            vals_f = [
+                ml.machine, ml.capacity_hrs,
+                round(ml.assigned_hrs, 1),  round(ml.utilisation_pct, 1),
+                sched_hrs,                   sched_util,
+                round(ml.machine_days, 1),
+                round(ml.material_kg, 0),    round(ml.fresh_compound_kg, 0),
+                round(ml.pulverizer_kg, 0),  "Yes" if ml.staffing_ok else "No",
+                ml.operators_ot,             ml.support_w,
+            ]
+            fmts_f = [
+                "General", '#,##0.0',
+                '#,##0.0', '0.0',
+                '#,##0.0', '0.0',
+                '0.00',
+                '#,##0', '#,##0', '#,##0',
+                "General", "General", "General",
+            ]
+            alns_f = ["left"] + ["right"] * 9 + ["center", "center", "center"]
+            for ci, (v, fmt, aln) in enumerate(zip(vals_f, fmts_f, alns_f), start=1):
+                _data_cell(ws2, r2, ci, v, fmt, aln, fill=row_fill)
+            r2 += 1
+
+        # Fitting totals row
+        fit_ml_list = fitting_result.machine_loads
+        _terra_total(ws2, r2, _N_COLS2, 1, "FITTING TOTAL", {
+            2: sum(ml.capacity_hrs for ml in fit_ml_list),
+            3: sum(ml.assigned_hrs for ml in fit_ml_list),
+            5: sum(_fit_sched_hrs_by_mc.get(ml.machine, 0.0) for ml in fit_ml_list),
+            8: sum(ml.material_kg for ml in fit_ml_list),
+            9: sum(ml.fresh_compound_kg for ml in fit_ml_list),
+            10: sum(ml.pulverizer_kg for ml in fit_ml_list),
+        })
+    else:
+        ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=_N_COLS2)
+        ws2["A" + str(r2)].value = "(no fitting machine data in this plan)"
 
     # ── TAB 3: Weekly Fill ────────────────────────────────────────────────────
     ws3 = wb.create_sheet("3. Weekly Fill")

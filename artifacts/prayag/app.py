@@ -6306,8 +6306,14 @@ def _ensure_session_run_id() -> None:
         pass
 
 
-def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
-    """Run shift scheduler from stored pipe demand in session."""
+def _mp_schedule_from_session(
+    engine_result: "_mp_engine.EngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run shift scheduler from stored pipe demand in session.
+
+    Pass *engine_result* when the caller has already computed the pipe engine
+    result to avoid a redundant re-run of the engine inside this helper.
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6325,7 +6331,7 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
         d2.setdefault("first_requested_week", 0)
         demand.append(_mp_engine.DemandItem(**d2))
 
-    result = _mp2_result_from_session()
+    result = engine_result if engine_result is not None else _mp2_result_from_session()
     if result is None:
         return None
     em = payload["effective_month"]
@@ -6346,8 +6352,14 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
         app.logger.error("mp_shift_schedule failed: %s", exc)
         return None
 
-def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
-    """Run fitting shift scheduler from stored fitting demand in session."""
+def _mp_fitting_schedule_from_session(
+    fitting_result: "_mp_engine.FittingEngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run fitting shift scheduler from stored fitting demand in session.
+
+    Pass *fitting_result* when the caller has already computed the fitting engine
+    result to avoid a redundant re-run of the fitting engine inside this helper.
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6358,8 +6370,8 @@ def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None"
     if not fit_dicts:
         return None
 
-    fitting_result = _mp3_fitting_result_from_session()
-    if fitting_result is None:
+    fr = fitting_result if fitting_result is not None else _mp3_fitting_result_from_session()
+    if fr is None:
         return None
     em  = payload["effective_month"]
     seg = payload.get("segment", _mp_seed.SEGMENT)
@@ -6369,7 +6381,7 @@ def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None"
         dt_recs = []
     try:
         return _mp_scheduler.run_fitting_schedule(
-            fitting_items=fitting_result.items,
+            fitting_items=fr.items,
             fitting_demand=[_mp_engine.FittingDemandItem(**d) for d in fit_dicts],
             segment=seg,
             effective_month=em,
@@ -6678,9 +6690,13 @@ def mp_report_consolidated():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result         = _mp2_result_from_session()
-    fitting_result = _mp3_fitting_result_from_session()
-    schedule_result = _mp_schedule_from_session()
+    result                  = _mp2_result_from_session()
+    fitting_result          = _mp3_fitting_result_from_session()
+    # Pass the already-computed results so the scheduler helpers do not
+    # re-run the engines a second time inside _mp_schedule_from_session /
+    # _mp_fitting_schedule_from_session.
+    schedule_result         = _mp_schedule_from_session(engine_result=result)
+    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6690,6 +6706,7 @@ def mp_report_consolidated():
             engine_result=result,
             fitting_result=fitting_result,
             schedule_result=schedule_result,
+            fitting_schedule=fitting_schedule_result,
         )
         month = (result or fitting_result).effective_month
         filename = f"Consolidated_Plan_{month}.xlsx"
@@ -6711,9 +6728,12 @@ def mp_report_zip():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result          = _mp2_result_from_session()
-    fitting_result  = _mp3_fitting_result_from_session()
-    schedule_result = _mp_schedule_from_session()
+    result                  = _mp2_result_from_session()
+    fitting_result          = _mp3_fitting_result_from_session()
+    # Pass the already-computed results so the scheduler helpers do not
+    # re-run the engines a second time.
+    schedule_result         = _mp_schedule_from_session(engine_result=result)
+    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6752,6 +6772,7 @@ def mp_report_zip():
                             engine_result=result,
                             fitting_result=fitting_result,
                             schedule_result=schedule_result,
+                            fitting_schedule=fitting_schedule_result,
                         ))
             built += 1
         except Exception as exc:
