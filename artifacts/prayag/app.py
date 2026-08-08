@@ -961,6 +961,17 @@ def _common_ctx(data: dict) -> dict:
     plants = sorted(set(r.plant for r in opt_rows))
     segments = sorted(set(r.segment for r in opt_rows))
     machines = sorted(set(r.machine for r in opt_rows if r.machine))
+
+    # Collect deduplicated parser notes from all source reports so templates
+    # can render a rejection-drift warning banner without reading raw JSON.
+    _seen_notes: set[str] = set()
+    _parse_notes: list[str] = []
+    for _rep in data.get("source_reports", []):
+        for _note in _rep.get("notes", []):
+            if _note not in _seen_notes:
+                _seen_notes.add(_note)
+                _parse_notes.append(_note)
+
     return {
         **data,
         "plants": plants,
@@ -972,6 +983,7 @@ def _common_ctx(data: dict) -> dict:
         "last_synced": _sync_ctx(),
         "recent_dates": _recent_date_options(),
         "data_empty": not bool(data.get("all_rows", data.get("rows", []))),
+        "parse_notes": _parse_notes,
     }
 
 
