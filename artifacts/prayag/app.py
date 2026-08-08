@@ -1603,11 +1603,11 @@ _MANIFEST_TTL = 900  # 15 min in-process
 @app.route("/manifest")
 def manifest_view():
     now = time.time()
-    cached = _manifest_cache.get("result")
-    if cached and (now - cached["ts"]) < _MANIFEST_TTL:
-        return render_template("manifest.html", **cached["ctx"])
 
     # Load full FY data — sheets.py caches; only cold first-load is expensive.
+    # We must load data before checking the cache because the fingerprint (which
+    # now includes parse notes) is the cache key; a note change → new fingerprint
+    # → cache miss even within the 15-minute TTL window.
     fy_months = FY_MONTHS
     try:
         mrecs, mreports, _ = get_records(fy_months)
@@ -1628,6 +1628,12 @@ def manifest_view():
 
     man = manifest_mod.build_manifest(fy_months, all_records, all_reports)
     fp = manifest_mod.manifest_fingerprint(man)
+
+    # Cache key includes the fingerprint so any change in coverage, schema flags,
+    # or parse notes immediately produces a cache miss (no stale counts).
+    cached = _manifest_cache.get(f"result_{fp}")
+    if cached and (now - cached["ts"]) < _MANIFEST_TTL:
+        return render_template("manifest.html", **cached["ctx"])
 
     # Advisory pass: cached per fingerprint so a re-load doesn't re-call Claude.
     adv_key = f"adv_{fp}"
@@ -1679,7 +1685,7 @@ def manifest_view():
         "grain_banner": None,
         "planning_sources": PLANNING_SOURCES,
     }
-    _manifest_cache["result"] = {"ctx": ctx, "ts": now}
+    _manifest_cache[f"result_{fp}"] = {"ctx": ctx, "ts": now}
     return render_template("manifest.html", **ctx)
 
 

@@ -320,8 +320,18 @@ def build_manifest(
 
 
 def manifest_fingerprint(manifest: dict) -> str:
+    # Collect all distinct parse notes from fetched reports so that any layout
+    # change (which produces new parser notes) invalidates the fingerprint and
+    # busts the in-process manifest cache immediately.
+    seen_notes: set[str] = set()
+    for rep in manifest.get("fetched", []):
+        for n in (rep.get("notes") or []):
+            seen_notes.add(n)
     payload = json.dumps(
-        {k: manifest[k] for k in ("as_of", "coverage", "schema_flags")},
+        {
+            **{k: manifest[k] for k in ("as_of", "coverage", "schema_flags")},
+            "parse_notes": sorted(seen_notes),
+        },
         sort_keys=True, default=str,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
