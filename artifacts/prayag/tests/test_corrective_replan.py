@@ -442,8 +442,14 @@ class TestP90Path(unittest.TestCase):
             f"With {n} days, method must switch to p90 (was {c.method})")
         self.assertGreater(c.cap_per_day, 0)
 
-    def test_p90_is_conservative(self):
-        """p90 (10th-percentile) must be ≤ mean of the same values."""
+    def test_p90_is_optimistic(self):
+        """p90 (90th-percentile) must be ≥ mean of the same daily category totals.
+
+        The 90th-percentile of any distribution is ≥ the mean (it's the high end).
+        We use it because it represents the 'best days' pace — optimistic but
+        grounded in actual production data.  A conservative floor (10th-pct) would
+        systematically understate what the line can do and overstate the gap.
+        """
         n = mcr.MIN_DAYS_FOR_P90
         base = datetime.date(2026, 8, 1)
         rows = []
@@ -451,14 +457,16 @@ class TestP90Path(unittest.TestCase):
         for i in range(n):
             while d.weekday() == 6:
                 d += datetime.timedelta(1)
+            # Each day is one item row for CPVC (one machine running that day).
+            # The per-day category total = the pcs for that row.
             rows.append((d.strftime("%b %-d, %Y"), "CPVC", f"PS-{i}", 1000 + i * 500))
             d += datetime.timedelta(1)
 
         result = _run(r11_rows=rows, r12_rows=[])
         c = _cat(result, "CPVC Pipe")
         mean_val = sum(1000 + i * 500 for i in range(n)) / n
-        self.assertLessEqual(c.cap_per_day, mean_val + 1,
-            "p90 (10th-percentile) must be ≤ mean (conservative capacity estimate)")
+        self.assertGreaterEqual(c.cap_per_day, mean_val - 1,
+            "p90 (90th-percentile of category-day totals) must be ≥ mean")
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +657,169 @@ class TestTargetValues(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # New spec-required tests (Fix 1–4)
 # ---------------------------------------------------------------------------
+
+class TestPaceGranularity(unittest.TestCase):
+    """Pace must be computed over per-CATEGORY-per-DAY totals (not per-item values).
+
+    The fix: for each date, SUM all item rows of a category, then compute p90
+    (90th-percentile) over those per-day sums.  Using individual item-row pcs
+    would give a 6-10× underestimate because a busy CPVC day has many item
+    rows, each a fraction of the day total.
+    """
+
+    def test_p90_is_90th_percentile_of_category_day_totals(self):
+        """Verify _percentile_90 is the 90th-percentile (not 10th) of category-day totals.
+
+        Uses synthetic data that matches the Aug 2026 CPVC Pipe per-day totals
+        (verified against Report-11):  [2025, 2420, 3075, 3310, 4753, 6114]
+        mean = 3,616    90th-pct ≈ 5,433    10th-pct ≈ 2,222
+
+        The fix must produce p90 ≈ 5,433 (not the old ≈ 2,222).
+        """
+        # These exactly match the Aug 1–7 2026 CPVC Pipe category-day totals
+        # derived from Report-11 in the active workbook.
+        cpvc_daily_totals = [2025.0, 2420.0, 3075.0, 3310.0, 4753.0, 6114.0]
+        p90 = mcr._percentile_90(cpvc_daily_totals)
+        mean_val = sum(cpvc_daily_totals) / len(cpvc_daily_totals)
+
+        # 90th-pct of [2025, 2420, 3075, 3310, 4753, 6114]:
+        # sorted idx = (6-1)*0.9 = 4.5 → 4753 + (6114-4753)*0.5 = 5433.5
+        self.assertAlmostEqual(p90, 5433.5, delta=1.0,
+            msg=f"90th-pct of Aug CPVC daily totals should be ~5433, got {p90}")
+        self.assertGreater(p90, mean_val,
+            msg=f"90th-pct ({p90}) must be > mean ({mean_val})")
+        # Critically: NOT the old 10th-pct (2222.5)
+        self.assertGreater(p90, 4000,
+            msg=f"p90 must be >> 2222 (old 10th-pct value); got {p90}")
+
+    def test_multiple_items_per_day_summed_before_p90(self):
+        """Three CPVC item rows on the same date must be SUMMED before p90 calc.
+
+        Setup: 5 production days. On day 1, three separate CPVC items each
+        producing 2,000 pcs (category-day total = 6,000).  On the other 4 days,
+        one item each producing 1,000 pcs.
+
+        If the engine incorrectly fed individual item values to p90, it would
+        compute p90 over [2000, 2000, 2000, 1000, 1000, 1000, 1000] (7 values)
+        giving 90th-pct ≈ 2,000.
+
+        Correct behaviour: day 1 total = 6,000, other days = 1,000 each.
+        p90 over [1000, 1000, 1000, 1000, 6000] (5 values, sorted):
+        idx = (5-1)*0.9 = 3.6 → 1000 + (6000-1000)*0.6 = 4,000.
+        """
+        rows = [
+            # Day 1: three items, each 2,000 pcs → category-day total = 6,000
+            ("Aug 1, 2026", "CPVC", "PS-1", 2000),
+            ("Aug 1, 2026", "CPVC", "PS-2", 2000),
+            ("Aug 1, 2026", "CPVC", "PS-3", 2000),
+            # Days 2-5: one item each, 1,000 pcs
+            ("Aug 3, 2026", "CPVC", "PS-1", 1000),
+            ("Aug 4, 2026", "CPVC", "PS-1", 1000),
+            ("Aug 5, 2026", "CPVC", "PS-1", 1000),
+            ("Aug 6, 2026", "CPVC", "PS-1", 1000),
+        ]
+        result = _run(r11_rows=rows, r12_rows=[])
+        c = _cat(result, "CPVC Pipe")
+
+        # Produced-to-date must be correct regardless of granularity
+        self.assertAlmostEqual(c.produced_to_date, 10_000, delta=1,
+            msg="produced_to_date must be 6000 + 4×1000 = 10,000")
+
+        # Per-day totals: [6000, 1000, 1000, 1000, 1000]
+        # 90th-pct (5 values): idx=(5-1)*0.9=3.6 → 1000+(6000-1000)*0.6 = 4000
+        self.assertAlmostEqual(c.cap_per_day, 4000.0, delta=5.0,
+            msg=f"p90 of [6000,1000,1000,1000,1000] should be ~4000, got {c.cap_per_day}")
+        self.assertEqual(c.method, "p90",
+            "5 production days must use p90 method")
+
+    def test_p90_higher_than_mean_with_high_day_skew(self):
+        """p90 (90th-pct) must exceed the mean when one day is much higher.
+
+        With values [100, 100, 100, 100, 10000], mean ≈ 2100 but 90th-pct ≈ 7240.
+        """
+        rows = [
+            ("Aug 1, 2026", "SWR", "PW-1", 100),
+            ("Aug 3, 2026", "SWR", "PW-1", 100),
+            ("Aug 4, 2026", "SWR", "PW-1", 100),
+            ("Aug 5, 2026", "SWR", "PW-1", 100),
+            ("Aug 6, 2026", "SWR", "PW-1", 10_000),
+        ]
+        result = _run(r11_rows=rows, r12_rows=[])
+        c = _cat(result, "SWR Pipe")
+        mean_val = (100 * 4 + 10_000) / 5
+        # p90 at idx=(5-1)*0.9=3.6 → 100+(10000-100)*0.6 = 100+5940 = 6040
+        self.assertGreater(c.cap_per_day, mean_val,
+            f"90th-pct ({c.cap_per_day}) must exceed mean ({mean_val})")
+        self.assertAlmostEqual(c.cap_per_day, 6040.0, delta=5.0,
+            msg=f"Expected p90 ≈ 6040, got {c.cap_per_day}")
+
+    def test_date_read_from_header_column(self):
+        """DATE must be identified by header text, not by column position.
+
+        In the August PIPE workbook, column A is blank and column B is DATE.
+        The parser must read dates from the column whose HEADER contains 'DATE',
+        which resolves to column index 1 (B) in that file.
+        """
+        # Build a synthetic R11 where column A is blank, DATE is in column B
+        hdr = ["", "DATE", "MACHINE NAME", "MACHINE NO.", "TYPES", "ITEM CODE",
+               "Running Hour", "Ideal Weight (KG)", "Pcs", "Weight"]
+        rows_raw = [
+            ["https://sheets..."],
+            ["", "TOTAL", "", "", "", "", "100", "", "3000", ""],
+            ["", "PIPE M/C"],
+            ["", "", "", "", "", ""],
+            hdr,
+            # Column A blank, date in column B
+            ["", "Aug 1, 2026", "CON-63-1", "PIPE M/C - 1", "CPVC", "PS-3",
+             "8", "1.0", "3000", "3000"],
+        ]
+        import mp_corrective_replan as m
+        parsed = m._parse_r11_daily_pcs(rows_raw, 2026, 8)
+        # Discard sentinel
+        parsed.pop("_n_no_date", None)
+        self.assertIn("2026-08-01", parsed,
+            "Parser must resolve date from column B (header 'DATE'), got: " + str(list(parsed.keys())))
+        self.assertAlmostEqual(parsed["2026-08-01"].get("CPVC Pipe", 0), 3000, delta=1)
+
+    def test_rows_without_date_not_silently_lost(self):
+        """A data row appearing before ANY date in the sheet must not be silently dropped.
+
+        The sentinel key '_n_no_date' must be non-zero and a warning must appear
+        in the CorrectiveReplanResult.warnings list.
+        """
+        # Build R11 where the first DATA row has no date and no prior date exists
+        hdr = ["", "DATE", "MACHINE NAME", "MACHINE NO.", "TYPES", "ITEM CODE",
+               "Running Hour", "Ideal Weight (KG)", "Pcs", "Weight"]
+        rows_raw = [
+            ["https://sheets..."],
+            ["", "TOTAL"],
+            ["", "PIPE M/C"],
+            ["", ""],
+            hdr,
+            # First data row: no date, CPVC, pcs=500 — unattributable
+            ["", "", "CON-63-1", "PIPE M/C - 1", "CPVC", "PS-3", "8", "1.0", "500", ""],
+            # Second row: date present, pcs=1000
+            ["", "Aug 1, 2026", "CON-63-1", "PIPE M/C - 1", "CPVC", "PS-4", "8", "1.0", "1000", ""],
+        ]
+        import mp_corrective_replan as m
+        parsed = m._parse_r11_daily_pcs(rows_raw, 2026, 8)
+        n_no_date = parsed.pop("_n_no_date", 0)
+        self.assertGreater(n_no_date, 0,
+            "Parser must count rows skipped due to unresolvable date")
+
+        # The engine warning must surface this
+        r12_empty = [["DATE", "MATERIAL", "Item Code", "SAP Code", "Machine",
+                       "RC", "MC(F)", "CT", "Output Production", ""],
+                     ["", "", "", "", "", "", "", "", " Pc ", " Wt "]]
+        result = m.compute_corrective_replan(
+            month="2026-08", plan_recs=[],
+            r11_values=rows_raw, r12_values=r12_empty,
+            as_of_date="2026-08-08", file_id="",
+        )
+        has_date_warning = any("date resolution" in w.lower() for w in result.warnings)
+        self.assertTrue(has_date_warning,
+            f"Engine warnings must include a date-resolution note; got: {result.warnings}")
+
 
 class TestNoCapacityLabel(unittest.TestCase):
     """Fix 1: no "capacity" language in method or status fields."""

@@ -12,14 +12,17 @@ For each category (CPVC Pipe, UPVC Pipe, SWR Pipe, AGRI Pipe,
                    CPVC Fitting, UPVC Fitting, SWR Fitting, AGRI Fitting,
                    + 4 Solvent categories):
 
-1.  Sum pcs per production day (dates where the category ran).
-2.  Compute Cap/Day:
-      ≥ MIN_DAYS_FOR_P90 non-zero days → 10th-percentile of daily sums
-        (conservative "p90" — 90 % probability of achieving this level)
-      1 … MIN_DAYS_FOR_P90-1 non-zero days → arithmetic mean
-      0 non-zero days → 0, method = "none" (NO_DEMONSTRATED_CAPACITY)
-3.  Feasible = Cap/Day × working_days_remaining   (exact, integer multiply)
-4.  Shortfall = max(0, remaining_demand − feasible)
+1.  For each category, group item rows by production date and SUM their pcs.
+    This gives one per-category-per-day total — the throughput of that category
+    on that date.  Never compute pace over individual item rows.
+2.  Compute Pace/Day from those per-category-per-day totals:
+      ≥ MIN_DAYS_FOR_P90 non-zero days → 90th-percentile of daily category totals
+        ("p90" — the pace exceeded only by the top 10 % of production days;
+        optimistic but grounded in actual observed throughput)
+      1 … MIN_DAYS_FOR_P90-1 non-zero days → arithmetic mean + low-confidence flag
+      0 non-zero days → 0, method = "none" (not started this month)
+3.  Projected = Pace/Day × working_days_remaining
+4.  Gap = max(0, remaining_demand − projected)
 
 INVARIANTS (checked before returning, raise AssertionError on violation)
 ------------------------------------------------------------------------
@@ -46,7 +49,7 @@ from typing import Dict, List, Optional, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
-MIN_DAYS_FOR_P90: int = 5   # fewer non-zero days → mean+low-confidence flag; ≥ → 10th-percentile
+MIN_DAYS_FOR_P90: int = 5   # fewer non-zero days → mean+low-confidence flag; ≥ → 90th-percentile
 
 #: R12 materials that are tracked in the sheet TOTAL but do not map to any
 #: standard Plumbing category (CPVC/UPVC/SWR/AGRI/PP/ABS).  We count their
@@ -232,43 +235,61 @@ def _col_idx(hdr: list, *names: str) -> int:
     return -1
 
 
-def _percentile_10(values: List[float]) -> float:
-    """10th-percentile (conservative 'p90') without numpy.
+def _percentile_90(values: List[float]) -> float:
+    """90th-percentile of per-category-per-day production totals without numpy.
 
-    With n values sorted ascending, the 10th-percentile is the value below
-    which 10 % of observations fall, i.e. 90 % of production days equalled or
-    exceeded this level — making it a 90 %-confidence capacity estimate.
-    Uses linear interpolation identical to numpy's default method.
+    Input: a list where every element is the CATEGORY TOTAL for one production
+    day (i.e. the sum over all item rows of that category on that day).
+
+    Returns the 90th-percentile of those daily totals — the pace exceeded only
+    by the top 10 % of production days.  This is the OPTIMISTIC end of the
+    distribution: "how fast does the line run on its best days?"  Using the 90th
+    percentile (rather than the mean) gives a pace projection that accounts for
+    variability without being dragged down by slow start-up days or low-volume
+    days, and without being a single-day outlier.
+
+    Uses linear interpolation identical to numpy's default method
+    (numpy.percentile(values, 90, interpolation='linear')).
     """
     s = sorted(values)
     n = len(s)
     if n == 1:
         return s[0]
-    idx = (n - 1) * 0.10          # fractional index into sorted list
+    idx = (n - 1) * 0.90          # fractional index into sorted list (90th pct)
     lo = int(idx)
     hi = min(lo + 1, n - 1)
     return s[lo] + (s[hi] - s[lo]) * (idx - lo)
 
 
-def _compute_cap_per_day(daily_totals: List[float]) -> Tuple[float, str, int]:
+def _compute_pace_per_day(
+    daily_cat_totals: List[float]
+) -> Tuple[float, str, int]:
     """Return (pace_per_day, method_label, n_non_zero_days).
 
-    Fallback chain: p90 (≥ MIN_DAYS_FOR_P90 days) → mean(low-confidence) → 0 / none.
+    Input must be per-CATEGORY-per-DAY totals (i.e. already summed across all
+    item rows for that category on each day).  Passing individual item-row pcs
+    would give a per-item pace, which is 6-10× too low.
 
-    "p90"  means 10th-percentile of ≥5 non-zero daily totals — a conservative
-           90%-confidence pace floor.
-    "mean(low-confidence,N days)"  means arithmetic mean of 1–4 days — too few
-           data points for a reliable projection; a low-confidence flag is shown.
-    "none" means no production days observed yet this month — category not started.
+    Fallback chain
+    --------------
+    ≥ MIN_DAYS_FOR_P90 production days → 90th-percentile of daily category totals
+      (the pace exceeded only by the top 10 % of days — optimistic but grounded)
+    1 … MIN_DAYS_FOR_P90-1 days → arithmetic mean + low-confidence flag
+      (too few data points for a stable percentile; treat as indicative only)
+    0 production days → 0.0 / "none" (category not started this month)
     """
-    non_zero = [v for v in daily_totals if v > 0]
+    non_zero = [v for v in daily_cat_totals if v > 0]
     n = len(non_zero)
     if n == 0:
         return 0.0, "none", 0
     if n >= MIN_DAYS_FOR_P90:
-        return round(_percentile_10(non_zero), 1), "p90", n
-    # Fewer than MIN_DAYS_FOR_P90 days: mean is the only option; flag as low-confidence
+        return round(_percentile_90(non_zero), 1), "p90", n
+    # Fewer than MIN_DAYS_FOR_P90 days: use mean, flag as low-confidence
     return round(sum(non_zero) / n, 1), f"mean(low-confidence,{n}d)", n
+
+
+# Backward-compat alias used by existing tests
+_compute_cap_per_day = _compute_pace_per_day
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +325,7 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
     daily: Dict[str, Dict[str, float]] = {}  # date → {category → pcs}
     last_date: Optional[str] = None
     dates_seen: set = set()
+    n_no_date: int = 0   # data rows skipped because no date could be resolved
 
     for raw in values[hdr_idx + 1:]:
         if len(raw) < 4:
@@ -312,7 +334,10 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
         def _cell(idx: int) -> str:
             return str(raw[idx]).strip() if idx < len(raw) else ""
 
-        # Date — carry forward if blank
+        # Date — always read from the column identified as "DATE" by header text.
+        # In the August PIPE workbook, that is column B (index 1); column A is blank.
+        # Carry the last resolved date forward for continuation rows (same-day items
+        # share the date only on the first item row).
         date_raw = _cell(col_date)
         if date_raw:
             try:
@@ -321,12 +346,20 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
                     last_date = d
                     dates_seen.add(d)
             except ValueError:
-                pass  # header sub-rows etc.
+                pass  # sub-header rows, text labels, etc. — not a data date
 
         if last_date is None:
+            # The very first data rows have no date yet; we cannot attribute them.
+            # Count them so the caller can surface a warning if there are too many.
+            mat_type = _cell(col_type).upper()
+            pcs = _to_float(_cell(col_pcs))
+            if mat_type and mat_type not in ("TYPES", "TYPE") and pcs > 0:
+                n_no_date += 1
             continue
 
-        # Type → category
+        # Type → category.  We sum ITEM ROWS per (date, category) so that
+        # _compute_pace_per_day receives per-CATEGORY-per-DAY totals, not
+        # per-item values (using per-item values would give a 6-10× underestimate).
         mat_type = _cell(col_type).upper()
         if not mat_type or "TOTAL" in mat_type or "TYPE" in mat_type:
             continue
@@ -342,8 +375,16 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
         if pcs <= 0:
             continue
 
+        # Sum this item's pcs into the day's category total.
+        # After all rows for a category on a given date are accumulated,
+        # the day_map[category] value equals the category-level daily throughput.
         day_map = daily.setdefault(last_date, {})
         day_map[category] = day_map.get(category, 0.0) + pcs
+
+    if n_no_date:
+        # Surface as a return value so compute_corrective_replan can warn.
+        # Attach to the dict by convention (avoids changing the function signature).
+        daily["_n_no_date"] = n_no_date  # type: ignore[assignment]
 
     return daily
 
@@ -532,7 +573,11 @@ def compute_corrective_replan(
     r12_daily, r12_other   = _parse_r12_daily_pcs(r12_values, year, mnum)
     # r12_other: {material → total pcs} for unclassified materials (e.g. TEFFLONE)
 
-    # Collect all dates seen
+    # _parse_r11_daily_pcs embeds a sentinel key when it encountered rows whose
+    # date could not be resolved; extract it before building all_dates.
+    n_r11_no_date: int = int(r11_daily.pop("_n_no_date", 0))  # type: ignore[arg-type]
+
+    # Collect all REAL dates seen (the sentinel key is gone now)
     all_dates = sorted(set(r11_daily) | set(r12_daily))
     src_date_min = all_dates[0]  if all_dates else ""
     src_date_max = all_dates[-1] if all_dates else ""
@@ -603,8 +648,20 @@ def compute_corrective_replan(
     other_produced        = round(sum(r12_other.values()), 0)
     actual_produced_total = round(sum(cat_produced.values()) + other_produced, 0)
 
-    # --- Build per-category results -----------------------------------------
+    # Warn if the R11 parser encountered rows it couldn't assign a date to.
+    # These rows contribute pcs to the sheet TOTAL but NOT to any per-day total,
+    # so produced-to-date and pace are both understated by that amount.
     warnings: List[str] = []
+    if n_r11_no_date:
+        warnings.append(
+            "R-11 date resolution: " + str(n_r11_no_date) + " data row(s) could not be "
+            "attributed to a date (no date resolved in the DATE column and no prior "
+            "date to carry forward).  These pcs are excluded from produced-to-date "
+            "and pace.  Check for rows that appear before the first date entry in "
+            "Report-11."
+        )
+
+    # --- Build per-category results -----------------------------------------
     results: List[CategoryResult] = []
 
     for cat in CATEGORY_ORDER:
@@ -977,8 +1034,10 @@ def corrective_replan_bytes(result: CorrectiveReplanResult) -> bytes:
          "R-11/R-12 are Plumbing-only.  The pace calc uses R-11/R-12."),
         ("Pace method", f"p90 (≥{MIN_DAYS_FOR_P90} days) → mean[low-confidence] → not-started"),
         ("p90 meaning",
-         f"10th-percentile of ≥{MIN_DAYS_FOR_P90} non-zero daily totals — "
-         "90 % of observed days met or exceeded this pace."),
+         f"90th-percentile of per-category-per-day totals (≥{MIN_DAYS_FOR_P90} "
+         "production days required).  Only the top 10 % of production days "
+         "exceeded this pace — it represents an optimistic-but-observed "
+         "throughput ceiling, not an average and not a machine-capacity limit."),
         ("mean(low-confidence,Nd) meaning",
          f"Arithmetic mean of only N days (N < {MIN_DAYS_FOR_P90}). "
          "Treat as indicative only; too few data points for reliable projection."),
