@@ -1,0 +1,23 @@
+GARDEN PIPE — correct the architecture. The current page reads the annual SUMMARY tab as source. Per the agreed principle, the SUMMARY tab is a DERIVED roll-up and must be used ONLY to validate + mirror styling. Recompute the monthly figures from the master data-entry tabs. Build mode. Add pytest. Restart. Never touch "/".
+
+=== MASTER (recompute FROM these) ===
+File "Annual 26-27 GARDEN PIPE M/C Summary" = 1OYQq7YR_-6PyqzppOOamEaJl14VjbOQ6x-O_cpDy0gc.
+Data-entry tabs (PRIMARY): GARDEN MC 26-27, MC-1..4, HOURS, OUTPUT. Parse by HEADER TEXT; months by label (latest-first).
+Recompute from these: run hours, output kg, rejection kg & %, utilisation %, per machine × month. Sum machines → segment monthly.
+
+=== LABOUR (separate master — do NOT read from the SUMMARY tab) ===
+Labour master = "Segment Wise Labour/Solar/Power Cost" 26-27 = 1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw, segment "Garden Pipe", monthly. Take headcount, paid hours, wages from there. ₹/kg = that segment's wages ÷ recomputed output kg, over the SAME months (this is the Plumbing costing pattern). Per-machine labour = "not captured at machine level".
+
+=== ANNUAL SUMMARY tab = VALIDATION ONLY ===
+After recomputing, compare to the SUMMARY tab and show a "recomputed vs annual" delta; flag any gap rather than overwriting. Mirror the SUMMARY tab's column order/labels for styling only.
+
+=== VALIDATION TARGETS (recomputed figure should MATCH these; flag if not) ===
+Segment: APR 549h/38,950kg/3.06% · JUN 1,004h/66,911kg/3.31% · JUL 0h/32,191kg/5.76% · TOTAL 1,553h/138,052kg/3.81% · labour 56/₹426,164/₹2.97 per kg.
+Per-machine rejection APR: M/C-1 2.23% · M/C-2 2.81% · M/C-3 3.00% · M/C-4 10.48%.
+July output MUST recompute to 32,191 (NOT 68,390).
+
+=== INTEGRITY (recompute makes these fall out naturally) ===
+MAY: cost-workbook wages present but recomputed output = 0 → flag, no ₹/kg. JUL: recomputed output present but cost-workbook labour blank → flag, ⚠ in ₹/kg cell. Idle machines (0 hrs) render as 0.
+
+=== TESTS ===
+pytest: figures recomputed from data-entry tabs (assert the app does NOT source them from SUMMARY); labour joined from cost workbook by segment; recomputed totals match validation targets; annual-vs-recomputed delta rendered; July=32,191; integrity flags fire. "/" unaffected; Plumbing unchanged.

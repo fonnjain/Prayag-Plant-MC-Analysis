@@ -1,0 +1,28 @@
+TANK — recompute litres from the per-plant DATA tabs; fix the file wiring; the annual SUMMARY (LTR) is a derived roll-up = validation only. Build mode. Add pytest. Restart. Never touch "/".
+
+=== VERIFIED NATIVE FILE IDs (ground truth from Drive title lookup) ===
+KH = 1T4RDvDNqxqbsL3zRWoTPcijdvQGPQjtBTw8S0qe98rs
+VN = 1Wa2jFV66NS-ntlSKqo8jzFFwgZfcdvgJYEAuFU0qdAI
+WB = 1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag
+Current sources.py has VN pointing at WB's ID, WB pointing at an unknown ID (1W6hGoEZauSkQyBUQbngnHNMD7Koon3_c8tnO0PDHrt8), KH annual unregistered. FIRST fetch and report the title of 1W6hGoEZ... (the inventory lists it as a WB "Final Output" styling sheet — confirm before discarding). THEN repoint all three to the verified IDs above and register KH.
+
+=== MASTER (recompute FROM these) ===
+Per plant, data-entry tab (PRIMARY) = "DATA" + per-size tabs: month × capacity × layer matrix, production & rejection in Ltr and pcs. Parse by HEADER; months by label (latest-first). Sum KH+VN+WB for the segment total.
+
+=== UNIT ===
+Headline unit is LITRES. The 26-27 VN/WB annual entries currently declare unit "pcs" — fix to "Ltr". Do NOT force kg. Rejection is in Ltr, not a weight %.
+
+=== NO FABRICATION ===
+Tank master has NO labour, NO hours, NO machine dimension. Do not invent them. (If Tank ₹/kg is ever needed it comes from the Segment Cost workbook's TANK segment in kg — out of scope here; flag, don't fabricate.)
+
+=== ANNUAL SUMMARY (LTR) tab = VALIDATION ONLY ===
+Recompute from DATA → compare to SUMMARY (LTR) → show delta, flag gaps.
+
+=== VALIDATION TARGETS (recomputed should MATCH) ===
+Per plant (Apr–Jul, Ltr): KH 633,500 (JUN only) · VN 1,852,250 · WB 4,325,100. Combined 6,810,850 Ltr / rejection 86,500 (1.27%). By month: APR 636,250 · MAY 1,582,500 · JUN 2,596,600 · JUL 1,995,500. WB=64%, KH=9% — if total shows ~633k it's reading KH alone.
+
+=== INTEGRITY (surface, don't auto-reconcile) ===
+KH annual = JUN only, but KH has DAILY files for Apr+May+Jun — do NOT reconcile; show both and flag for Preeti cross-check; KH daily missing JUL. WB item-strip Jul 2,198 pcs vs WB TOTAL 1,834 pcs / 1,432,000 Ltr, and a Jun sub-table 1,424,600 vs TOTAL 1,429,600 Ltr — use TOTAL-row Ltr, flag the discrepancy.
+
+=== TESTS ===
+pytest: three IDs resolve to correct titles; VN no longer reads WB; unit=="Ltr"; litres recomputed from DATA tabs (not SUMMARY); combined==6,810,850; per-plant match; no labour/hours fabricated; integrity flags fire. "/" unaffected.

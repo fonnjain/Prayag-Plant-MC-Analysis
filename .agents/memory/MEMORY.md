@@ -50,3 +50,5 @@
 - [MP seed provenance module](prayag-mp-seed-provenance.md) — mp_seed_provenance.py tracks per-table seed freshness; Drive tests must wipe+restore all provenance rows (build_staleness_warnings queries ALL tables, not per-segment).
 - [PIPE monthly workbook auto-discovery](prayag-pipe-source-registry.md) — source_registry.py: pinned sources.py ID wins; else DB cache; else Drive title search. Titles contain "Pipe"+"Fitting"+MON_ABBREV+YEAR. Tie-break: preeti@, else newest. Never overwrites a pin.
 - [Corrective Re-plan engine](prayag-corrective-replan.md) — mp_corrective_replan.py: p90(≥5 days)→mean→NDC; Issue #5 date fix in mp_followup._parse_date; route at /planning/corrective-replan; 45 regression tests.
+- [Tank source wiring](prayag-tank-sources.md) — VN/WB/KH 26-27 correct file IDs, unit="Ltr", KH route fixed (was redirect), integrity flags wired; acceptance 6,810,850 Ltr.
+- [PTMT annual Moulds Summary](prayag-ptmt-moulds-summary.md) — kind=ptmt_moulds_summary in ANNUAL_SOURCES; parse_ptmt_summary_tab handles "1-Aug-2026" via _parse_date_cell_manpower; 48 injection machines = annual scope; ₹/kg mismatch flag.

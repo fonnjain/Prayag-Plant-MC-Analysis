@@ -331,6 +331,145 @@ def parse_garden_summary_tab(
     return result
 
 
+def parse_ptmt_summary_tab(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    source_file: str,
+    source_tab: str,
+) -> List[dict]:
+    """Parse the SUMMARY tab of the PTMT annual Moulds Summary workbook.
+
+    Returns one dict per month (YYYY-MM) plus one for the TOTAL row::
+
+        {month, run_moulds, mould_hours, nett_output_kg, reject_kg,
+         reject_pct, runner_kg, lumps_kg, wastage_pct, grinder,
+         labour_count, paid_wages, per_kg_cost, per_kg_cost_basis_note}
+
+    Months run LATEST-FIRST in the sheet (e.g. JUL'26 → APR'26 → TOTAL).
+    All column positions are found by header text — never assumed.
+
+    SUMMARY tab headers (source-verified):
+        MONTHS | No. of Run Moulds | Mould Run Hours | Nett Output (KG) |
+        Rejection (KG) | Rejection %age | Runner Produce (KG) | Lumps (KG) |
+        100% Wastage %age | Total Grinder Working | Labour | Paid Wages |
+        Per KG Labour Cost
+    """
+    # ── Find header row ───────────────────────────────────────────────────────
+    header_idx: Optional[int] = None
+    header: List = []
+    for i, row in enumerate(values[:12]):
+        joined = " ".join(str(c).upper() for c in row)
+        if ("MOULD" in joined or "OUTPUT" in joined) and ("MONTH" in joined or "RUN" in joined):
+            header_idx, header = i, list(row)
+            break
+    if header_idx is None:
+        return []
+
+    U = [str(c).strip().upper() for c in header]
+
+    def _find(pred) -> int:
+        for idx, h in enumerate(U):
+            if pred(h):
+                return idx
+        return -1
+
+    month_c        = _find(lambda h: "MONTH" in h)
+    if month_c < 0:
+        month_c = 0
+    moulds_c       = _find(lambda h: "RUN MOULD" in h or (
+                           "MOULD" in h and "HOUR" not in h and "PER" not in h
+                           and "NETT" not in h and "OUTPUT" not in h))
+    mould_hrs_c    = _find(lambda h: "MOULD" in h and "HOUR" in h)
+    # "Nett Output (KG)" — prefer NETT over plain OUTPUT; exclude TOTAL/REJECT
+    nett_output_c  = _find(lambda h: "NETT" in h and "OUTPUT" in h)
+    if nett_output_c < 0:
+        nett_output_c = _find(lambda h: "OUTPUT" in h and "KG" in h
+                              and "TOTAL" not in h and "REJECT" not in h)
+    reject_kg_c    = _find(lambda h: "REJECT" in h and "KG" in h
+                           and "%" not in h and "AGE" not in h)
+    reject_pct_c   = _find(lambda h: "REJECT" in h and ("%" in h or "AGE" in h))
+    runner_c       = _find(lambda h: "RUNNER" in h and "KG" in h)
+    lumps_c        = _find(lambda h: "LUMP" in h)
+    wastage_c      = _find(lambda h: "WASTAGE" in h)
+    grinder_c      = _find(lambda h: "GRINDER" in h)
+    labour_c       = _find(lambda h: h == "LABOUR" or (
+                           "LABOUR" in h and "COST" not in h and "HOUR" not in h
+                           and "WAGE" not in h and "PER" not in h and "PAID" not in h))
+    wages_c        = _find(lambda h: "PAID WAGE" in h or "WAGES" in h
+                           or ("WAGE" in h and "PER" not in h))
+    per_kg_c       = _find(lambda h: "PER KG" in h and ("COST" in h or "LABOUR" in h))
+
+    result: List[dict] = []
+    for row in values[header_idx + 1:]:
+        def g(c: int):
+            return row[c] if 0 <= c < len(row) else ""
+
+        raw = str(g(month_c)).strip()
+        ym = parse_month_label(raw)
+        if not ym and raw:
+            # "1-Jul-2026" / "1-Aug-2026" format — _parse_date_cell_manpower
+            # handles %d-%b-%Y; extract YYYY-MM from the full ISO date it returns.
+            _ds = _parse_date_cell_manpower(raw)
+            if _ds and len(_ds) >= 7:
+                ym = _ds[:7]
+        is_total = (raw.upper() == "TOTAL")
+        if not ym and not is_total:
+            continue
+
+        run_moulds   = int(num(g(moulds_c)))   if moulds_c >= 0   else 0
+        mould_hours  = num(g(mould_hrs_c))     if mould_hrs_c >= 0 else 0.0
+        nett_output  = num(g(nett_output_c))   if nett_output_c >= 0 else 0.0
+        reject_kg    = num(g(reject_kg_c))     if reject_kg_c >= 0 else 0.0
+        runner_kg    = num(g(runner_c))        if runner_c >= 0   else 0.0
+        lumps_kg     = num(g(lumps_c))         if lumps_c >= 0    else 0.0
+        wastage_pct  = num(g(wastage_c))       if wastage_c >= 0  else 0.0
+        grinder      = num(g(grinder_c))       if grinder_c >= 0  else 0.0
+        labour_count = int(num(g(labour_c)))   if labour_c >= 0   else 0
+        paid_wages   = num(g(wages_c))         if wages_c >= 0    else 0.0
+        per_kg_sheet = num(g(per_kg_c))        if per_kg_c >= 0   else 0.0
+
+        # Rejection %
+        reject_pct_raw = num(g(reject_pct_c)) if reject_pct_c >= 0 else 0.0
+        if 0 < reject_pct_raw <= 100:
+            reject_pct = round(reject_pct_raw, 2)
+        elif (nett_output + reject_kg) > 0:
+            reject_pct = round(reject_kg / (nett_output + reject_kg) * 100, 2)
+        else:
+            reject_pct = 0.0
+
+        # ₹/kg basis: the sheet's stated Per KG Labour Cost may differ from
+        # wages ÷ Nett Output when July has output but no wages.  Carry the
+        # sheet value AND a flag so the template can explain the discrepancy.
+        computed_per_kg = round(paid_wages / nett_output, 2) if (paid_wages > 0 and nett_output > 0) else 0.0
+        per_kg_cost = per_kg_sheet if per_kg_sheet > 0 else computed_per_kg
+        per_kg_mismatch = (
+            per_kg_sheet > 0 and computed_per_kg > 0
+            and abs(per_kg_sheet - computed_per_kg) / max(per_kg_sheet, computed_per_kg) > 0.02
+        )
+
+        result.append({
+            "month":             ym if ym else "TOTAL",
+            "run_moulds":        run_moulds,
+            "mould_hours":       mould_hours,
+            "nett_output_kg":    nett_output,
+            "reject_kg":         reject_kg,
+            "reject_pct":        reject_pct,
+            "runner_kg":         runner_kg,
+            "lumps_kg":          lumps_kg,
+            "wastage_pct":       wastage_pct,
+            "grinder":           grinder,
+            "labour_count":      labour_count,
+            "paid_wages":        paid_wages,
+            "per_kg_cost":       per_kg_cost,
+            "per_kg_sheet":      per_kg_sheet,
+            "per_kg_computed":   computed_per_kg,
+            "per_kg_mismatch":   per_kg_mismatch,
+        })
+    return result
+
+
 def _day_from_label(s) -> Optional[int]:
     """Extract a day-of-month (1..31) from a per-date column header.
 

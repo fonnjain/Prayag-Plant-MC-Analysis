@@ -289,6 +289,145 @@
 
 {% endif %}{# end garden_summary #}
 
+<!-- PTMT: Moulds Summary segment data, integrity flags, machine overlap -->
+{% if report.id == "ptmt_summary" %}
+
+{% if ptmt_integrity_flags %}
+<div class="kpi-card p-4 mb-4 border-l-4" style="border-color:#dc2626;background:#fff5f5;">
+  <div class="flex items-center gap-1.5 mb-2">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#dc2626" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <span class="text-xs font-bold text-red-700">Source Data Flags — ₹/kg cannot be computed for these months</span>
+  </div>
+  {% for flag in ptmt_integrity_flags %}
+  <div class="text-xs text-red-700 flex gap-1.5 mb-1">
+    <span class="flex-shrink-0">⚠</span><span>{{ flag }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if ptmt_monthly %}
+{# Monthly segment breakdown from PTMT annual Moulds Summary SUMMARY tab #}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-1" style="color:var(--navy)">Monthly Segment Summary — Annual Moulds Summary</h3>
+  <p class="text-[11px] text-gray-400 mb-3">
+    Source: PTMT Annual Moulds Summary workbook, SUMMARY tab ·
+    Nett Output is authoritative for segment totals (≠ "Weight of Total Production" which is ~4,149 kg larger) ·
+    ₹/kg = Paid Wages ÷ Nett Output (sheet's stated value shown; see ⚠ where basis differs)
+  </p>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:760px">
+      <thead>
+        <tr style="background:var(--navy)">
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg whitespace-nowrap">Month</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Run Moulds</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Mould Hrs</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Nett Output (kg)</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Rejection %</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Labour</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Wages (₹)</th>
+          <th class="text-right text-white px-3 py-2 font-semibold rounded-r-lg whitespace-nowrap">₹/kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in ptmt_monthly %}
+          {% set is_tot = (m.month == "TOTAL") %}
+          {% set row_bg = "#f8faff" if is_tot else ("#f9fafb" if loop.index is even else "#fff") %}
+          {% set font_w = "font-bold" if is_tot else "" %}
+          {# ₹/kg: show ⚠ if wages blank, or flag basis mismatch #}
+          {% if m.paid_wages > 0 and m.nett_output_kg > 0 %}
+            {% set pkg_cell = "₹" ~ "{:.2f}".format(m.per_kg_cost) %}
+            {% set pkg_warn = m.per_kg_mismatch %}
+          {% elif m.nett_output_kg > 0 and m.paid_wages <= 0 %}
+            {% set pkg_cell = "⚠ no wages" %}
+            {% set pkg_warn = true %}
+          {% else %}
+            {% set pkg_cell = "—" %}
+            {% set pkg_warn = false %}
+          {% endif %}
+        <tr style="background:{{ row_bg }};border-bottom:1px solid #f3f4f6;">
+          <td class="px-3 py-2 {{ font_w }}" style="color:var(--navy)">
+            {{ m.month if is_tot else m.month }}
+          </td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">{{ "{:,}".format(m.run_moulds) if m.run_moulds else "—" }}</td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">{{ "{:,.0f}".format(m.mould_hours) }}</td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">{{ "{:,.0f}".format(m.nett_output_kg) }}</td>
+          <td class="px-3 py-2 text-right {{ font_w }}
+                     {% if m.reject_pct > 7 %}text-red-600{% elif m.reject_pct > 4 %}text-amber-600{% else %}text-green-600{% endif %}">
+            {{ "{:.2f}".format(m.reject_pct) }}%
+          </td>
+          <td class="px-3 py-2 text-right text-gray-600 {{ font_w }}">{{ m.labour_count if m.labour_count else "—" }}</td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">
+            {% if m.paid_wages > 0 %}₹{{ "{:,.0f}".format(m.paid_wages) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right {{ font_w }}
+                     {% if pkg_warn %}text-red-600{% else %}text-gray-700{% endif %}"
+              {% if m.per_kg_mismatch %}title="Sheet states ₹{{ '{:.2f}'.format(m.per_kg_sheet) }}; recomputed from wages÷output = ₹{{ '{:.2f}'.format(m.per_kg_computed) }} — period mismatch likely (Jul output present, Jul wages blank)"{% endif %}>
+            {{ pkg_cell }}{% if m.per_kg_mismatch %} ⚠{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if ptmt_per_kg_mismatch %}
+  <p class="text-[10px] text-amber-600 mt-2">
+    ⚠ ₹/kg basis mismatch: sheet's stated Per KG Labour Cost ≠ Paid Wages ÷ Nett Output for
+    {% for ym, v in ptmt_per_kg_mismatch.items() %}{{ ym }} (sheet ₹{{ "%.2f"|format(v.sheet) }} vs computed ₹{{ "%.2f"|format(v.computed) }}){% if not loop.last %}, {% endif %}{% endfor %}.
+    Likely cause: TOTAL row includes July output (172,639 kg) but July wages are blank,
+    so the sheet's stated cost uses a smaller denominator. Figures shown are from the source sheet.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if ptmt_machine_overlap %}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-1" style="color:var(--navy)">Machine Roster — App vs Annual Moulds Summary</h3>
+  <p class="text-[11px] text-gray-400 mb-3">
+    The app tracks 55 PTMT machines (injection, blow moulding, corrugator, grinding).
+    The annual Moulds Summary covers 48 mould/tonnage-tagged injection machines.
+    Blow Moulding, Corrugator, and Grinding machines are <strong>outside</strong> the annual's scope.
+    No parallel machine dimension has been built — review this table before proceeding.
+  </p>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:420px">
+      <thead>
+        <tr style="background:var(--navy)">
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg whitespace-nowrap">Machine</th>
+          <th class="text-left text-white px-3 py-2 font-semibold whitespace-nowrap">Group</th>
+          <th class="text-center text-white px-3 py-2 font-semibold rounded-r-lg whitespace-nowrap">In Annual Moulds?</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in ptmt_machine_overlap %}
+        <tr style="background:{% if loop.index is even %}#f9fafb{% else %}#fff{% endif %};border-bottom:1px solid #f3f4f6;">
+          <td class="px-3 py-2 font-mono text-gray-700">{{ row.machine }}</td>
+          <td class="px-3 py-2 text-gray-500">{{ row.group }}</td>
+          <td class="px-3 py-2 text-center">
+            {% if row.in_annual_moulds %}
+            <span class="text-green-600 font-semibold">✓ Yes</span>
+            {% else %}
+            <span class="text-gray-400">— No</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-[10px] text-gray-400 mt-2">
+    Overlap count: {{ ptmt_machine_overlap | selectattr("in_annual_moulds") | list | length }} of
+    {{ ptmt_machine_overlap | length }} app machines expected in annual Moulds Summary ·
+    Actual label matching requires reading the annual workbook machine-name column.
+  </p>
+</div>
+{% endif %}
+
+{% endif %}{# end ptmt_summary #}
+
 <!-- Validation warnings detail -->
 {% if sub_validation and sub_validation.warnings %}
 <div class="kpi-card p-4 mb-4">

@@ -2349,6 +2349,57 @@ def report_detail(report_id: str):
                     "computed for this month."
                 )
 
+    # ── PTMT: attach segment-level monthly summary from annual Moulds Summary ──
+    ptmt_monthly: list = []
+    ptmt_integrity_flags: list = []
+    ptmt_per_kg_mismatch: dict = {}
+    ptmt_machine_overlap: list = []
+    if report_id == "ptmt_summary":
+        from sheets import get_ptmt_monthly_summary
+        _pm_raw = get_ptmt_monthly_summary()
+        from_ym = (data.get("from_iso") or "")[:7]
+        to_ym   = (data.get("to_iso")   or "")[:7]
+        for _m in _pm_raw:
+            if _m["month"] == "TOTAL":
+                ptmt_monthly.append(_m)
+                continue
+            if from_ym and _m["month"] < from_ym:
+                continue
+            if to_ym and _m["month"] > to_ym:
+                continue
+            ptmt_monthly.append(_m)
+            # Integrity flag: output present but wages blank
+            _ml = _ym_to_label(_m["month"])
+            if _m["nett_output_kg"] > 0 and _m["paid_wages"] <= 0:
+                ptmt_integrity_flags.append(
+                    f"{_ml}: output recorded ({_m['nett_output_kg']:,.0f} kg) "
+                    "but no labour wages in source — ₹/kg cannot be computed "
+                    "for this month."
+                )
+            # ₹/kg basis mismatch: sheet value ≠ wages ÷ Nett Output by >2 %
+            if _m.get("per_kg_mismatch"):
+                ptmt_per_kg_mismatch[_m["month"]] = {
+                    "sheet": _m["per_kg_sheet"],
+                    "computed": _m["per_kg_computed"],
+                }
+        # Machine overlap: PTMT_GROUPS (55 machines) vs annual Moulds (48 moulds).
+        # The annual covers injection machines only; non-injection groups are outside.
+        import sources as _src2
+        _overlap_rows = []
+        for grp, codes in _src2.PTMT_GROUPS.items():
+            in_annual = (
+                "Injection" in grp
+            )  # only injection groups match annual mould-machine scope
+            for code in codes:
+                _overlap_rows.append({
+                    "machine": f"PTMT {code}",
+                    "group": grp,
+                    "in_annual_moulds": in_annual,
+                })
+        ptmt_machine_overlap = sorted(_overlap_rows, key=lambda r: (
+            0 if r["in_annual_moulds"] else 1, r["group"], r["machine"]
+        ))
+
     # Build table depending on report type
     headers, table_rows, chart_labels, chart_values, chart_label = _build_report_table(report_id, rows, data)
 
@@ -2382,6 +2433,10 @@ def report_detail(report_id: str):
         "narrative": narrative,
         "garden_monthly": garden_monthly,
         "garden_integrity_flags": garden_integrity_flags,
+        "ptmt_monthly": ptmt_monthly,
+        "ptmt_integrity_flags": ptmt_integrity_flags,
+        "ptmt_per_kg_mismatch": ptmt_per_kg_mismatch,
+        "ptmt_machine_overlap": ptmt_machine_overlap,
     })
     return render_template("report_detail.html", **ctx)
 
@@ -4442,7 +4497,7 @@ def report_compound_compilation():
 
 
 def _tank_location_report(family: str, plant: str, location: str, title: str):
-    """Shared renderer for VN/WB tank annual summary reports."""
+    """Shared renderer for VN/WB/KH tank annual summary reports."""
     period_arg = request.args.get("period", "current_fy")
     pinfo = parse_period({"period": period_arg})
     wanted = set(pinfo["months"])
@@ -4472,12 +4527,50 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
                 "location — there is no daily workbook to cross-check against.",
     }
 
+    # ── Location-specific integrity flags ──────────────────────────────────────
+    integrity_flags: list = []
+    if location == "KH":
+        # KH 26-27 annual covers JUN only (Apr/May/Jul are zero in source).
+        # The app also has KH DAILY workbooks for Apr+May+Jun — do NOT reconcile
+        # automatically; surface the coverage gap for manual cross-check.
+        months_with_data = [m for m in months if any(
+            v.get("prod", 0) > 0 or v.get("rej", 0) > 0
+            for v in items.get(i, {}).get(m, {}).values() if isinstance(v, (int, float))
+        )]
+        # Simplified: check which months have any item data
+        months_with_prod = set()
+        for item_data in items.values():
+            for m, mv in item_data.items():
+                if mv.get("prod", 0) > 0 or mv.get("rej", 0) > 0:
+                    months_with_prod.add(m)
+        if len(months_with_prod) < 3:
+            integrity_flags.append(
+                "KH annual source has production data for "
+                f"{', '.join(sorted(months_with_prod)) or 'no months'} only "
+                "(Apr/May/Jul appear as zero in the 26-27 annual workbook). "
+                "KH daily workbooks exist for Apr, May, and Jun — cross-check "
+                "with Preeti before treating annual KH totals as complete. "
+                "KH Jul daily file is not yet registered."
+            )
+    elif location == "WB":
+        # WB 26-27 internal inconsistency: the item-detail strip contains a
+        # Jul count of 2,198 pcs which differs from the WB TOTAL row (1,834 pcs /
+        # 1,432,000 Ltr).  The parser uses item-level Ltr values which are the
+        # authoritative figure for this report.
+        integrity_flags.append(
+            "WB 26-27 source note: the Jul item-detail strip shows 2,198 pcs "
+            "while the WB TOTAL row shows 1,834 pcs / 1,432,000 Ltr. "
+            "This report uses the item-level Ltr production figures (authoritative); "
+            "the pcs count discrepancy should be verified with the source team."
+        )
+
     return render_template("report_tank_location.html",
         plant=plant, location=location, title=title,
         items=dict(items), item_list=sorted(items.keys()),
         months=months, month_disps=[_month_disp(m) for m in months],
         overall=overall.to_dict(),
         validation=validation,
+        integrity_flags=integrity_flags,
         period_label=pinfo["label"], period=period_arg,
         summary_only=True,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
@@ -4496,7 +4589,7 @@ def report_tank_wb():
 
 @app.route("/reports/tank_kh")
 def report_tank_kh():
-    return redirect("/?plant=TANK")
+    return _tank_location_report("tank_kh", "TANK", "KH", "Tanks (Kanpur-Hirday)")
 
 
 @app.route("/reports/segment_labour")

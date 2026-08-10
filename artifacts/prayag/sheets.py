@@ -705,6 +705,41 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
             "reconcile": None, "location": location, "grain_note": "summary-only",
         }
 
+    # ── PTMT Moulds Summary — no Records emitted; cached for /reports/ptmt_summary ──
+    if kind == "ptmt_moulds_summary":
+        tabs = list_tabs(file_id, token)
+        # Accept any tab whose name contains "SUMMARY" (case-insensitive)
+        summary_tab = next(
+            (t for t in tabs if "SUMMARY" in t.strip().upper()),
+            None
+        )
+        if summary_tab is None:
+            return [], {
+                "family": src["family"], "title": src["title"], "file_id": file_id,
+                "tab": src.get("tab", "SUMMARY"), "detail_tabs": [], "grain": "monthly",
+                "months_available": [], "record_count": 0,
+                "segment": src["segment"], "plant": src["plant"],
+                "reconcile": None, "warning": "No SUMMARY tab found in PTMT Moulds Summary workbook.",
+            }
+        values = read_values(file_id, summary_tab, token)
+        rows = parsers.parse_ptmt_summary_tab(
+            values, plant=src["plant"], segment=src["segment"],
+            source_file=file_id, source_tab=summary_tab,
+        )
+        _ptmt_monthly_cache[file_id] = {
+            "rows": rows,
+            "segment": src["segment"],
+            "plant": src["plant"],
+            "title": src["title"],
+        }
+        months = sorted({r["month"] for r in rows if r["month"] != "TOTAL"})
+        return [], {
+            "family": src["family"], "title": src["title"], "file_id": file_id,
+            "tab": summary_tab, "detail_tabs": [], "grain": "monthly",
+            "months_available": months, "record_count": len(rows),
+            "segment": src["segment"], "plant": src["plant"], "reconcile": None,
+        }
+
     # ── Segment Labour — no Records emitted; rows cached for dedicated route ──
     if kind == "seg_labour":
         tabs = list_tabs(file_id, token)
@@ -801,6 +836,22 @@ def get_garden_monthly_summary() -> List[dict]:
     for src in ANNUAL_SOURCES:
         if src.get("family") == "garden":
             cached = _garden_monthly_cache.get(src["file_id"])
+            if cached:
+                return cached.get("rows", [])
+    return []
+
+
+def get_ptmt_monthly_summary() -> List[dict]:
+    """Return cached SUMMARY-tab rows for the PTMT annual Moulds Summary workbook.
+
+    Populated as a side-effect of the normal ``_load_live_monthly`` call
+    (ptmt_moulds_summary is in ``ANNUAL_SOURCES``).  Falls back to [] when
+    not yet loaded.
+    """
+    from sources import ANNUAL_SOURCES
+    for src in ANNUAL_SOURCES:
+        if src.get("family") == "ptmt_moulds_summary":
+            cached = _ptmt_monthly_cache.get(src["file_id"])
             if cached:
                 return cached.get("rows", [])
     return []
@@ -998,8 +1049,9 @@ _seg_labour_cache: dict = {}     # file_id -> {rows, title, fy, tabs}
 
 # Report-only annual sources (REPORT_SOURCES) loaded on-demand by /reports/*.
 # Kept OFF the main dashboard critical path so the cold "/" load stays fast.
-_report_cache: dict = {}         # family -> (ts, [Record, ...])
-_garden_monthly_cache: dict = {} # file_id -> {rows, segment, plant, title}
+_report_cache: dict = {}          # family -> (ts, [Record, ...])
+_garden_monthly_cache: dict = {}  # file_id -> {rows, segment, plant, title}
+_ptmt_monthly_cache: dict = {}    # file_id -> {rows, segment, plant, title}
 _REPORT_TTL = 900.0
 _report_lock = threading.Lock()
 
