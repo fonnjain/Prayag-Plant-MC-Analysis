@@ -1166,6 +1166,54 @@ def _make_both_results():
     return pipe_result, fitting_result, pipe_schedule, fitting_schedule
 
 
+def test_route_consolidated_no_plan_redirects():
+    """GET /machine-planning/report/consolidated redirects to upload when no plan
+    has been run (both _mp2_result_from_session and _mp3_fitting_result_from_session
+    return None). Must be a 302 to /machine-planning/upload, not a 500."""
+    import app as appmod
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=None), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=None):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/consolidated")
+
+    assert resp.status_code == 302, (
+        f"Expected 302 redirect when no plan present, got {resp.status_code}"
+    )
+    location = resp.headers.get("Location", "")
+    assert "machine-planning/upload" in location, (
+        f"Expected redirect to /machine-planning/upload, got Location={location!r}"
+    )
+
+
+def test_route_zip_no_plan_redirects():
+    """GET /machine-planning/report/zip redirects to upload when no plan has been
+    run (both _mp2_result_from_session and _mp3_fitting_result_from_session return
+    None). Must be a 302 to /machine-planning/upload, not a 500."""
+    import app as appmod
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=None), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=None):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 302, (
+        f"Expected 302 redirect when no plan present, got {resp.status_code}"
+    )
+    location = resp.headers.get("Location", "")
+    assert "machine-planning/upload" in location, (
+        f"Expected redirect to /machine-planning/upload, got Location={location!r}"
+    )
+
+
 def test_route_consolidated_with_both_schedules_returns_xlsx():
     """GET /machine-planning/report/consolidated returns a valid .xlsx with 7 tabs
     and the fitting machine row in tab '2. Machine Load' when both pipe and fitting
