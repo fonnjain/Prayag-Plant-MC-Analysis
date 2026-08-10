@@ -759,6 +759,23 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
             "ok": diff <= 0.02,
         }
 
+    # Garden Pipe: also parse the SUMMARY tab for segment-level monthly data
+    # (rejection %, labour) which is not available per-machine.  Cached so the
+    # /reports/garden_summary route can retrieve it without re-reading Sheets.
+    if src.get("family") == "garden":
+        _summary_vals = matrices.get(src["tab"], [])
+        _garden_rows = parsers.parse_garden_summary_tab(
+            _summary_vals,
+            plant=src["plant"], segment=src["segment"],
+            source_file=file_id, source_tab=src["tab"],
+        )
+        _garden_monthly_cache[file_id] = {
+            "rows": _garden_rows,
+            "segment": src["segment"],
+            "plant": src["plant"],
+            "title": src["title"],
+        }
+
     months = sorted({r.period for r in records})
     report = {
         "family": src["family"], "title": src["title"], "file_id": file_id,
@@ -772,6 +789,21 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
     if mc_notes:
         report["notes"] = list(dict.fromkeys(mc_notes))
     return records, report
+
+
+def get_garden_monthly_summary() -> List[dict]:
+    """Return cached SUMMARY-tab rows for the Garden Pipe annual workbook.
+
+    Populated as a side-effect of the normal ``_load_live_monthly`` call
+    (Garden is in ``ANNUAL_SOURCES``).  Falls back to [] when not yet loaded.
+    """
+    from sources import ANNUAL_SOURCES
+    for src in ANNUAL_SOURCES:
+        if src.get("family") == "garden":
+            cached = _garden_monthly_cache.get(src["file_id"])
+            if cached:
+                return cached.get("rows", [])
+    return []
 
 def _load_live_monthly(token: str) -> dict:
   all_records: List[Record] = []
@@ -967,6 +999,7 @@ _seg_labour_cache: dict = {}     # file_id -> {rows, title, fy, tabs}
 # Report-only annual sources (REPORT_SOURCES) loaded on-demand by /reports/*.
 # Kept OFF the main dashboard critical path so the cold "/" load stays fast.
 _report_cache: dict = {}         # family -> (ts, [Record, ...])
+_garden_monthly_cache: dict = {} # file_id -> {rows, segment, plant, title}
 _REPORT_TTL = 900.0
 _report_lock = threading.Lock()
 

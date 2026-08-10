@@ -1,0 +1,74 @@
+# PTMT Segment — Verification Prompt (read-only)
+
+**Purpose:** Verify how the app ingests/represents the **PTMT** segment against the primary source, and flag anything wrong or unhandled. This is a *diagnostic* — report observed values against the targets below; do **not** fix in this pass.
+
+**Governing rule:** Recompute from the source workbook. Parse by **header text**, never fixed position. Map months **by label** (they run latest-first). Assert headers were found; fail loudly; flag "awaiting source" rather than fabricate.
+
+---
+
+## Source of truth
+
+- **File:** `ANNUALY PTMT Moulds Summary 26-27`
+- **Drive ID:** `1kc6AOZJR8b29TBIMprNMxQ85VbAk2BgBU0Iz5u5Se2M`
+- **Owner:** preeti.chauhan@prayagindia.com · modified 2026-08-04
+- **FY:** 2026-27 · **Months with data:** APR, MAY, JUN, JUL 2026 (Aug onward zero)
+
+---
+
+## What makes PTMT different (the app must handle these, or fail loudly)
+
+PTMT is **injection moulding** — structurally unlike the Plumbing/Garden pipe segments. A parser built on pipe assumptions will silently misread it.
+
+1. **48 mould machines** (`M/C-1 … M/C-48`), each tonnage-tagged (80 / 110 / 125 / 150 / 200 / 250 / 350 / 450 / 130-TON) — not 9 pipe machines. Machine labels also carry a mould-code (e.g. `80-1`, `N-200D`).
+2. **Moulding-only metrics** with no pipe equivalent: *Nett Output, Rejection, Lumps (Gulla), Runner Produce, 100% Wastage, Total Grinder Working, Runner %age, Avg Run Hour per Mould*.
+3. **Two different output figures — do not confuse them:**
+   - **Nett Output (KG) = 537,109** ← authoritative; use this for rejection % and cost/kg.
+   - **Weight of Total Production = 541,258** ← a different (larger) basis; NOT the output figure.
+4. **Date format is `1-Aug-2026`** (day-month-year), unlike Plumbing's `Aug 1, 2026`. A shared date parser must handle **both**, or raise a named error — never yield empty rows.
+5. **Months run latest-first** in the summary (MAR'27 at top → APR'26 → TOTAL). Map by label, not row order.
+6. **July labour is blank** despite full July output (172,639 kg) — the same orphaned-labour pattern seen in Plumbing/Garden. Flag it; do not divide into a misleading ₹/kg.
+7. **~393 moulds** with per-mould **cavity / cycle-time / pc-weight** detail (the routing data if PTMT ever gets a planner). Materials span **PBT / PP / PC / PVC / ABS / LD / DALRINE / HD GREEN / LDPE / EVA / TPR / NYLONE**.
+
+---
+
+## Verified acceptance targets (segment monthly rollup — direct source cells)
+
+| Month | Run Moulds | Mould Hrs | Nett Output (kg) | Rejection (kg) | Rej % | Labour | Paid Wages (₹) |
+|-------|-----------:|----------:|-----------------:|---------------:|------:|-------:|---------------:|
+| APR'26 | 216 | 16,092 | 99,262 | 5,917 | 5.96% | 61 | 727,748 |
+| MAY'26 | 280 | 15,752 | 104,729 | 7,262 | 6.93% | 49 | 632,458 |
+| JUN'26 | 311 | 20,921 | 160,478 | 9,297 | 5.79% | 52 | 649,742 |
+| JUL'26 | 298 | 22,318 | 172,639 | 10,476 | 6.07% | **blank** | **blank** |
+| **TOTAL** | **1,105** | **75,083** | **537,109** | **32,952** | **6.14%** | **162** | **2,009,948** |
+
+Additional verified segment figures:
+- **Production (pcs):** 24,487,601 total (JUL 7,408,030 · JUN 7,018,009 · MAY 4,849,870 · APR 5,211,693).
+- **Runner Produce:** 72,839 kg total · **Lumps:** 10,352 kg · **100% Wastage:** 1.93% · **Grinder:** 105,791.
+- **Per-machine block TOTAL** (separate 48-machine table): Actual Hours 71,650 · Output 454,867 kg · Rejection 32,091 kg · M/C Utilisation 74.64%.
+  - ⚠️ **Note the two bases differ:** segment Nett Output (537,109) vs per-machine Output (454,867). Confirm which basis the app uses where, and that it doesn't mix them.
+- **Material split (kg):** PBT 291,779 · PP 136,227 · PVC RESIN 33,936 · LDPE 24,699 · HD GREEN 19,407 · ABS 11,448 · DALRINE 7,954 · PC 6,030 · (others small).
+
+### ₹/kg — source-stated, verify against sheet value (flag the basis)
+Source-stated **Per KG Labour Cost**: APR **6.92** · MAY **5.65** · JUN **3.83** · TOTAL **3.53**.
+- These are the sheet's own computed values — reproduce them, but **flag the denominator basis**: total ₹/kg 3.53 does not cleanly equal `total wages ÷ Nett Output` (2,009,948 ÷ 537,109 = 3.74), which suggests a period mismatch (July output counted, July wages blank) or a different output basis — the **same class of bug** found in Plumbing costing. Report which output figure the sheet/app divides by; do not silently accept 3.53 without the basis.
+
+---
+
+## Verification checks to run and report
+
+1. **Does the app have a PTMT segment at all?** If yes, on which pages (Performance / Costing / Planning)? If not, state that PTMT is not yet ingested.
+2. For each present figure, report the app value beside the target above and mark match / differ.
+3. **Rejection:** confirm the app reads Rejection by header and reproduces 6.14% total (not 0%). If 0%, it's the silent-column failure again.
+4. **Output basis:** confirm the app uses **Nett Output 537,109**, not Weight of Total Production 541,258 and not the per-machine 454,867, for segment output and rejection %.
+5. **Machine coverage:** confirm all **48** mould machines are represented (not truncated to 9); idle machines (e.g. `130-TON` = 0) render as 0, not dropped.
+6. **Date parser:** confirm `1-Aug-2026` format parses; an unrecognised format raises a named error, never empty rows.
+7. **July labour:** confirm the app flags July as output-without-labour rather than showing ₹0 or a misleading ₹/kg.
+8. **₹/kg basis:** report the denominator the app uses; flag if it mixes periods (Apr–Jun wages over Apr–Jul output).
+
+## Report back
+- A row-by-row table: metric · target · app value · match/differ.
+- Whether PTMT exists in the app and where.
+- Any silent-zero (rejection, labour) or wrong-basis (output, ₹/kg) findings.
+- Confirmation the 48-machine layout and `1-Aug-2026` date format are handled or explicitly not-yet-handled.
+
+*No changes in this pass — verification only.*

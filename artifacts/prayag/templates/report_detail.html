@@ -204,6 +204,91 @@
 </div>
 {% endif %}
 
+<!-- Garden Pipe: data-integrity flags, monthly segment summary, segment labour -->
+{% if report.id == "garden_summary" %}
+
+{% if garden_integrity_flags %}
+<div class="kpi-card p-4 mb-4 border-l-4" style="border-color:#dc2626;background:#fff5f5;">
+  <div class="flex items-center gap-1.5 mb-2">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#dc2626" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <span class="text-xs font-bold text-red-700">Source Data Misalignment — do not fabricate per-kg costs for these months</span>
+  </div>
+  {% for flag in garden_integrity_flags %}
+  <div class="text-xs text-red-700 flex gap-1.5 mb-1">
+    <span class="flex-shrink-0">⚠</span><span>{{ flag }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if garden_monthly %}
+{# Monthly segment breakdown from SUMMARY tab (authoritative for rejection & labour) #}
+<div class="kpi-card p-4 mb-4">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--navy)">Monthly Segment Summary (from SUMMARY tab)</h3>
+  <div class="table-scroll">
+    <table class="w-full text-xs border-collapse" style="min-width:540px">
+      <thead>
+        <tr style="background:var(--navy)">
+          <th class="text-left text-white px-3 py-2 font-semibold rounded-l-lg whitespace-nowrap">Month</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Run Hrs</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Output (kg)</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Rejection %</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Labour</th>
+          <th class="text-right text-white px-3 py-2 font-semibold whitespace-nowrap">Wages (₹)</th>
+          <th class="text-right text-white px-3 py-2 font-semibold rounded-r-lg whitespace-nowrap">₹/kg</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(is_total=false) %}
+        {% for m in garden_monthly %}
+          {% set is_tot = (m.month == "TOTAL") %}
+          {% set row_bg = "#f8faff" if is_tot else ("#f9fafb" if loop.index is even else "#fff") %}
+          {% set font_w = "font-bold" if is_tot else "" %}
+          {# Safe per-kg: only show when wages > 0 AND output > 0 #}
+          {% if m.wages > 0 and m.output_kg > 0 %}
+            {% set pkg = m.per_kg_cost if m.per_kg_cost > 0 else (m.wages / m.output_kg) %}
+            {% set pkg_cell = "₹" ~ "{:.2f}".format(pkg) %}
+          {% elif m.output_kg <= 0 and m.wages > 0 %}
+            {% set pkg_cell = "⚠ no output" %}
+          {% elif m.output_kg > 0 and m.wages <= 0 %}
+            {% set pkg_cell = "⚠ no wages" %}
+          {% else %}
+            {% set pkg_cell = "—" %}
+          {% endif %}
+        <tr style="background:{{ row_bg }};border-bottom:1px solid #f3f4f6;">
+          <td class="px-3 py-2 {{ font_w }}" style="color:var(--navy)">
+            {{ m.month if is_tot else m.month }}
+          </td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">{{ "{:,.0f}".format(m.run_hours) }}</td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">{{ "{:,.0f}".format(m.output_kg) }}</td>
+          <td class="px-3 py-2 text-right {{ font_w }}
+                     {% if m.reject_pct > 5 %}text-red-600{% elif m.reject_pct > 2 %}text-amber-600{% else %}text-green-600{% endif %}">
+            {{ "{:.2f}".format(m.reject_pct) }}%
+          </td>
+          <td class="px-3 py-2 text-right text-gray-600 {{ font_w }}">{{ m.labour_count if m.labour_count else "—" }}</td>
+          <td class="px-3 py-2 text-right text-gray-700 {{ font_w }}">
+            {% if m.wages > 0 %}₹{{ "{:,.0f}".format(m.wages) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right {{ font_w }}
+                     {% if '⚠' in pkg_cell %}text-red-600{% else %}text-gray-700{% endif %}">
+            {{ pkg_cell }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-[10px] text-gray-400 mt-2">
+    Source: SUMMARY tab · Labour cost/kg = paid wages ÷ actual output ·
+    ⚠ flags = source data misalignment (see banner above)
+  </p>
+</div>
+{% endif %}
+
+{% endif %}{# end garden_summary #}
+
 <!-- Validation warnings detail -->
 {% if sub_validation and sub_validation.warnings %}
 <div class="kpi-card p-4 mb-4">

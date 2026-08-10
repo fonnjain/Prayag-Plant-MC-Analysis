@@ -107,6 +107,16 @@ def _handle_sheet_error(err):
     return render_template("sheet_error.html", message=str(err)), 200
 
 
+def _ym_to_label(ym: str) -> str:
+    """'2026-05' → \"May '26\"; used in Garden Pipe integrity flags."""
+    try:
+        import datetime as _dt
+        y, m = int(ym[:4]), int(ym[5:7])
+        return _dt.date(y, m, 1).strftime("%b '%y")
+    except Exception:
+        return ym
+
+
 def _safe_json(obj) -> str:
     """JSON for safe embedding inside a <script> tag.
 
@@ -2301,6 +2311,44 @@ def report_detail(report_id: str):
     if rpt["segments"]:
         rows = _filter_report_segments(rows, rpt["segments"])
 
+    # ── Garden Pipe: de-duplicate sources and attach monthly summary ──────────
+    garden_monthly: list = []
+    garden_integrity_flags: list = []
+    if report_id == "garden_summary":
+        # Filter to annual-workbook (monthly grain) records only so daily
+        # workbook rows (grain="daily") don't double-count utilisation or
+        # appear as separate machine-name variants in the per-machine table.
+        rows = [r for r in rows if r.grain == "monthly"]
+        from sheets import get_garden_monthly_summary
+        _gm_raw = get_garden_monthly_summary()
+        # Filter by the same period window as the rest of the request
+        from_ym = (data.get("from_iso") or "")[:7]   # "2026-04"
+        to_ym   = (data.get("to_iso")   or "")[:7]
+        for _m in _gm_raw:
+            if _m["month"] == "TOTAL":
+                garden_monthly.append(_m)
+                continue
+            if from_ym and _m["month"] < from_ym:
+                continue
+            if to_ym and _m["month"] > to_ym:
+                continue
+            garden_monthly.append(_m)
+            # ── Data-integrity flags ─────────────────────────────────────────
+            _mon_label = _ym_to_label(_m["month"])
+            if _m["wages"] > 0 and _m["output_kg"] <= 0:
+                garden_integrity_flags.append(
+                    f"{_mon_label}: wages recorded (₹{_m['wages']:,.0f}) "
+                    "but output is zero — labour and production are "
+                    "misaligned in the source workbook. Do not compute a "
+                    "per-kg labour cost for this month."
+                )
+            elif _m["output_kg"] > 0 and _m["wages"] <= 0 and _m["labour_count"] <= 0:
+                garden_integrity_flags.append(
+                    f"{_mon_label}: output recorded ({_m['output_kg']:,.0f} kg) "
+                    "but no labour wages in source — labour cost/kg cannot be "
+                    "computed for this month."
+                )
+
     # Build table depending on report type
     headers, table_rows, chart_labels, chart_values, chart_label = _build_report_table(report_id, rows, data)
 
@@ -2332,6 +2380,8 @@ def report_detail(report_id: str):
         "sub_validation": sub_validation,
         "recon": _report_reconciliation(report_id, rows, data),
         "narrative": narrative,
+        "garden_monthly": garden_monthly,
+        "garden_integrity_flags": garden_integrity_flags,
     })
     return render_template("report_detail.html", **ctx)
 
@@ -2424,16 +2474,38 @@ def _build_report_table(report_id: str, rows, data: dict):
 
     if report_id in _EXTRUSION_REPORT_IDS:
         by_machine = rollup_by_machine(rows)
+        is_garden = (report_id == "garden_summary")
         headers = ["Machine", "Run Hrs", "Output (kg)", "Reject %", "Utilisation %", "Labour Cost/kg"]
         table_rows = []
         chart_labels, chart_values = [], []
-        for mc, m in sorted(by_machine.items()):
+
+        # Garden Pipe: always render all 4 machines — idle months (0 output)
+        # must appear as a zero row, not be omitted.  Machines are keyed by the
+        # canonical "GARDEN M/C-N" name that parse_mc_detail emits.
+        mc_keys = sorted(k for k in by_machine if k)
+        if is_garden:
+            canonical = {f"GARDEN M/C-{i}" for i in range(1, 5)}
+            mc_keys = sorted(set(mc_keys) | canonical)
+
+        for mc in mc_keys:
             if not mc:
                 continue
-            lc_per_kg = round(m.labour_cost / m.total_count, 2) if m.total_count > 0 else 0
+            m = by_machine.get(mc)
+            if m is None:
+                # Idle machine — no records in the selected period
+                table_rows.append([mc, "0.0", "0", "—", "—",
+                                   "not captured at machine level" if is_garden else "₹0.00"])
+                chart_labels.append(mc)
+                chart_values.append(0)
+                continue
+            if is_garden:
+                lc_cell = "not captured at machine level"
+            else:
+                lc_per_kg = round(m.labour_cost / m.total_count, 2) if m.total_count > 0 else 0
+                lc_cell = f"₹{lc_per_kg:.2f}"
             table_rows.append([mc, f"{m.run_time/60:.1f}", f"{m.total_count:,.0f}",
                                 f"{m.rejection_pct_display:.2f}%", f"{m.utilisation_pct:.1f}%",
-                                f"₹{lc_per_kg:.2f}"])
+                                lc_cell])
             chart_labels.append(mc)
             chart_values.append(round(m.total_count, 0))
         return headers, table_rows, chart_labels, chart_values, "Output (kg)"

@@ -89,15 +89,26 @@ def parse_mc_detail(
     appear once then blank — we carry them forward across the month rows.
     """
     # Locate header row (contains both ACTUAL and HOUR).
+    # Prefer a row that ALSO mentions REJECT — Garden Pipe per-machine blocks
+    # sometimes have an earlier row that matches ACTUAL+HOUR (e.g. a sub-total
+    # or merged-cell title) but does not carry the rejection columns.  Taking
+    # the first match blindly causes rej_c=-1 and silent 0% rejection.
     header_idx = None
     header: List[str] = []
-    for i, row in enumerate(values[:6]):
+    _fb_idx: Optional[int] = None
+    _fb_row: List = []
+    for i, row in enumerate(values[:8]):
         joined = " ".join(str(c).upper() for c in row)
         if "ACTUAL" in joined and "HOUR" in joined:
-            header_idx, header = i, row
-            break
+            if _fb_idx is None:
+                _fb_idx, _fb_row = i, list(row)
+            if "REJECT" in joined:          # richer header — prefer this one
+                header_idx, header = i, list(row)
+                break
     if header_idx is None:
-        return []
+        if _fb_idx is None:
+            return []
+        header_idx, header = _fb_idx, _fb_row
 
     U = [str(c).strip().upper() for c in header]
 
@@ -202,6 +213,122 @@ def parse_mc_detail(
             source_tab=source_tab,
         ))
     return recs
+
+
+def parse_garden_summary_tab(
+    values: List[list],
+    *,
+    plant: str,
+    segment: str,
+    source_file: str,
+    source_tab: str,
+) -> List[dict]:
+    """Parse the SUMMARY tab of a Garden Pipe (or compatible) annual workbook.
+
+    Returns one dict per month (YYYY-MM) plus one for the TOTAL row::
+
+        {month, run_hours, output_kg, reject_kg, reject_pct,
+         labour_count, paid_hours, wages, per_hour_cost, per_kg_cost}
+
+    Months run LATEST-FIRST in the sheet (MAR'27 → APR'26 → TOTAL).
+    Rows are read strictly by label; column positions are never assumed.
+
+    SUMMARY tab header (source-verified)::
+        MONTHS | M/C Run Hours | Actual Output (KG) | Rejection (KG) |
+        Rejection %age | Total Output with Rejection (KG) | Labour |
+        Actual Paid Hours | Paid Wages | Paid Hours Devoted by Per Person |
+        Per Hour Cost on Paid Hours | Per KG Labour Cost
+    """
+    # ── Find header row ───────────────────────────────────────────────────────
+    header_idx: Optional[int] = None
+    header: List = []
+    for i, row in enumerate(values[:10]):
+        joined = " ".join(str(c).upper() for c in row)
+        if "OUTPUT" in joined and ("MONTH" in joined or "RUN" in joined or "HOUR" in joined):
+            header_idx, header = i, list(row)
+            break
+    if header_idx is None:
+        return []
+
+    U = [str(c).strip().upper() for c in header]
+
+    def _find(pred) -> int:
+        for idx, h in enumerate(U):
+            if pred(h):
+                return idx
+        return -1
+
+    month_c      = _find(lambda h: "MONTH" in h)
+    if month_c < 0:
+        month_c = 0  # default: first column
+
+    run_hrs_c    = _find(lambda h: "RUN" in h and "HOUR" in h)
+    # "Actual Output (KG)" — exclude rows with TOTAL, IDEAL, or REJECT in name
+    output_c     = _find(lambda h: "OUTPUT" in h and "KG" in h
+                         and "TOTAL" not in h and "IDEAL" not in h
+                         and "REJECT" not in h)
+    reject_kg_c  = _find(lambda h: "REJECT" in h and "KG" in h
+                         and "%" not in h and "AGE" not in h
+                         and "TOTAL" not in h)
+    reject_pct_c = _find(lambda h: "REJECT" in h and ("%" in h or "AGE" in h))
+    # "Labour" = headcount column; exclude cost/wage/per/paid variants
+    labour_c     = _find(lambda h: h == "LABOUR" or (
+                         "LABOUR" in h and "COST" not in h and "HOUR" not in h
+                         and "WAGE" not in h and "PER" not in h and "PAID" not in h))
+    # "Actual Paid Hours" — exclude "Paid Hours Devoted by Per Person"
+    paid_hrs_c   = _find(lambda h: "PAID" in h and "HOUR" in h and "PER" not in h)
+    wages_c      = _find(lambda h: "PAID WAGE" in h or "WAGES" in h
+                         or ("WAGE" in h and "PER" not in h))
+    per_hour_c   = _find(lambda h: "PER HOUR" in h and "COST" in h)
+    per_kg_c     = _find(lambda h: "PER KG" in h and ("COST" in h or "LABOUR" in h))
+
+    result: List[dict] = []
+    for row in values[header_idx + 1:]:
+        def g(c: int):
+            return row[c] if 0 <= c < len(row) else ""
+
+        raw = str(g(month_c)).strip()
+        ym = parse_month_label(raw)
+        is_total = (raw.upper() == "TOTAL")
+        if not ym and not is_total:
+            continue
+
+        run_hrs       = num(g(run_hrs_c))    if run_hrs_c >= 0    else 0.0
+        output_kg     = num(g(output_c))     if output_c >= 0     else 0.0
+        reject_kg     = num(g(reject_kg_c))  if reject_kg_c >= 0  else 0.0
+        # Sheet stores rejection % as a percentage value (e.g. "3.06%" → 3.06
+        # after num() strips the % sign).  Values in the 0–100 range are used
+        # directly; recompute from reject_kg/output when the cell is blank.
+        reject_pct_sheet = num(g(reject_pct_c)) if reject_pct_c >= 0 else 0.0
+        if 0 < reject_pct_sheet <= 100:
+            reject_pct = round(reject_pct_sheet, 2)
+        elif (output_kg + reject_kg) > 0:
+            reject_pct = round(reject_kg / (output_kg + reject_kg) * 100, 2)
+        else:
+            reject_pct = 0.0
+
+        labour_count  = int(num(g(labour_c)))  if labour_c >= 0   else 0
+        paid_hours    = num(g(paid_hrs_c))     if paid_hrs_c >= 0 else 0.0
+        wages         = num(g(wages_c))        if wages_c >= 0    else 0.0
+        per_hour_cost = num(g(per_hour_c))     if per_hour_c >= 0 else 0.0
+        per_kg_cost   = num(g(per_kg_c))       if per_kg_c >= 0   else 0.0
+        # Derive per_kg_cost if blank but computable
+        if per_kg_cost == 0.0 and wages > 0 and output_kg > 0:
+            per_kg_cost = round(wages / output_kg, 2)
+
+        result.append({
+            "month":        ym if ym else "TOTAL",
+            "run_hours":    run_hrs,
+            "output_kg":    output_kg,
+            "reject_kg":    reject_kg,
+            "reject_pct":   reject_pct,
+            "labour_count": labour_count,
+            "paid_hours":   paid_hours,
+            "wages":        wages,
+            "per_hour_cost": per_hour_cost,
+            "per_kg_cost":  per_kg_cost,
+        })
+    return result
 
 
 def _day_from_label(s) -> Optional[int]:
