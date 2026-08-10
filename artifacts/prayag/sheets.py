@@ -38,11 +38,14 @@ import store as _store
 # ---------------------------------------------------------------------------
 _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
-_DATA_TTL = 900.0               # seconds (15 min) on-demand fallback TTL. The
+_DATA_TTL = 1800.0              # seconds (30 min) on-demand fallback TTL. The
                                 # always-on background refresher (bottom of file)
                                 # refills well inside this window, so warm-cache
                                 # hits are the norm; this TTL only governs the
                                 # fallback when no refresher runs (e.g. autoscale).
+                                # 30 min chosen so secondary data (historical months,
+                                # yield, mixer, etc.) stays hot for 3 refresh cycles
+                                # after a first-visit fetch.
 _REFRESH_INTERVAL = 600.0       # seconds (10 min) — always-on background sync
                                 # cadence. Effective only on an always-running
                                 # (Reserved VM) deployment; idle/harmless on a
@@ -2657,6 +2660,19 @@ def _refresh_once() -> None:
       get_daily_records(recent)
   except Exception as exc:                       # noqa: BLE001 — best-effort leg
       errors.append(f"daily: {exc}")
+  # Warm compound data and pipe moulds — these are common secondary pages that
+  # are NOT covered by the monthly/daily legs above, so without explicit warming
+  # the first visit after TTL expiry always triggers a cold Sheets fetch.
+  try:
+      load_compound_data(recent)
+  except Exception as exc:                       # noqa: BLE001 — best-effort leg
+      errors.append(f"compound: {exc}")
+  try:
+      import datetime as _dt
+      _cur_ym = _dt.date.today().strftime("%Y-%m")
+      load_pipe_moulds(_cur_ym)
+  except Exception as exc:                       # noqa: BLE001 — best-effort leg
+      errors.append(f"pipe_moulds: {exc}")
   _sync_state["last_attempt_ts"] = time.time()
   _sync_state["last_error"] = "; ".join(errors) if errors else None
   if errors:
@@ -2728,7 +2744,7 @@ _yield_cache        : dict = {}
 _mixer_cache        : dict = {}
 _toolroom_cache     : dict = {}
 _wastage_cache      : dict = {}
-_PLANNING_TTL = 900.0
+_PLANNING_TTL = 1800.0
 _planning_lock      = threading.Lock()
 _ptmt_pc_lock       = threading.Lock()
 _ptmt_ms_lock       = threading.Lock()
