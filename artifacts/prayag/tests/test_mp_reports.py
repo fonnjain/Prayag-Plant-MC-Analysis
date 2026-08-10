@@ -1210,6 +1210,57 @@ def test_route_consolidated_with_both_schedules_returns_xlsx():
     assert found_header, "Expected 'FITTING MACHINES' section header in tab '2. Machine Load'"
 
 
+def test_route_zip_partial_success_when_report_11_raises():
+    """ZIP route returns 200 with a valid ZIP even when report_11_bytes raises.
+
+    The consolidated plan and report-12 (fittings) must still be present.
+    The failing Report-11 entry must be absent, and the response must NOT be a 500.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11_bytes", side_effect=RuntimeError("simulated report-11 failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when report_11_bytes raises; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Consolidated plan must be present (built successfully)
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain a Consolidated_Plan file even when report-11 fails; got: {names}"
+    )
+
+    # Report-12 (fittings) must be present (built successfully)
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain a Report-12/Fitting file even when report-11 fails; got: {names}"
+    )
+
+    # The failing Report-11 must NOT be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert not report11_entries, (
+        f"Report-11 should be absent when report_11_bytes raises; got: {names}"
+    )
+
+
 def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
     """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
     sheet and the fitting-machine report (report-12) when both plans are present."""
