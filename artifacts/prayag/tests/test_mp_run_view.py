@@ -838,6 +838,139 @@ class TestFittingWeeklyFillTotals:
         assert cells[7] == "—", f"MC-F2 W4 sched: expected '—', got '{cells[7]}'"
         assert cells[8] == "—", f"MC-F2 W4 pct:   expected '—', got '{cells[8]}'"
 
+class TestFittingOnlyRunReports:
+    """Report download endpoints must not return 500 for a fitting-only run.
+
+    The real report generators (consolidated_plan_bytes, revised_production_plan_bytes,
+    machine_plan_comparison_bytes, capacity_feasible_plan_bytes, report_12_bytes) are
+    exercised against a None pipe EngineResult + a real FittingEngineResult so that any
+    crash inside the generators is caught by the test.
+
+    Only external callers that need live Sheets / DB access are patched:
+      - _mp2_result_from_run        → None      (no pipe plan)
+      - _mp3_fitting_result_from_run → real fitting fixture
+      - _mp_schedule_from_run       → None      (no pipe schedule)
+      - _mp_fitting_schedule_from_run → real fitting schedule fixture
+      - mp_engine.run_engine        → None      (comparison handler re-runs engine)
+      - mp_engine.run_fitting_engine → real fitting fixture
+
+    Expected outcomes:
+      - Pipe report IDs (11 / 11A-D) → 404  (no uploaded_demand)
+      - 12, consolidated, revised, comparison, capacity_feasible → 200 with valid XLSX
+      - zip → 200 with a valid ZIP containing at least Report-12 + Consolidated
+    """
+
+    # -- Patch context --------------------------------------------------------
+
+    def _patches(self):
+        """Return (fitting_res, fit_sched, context-manager-patches)."""
+        fitting_res = _fitting_engine_result()
+        fit_sched   = _fitting_schedule_result()
+        return fitting_res, fit_sched, [
+            patch("mp_model.get_plan_run_by_id",        MagicMock(return_value=_FITTING_ONLY_RUN)),
+            patch("app._mp2_result_from_run",           MagicMock(return_value=None)),
+            patch("app._mp3_fitting_result_from_run",   MagicMock(return_value=fitting_res)),
+            patch("app._mp_schedule_from_run",          MagicMock(return_value=None)),
+            patch("app._mp_fitting_schedule_from_run",  MagicMock(return_value=fit_sched)),
+            # comparison handler independently calls run_engine / run_fitting_engine
+            patch("mp_engine.run_engine",               MagicMock(return_value=None)),
+            patch("mp_engine.run_fitting_engine",       MagicMock(return_value=fitting_res)),
+        ]
+
+    def _get_report(self, client, report_id: str):
+        """Hit /machine-planning/runs/12/report/<report_id> with fitting-only patches.
+
+        The real report builders run; only external data/service calls are mocked.
+        """
+        _, _, patches = self._patches()
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return client.get(f"/machine-planning/runs/12/report/{report_id}")
+
+    # -- Helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _assert_xlsx(r, label: str):
+        """Assert 200, XLSX content-type, and valid ZIP/XLSX magic bytes."""
+        assert r.status_code == 200, (
+            f"{label}: expected 200, got {r.status_code}: "
+            f"{r.data[:300].decode(errors='replace')}"
+        )
+        assert "spreadsheetml" in r.content_type, (
+            f"{label}: expected XLSX content-type, got {r.content_type}"
+        )
+        # XLSX is a ZIP — must start with the PK local-file-header signature
+        assert r.data[:2] == b"PK", (
+            f"{label}: response body is not a valid XLSX (no PK header): "
+            f"{r.data[:20]!r}"
+        )
+
+    # -- Pipe reports must 404 (no pipe demand) --------------------------------
+
+    @pytest.mark.parametrize("report_id", ["11", "11A", "11B", "11C", "11D"])
+    def test_pipe_reports_return_404(self, client, report_id):
+        """Pipe report endpoints must return 404 when the run has no pipe demand."""
+        r = self._get_report(client, report_id)
+        assert r.status_code == 404, (
+            f"report/{report_id} for fitting-only run: expected 404, got {r.status_code}"
+        )
+
+    # -- Non-pipe reports must 200 with real XLSX bytes -----------------------
+
+    def test_report_12_returns_valid_xlsx(self, client):
+        """Report-12 (fittings moulding plan) must produce a real XLSX file."""
+        self._assert_xlsx(self._get_report(client, "12"), "report/12")
+
+    def test_consolidated_returns_valid_xlsx(self, client):
+        """Consolidated plan (7-tab) must build without crash when pipe result is None."""
+        self._assert_xlsx(self._get_report(client, "consolidated"), "report/consolidated")
+
+    def test_revised_returns_valid_xlsx(self, client):
+        """Revised production plan must build without crash when pipe result is None."""
+        self._assert_xlsx(self._get_report(client, "revised"), "report/revised")
+
+    def test_comparison_returns_valid_xlsx(self, client):
+        """Machine plan comparison must build without crash when pipe result is None."""
+        self._assert_xlsx(self._get_report(client, "comparison"), "report/comparison")
+
+    def test_capacity_feasible_returns_valid_xlsx(self, client):
+        """Capacity-feasible plan must build without crash when pipe result is None."""
+        self._assert_xlsx(
+            self._get_report(client, "capacity_feasible"), "report/capacity_feasible"
+        )
+
+    def test_zip_returns_valid_zip_with_expected_members(self, client):
+        """ZIP bundle must be a valid ZIP containing Report-12 and Consolidated Plan."""
+        import zipfile as _zf
+        r = self._get_report(client, "zip")
+        assert r.status_code == 200, (
+            f"report/zip fitting-only: expected 200, got {r.status_code}: "
+            f"{r.data[:300].decode(errors='replace')}"
+        )
+        assert r.content_type == "application/zip", (
+            f"report/zip: unexpected content-type {r.content_type}"
+        )
+        # Must be a parseable ZIP with at least Report-12 and Consolidated Plan
+        buf = io.BytesIO(r.data)
+        assert _zf.is_zipfile(buf), "report/zip response is not a valid ZIP file"
+        buf.seek(0)
+        with _zf.ZipFile(buf) as z:
+            names = z.namelist()
+        assert any("Report-12" in n for n in names), (
+            f"ZIP must contain a Report-12 file; found: {names}"
+        )
+        assert any("Consolidated" in n for n in names), (
+            f"ZIP must contain a Consolidated Plan file; found: {names}"
+        )
+
+    def test_unknown_report_id_is_404(self, client):
+        """An unrecognised report_id must return 404, not 500."""
+        with patch("mp_model.get_plan_run_by_id", MagicMock(return_value=_FITTING_ONLY_RUN)):
+            r = client.get("/machine-planning/runs/12/report/unknown_report")
+        assert r.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Test: ScheduleResult round-trip (to_dict → from_dict) preserves fitting totals
