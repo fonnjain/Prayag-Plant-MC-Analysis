@@ -1523,6 +1523,73 @@ def test_route_zip_partial_success_when_one_11x_subgroup_raises():
         )
 
 
+def test_route_single_report_11b_failing_returns_non_500():
+    """GET /machine-planning/report/11B returns a non-500 when report_11x_bytes raises.
+
+    The individual download route must catch the RuntimeError and return a 400
+    (bad request / temporarily unavailable) rather than propagating a 500 with
+    a server traceback to the operator's browser.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, _fit_r, pipe_s, _fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(r, "report_11x_bytes",
+                      side_effect=RuntimeError("simulated 11B failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/11B")
+
+    assert resp.status_code != 500, (
+        f"A RuntimeError in report_11x_bytes must NOT produce a 500 traceback; "
+        f"got {resp.status_code}"
+    )
+    assert resp.status_code < 500, (
+        f"Expected a 4xx response when report_11x_bytes raises; got {resp.status_code}"
+    )
+
+
+def test_route_single_report_11a_succeeds_when_11b_would_fail():
+    """GET /machine-planning/report/11A returns 200 + xlsx even when 11B would fail.
+
+    The per-group failure isolation in the individual download route must not
+    affect other sub-groups: a fault in 11B's generator must have no impact on
+    an independent 11A download.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, _fit_r, pipe_s, _fit_s = _make_both_results()
+
+    _orig_11x = r.report_11x_bytes
+
+    def _raise_for_b(result, group, **kwargs):
+        if group == "B":
+            raise RuntimeError("simulated 11B failure")
+        return _orig_11x(result, group, **kwargs)
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(r, "report_11x_bytes", side_effect=_raise_for_b):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/11A")
+
+    assert resp.status_code == 200, (
+        f"GET /machine-planning/report/11A should succeed (200) independently of 11B; "
+        f"got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response for 11A should be a valid xlsx (ZIP magic bytes); "
+        f"first bytes={resp.data[:4]!r}"
+    )
+
+
 def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
     """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
     sheet and the fitting-machine report (report-12) when both plans are present."""

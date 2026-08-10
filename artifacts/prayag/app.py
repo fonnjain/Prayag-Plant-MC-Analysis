@@ -6855,7 +6855,7 @@ def mp_report_download(report_id: str):
             filename = f"Report-11{group}_{mcs}_{result.effective_month}.xlsx"
     except Exception as exc:
         app.logger.error("mp_report_download %s failed: %s", report_id, exc)
-        abort(500)
+        abort(400)
 
     return _send_file(
         io.BytesIO(xlsx_bytes),
