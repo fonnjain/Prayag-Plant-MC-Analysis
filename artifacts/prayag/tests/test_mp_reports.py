@@ -1450,6 +1450,79 @@ def test_route_zip_partial_success_when_report_12_raises():
     )
 
 
+def test_route_zip_partial_success_when_one_11x_subgroup_raises():
+    """ZIP route returns 200 with a valid ZIP when only one 11x sub-group (11B) raises.
+
+    The per-group try/except in the ZIP loop must isolate the failure so that:
+    - Report-11_Pipe, Report-12, and Consolidated_Plan are still present.
+    - Report-11A, 11C, and 11D are still present.
+    - Report-11B (the failing group) is absent.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    _orig_11x = r.report_11x_bytes
+
+    def _raise_for_b(result, group, **kwargs):
+        if group == "B":
+            raise RuntimeError("simulated 11B failure")
+        return _orig_11x(result, group, **kwargs)
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11x_bytes", side_effect=_raise_for_b):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when report_11x_bytes raises for group B; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Report-11 (pipe) must be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert report11_entries, (
+        f"ZIP must contain Report-11_Pipe even when 11B fails; got: {names}"
+    )
+
+    # Report-12 (fittings) must be present
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain Report-12/Fitting even when 11B fails; got: {names}"
+    )
+
+    # Consolidated plan must be present
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain Consolidated_Plan even when 11B fails; got: {names}"
+    )
+
+    # The failing 11B entry must NOT be present
+    report11b_entries = [n for n in names if "Report-11B" in n]
+    assert not report11b_entries, (
+        f"Report-11B should be absent when report_11x_bytes raises for group B; got: {names}"
+    )
+
+    # The other sub-groups 11A, 11C, 11D must still be present
+    for grp in ("A", "C", "D"):
+        grp_entries = [n for n in names if f"Report-11{grp}" in n]
+        assert grp_entries, (
+            f"ZIP must contain Report-11{grp} even when 11B fails; got: {names}"
+        )
+
+
 def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
     """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
     sheet and the fitting-machine report (report-12) when both plans are present."""
