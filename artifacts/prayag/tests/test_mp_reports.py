@@ -1065,3 +1065,199 @@ def test_fitting_schedule_helper_does_not_rerun_fitting_engine_when_result_suppl
             f"run_fitting_engine must NOT be called when fitting_result is "
             f"pre-supplied; got {mock_run_fitting.call_count} call(s)"
         )
+
+
+# ── Flask route integration tests ────────────────────────────────────────────
+
+def _make_both_results():
+    """Return (engine_result, fitting_result, pipe_schedule, fitting_schedule)
+    with a fitting machine that is distinct from the pipe machine."""
+    from mp_engine import (
+        EngineResult, FittingEngineResult, FittingItemResult,
+        FittingAssignedPortion, MachineLoad, CoverageGaps, PlanTotals,
+    )
+    from mp_scheduler import ScheduleResult, WeekFillRow
+
+    # ── Pipe side ──
+    pipe_ml = MachineLoad(
+        machine="M/C-1", capacity_hrs=500.0,
+        assigned_hrs=250.0, utilisation_pct=50.0, machine_days=25.0,
+        material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    item = _make_item(machine="M/C-1")
+    pipe_result = EngineResult(
+        segment="PIPE", effective_month="2026-07",
+        items=[item], machine_loads=[pipe_ml],
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=item.qty_pcs, total_material_kg=item.material_kg,
+            total_fresh_compound_kg=item.fresh_compound_kg,
+            total_pulverizer_kg=item.pulverizer_kg,
+            routable_material_kg=item.material_kg,
+            routable_fresh_compound_kg=item.fresh_compound_kg,
+            routable_pulverizer_kg=item.pulverizer_kg,
+        ),
+        baseline_machine_loads=[pipe_ml],
+        params_used={}, effective_costs={}, cost_by_material={}, n_unpriced=0,
+    )
+    pipe_wf = WeekFillRow(
+        week=1, machine="M/C-1", capacity_hrs=500.0,
+        scheduled_hrs=250.0, idle_hrs=250.0, utilisation_pct=50.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 250.0},
+    )
+    pipe_schedule = ScheduleResult(
+        segment="PIPE", effective_month="2026-07",
+        blocks=[], weekly_fill=[pipe_wf], unfinished=[],
+        total_capacity_hrs=500.0, total_scheduled_hrs=250.0,
+        total_idle_hrs=250.0, total_excess_kg=0.0, total_changeovers=0,
+        week_days=[6, 6, 6, 7], params_used={},
+    )
+
+    # ── Fitting side ──
+    fit_ml = MachineLoad(
+        machine="FM-ROUTE-1", capacity_hrs=300.0,
+        assigned_hrs=180.0, utilisation_pct=60.0, machine_days=15.0,
+        material_kg=3000.0, fresh_compound_kg=2250.0, pulverizer_kg=750.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    fit_item = FittingItemResult(
+        item_code="CPVC-F-100", raw_code="CPVC-F-100",
+        material="CPVC", qty_pcs=500.0, weight_per_pc_kg=0.15,
+        material_kg=78.0, fresh_compound_kg=58.5, pulverizer_kg=19.5,
+        pcs_per_hr=120.0, rate_estimated=False, machine_hrs=4.17,
+        cavity=4.0, cycle_time_sec=120.0, num_cycles=125.0,
+        capable_machines=["FM-ROUTE-1"], route_estimated=False,
+        assignments=[FittingAssignedPortion(
+            machine="FM-ROUTE-1", hrs=4.17, qty_pcs=500.0, material_kg=78.0,
+        )],
+        has_weight=True, has_machine=True,
+    )
+    fitting_result = FittingEngineResult(
+        segment="FITTING", effective_month="2026-07",
+        items=[fit_item], machine_loads=[fit_ml],
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=500.0, total_material_kg=78.0,
+            total_fresh_compound_kg=58.5, total_pulverizer_kg=19.5,
+            routable_material_kg=78.0, routable_fresh_compound_kg=58.5,
+            routable_pulverizer_kg=19.5,
+        ),
+        baseline_machine_loads=[fit_ml],
+        params_used={}, n_route_estimated=0, n_unroutable=0,
+    )
+    fit_wf = WeekFillRow(
+        week=1, machine="FM-ROUTE-1", capacity_hrs=300.0,
+        scheduled_hrs=180.0, idle_hrs=120.0, utilisation_pct=60.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 180.0},
+    )
+    fitting_schedule = ScheduleResult(
+        segment="FITTING", effective_month="2026-07",
+        blocks=[], weekly_fill=[fit_wf], unfinished=[],
+        total_capacity_hrs=300.0, total_scheduled_hrs=180.0,
+        total_idle_hrs=120.0, total_excess_kg=0.0, total_changeovers=0,
+        week_days=[6, 6, 6, 7], params_used={},
+    )
+
+    return pipe_result, fitting_result, pipe_schedule, fitting_schedule
+
+
+def test_route_consolidated_with_both_schedules_returns_xlsx():
+    """GET /machine-planning/report/consolidated returns a valid .xlsx with 7 tabs
+    and the fitting machine row in tab '2. Machine Load' when both pipe and fitting
+    plans are present in the session."""
+    import app as appmod
+    from openpyxl import load_workbook
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/consolidated")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert "spreadsheet" in resp.content_type or "octet" in resp.content_type or \
+           resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not xlsx; content_type={resp.content_type}"
+    )
+
+    wb = load_workbook(io.BytesIO(resp.data))
+    assert len(wb.sheetnames) == 7, f"Expected 7 tabs; got {wb.sheetnames}"
+    for prefix in ["1.", "2.", "3.", "4.", "5.", "6.", "7."]:
+        assert any(n.startswith(prefix) for n in wb.sheetnames), (
+            f"Tab starting with {prefix!r} missing; sheets={wb.sheetnames}"
+        )
+
+    # Tab '2. Machine Load' must show the fitting machine name
+    ws2 = wb["2. Machine Load"]
+    col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
+    assert "FM-ROUTE-1" in col1, (
+        f"Fitting machine 'FM-ROUTE-1' not found in tab '2. Machine Load' col-1; "
+        f"values: {[v for v in col1 if v]}"
+    )
+
+    # The section header must also be present
+    found_header = any("FITTING MACHINES" in str(v or "") for v in col1)
+    assert found_header, "Expected 'FITTING MACHINES' section header in tab '2. Machine Load'"
+
+
+def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
+    """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
+    sheet and the fitting-machine report (report-12) when both plans are present."""
+    import app as appmod
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Must contain a consolidated plan entry
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain a Consolidated_Plan file; got: {names}"
+    )
+
+    # Must contain report-12 (fittings)
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain a Report-12/Fitting file; got: {names}"
+    )
+
+    # Consolidated entry inside the ZIP must be a valid .xlsx with fitting data
+    from openpyxl import load_workbook
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        xlsx_bytes = zf.read(consolidated_entries[0])
+    wb = load_workbook(io.BytesIO(xlsx_bytes))
+    assert len(wb.sheetnames) == 7, (
+        f"Consolidated sheet inside ZIP should have 7 tabs; got {wb.sheetnames}"
+    )
+    ws2 = wb["2. Machine Load"]
+    col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
+    assert "FM-ROUTE-1" in col1, (
+        f"Fitting machine 'FM-ROUTE-1' not found in consolidated sheet inside ZIP; "
+        f"values: {[v for v in col1 if v]}"
+    )
