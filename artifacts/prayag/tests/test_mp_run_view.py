@@ -837,3 +837,362 @@ class TestFittingWeeklyFillTotals:
         )
         assert cells[7] == "—", f"MC-F2 W4 sched: expected '—', got '{cells[7]}'"
         assert cells[8] == "—", f"MC-F2 W4 pct:   expected '—', got '{cells[8]}'"
+
+
+# ---------------------------------------------------------------------------
+# Test: ScheduleResult round-trip (to_dict → from_dict) preserves fitting totals
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Frozen run fixture with non-empty fitting results
+# ---------------------------------------------------------------------------
+# Simulates the JSON blob that _do_freeze_run writes to the DB:
+#   results_snapshot = {"pipe": dataclasses.asdict(result),
+#                        "fitting": dataclasses.asdict(fitting_result)}
+# The route sets frozen=True when row["results"] is truthy, then calls
+# _reconstruct_display_vars(row) which reads machine_loads / items / totals
+# directly from the stored dict.  The ScheduleResult is regenerated fresh via
+# _mp_fitting_schedule_from_run (never stored), so the JSON boundary under
+# test is the stored FittingEngineResult → route → fitting_schedule template var.
+
+_FROZEN_RUN_WITH_FITTING = {
+    "id": 11,
+    "segment": "PIPE",
+    "month": "2026-08",
+    "uploaded_demand": _DEMAND_DICT,
+    "fitting_demand": _FITTING_DICT,
+    "frozen_inputs": {},
+    "status": "draft",
+    "created_at": None,
+    "uploaded_file_path": "",
+    "results": {
+        "pipe": {
+            "machine_loads": [
+                {"machine": "M/C-1", "capacity_hrs": 500, "assigned_hrs": 480,
+                 "utilisation_pct": 96.0, "machine_days": 25, "material_kg": 10000,
+                 "fresh_compound_kg": 7500, "pulverizer_kg": 2500,
+                 "staffing_ok": True, "operators_ot": 0, "support_w": 0}
+            ],
+            "baseline_machine_loads": [],
+            "items": [],
+            "coverage_gaps": {"no_weight": [], "no_machine": [],
+                              "idle_machines": [], "locked_out_machines": []},
+            "totals": {"total_qty_pcs": 1000, "total_material_kg": 500,
+                       "total_fresh_compound_kg": 375, "total_pulverizer_kg": 125,
+                       "routable_material_kg": 500, "routable_fresh_compound_kg": 375,
+                       "routable_pulverizer_kg": 125},
+            "params_used": {"waste_pct": 5.0}, "effective_costs": {},
+            "cost_by_material": {}, "n_unpriced": 0,
+        },
+        "fitting": {
+            "machine_loads": [
+                {"machine": "MC-F1", "capacity_hrs": 300, "assigned_hrs": 240,
+                 "utilisation_pct": 80.0, "machine_days": 25, "material_kg": 5000,
+                 "fresh_compound_kg": 3750, "pulverizer_kg": 1250,
+                 "staffing_ok": True, "operators_ot": 0, "support_w": 0},
+                {"machine": "MC-F2", "capacity_hrs": 200, "assigned_hrs": 160,
+                 "utilisation_pct": 80.0, "machine_days": 25, "material_kg": 3000,
+                 "fresh_compound_kg": 2250, "pulverizer_kg": 750,
+                 "staffing_ok": True, "operators_ot": 0, "support_w": 0},
+            ],
+            "baseline_machine_loads": [],
+            "items": [],
+            "coverage_gaps": {"no_weight": [], "no_machine": [],
+                              "idle_machines": [], "locked_out_machines": []},
+            "totals": {"total_qty_pcs": 500, "total_material_kg": 250,
+                       "total_fresh_compound_kg": 187, "total_pulverizer_kg": 63,
+                       "routable_material_kg": 250, "routable_fresh_compound_kg": 187,
+                       "routable_pulverizer_kg": 63},
+            "params_used": {"waste_pct": 4.0},
+            "n_route_estimated": 0, "n_unroutable": 0,
+            "effective_costs": {}, "cost_by_material": {}, "n_unpriced": 0,
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Test: frozen run renders fitting totals row correctly (actual freeze/reload path)
+# ---------------------------------------------------------------------------
+
+class TestFrozenFittingTotalsRendered:
+    """Integration test: a frozen run (status='draft') with sparse fitting data
+    must render the correct tfoot values in the fitting weekly fill table.
+
+    This follows the actual freeze/reload path:
+      1.  _do_freeze_run writes FittingEngineResult as JSON to results['fitting']
+      2.  Route sees frozen=True, calls _reconstruct_display_vars(row) from DB JSON
+      3.  _mp_fitting_schedule_from_run regenerates ScheduleResult from stored demand
+      4.  Template renders fitting_schedule_result — the sparse totals row must be right
+
+    The sparse fixture (MC-F1 weeks 1-2, MC-F2 weeks 1-3, week-4 absent) is the same
+    as TestFittingWeeklyFillTotals so expected values are directly comparable.
+    """
+
+    def _render_body(self, client) -> str:
+        fitting_res   = _fitting_engine_result(machines=("MC-F1", "MC-F2"))
+        fitting_sched = _sparse_fitting_schedule_result()
+
+        with patch("mp_model.get_plan_run_by_id",
+                   MagicMock(return_value=_FROZEN_RUN_WITH_FITTING)), \
+             patch("app._mp2_result_from_run",
+                   MagicMock(return_value=_engine_result())), \
+             patch("app._mp3_fitting_result_from_run",
+                   MagicMock(return_value=fitting_res)), \
+             patch("app._mp_schedule_from_run",
+                   MagicMock(return_value=_schedule_result())), \
+             patch("app._mp_fitting_schedule_from_run",
+                   MagicMock(return_value=fitting_sched)), \
+             patch("app._build_plan_lookups",
+                   MagicMock(return_value=({"has_data": False}, {"has_data": False}))):
+            r = client.get("/machine-planning/runs/11")
+        assert r.status_code == 200, (
+            f"Expected 200 from frozen run view with sparse fitting schedule, "
+            f"got {r.status_code}: {r.data[:300].decode(errors='replace')}"
+        )
+        return r.data.decode()
+
+    def test_frozen_run_renders_200(self, client):
+        """Frozen run with sparse fitting schedule must not crash the template."""
+        self._render_body(client)
+
+    def test_frozen_banner_absent(self, client):
+        """Frozen run must not show the live-preview 'not saved' banner."""
+        body = self._render_body(client)
+        assert "not saved until frozen" not in body.lower(), (
+            "Frozen run should not show the live-preview 'not saved' banner"
+        )
+
+    def test_fitting_fill_table_present_in_frozen_run(self, client):
+        """Fitting Moulding — Weekly Fill table must appear in a frozen run."""
+        body = self._render_body(client)
+        tbl  = _get_fitting_fill_table(body)
+        assert tbl is not None, (
+            "Could not locate the 'Fitting Moulding — Weekly Fill' table "
+            "in the frozen run page — template may have lost fitting_schedule_result"
+        )
+
+    def test_frozen_tfoot_week1_week2_correct(self, client):
+        """W1 and W2: both machines (MC-F1 cap=150+MC-F2 cap=100)
+        → tfoot sched=200, pct=80%.  Must survive the freeze/reload JSON boundary.
+        """
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert len(cells) == 10, f"Expected 10 tfoot cells, got {len(cells)}: {cells}"
+        # W1
+        assert cells[1] == "200", (
+            f"Frozen run W1 tfoot sched: expected '200', got '{cells[1]}'"
+        )
+        assert cells[2] == "80%", (
+            f"Frozen run W1 tfoot pct: expected '80%', got '{cells[2]}'"
+        )
+        # W2
+        assert cells[3] == "200", (
+            f"Frozen run W2 tfoot sched: expected '200', got '{cells[3]}'"
+        )
+        assert cells[4] == "80%", (
+            f"Frozen run W2 tfoot pct: expected '80%', got '{cells[4]}'"
+        )
+
+    def test_frozen_tfoot_week3_mc_f2_only(self, client):
+        """W3: only MC-F2 → tfoot sched=80, pct=80%."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[5] == "80",  (
+            f"Frozen run W3 tfoot sched: expected '80', got '{cells[5]}'"
+        )
+        assert cells[6] == "80%", (
+            f"Frozen run W3 tfoot pct: expected '80%', got '{cells[6]}'"
+        )
+
+    def test_frozen_tfoot_week4_zero_cap_dash(self, client):
+        """W4: no rows → cap=0 → tfoot % cell must show '—', not crash or show 0%."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[7] == "0", (
+            f"Frozen run W4 tfoot sched: expected '0', got '{cells[7]}'"
+        )
+        assert cells[8] == "—", (
+            f"Frozen run W4 tfoot pct: expected '—' (cap=0 branch), got '{cells[8]}'"
+        )
+
+    def test_frozen_tfoot_changeovers_correct(self, client):
+        """Total changeovers = 2 (MC-F1 W1=1, MC-F2 W2=1)."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[9] == "2", (
+            f"Frozen run tfoot CO total: expected '2', got '{cells[9]}'"
+        )
+
+
+class TestScheduleResultRoundTrip:
+    """Confirm that serialising a sparse fitting ScheduleResult to JSON and
+    deserialising it back (the freeze/reload path) preserves every WeekFillRow
+    field correctly — in particular that origin_breakdown keys remain int so
+    that fit_fill_lookup.get((mc, wk)) does not silently return None.
+    """
+
+    def _original(self) -> "ScheduleResult":
+        return _sparse_fitting_schedule_result()
+
+    def _roundtrip(self) -> "ScheduleResult":
+        from mp_scheduler import ScheduleResult
+        orig = self._original()
+        # Simulate JSON round-trip (freeze → DB → reload)
+        import json
+        serialised = json.loads(json.dumps(orig.to_dict()))
+        return ScheduleResult.from_dict(serialised)
+
+    # -- WeekFillRow field survival ----------------------------------------
+
+    def test_all_rows_survive(self):
+        """All 5 WeekFillRow entries in the sparse fixture must survive the round-trip."""
+        orig = self._original()
+        rt   = self._roundtrip()
+        assert len(rt.weekly_fill) == len(orig.weekly_fill), (
+            f"Expected {len(orig.weekly_fill)} WeekFillRow entries after round-trip, "
+            f"got {len(rt.weekly_fill)}"
+        )
+
+    def test_machine_and_week_fields_intact(self):
+        """Each row's machine and week must match the original after deserialisation."""
+        orig = self._original()
+        rt   = self._roundtrip()
+        orig_keys = sorted((r.machine, r.week) for r in orig.weekly_fill)
+        rt_keys   = sorted((r.machine, r.week) for r in rt.weekly_fill)
+        assert orig_keys == rt_keys, (
+            f"(machine, week) keys differ after round-trip.\n"
+            f"  Original : {orig_keys}\n"
+            f"  Round-trip: {rt_keys}"
+        )
+
+    def test_scheduled_hrs_intact(self):
+        """scheduled_hrs must be preserved exactly for every row."""
+        orig = self._original()
+        rt   = self._roundtrip()
+        orig_map = {(r.machine, r.week): r.scheduled_hrs for r in orig.weekly_fill}
+        rt_map   = {(r.machine, r.week): r.scheduled_hrs for r in rt.weekly_fill}
+        for key, expected in orig_map.items():
+            assert rt_map.get(key) == pytest.approx(expected, abs=1e-6), (
+                f"scheduled_hrs mismatch for {key}: expected {expected}, got {rt_map.get(key)}"
+            )
+
+    def test_capacity_hrs_intact(self):
+        """capacity_hrs must be preserved exactly for every row."""
+        orig = self._original()
+        rt   = self._roundtrip()
+        orig_map = {(r.machine, r.week): r.capacity_hrs for r in orig.weekly_fill}
+        rt_map   = {(r.machine, r.week): r.capacity_hrs for r in rt.weekly_fill}
+        for key, expected in orig_map.items():
+            assert rt_map.get(key) == pytest.approx(expected, abs=1e-6), (
+                f"capacity_hrs mismatch for {key}: expected {expected}, got {rt_map.get(key)}"
+            )
+
+    # -- origin_breakdown key type -----------------------------------------
+
+    def test_origin_breakdown_keys_are_int(self):
+        """After deserialisation every origin_breakdown key must be int, not str.
+
+        If from_dict fails to convert the JSON string keys back to int, the
+        template lookup fit_fill_lookup.get((mc, wk)) will never match and the
+        totals row will silently zero out.
+        """
+        rt = self._roundtrip()
+        for row in rt.weekly_fill:
+            for k in row.origin_breakdown.keys():
+                assert isinstance(k, int), (
+                    f"origin_breakdown key {k!r} on ({row.machine}, wk{row.week}) "
+                    f"is {type(k).__name__}, expected int"
+                )
+
+    def test_origin_breakdown_values_are_float(self):
+        """origin_breakdown values must be float after deserialisation."""
+        rt = self._roundtrip()
+        for row in rt.weekly_fill:
+            for k, v in row.origin_breakdown.items():
+                assert isinstance(v, float), (
+                    f"origin_breakdown[{k}] on ({row.machine}, wk{row.week}) "
+                    f"is {type(v).__name__}, expected float"
+                )
+
+    # -- Per-week totals consistency ---------------------------------------
+
+    def test_per_week_totals_match_original(self):
+        """Summing scheduled_hrs per week from the deserialised result must
+        match the same sum from the original in-memory result.
+
+        Sparse fixture expected weekly scheduled totals:
+          Week 1: 200  (MC-F1 120 + MC-F2 80)
+          Week 2: 200  (MC-F1 120 + MC-F2 80)
+          Week 3:  80  (MC-F2 only)
+          Week 4:   0  (no rows)
+        """
+        from collections import defaultdict
+
+        orig = self._original()
+        rt   = self._roundtrip()
+
+        def _week_totals(result):
+            totals: dict = defaultdict(float)
+            for r in result.weekly_fill:
+                totals[r.week] += r.scheduled_hrs
+            return dict(totals)
+
+        orig_totals = _week_totals(orig)
+        rt_totals   = _week_totals(rt)
+
+        assert orig_totals == pytest.approx(rt_totals, abs=1e-6), (
+            f"Per-week scheduled totals differ after round-trip.\n"
+            f"  Original : {orig_totals}\n"
+            f"  Round-trip: {rt_totals}"
+        )
+
+    def test_per_week_capacity_totals_match_original(self):
+        """Summing capacity_hrs per week from the deserialised result must
+        match the original — including that week 4 is absent (cap=0).
+        """
+        from collections import defaultdict
+
+        orig = self._original()
+        rt   = self._roundtrip()
+
+        def _cap_totals(result):
+            totals: dict = defaultdict(float)
+            for r in result.weekly_fill:
+                totals[r.week] += r.capacity_hrs
+            return dict(totals)
+
+        orig_caps = _cap_totals(orig)
+        rt_caps   = _cap_totals(rt)
+
+        assert orig_caps == pytest.approx(rt_caps, abs=1e-6), (
+            f"Per-week capacity totals differ after round-trip.\n"
+            f"  Original : {orig_caps}\n"
+            f"  Round-trip: {rt_caps}"
+        )
+
+    def test_expected_weekly_scheduled_values(self):
+        """Spot-check the concrete expected totals from the sparse fixture."""
+        from collections import defaultdict
+
+        rt = self._roundtrip()
+        totals: dict = defaultdict(float)
+        for r in rt.weekly_fill:
+            totals[r.week] += r.scheduled_hrs
+
+        assert totals[1] == pytest.approx(200.0, abs=1e-6), (
+            f"Week 1 scheduled total: expected 200, got {totals[1]}"
+        )
+        assert totals[2] == pytest.approx(200.0, abs=1e-6), (
+            f"Week 2 scheduled total: expected 200, got {totals[2]}"
+        )
+        assert totals[3] == pytest.approx(80.0, abs=1e-6), (
+            f"Week 3 scheduled total: expected 80, got {totals[3]}"
+        )
+        assert 4 not in totals, (
+            f"Week 4 should have no rows (cap=0 path), but got {totals[4]}"
+        )
