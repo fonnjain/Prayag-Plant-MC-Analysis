@@ -926,6 +926,43 @@
           </tr>
           {% endfor %}
         </tbody>
+        {# ── Fitting totals row ─────────────────────────────────────────────── #}
+        {% set fit_totals_co = namespace(v=0) %}
+        {% for mc in fit_machines %}
+          {% for wk in fit_weeks %}
+            {% set r = fit_fill_lookup.get((mc, wk)) %}
+            {% if r %}{% set fit_totals_co.v = fit_totals_co.v + r.changeovers %}{% endif %}
+          {% endfor %}
+        {% endfor %}
+        <tfoot>
+          <tr style="border-top:2px solid #d1d5db;background:#f1f5f9;">
+            <td style="padding:.3rem .45rem;font-size:.73rem;font-weight:800;
+                       color:var(--navy);white-space:nowrap;">Totals</td>
+            {% for wk in fit_weeks %}
+              {% set wk_ns = namespace(sched=0.0, cap=0.0) %}
+              {% for mc in fit_machines %}
+                {% set r = fit_fill_lookup.get((mc, wk)) %}
+                {% if r %}
+                  {% set wk_ns.sched = wk_ns.sched + r.scheduled_hrs %}
+                  {% set wk_ns.cap   = wk_ns.cap   + r.capacity_hrs %}
+                {% endif %}
+              {% endfor %}
+              {% set wk_pct = (wk_ns.sched / wk_ns.cap * 100) if wk_ns.cap > 0 else 0 %}
+              {% set tot_bg = "#d1fae5" if wk_pct >= 95 else ("#fef3c7" if wk_pct >= 70 else ("#fee2e2" if wk_pct > 0 else "#f1f5f9")) %}
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:700;">
+              {{ "{:.0f}".format(wk_ns.sched) }}
+            </td>
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:800;
+                       background:{{ tot_bg }};">
+              {% if wk_ns.cap > 0 %}{{ "{:.0f}".format(wk_pct) }}%{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+            <td style="padding:.3rem .3rem;text-align:center;font-size:.71rem;font-weight:700;
+                       color:{{ '#92400e' if fit_totals_co.v > 0 else '#6b7280' }};">
+              {{ fit_totals_co.v if fit_totals_co.v > 0 else '—' }}
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
 
