@@ -1,0 +1,23 @@
+PTMT segment — the annual Moulds Summary is not ingested; the page shows daily Report-5 injection data (a valid but different view). Wire the annual SEGMENT-LEVEL monthly summary, the same way Garden's SUMMARY tab was wired. Do NOT build a parallel machine engine yet (see step C). Isolated to PTMT parsers + ptmt_summary route/template; never touch "/". Build mode. Add pytest. Restart after edits.
+
+=== SOURCE ===
+File "ANNUALY PTMT Moulds Summary 26-27" = 1kc6AOZJR8b29TBIMprNMxQ85VbAk2BgBU0Iz5u5Se2M (owner preeti, FY26-27). Register in ANNUAL_SOURCES. Parse the SUMMARY (monthly) tab BY HEADER TEXT; months run latest-first — map by label. Date format is 1-Aug-2026 (already handled by _parse_date_cell_manpower ✓).
+
+=== A. MONTHLY SEGMENT SUMMARY (wire + surface) ===
+Add parse_ptmt_summary_tab reading these header-named columns: No. of Run Moulds, Mould Run Hours, Nett Output (KG), Rejection (KG), Rejection %age, Runner Produce (KG), Lumps (KG), 100% Wastage %age, Total Grinder Working, Labour, Paid Wages, Per KG Labour Cost. Surface a "Monthly Segment Summary" table on /reports/ptmt_summary (same pattern as Garden's monthly table). Verified targets (report OBSERVED):
+  APR 216 moulds / 16,092 h / 99,262 kg / 5,917 rej / 5.96% / 61 labour / ₹727,748
+  MAY 280 / 15,752 / 104,729 / 7,262 / 6.93% / 49 / ₹632,458
+  JUN 311 / 20,921 / 160,478 / 9,297 / 5.79% / 52 / ₹649,742
+  JUL 298 / 22,318 / 172,639 / 10,476 / 6.07% / labour BLANK
+  TOTAL 1,105 / 75,083 / 537,109 / 32,952 / 6.14% / 162 / ₹2,009,948
+
+=== B. OUTPUT BASIS + ₹/kg (get the basis right, flag what's suspect) ===
+- Use Nett Output = 537,109 kg for segment output and rejection %. Do NOT use "Weight of Total Production" 541,258 (a different, larger basis) — surface both but label which is authoritative.
+- ₹/kg: reproduce the sheet's stated Per KG Labour Cost (APR 6.92 · MAY 5.65 · JUN 3.83 · TOTAL 3.53) but FLAG the basis: total 3.53 ≠ wages 2,009,948 ÷ Nett Output 537,109 (=3.74), indicating a period mismatch (July output present, July wages blank) — same class as the Plumbing costing fix. Report which denominator the sheet uses; do not silently accept 3.53.
+- July labour blank → fire an integrity flag "PTMT July: output without labour"; show ⚠ in the ₹/kg cell for July, never ₹0.
+
+=== C. MACHINE DIMENSION — REPORT FIRST, DO NOT BUILD YET ===
+The annual describes 48 mould/tonnage-tagged machines (80T–450T incl N-80A…N-200I). The app's PTMT roster is 55 injection/process machines. Before building anything: report the OVERLAP between the two rosters (how many of the 48 annual machine labels match existing app machine names). Output the overlap table only — do not create a parallel machine dimension in this pass. We'll decide augment-vs-build after seeing the overlap.
+
+=== TESTS ===
+pytest: annual file registered; summary tab parsed by header; monthly totals reproduce 1,105 / 75,083 / 537,109 / 32,952 / 6.14%; Nett Output preferred over Weight of Total Production; July integrity flag fires; ₹/kg basis flag present; machine-overlap report produced (no parallel engine built). Confirm "/" unaffected and daily Report-5 PTMT view unchanged.
