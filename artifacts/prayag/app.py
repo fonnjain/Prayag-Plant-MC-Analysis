@@ -15,6 +15,7 @@ import hmac
 import threading
 import io
 import zipfile
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
@@ -6026,16 +6027,21 @@ def mp_reset_section(section: str):
 
 
 # ---------------------------------------------------------------------------
-# Machine Planning — Phase MP-2: demand upload, optimiser, Report-11/11A-D
-# ADDITIVE / ISOLATED: only /machine-planning/* routes. Never touches "/".
+# Machine-planning engine imports (deferred to avoid circular imports at top
+# of file; placed here so all planning routes below can use them).
 # ---------------------------------------------------------------------------
 import mp_engine as _mp_engine        # noqa: E402
 import mp_reports as _mp_reports      # noqa: E402
 import mp_scheduler as _mp_scheduler  # noqa: E402
 
+
+from mp_lru_cache import BoundedLRUCache as _BoundedCache  # noqa: E402
+
+
 # In-process run cache (fallback when Postgres unavailable).
 # Key = run_id (str); value = {"demand": [...], "fitting_demand": [...], ...}
-_MP2_RUN_CACHE: dict = {}
+# Capped at 100 entries (LRU) — demand payloads are small, but still bounded.
+_MP2_RUN_CACHE: _BoundedCache = _BoundedCache(maxsize=100)
 
 # Engine-result cache — avoids re-running the heavy optimiser on the same demand
 # + rejection/wastage state (e.g. the Machine Plan Comparison route calls both
@@ -6045,9 +6051,9 @@ _MP2_RUN_CACHE: dict = {}
 # params_fingerprint is a short SHA-256 of the rejection + wastage lookup dicts;
 # changing those DB tables (recompute_rejection, wastage seed) changes the key
 # and automatically invalidates cached results.
-_MP2_ENGINE_CACHE: dict = {}
+# Capped at 50 entries (LRU) so a busy worker cannot leak memory indefinitely.
+_MP2_ENGINE_CACHE: _BoundedCache = _BoundedCache(maxsize=50)
 
-_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
@@ -6157,9 +6163,15 @@ def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str,
 
 
 def _mp2_load_run(run_id: str) -> dict | None:
-    """Retrieve run payload from cache (or re-fetch from DB if cold worker)."""
-    if run_id in _MP2_RUN_CACHE:
-        return _MP2_RUN_CACHE[run_id]
+    """Retrieve run payload from cache (or re-fetch from DB if cold worker).
+
+    Uses a single .get() call so that the membership check and the value read
+    happen under the same lock acquisition — no TOCTOU window where a concurrent
+    LRU eviction could remove the key between the two operations.
+    """
+    cached = _MP2_RUN_CACHE.get(run_id)
+    if cached is not None:
+        return cached
     # Try DB
     try:
         import mp_model as _mpm
