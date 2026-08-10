@@ -470,6 +470,268 @@ def parse_ptmt_summary_tab(
     return result
 
 
+def parse_ptmt_monthly_mc_tab(
+    values: List[list],
+    *,
+    source_file: str = "",
+    source_tab: str = "",
+) -> dict:
+    """Parse the 'Month Wise MC' data-entry tab (PTMT annual Moulds Summary).
+
+    Returns  {YYYY-MM: {"hours": f, "output_kg": f, "reject_kg": f,
+                         "runner_kg": f, "lumps_kg": f}}
+    aggregated (summed) across all machines.
+
+    Auto-detects two common layouts:
+
+    Layout A — compound-header matrix (months repeated for each metric group;
+    Sheets API returns the value in the left-most merged cell only):
+      Row H:   [blank, APR'26, "",     "",    MAY'26, "",     "", ...]
+      Row H+1: [blank, Mould Hrs, Output, Reject, Mould Hrs, Output, ...]
+      Rows N:  [M/C-01, 8046, 49631, 2959, 7876, 52365, 3631, ...]
+
+    Layout B — metric-block (month labels in one header row; each metric
+    starts a new label row, blank in second column):
+      Row H:   [blank, APR'26, MAY'26, JUN'26, JUL'26]
+      [MOULD HOURS, "", "", "", ""]
+      [M/C-01, 8046, 7876, 10461, 11159]
+      [NETT OUTPUT (KG), "", "", "", ""]
+      [M/C-01, 49631, 52365, 80239, 86320]
+    """
+    if not values:
+        return {}
+
+    METRIC_KW = {
+        "HOUR": "hours", "HRS": "hours",
+        "NETT": "output_kg", "NET OUTPUT": "output_kg",
+        "OUTPUT": "output_kg",
+        "REJECT": "reject_kg",
+        "RUNNER": "runner_kg",
+        "LUMP": "lumps_kg",
+        "WASTAGE": "wastage_pct",
+        "GRINDER": "grinder",
+    }
+
+    def _to_ym(s: str) -> Optional[str]:
+        s = str(s).strip()
+        y = parse_month_label(s)
+        if y:
+            return y
+        ds = _parse_date_cell_manpower(s)
+        return ds[:7] if ds and len(ds) >= 7 else None
+
+    # ── Find month-header row (≥2 month-label columns) ───────────────────────
+    month_col_map: dict = {}   # col → ym (distinct month positions)
+    month_row_idx = -1
+    for i, row in enumerate(values[:10]):
+        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
+        if len(tmp) >= 2:
+            month_col_map = tmp
+            month_row_idx = i
+            break
+    if not month_col_map:
+        return {}
+
+    result: dict = {}   # ym → {metric → total}
+
+    # ── Detect Layout A: metric sub-header row directly after month row ───────
+    col_metric_map: dict = {}  # col → metric (Layout A only)
+    if month_row_idx + 1 < len(values):
+        sub = values[month_row_idx + 1]
+        for c, cell in enumerate(sub):
+            s = str(cell).strip().upper()
+            for kw, metric in METRIC_KW.items():
+                if kw in s and s:
+                    col_metric_map[c] = metric
+                    break
+
+    if col_metric_map:
+        # Build full col→ym by propagating month label rightward across blank gaps
+        full_month: dict = {}
+        last_ym = None
+        for c, cell in enumerate(values[month_row_idx]):
+            ym = _to_ym(cell)
+            if ym:
+                last_ym = ym
+            if last_ym:
+                full_month[c] = last_ym
+        for row in values[month_row_idx + 2:]:
+            if not row:
+                continue
+            first = str(row[0]).strip().upper()
+            if not first or "TOTAL" in first or "GRAND" in first:
+                continue
+            for c, metric in col_metric_map.items():
+                ym = full_month.get(c)
+                if ym and c < len(row):
+                    val = num(str(row[c]))
+                    if ym not in result:
+                        result[ym] = {}
+                    result[ym][metric] = result[ym].get(metric, 0.0) + val
+        if result:
+            return result
+
+    # ── Layout B: metric-block ────────────────────────────────────────────────
+    current_metric: Optional[str] = None
+    for row in values[month_row_idx + 1:]:
+        if not row:
+            continue
+        first = str(row[0]).strip().upper()
+        second = str(row[1]).strip() if len(row) > 1 else ""
+        # A label row has a keyword in first cell AND a blank/non-numeric second cell
+        matched_kw_metric = next(
+            (metric for kw, metric in METRIC_KW.items() if kw in first), None
+        )
+        second_is_numeric = False
+        try:
+            float(second.replace(",", ""))
+            second_is_numeric = True
+        except (ValueError, TypeError):
+            pass
+        if matched_kw_metric and not second_is_numeric:
+            current_metric = matched_kw_metric
+            continue
+        if current_metric is None:
+            continue
+        if "TOTAL" in first or "GRAND" in first or not first:
+            continue
+        for c, ym in month_col_map.items():
+            if c < len(row):
+                val = num(str(row[c]))
+                if ym not in result:
+                    result[ym] = {}
+                result[ym][current_metric] = result[ym].get(current_metric, 0.0) + val
+
+    return result
+
+
+def parse_ptmt_mould_tab(
+    values: List[list],
+    *,
+    source_file: str = "",
+    source_tab: str = "",
+) -> dict:
+    """Parse 'PTMT Mould Apr26-Mar27' data-entry tab.
+
+    Expects month labels as column headers; each data row = one mould type
+    with its monthly run count in the corresponding column.
+
+    Returns {YYYY-MM: {"run_moulds": int, "prod_pcs": float, "prod_kg": float}}.
+    """
+    if not values:
+        return {}
+
+    def _to_ym(s: str) -> Optional[str]:
+        s = str(s).strip()
+        y = parse_month_label(s)
+        if y:
+            return y
+        ds = _parse_date_cell_manpower(s)
+        return ds[:7] if ds and len(ds) >= 7 else None
+
+    # Find month header row
+    month_col_map: dict = {}
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
+        if len(tmp) >= 2:
+            month_col_map = tmp
+            header_idx = i
+            break
+    if not month_col_map:
+        return {}
+
+    # Optional: detect a sub-header (run count / pcs / kg) for the first
+    # metric column.  When present the value column per month shifts.
+    # For now: assume first occurrence of month col = run count.
+    # The mould tab has one value per mould per month (run count is primary).
+    result: dict = {}  # ym → {run_moulds, prod_pcs, prod_kg}
+
+    for row in values[header_idx + 1:]:
+        if not row:
+            continue
+        first = str(row[0]).strip().upper()
+        if not first or "TOTAL" in first or "GRAND" in first:
+            continue
+        for c, ym in month_col_map.items():
+            if c < len(row):
+                val = num(str(row[c]))
+                if ym not in result:
+                    result[ym] = {"run_moulds": 0, "prod_pcs": 0.0, "prod_kg": 0.0}
+                result[ym]["run_moulds"] = int(result[ym]["run_moulds"] + val)
+
+    return result
+
+
+def parse_tank_summary_ltr(
+    values: List[list],
+    *,
+    source_tab: str = "",
+) -> dict:
+    """Parse the SUMMARY (LTR) tab from a Tank annual workbook for validation.
+
+    Returns {YYYY-MM: ltr_total} (monthly production totals in Litres).
+    Looks for a header row containing month labels; TOTAL row is excluded.
+    Two common layouts:
+
+    Row-based (months as rows, one Ltr column):
+      [Month | Ltr]
+      [APR'26 | 636250]
+
+    Column-based (months as columns, one summary row):
+      [blank | APR'26 | MAY'26 | ...]
+      [Total Ltr | 636250 | ...]
+    """
+    if not values:
+        return {}
+
+    def _to_ym(s: str) -> Optional[str]:
+        s = str(s).strip()
+        y = parse_month_label(s)
+        if y:
+            return y
+        ds = _parse_date_cell_manpower(s)
+        return ds[:7] if ds and len(ds) >= 7 else None
+
+    result: dict = {}
+
+    # Try column-based: header row has ≥2 month labels as columns
+    for i, row in enumerate(values[:10]):
+        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
+        if len(tmp) >= 2:
+            # Read subsequent rows for Ltr values
+            for drow in values[i + 1:]:
+                if not drow:
+                    continue
+                first = str(drow[0]).strip().upper()
+                if "TOTAL" in first or "GRAND" in first or "LTR" in first or "LITR" in first or first == "":
+                    for c, ym in tmp.items():
+                        if c < len(drow):
+                            val = num(str(drow[c]))
+                            if val > 0:
+                                result[ym] = result.get(ym, 0.0) + val
+            if result:
+                return result
+
+    # Try row-based: first column has month labels
+    ltr_col = -1
+    for i, row in enumerate(values[:10]):
+        for c, cell in enumerate(row):
+            if "LTR" in str(cell).upper() or "LITR" in str(cell).upper() or "TOTAL" in str(cell).upper():
+                ltr_col = c
+                break
+        if ltr_col >= 0:
+            for drow in values[i + 1:]:
+                if not drow:
+                    continue
+                ym = _to_ym(drow[0]) if drow else None
+                if ym and ltr_col < len(drow):
+                    result[ym] = num(str(drow[ltr_col]))
+            break
+
+    return result
+
+
 def _day_from_label(s) -> Optional[int]:
     """Extract a day-of-month (1..31) from a per-date column header.
 

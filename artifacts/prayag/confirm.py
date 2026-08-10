@@ -189,10 +189,17 @@ def build_masters(master_rows: List[Record]) -> dict:
     }
 
 
+# Kinds in ANNUAL_SOURCES that are segment-level summaries only — they do NOT
+# emit per-machine monthly Records and must be excluded from the normal
+# completeness file-check and plant-scope calculations.
+_REPORT_ONLY_KINDS: frozenset = frozenset({"ptmt_moulds_summary"})
+
+
 def expected_files_for(period_months: List[str], daily_used: bool) -> List[dict]:
     """Configured workbooks expected to contribute to this period.
 
-    Monthly grain → the annual M/C summary workbooks.
+    Monthly grain → the annual M/C summary workbooks (excluding segment-summary
+    kinds that don't emit per-machine Records).
     Daily grain   → the per-month daily workbooks of every plant that has one,
                     for the selected months (a plant need not have a monthly grid
                     baseline to contribute daily run hours + output).
@@ -211,6 +218,10 @@ def expected_files_for(period_months: List[str], daily_used: bool) -> List[dict]
                     })
     else:
         for s in sources.ANNUAL_SOURCES:
+            if s.get("kind") in _REPORT_ONLY_KINDS:
+                # Segment-summary source: no per-machine Records emitted;
+                # skip the standard file-completeness check.
+                continue
             out.append({
                 "plant": s["plant"],
                 "file_id": s["file_id"],
@@ -253,7 +264,10 @@ def _scope_plants(period_rows: List[Record], masters: dict, daily_used: bool) ->
     # Monthly grain only holds plants that actually HAVE a monthly grid (the
     # annual summaries). PTMT/TANK have a daily file but no monthly grid, so they
     # must not be held to a roster in a monthly view (they'd show as all-missing).
-    return {s["plant"] for s in sources.ANNUAL_SOURCES}
+    # Segment-summary kinds (ptmt_moulds_summary etc.) do not emit per-machine
+    # Records, so their plants must be excluded from the per-machine scope.
+    return {s["plant"] for s in sources.ANNUAL_SOURCES
+            if s.get("kind") not in _REPORT_ONLY_KINDS}
 
 
 def tier1_completeness(

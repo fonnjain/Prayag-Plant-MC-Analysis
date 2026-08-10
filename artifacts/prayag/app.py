@@ -2311,89 +2311,254 @@ def report_detail(report_id: str):
     if rpt["segments"]:
         rows = _filter_report_segments(rows, rpt["segments"])
 
-    # ── Garden Pipe: de-duplicate sources and attach monthly summary ──────────
+    # ── Garden Pipe: RECOMPUTE from per-machine Records (data-entry tabs MC-1..4)
+    # The SUMMARY tab is a derived roll-up — used for validation delta only.
+    # July output MUST be 32,191 (Records); SUMMARY tab incorrectly shows 68,390.
     garden_monthly: list = []
     garden_integrity_flags: list = []
+    garden_validation_delta: list = []
     if report_id == "garden_summary":
-        # Filter to annual-workbook (monthly grain) records only so daily
-        # workbook rows (grain="daily") don't double-count utilisation or
-        # appear as separate machine-name variants in the per-machine table.
         rows = [r for r in rows if r.grain == "monthly"]
-        from sheets import get_garden_monthly_summary
-        _gm_raw = get_garden_monthly_summary()
-        # Filter by the same period window as the rest of the request
-        from_ym = (data.get("from_iso") or "")[:7]   # "2026-04"
+        from_ym = (data.get("from_iso") or "")[:7]
         to_ym   = (data.get("to_iso")   or "")[:7]
-        for _m in _gm_raw:
-            if _m["month"] == "TOTAL":
-                garden_monthly.append(_m)
-                continue
-            if from_ym and _m["month"] < from_ym:
-                continue
-            if to_ym and _m["month"] > to_ym:
-                continue
-            garden_monthly.append(_m)
-            # ── Data-integrity flags ─────────────────────────────────────────
-            _mon_label = _ym_to_label(_m["month"])
-            if _m["wages"] > 0 and _m["output_kg"] <= 0:
-                garden_integrity_flags.append(
-                    f"{_mon_label}: wages recorded (₹{_m['wages']:,.0f}) "
-                    "but output is zero — labour and production are "
-                    "misaligned in the source workbook. Do not compute a "
-                    "per-kg labour cost for this month."
-                )
-            elif _m["output_kg"] > 0 and _m["wages"] <= 0 and _m["labour_count"] <= 0:
-                garden_integrity_flags.append(
-                    f"{_mon_label}: output recorded ({_m['output_kg']:,.0f} kg) "
-                    "but no labour wages in source — labour cost/kg cannot be "
-                    "computed for this month."
-                )
 
-    # ── PTMT: attach segment-level monthly summary from annual Moulds Summary ──
+        # Step 1: aggregate per-machine Records → segment monthly totals
+        from collections import defaultdict as _gdd
+        _seg_g = _gdd(lambda: {"run_hours": 0.0, "output_kg": 0.0, "reject_kg": 0.0})
+        for r in rows:
+            ym = r.period
+            if from_ym and ym < from_ym: continue
+            if to_ym   and ym > to_ym:   continue
+            _seg_g[ym]["run_hours"] += r.actual_hours or 0.0
+            _seg_g[ym]["output_kg"] += r.total_count  or 0.0
+            _seg_g[ym]["reject_kg"] += r.reject_count or 0.0
+
+        # Step 2: join labour from Segment Cost workbook → "Garden Pipe" segment
+        _garden_labour: dict = {}
+        try:
+            load_report_records("seg_labour")
+        except Exception:
+            pass
+        from sheets import _seg_labour_cache as _gslc
+        from sources import REPORT_SOURCES as _RSg
+        for _lsrc_g in _RSg:
+            if _lsrc_g.get("kind") != "seg_labour": continue
+            _lcg = _gslc.get(_lsrc_g["file_id"])
+            if not _lcg: continue
+            for _lr_g in _lcg["rows"]:
+                if "garden" in str(_lr_g.get("segment", "")).lower():
+                    _lm_g = _lr_g["month"]
+                    if _lm_g not in _garden_labour:
+                        _garden_labour[_lm_g] = {"labour_count": 0, "wages": 0.0}
+                    _garden_labour[_lm_g]["labour_count"] = max(
+                        _garden_labour[_lm_g]["labour_count"], int(_lr_g.get("labour") or 0)
+                    )
+                    _garden_labour[_lm_g]["wages"] += _lr_g.get("total") or 0.0
+
+        # Step 3: build garden_monthly rows and TOTAL
+        _all_ym_g = sorted(_seg_g.keys())
+        _tot_g = {"run_hours": 0.0, "output_kg": 0.0, "reject_kg": 0.0, "lc": 0, "wages": 0.0}
+        for ym in _all_ym_g:
+            s = _seg_g[ym]
+            lab = _garden_labour.get(ym, {})
+            wages = lab.get("wages", 0.0)
+            lc    = lab.get("labour_count", 0)
+            rej_pct = round(s["reject_kg"] / s["output_kg"] * 100, 2) if s["output_kg"] > 0 else 0.0
+            pkg     = round(wages / s["output_kg"], 2) if wages > 0 and s["output_kg"] > 0 else 0.0
+            garden_monthly.append({
+                "month":         ym,
+                "run_hours":     round(s["run_hours"], 1),
+                "output_kg":     round(s["output_kg"], 1),
+                "reject_kg":     round(s["reject_kg"], 1),
+                "reject_pct":    rej_pct,
+                "labour_count":  lc,
+                "wages":         wages,
+                "per_kg_cost":   pkg,
+            })
+            _tot_g["run_hours"] += s["run_hours"]
+            _tot_g["output_kg"] += s["output_kg"]
+            _tot_g["reject_kg"] += s["reject_kg"]
+            _tot_g["lc"]        += lc
+            _tot_g["wages"]     += wages
+            _mon_label = _ym_to_label(ym)
+            if wages > 0 and s["output_kg"] <= 0:
+                garden_integrity_flags.append(
+                    f"{_mon_label}: wages recorded (₹{wages:,.0f}) but output is zero — "
+                    "labour and production are misaligned in the source workbook. "
+                    "Do not compute a per-kg labour cost for this month."
+                )
+            elif s["output_kg"] > 0 and wages <= 0:
+                garden_integrity_flags.append(
+                    f"{_mon_label}: output recorded ({s['output_kg']:,.0f} kg) but no "
+                    "labour wages in source — labour cost/kg cannot be computed."
+                )
+        if garden_monthly:
+            _tr_g = (_tot_g["reject_kg"] / _tot_g["output_kg"] * 100) if _tot_g["output_kg"] > 0 else 0.0
+            _tp_g = (_tot_g["wages"] / _tot_g["output_kg"]) if (_tot_g["wages"] > 0 and _tot_g["output_kg"] > 0) else 0.0
+            garden_monthly.append({
+                "month": "TOTAL",
+                "run_hours":    round(_tot_g["run_hours"], 1),
+                "output_kg":    round(_tot_g["output_kg"], 1),
+                "reject_kg":    round(_tot_g["reject_kg"], 1),
+                "reject_pct":   round(_tr_g, 2),
+                "labour_count": _tot_g["lc"],
+                "wages":        _tot_g["wages"],
+                "per_kg_cost":  round(_tp_g, 2),
+            })
+
+        # Step 4: SUMMARY tab → validation delta (architecture: NOT the primary source)
+        from sheets import get_garden_monthly_summary as _gms
+        _gm_summary = _gms()
+        _sv_by_ym_g = {m["month"]: m for m in _gm_summary}
+        for m in garden_monthly:
+            if m["month"] == "TOTAL": continue
+            _sv_g = _sv_by_ym_g.get(m["month"])
+            if not _sv_g: continue
+            _delta_g = m["output_kg"] - (_sv_g.get("output_kg") or 0)
+            if abs(_delta_g) > 5:
+                garden_validation_delta.append({
+                    "month":          _ym_to_label(m["month"]),
+                    "recomputed_kg":  m["output_kg"],
+                    "summary_kg":     round(_sv_g.get("output_kg") or 0, 1),
+                    "delta_kg":       round(_delta_g, 1),
+                })
+
+    # ── PTMT: data-entry aggregates + labour joined from Segment Cost workbook ──
+    # get_ptmt_monthly_summary() now returns data-entry tab aggregates (not SUMMARY).
     ptmt_monthly: list = []
     ptmt_integrity_flags: list = []
     ptmt_per_kg_mismatch: dict = {}
     ptmt_machine_overlap: list = []
+    ptmt_source_kind: str = "unknown"
+    ptmt_validation_delta: list = []
     if report_id == "ptmt_summary":
-        from sheets import get_ptmt_monthly_summary
+        from sheets import (
+            get_ptmt_monthly_summary,
+            get_ptmt_source_kind as _gpsk,
+            get_ptmt_summary_validation as _gpsv,
+        )
         _pm_raw = get_ptmt_monthly_summary()
+        ptmt_source_kind = _gpsk()
+        _summary_rows_p = _gpsv()
+        _summary_by_ym_p = {m["month"]: m for m in _summary_rows_p}
+
         from_ym = (data.get("from_iso") or "")[:7]
         to_ym   = (data.get("to_iso")   or "")[:7]
+
+        # Join labour from Segment Cost workbook for PTMT segment
+        _ptmt_labour: dict = {}
+        try:
+            load_report_records("seg_labour")
+        except Exception:
+            pass
+        from sheets import _seg_labour_cache as _slc_p
+        from sources import REPORT_SOURCES as _RS_p
+        for _lsrc_p in _RS_p:
+            if _lsrc_p.get("kind") != "seg_labour": continue
+            _lc_p = _slc_p.get(_lsrc_p["file_id"])
+            if not _lc_p: continue
+            for _lr_p in _lc_p["rows"]:
+                _sn = str(_lr_p.get("segment", "")).strip().upper()
+                if _sn == "PTMT" or _sn.startswith("PTMT"):
+                    _lm_p = _lr_p["month"]
+                    if _lm_p not in _ptmt_labour:
+                        _ptmt_labour[_lm_p] = {"labour_count": 0, "wages": 0.0}
+                    _ptmt_labour[_lm_p]["labour_count"] = max(
+                        _ptmt_labour[_lm_p]["labour_count"], int(_lr_p.get("labour") or 0)
+                    )
+                    _ptmt_labour[_lm_p]["wages"] += _lr_p.get("total") or 0.0
+
+        _ptmt_tot_wages = 0.0
+        _ptmt_tot_out   = 0.0
+        _ptmt_tot_lc    = 0
+
         for _m in _pm_raw:
             if _m["month"] == "TOTAL":
-                ptmt_monthly.append(_m)
-                continue
-            if from_ym and _m["month"] < from_ym:
-                continue
-            if to_ym and _m["month"] > to_ym:
-                continue
-            ptmt_monthly.append(_m)
-            # Integrity flag: output present but wages blank
-            _ml = _ym_to_label(_m["month"])
-            if _m["nett_output_kg"] > 0 and _m["paid_wages"] <= 0:
+                continue   # rebuilt after labour join
+            if from_ym and _m["month"] < from_ym: continue
+            if to_ym   and _m["month"] > to_ym:   continue
+
+            lab_p  = _ptmt_labour.get(_m["month"], {})
+            wages_p = lab_p.get("wages", 0.0)
+            lc_p   = lab_p.get("labour_count", 0)
+            out_kg = _m["nett_output_kg"]
+            pkg_p  = round(wages_p / out_kg, 2) if wages_p > 0 and out_kg > 0 else 0.0
+
+            _sv_mp = _summary_by_ym_p.get(_m["month"], {})
+            _pkg_sheet_p   = _sv_mp.get("per_kg_sheet", 0.0) or 0.0
+            _pkg_mismatch_p = (
+                _pkg_sheet_p > 0 and pkg_p > 0
+                and abs(pkg_p - _pkg_sheet_p) / max(pkg_p, _pkg_sheet_p) > 0.02
+            )
+
+            row_p = dict(_m)
+            row_p.update({
+                "labour_count": lc_p, "paid_wages": wages_p,
+                "per_kg_cost": pkg_p, "per_kg_sheet": _pkg_sheet_p,
+                "per_kg_computed": pkg_p, "per_kg_mismatch": _pkg_mismatch_p,
+            })
+            ptmt_monthly.append(row_p)
+            _ptmt_tot_wages += wages_p
+            _ptmt_tot_out   += out_kg
+            _ptmt_tot_lc    += lc_p
+
+            _ml_p = _ym_to_label(_m["month"])
+            if out_kg > 0 and wages_p <= 0:
                 ptmt_integrity_flags.append(
-                    f"{_ml}: output recorded ({_m['nett_output_kg']:,.0f} kg) "
-                    "but no labour wages in source — ₹/kg cannot be computed "
-                    "for this month."
+                    f"{_ml_p}: output recorded ({out_kg:,.0f} kg) but no labour wages "
+                    "in source — ₹/kg cannot be computed for this month."
                 )
-            # ₹/kg basis mismatch: sheet value ≠ wages ÷ Nett Output by >2 %
-            if _m.get("per_kg_mismatch"):
+            if _pkg_mismatch_p:
                 ptmt_per_kg_mismatch[_m["month"]] = {
-                    "sheet": _m["per_kg_sheet"],
-                    "computed": _m["per_kg_computed"],
+                    "sheet": _pkg_sheet_p, "computed": pkg_p,
                 }
-        # Machine overlap: PTMT_GROUPS (55 machines) vs annual Moulds (48 moulds).
-        # The annual covers injection machines only; non-injection groups are outside.
-        import sources as _src2
+
+        # Rebuild TOTAL row with joined labour
+        if ptmt_monthly:
+            _tot_raw_p = next((m for m in _pm_raw if m["month"] == "TOTAL"), None)
+            if _tot_raw_p:
+                _tot_pkg_p = round(_ptmt_tot_wages / _ptmt_tot_out, 2) if (
+                    _ptmt_tot_wages > 0 and _ptmt_tot_out > 0) else 0.0
+                _sv_tot_p = _summary_by_ym_p.get("TOTAL", {})
+                _pkg_tot_sheet = _sv_tot_p.get("per_kg_sheet", 0.0) or 0.0
+                _tot_mm = (
+                    _pkg_tot_sheet > 0 and _tot_pkg_p > 0
+                    and abs(_tot_pkg_p - _pkg_tot_sheet) / max(_tot_pkg_p, _pkg_tot_sheet) > 0.02
+                )
+                if _tot_mm:
+                    ptmt_per_kg_mismatch["TOTAL"] = {
+                        "sheet": _pkg_tot_sheet, "computed": _tot_pkg_p,
+                    }
+                _tot_row_p = dict(_tot_raw_p)
+                _tot_row_p.update({
+                    "labour_count": _ptmt_tot_lc, "paid_wages": _ptmt_tot_wages,
+                    "per_kg_cost": _tot_pkg_p, "per_kg_sheet": _pkg_tot_sheet,
+                    "per_kg_computed": _tot_pkg_p, "per_kg_mismatch": _tot_mm,
+                })
+                ptmt_monthly.append(_tot_row_p)
+
+        # Validation delta: recomputed vs SUMMARY tab
+        for _m in ptmt_monthly:
+            if _m["month"] == "TOTAL": continue
+            _sv_d = _summary_by_ym_p.get(_m["month"])
+            if not _sv_d: continue
+            _dd = _m["nett_output_kg"] - (_sv_d.get("nett_output_kg") or 0)
+            if abs(_dd) > 5:
+                ptmt_validation_delta.append({
+                    "month":          _ym_to_label(_m["month"]),
+                    "recomputed_kg":  _m["nett_output_kg"],
+                    "summary_kg":     _sv_d.get("nett_output_kg") or 0,
+                    "delta_kg":       round(_dd, 1),
+                })
+
+        # Machine overlap: 55 app machines vs 48 annual injection moulds
+        import sources as _src2p
         _overlap_rows = []
-        for grp, codes in _src2.PTMT_GROUPS.items():
-            in_annual = (
-                "Injection" in grp
-            )  # only injection groups match annual mould-machine scope
+        for grp, codes in _src2p.PTMT_GROUPS.items():
+            in_annual = "Injection" in grp
             for code in codes:
                 _overlap_rows.append({
-                    "machine": f"PTMT {code}",
-                    "group": grp,
+                    "machine": f"PTMT {code}", "group": grp,
                     "in_annual_moulds": in_annual,
                 })
         ptmt_machine_overlap = sorted(_overlap_rows, key=lambda r: (
@@ -2433,10 +2598,13 @@ def report_detail(report_id: str):
         "narrative": narrative,
         "garden_monthly": garden_monthly,
         "garden_integrity_flags": garden_integrity_flags,
+        "garden_validation_delta": garden_validation_delta,
         "ptmt_monthly": ptmt_monthly,
         "ptmt_integrity_flags": ptmt_integrity_flags,
         "ptmt_per_kg_mismatch": ptmt_per_kg_mismatch,
         "ptmt_machine_overlap": ptmt_machine_overlap,
+        "ptmt_source_kind": ptmt_source_kind,
+        "ptmt_validation_delta": ptmt_validation_delta,
     })
     return render_template("report_detail.html", **ctx)
 
@@ -4564,6 +4732,26 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
             "the pcs count discrepancy should be verified with the source team."
         )
 
+    # SUMMARY (LTR) tab → validation delta (architecture: NOT the primary source)
+    from sheets import get_tank_summary_ltr_validation as _gtsv
+    _ltr_val = _gtsv(family)
+    tank_summary_delta: list = []
+    if _ltr_val:
+        from collections import defaultdict as _tdd
+        _recomp_ltr: dict = _tdd(float)
+        for r in recs:
+            _recomp_ltr[r.period] += r.total_count or 0.0
+        for _ym_s, _sum_ltr in sorted(_ltr_val.items()):
+            _re_ltr = _recomp_ltr.get(_ym_s, 0.0)
+            _d_ltr = _re_ltr - _sum_ltr
+            if abs(_d_ltr) > 100:
+                tank_summary_delta.append({
+                    "month":          _month_disp(_ym_s),
+                    "recomputed_ltr": round(_re_ltr),
+                    "summary_ltr":    round(_sum_ltr),
+                    "delta_ltr":      round(_d_ltr),
+                })
+
     return render_template("report_tank_location.html",
         plant=plant, location=location, title=title,
         items=dict(items), item_list=sorted(items.keys()),
@@ -4571,6 +4759,7 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         overall=overall.to_dict(),
         validation=validation,
         integrity_flags=integrity_flags,
+        tank_summary_delta=tank_summary_delta,
         period_label=pinfo["label"], period=period_arg,
         summary_only=True,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
