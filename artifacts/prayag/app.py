@@ -2346,7 +2346,12 @@ def report_detail(report_id: str):
             _lcg = _gslc.get(_lsrc_g["file_id"])
             if not _lcg: continue
             for _lr_g in _lcg["rows"]:
-                if "garden" in str(_lr_g.get("segment", "")).lower():
+                # Exact match: the dedicated "Garden Pipe" named tab is the
+                # authoritative wages source (Fix 3). Broad "garden in segment"
+                # would also pick up UNIT-3 rows whose carry_seg happens to
+                # contain "Garden" — those rows carry UNIT-level wages, not
+                # per-segment wages, and must not be double-counted.
+                if str(_lr_g.get("segment", "")).strip() == "Garden Pipe":
                     _lm_g = _lr_g["month"]
                     if _lm_g not in _garden_labour:
                         _garden_labour[_lm_g] = {"labour_count": 0, "wages": 0.0}
