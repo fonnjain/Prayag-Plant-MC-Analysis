@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from mp_engine import (
     EngineResult, MachineLoad, CoverageGaps, PlanTotals,
     ItemResult, AssignedPortion, REPORT_11_GROUPS,
+    FittingEngineResult, FittingItemResult, FittingAssignedPortion,
 )
 from mp_scheduler import ScheduleResult, WeekFillRow
 
@@ -429,4 +430,206 @@ class TestRunViewDownloadLinks:
         body = r.data.decode()
         assert "Re-run" in body and "Freeze" in body, (
             "Expected Re-run & Freeze button on a pending run"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fitting-only run fixtures
+# ---------------------------------------------------------------------------
+
+_FITTING_ONLY_RUN = {
+    "id": 12,
+    "segment": "PIPE",
+    "month": "2026-08",
+    "uploaded_demand": [],          # no pipe demand
+    "fitting_demand": _FITTING_DICT,
+    "frozen_inputs": None,
+    "results": None,
+    "status": "pending",
+    "created_at": None,
+    "uploaded_file_path": "",
+}
+
+_FITTING_ONLY_FROZEN_RUN = {
+    **_FITTING_ONLY_RUN,
+    "id": 13,
+    "status": "draft",
+    "results": {
+        "pipe": {},                  # no pipe results
+        "fitting": {
+            "machine_loads": [
+                {"machine": "MOD-1", "capacity_hrs": 250, "assigned_hrs": 200,
+                 "utilisation_pct": 80.0, "machine_days": 25, "material_kg": 5000,
+                 "fresh_compound_kg": 3750, "pulverizer_kg": 1250,
+                 "staffing_ok": True, "operators_ot": 0, "support_w": 0}
+            ],
+            "baseline_machine_loads": [],
+            "items": [],
+            "coverage_gaps": {"no_weight": [], "no_machine": [],
+                              "idle_machines": [], "locked_out_machines": []},
+            "totals": {"total_qty_pcs": 500, "total_material_kg": 250,
+                       "total_fresh_compound_kg": 187, "total_pulverizer_kg": 63,
+                       "routable_material_kg": 250, "routable_fresh_compound_kg": 187,
+                       "routable_pulverizer_kg": 63},
+            "params_used": {"waste_pct": 4.0, "pulverizer_pct": 25.0},
+            "n_route_estimated": 0, "n_unroutable": 0,
+            "effective_costs": {}, "cost_by_material": {}, "n_unpriced": 0,
+        },
+    },
+}
+
+
+def _fitting_item_result() -> FittingItemResult:
+    return FittingItemResult(
+        item_code="FIT-001", raw_code="FIT-001",
+        material="CPVC", qty_pcs=500.0,
+        weight_per_pc_kg=0.5, material_kg=250.0,
+        fresh_compound_kg=187.5, pulverizer_kg=62.5,
+        pcs_per_hr=100.0, rate_estimated=False,
+        machine_hrs=5.0, cavity=4.0, cycle_time_sec=144.0,
+        num_cycles=125.0, capable_machines=["MOD-1"],
+        route_estimated=False,
+        assignments=[
+            FittingAssignedPortion(machine="MOD-1", hrs=5.0,
+                                   qty_pcs=500.0, material_kg=250.0),
+        ],
+        has_weight=True, has_machine=True,
+    )
+
+
+def _fitting_engine_result() -> FittingEngineResult:
+    ml = MachineLoad(
+        machine="MOD-1", capacity_hrs=250.0, assigned_hrs=200.0,
+        utilisation_pct=80.0, machine_days=25.0,
+        material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    return FittingEngineResult(
+        segment="PIPE", effective_month="2026-08",
+        items=[_fitting_item_result()],
+        machine_loads=[ml],
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[],
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=500.0, total_material_kg=250.0,
+            total_fresh_compound_kg=187.5, total_pulverizer_kg=62.5,
+            routable_material_kg=250.0, routable_fresh_compound_kg=187.5,
+            routable_pulverizer_kg=62.5,
+        ),
+        baseline_machine_loads=[ml],
+        params_used={"waste_pct": 4.0, "pulverizer_pct": 25.0},
+        n_route_estimated=0, n_unroutable=0,
+    )
+
+
+def _fitting_schedule_result() -> ScheduleResult:
+    wf = WeekFillRow(
+        week=1, machine="MOD-1", capacity_hrs=62.5,
+        scheduled_hrs=50.0, idle_hrs=12.5,
+        utilisation_pct=80.0, changeovers=1, excess_kg=0.0,
+        origin_breakdown={1: 50.0},
+    )
+    return ScheduleResult(
+        segment="PIPE", effective_month="2026-08",
+        blocks=[], weekly_fill=[wf], unfinished=[],
+        total_capacity_hrs=250.0, total_scheduled_hrs=200.0,
+        total_idle_hrs=50.0, total_excess_kg=0.0,
+        total_changeovers=1, week_days=[6, 6, 6, 7], params_used={},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: fitting-only run (no pipe demand) renders without errors
+# ---------------------------------------------------------------------------
+class TestFittingOnlyRunView:
+    """Run with fitting demand only (no pipe demand) must render the fitting
+    weekly fill block without 500 errors or missing-variable references."""
+
+    def _render(self, client, run_row=None):
+        if run_row is None:
+            run_row = _FITTING_ONLY_RUN
+        fit_res   = _fitting_engine_result()
+        fit_sched = _fitting_schedule_result()
+        with patch("mp_model.get_plan_run_by_id", MagicMock(return_value=run_row)), \
+             patch("app._mp2_result_from_run",          MagicMock(return_value=None)), \
+             patch("app._mp3_fitting_result_from_run",  MagicMock(return_value=fit_res)), \
+             patch("app._mp_schedule_from_run",         MagicMock(return_value=None)), \
+             patch("app._mp_fitting_schedule_from_run", MagicMock(return_value=fit_sched)):
+            return client.get("/machine-planning/runs/12")
+
+    def test_page_renders_200(self, client):
+        """Fitting-only run must return 200, not a 500 or missing-variable crash."""
+        r = self._render(client)
+        assert r.status_code == 200, (
+            f"Expected 200 for fitting-only run; got {r.status_code}: "
+            f"{r.data[:300].decode(errors='replace')}"
+        )
+
+    def test_fitting_weekly_fill_section_present(self, client):
+        """Fitting Moulding — Weekly Fill block must appear in the page."""
+        r = self._render(client)
+        body = r.data.decode()
+        assert "Fitting Moulding" in body or "Weekly Fill" in body, (
+            "Expected 'Fitting Moulding' / 'Weekly Fill' heading in fitting-only run"
+        )
+
+    def test_fitting_stats_row_rendered(self, client):
+        """Capacity / Scheduled / Idle / Changeovers stat cards must appear."""
+        r = self._render(client)
+        body = r.data.decode()
+        # Stat card labels
+        assert "Capacity" in body,    "Expected 'Capacity' stat card"
+        assert "Scheduled" in body,   "Expected 'Scheduled' stat card"
+        assert "Idle" in body,        "Expected 'Idle' stat card"
+        assert "Changeovers" in body, "Expected 'Changeovers' stat card"
+
+    def test_fitting_stats_values_rendered(self, client):
+        """Stat cards must contain the fixture values: 250h capacity, 200h scheduled."""
+        r = self._render(client)
+        body = r.data.decode()
+        assert "250" in body, "Expected total capacity 250 in fitting-only run page"
+        assert "200" in body, "Expected total scheduled 200 in fitting-only run page"
+
+    def test_fitting_machine_appears_in_weekly_table(self, client):
+        """MOD-1 must appear in the fitting weekly fill table."""
+        r = self._render(client)
+        body = r.data.decode()
+        assert "MOD-1" in body, "Expected MOD-1 in fitting weekly fill table"
+
+    def test_pipe_section_absent(self, client):
+        """When there is no pipe plan the pipe section header must not render.
+
+        "Extrusion Machines" is unique to the PIPE · Extrusion Machines label;
+        the fitting section says "Moulding Machine Load" so this is safe.
+        """
+        r = self._render(client)
+        body = r.data.decode()
+        assert "Extrusion Machines" not in body, (
+            "Pipe 'Extrusion Machines' section label should be absent for a fitting-only run"
+        )
+
+    def test_pipe_schedule_section_absent(self, client):
+        """Pipe 'Shift Schedule — Weekly Fill' must not appear when pipe plan is absent."""
+        r = self._render(client)
+        body = r.data.decode()
+        # The pipe weekly fill section is guarded by {% if schedule_result %}
+        # Only assert the pipe-specific "Full Schedule" link is absent
+        assert "Full Schedule" not in body, (
+            "Pipe 'Full Schedule' link should not appear for a fitting-only run"
+        )
+
+    def test_frozen_fitting_only_run_renders_200(self, client):
+        """A frozen run with no pipe results and fitting results must return 200."""
+        fit_res   = _fitting_engine_result()
+        fit_sched = _fitting_schedule_result()
+        with patch("mp_model.get_plan_run_by_id", MagicMock(return_value=_FITTING_ONLY_FROZEN_RUN)), \
+             patch("app._mp2_result_from_run",          MagicMock(return_value=None)), \
+             patch("app._mp3_fitting_result_from_run",  MagicMock(return_value=fit_res)), \
+             patch("app._mp_schedule_from_run",         MagicMock(return_value=None)), \
+             patch("app._mp_fitting_schedule_from_run", MagicMock(return_value=fit_sched)):
+            r = client.get("/machine-planning/runs/13")
+        assert r.status_code == 200, (
+            f"Frozen fitting-only run returned {r.status_code}: "
+            f"{r.data[:300].decode(errors='replace')}"
         )
