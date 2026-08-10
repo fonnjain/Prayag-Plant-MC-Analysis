@@ -1553,6 +1553,35 @@ def test_route_single_report_11b_failing_returns_non_500():
     )
 
 
+def test_route_single_report_12_failing_returns_non_500():
+    """GET /machine-planning/report/12 returns a non-500 when report_12_bytes raises.
+
+    The individual download route must catch the RuntimeError and return a 400
+    (bad request / temporarily unavailable) rather than propagating a 500 with
+    a server traceback to the operator's browser.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    _pipe_r, fit_r, _pipe_s, _fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(r, "report_12_bytes",
+                      side_effect=RuntimeError("simulated report-12 failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/12")
+
+    assert resp.status_code != 500, (
+        f"A RuntimeError in report_12_bytes must NOT produce a 500 traceback; "
+        f"got {resp.status_code}"
+    )
+    assert resp.status_code < 500, (
+        f"Expected a 4xx response when report_12_bytes raises; got {resp.status_code}"
+    )
+
+
 def test_route_single_report_11a_succeeds_when_11b_would_fail():
     """GET /machine-planning/report/11A returns 200 + xlsx even when 11B would fail.
 
