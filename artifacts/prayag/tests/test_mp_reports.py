@@ -1309,6 +1309,41 @@ def test_route_zip_partial_success_when_report_11_raises():
     )
 
 
+def test_route_zip_returns_500_when_all_generators_raise():
+    """ZIP route returns 500 when every single report generator raises an exception.
+
+    The abort(500) guard at built==0 must fire, not return a partial ZIP.
+    The response body must NOT contain a ZIP magic header (PK\\x03\\x04).
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    _boom = RuntimeError("simulated total failure")
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11_bytes", side_effect=_boom), \
+         patch.object(r, "report_11x_bytes", side_effect=_boom), \
+         patch.object(r, "report_12_bytes", side_effect=_boom), \
+         patch.object(r, "consolidated_plan_bytes", side_effect=_boom):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 500, (
+        f"Expected 500 when all report generators raise; got {resp.status_code}"
+    )
+    assert resp.data[:4] != b"PK\x03\x04", (
+        f"Response must NOT be a valid ZIP when all generators fail; "
+        f"first bytes={resp.data[:4]!r}"
+    )
+
+
 def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
     """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
     sheet and the fitting-machine report (report-12) when both plans are present."""
