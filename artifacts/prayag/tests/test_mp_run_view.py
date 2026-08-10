@@ -434,7 +434,7 @@ class TestRunViewDownloadLinks:
 
 
 # ---------------------------------------------------------------------------
-# Fitting-only run fixtures
+# Fitting-only run fixtures (task 102)
 # ---------------------------------------------------------------------------
 
 _FITTING_ONLY_RUN = {
@@ -479,15 +479,20 @@ _FITTING_ONLY_FROZEN_RUN = {
 }
 
 
-def _fitting_item_result() -> FittingItemResult:
-    return FittingItemResult(
+# ---------------------------------------------------------------------------
+# Helpers for fitting engine / schedule fixtures
+# ---------------------------------------------------------------------------
+
+def _fitting_item_result(**kw) -> FittingItemResult:
+    defaults = dict(
         item_code="FIT-001", raw_code="FIT-001",
         material="CPVC", qty_pcs=500.0,
         weight_per_pc_kg=0.5, material_kg=250.0,
         fresh_compound_kg=187.5, pulverizer_kg=62.5,
         pcs_per_hr=100.0, rate_estimated=False,
         machine_hrs=5.0, cavity=4.0, cycle_time_sec=144.0,
-        num_cycles=125.0, capable_machines=["MOD-1"],
+        num_cycles=125.0,
+        capable_machines=["MOD-1"],
         route_estimated=False,
         assignments=[
             FittingAssignedPortion(machine="MOD-1", hrs=5.0,
@@ -495,19 +500,30 @@ def _fitting_item_result() -> FittingItemResult:
         ],
         has_weight=True, has_machine=True,
     )
+    defaults.update(kw)
+    return FittingItemResult(**defaults)
 
 
-def _fitting_engine_result() -> FittingEngineResult:
-    ml = MachineLoad(
-        machine="MOD-1", capacity_hrs=250.0, assigned_hrs=200.0,
-        utilisation_pct=80.0, machine_days=25.0,
-        material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
-        staffing_ok=True, operators_ot=0, support_w=0,
-    )
+def _fitting_engine_result(machines=("MOD-1",)) -> FittingEngineResult:
+    """Build a minimal FittingEngineResult for tests.
+
+    Default machine is MOD-1 (matching _FITTING_ONLY_FROZEN_RUN) so existing
+    task-102 tests that assert 'MOD-1 in body' continue to pass.  Pass an
+    explicit machines= tuple to get a different set (e.g. task-104 sparse tests).
+    """
+    ml = [
+        MachineLoad(
+            machine=mc, capacity_hrs=250.0, assigned_hrs=200.0,
+            utilisation_pct=80.0, machine_days=25.0,
+            material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
+            staffing_ok=True, operators_ot=0, support_w=0,
+        )
+        for mc in machines
+    ]
     return FittingEngineResult(
         segment="PIPE", effective_month="2026-08",
         items=[_fitting_item_result()],
-        machine_loads=[ml],
+        machine_loads=ml,
         coverage_gaps=CoverageGaps(
             no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[],
         ),
@@ -517,9 +533,54 @@ def _fitting_engine_result() -> FittingEngineResult:
             routable_material_kg=250.0, routable_fresh_compound_kg=187.5,
             routable_pulverizer_kg=62.5,
         ),
-        baseline_machine_loads=[ml],
+        baseline_machine_loads=ml,
         params_used={"waste_pct": 4.0, "pulverizer_pct": 25.0},
+        effective_costs={}, cost_by_material={}, n_unpriced=0,
         n_route_estimated=0, n_unroutable=0,
+    )
+
+def _sparse_fitting_schedule_result() -> ScheduleResult:
+    """Two fitting machines where MC-F1 covers weeks 1+2 and MC-F2 covers weeks 1+2+3.
+
+    Week 4 has no machine data at all → cap=0 → template must show '—' not crash.
+
+    Expected per-week totals:
+      Week 1: sched=200 (120+80), cap=250 (150+100) → 80%
+      Week 2: sched=200 (120+80), cap=250 (150+100) → 80%
+      Week 3: sched=80,  cap=100  (MC-F2 only)      → 80%
+      Week 4: cap=0 → '—'
+    """
+    rows = [
+        # MC-F1 weeks 1 and 2
+        WeekFillRow(week=1, machine="MC-F1", capacity_hrs=150.0,
+                    scheduled_hrs=120.0, idle_hrs=30.0,
+                    utilisation_pct=80.0, changeovers=1, excess_kg=0.0,
+                    origin_breakdown={1: 120.0}),
+        WeekFillRow(week=2, machine="MC-F1", capacity_hrs=150.0,
+                    scheduled_hrs=120.0, idle_hrs=30.0,
+                    utilisation_pct=80.0, changeovers=0, excess_kg=0.0,
+                    origin_breakdown={2: 120.0}),
+        # MC-F2 weeks 1, 2, and 3
+        WeekFillRow(week=1, machine="MC-F2", capacity_hrs=100.0,
+                    scheduled_hrs=80.0, idle_hrs=20.0,
+                    utilisation_pct=80.0, changeovers=0, excess_kg=0.0,
+                    origin_breakdown={1: 80.0}),
+        WeekFillRow(week=2, machine="MC-F2", capacity_hrs=100.0,
+                    scheduled_hrs=80.0, idle_hrs=20.0,
+                    utilisation_pct=80.0, changeovers=1, excess_kg=0.0,
+                    origin_breakdown={2: 80.0}),
+        WeekFillRow(week=3, machine="MC-F2", capacity_hrs=100.0,
+                    scheduled_hrs=80.0, idle_hrs=20.0,
+                    utilisation_pct=80.0, changeovers=0, excess_kg=0.0,
+                    origin_breakdown={3: 80.0}),
+        # Week 4: no rows for either machine (sparse — triggers cap=0 path)
+    ]
+    return ScheduleResult(
+        segment="FITTING", effective_month="2026-08",
+        blocks=[], weekly_fill=rows, unfinished=[],
+        total_capacity_hrs=600.0, total_scheduled_hrs=480.0,
+        total_idle_hrs=120.0, total_excess_kg=0.0,
+        total_changeovers=2, week_days=[6, 6, 6, 7], params_used={},
     )
 
 
@@ -633,3 +694,146 @@ class TestFittingOnlyRunView:
             f"Frozen fitting-only run returned {r.status_code}: "
             f"{r.data[:300].decode(errors='replace')}"
         )
+
+# ---------------------------------------------------------------------------
+# BeautifulSoup helpers for fitting weekly fill table parsing
+# ---------------------------------------------------------------------------
+
+def _get_fitting_fill_table(html: str):
+    """Return the <table> element immediately following the 'Fitting Moulding — Weekly Fill' h3."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    for h3 in soup.find_all("h3"):
+        if "Fitting Moulding" in h3.get_text() and "Weekly Fill" in h3.get_text():
+            # The table is a few levels below the h3 (not a direct sibling), so use
+            # find_next("table") which searches forward in document order.
+            return h3.find_next("table")
+    return None
+
+
+def _tfoot_cell_texts(table) -> list:
+    """Stripped text of every <td> in the tfoot row."""
+    tfoot = table.find("tfoot")
+    if not tfoot:
+        return []
+    row = tfoot.find("tr")
+    if not row:
+        return []
+    return [td.get_text(strip=True) for td in row.find_all("td")]
+
+
+def _tbody_machine_row_texts(table, machine: str) -> list:
+    """Stripped <td> texts for the tbody row whose first cell equals machine."""
+    tbody = table.find("tbody")
+    if not tbody:
+        return []
+    for tr in tbody.find_all("tr"):
+        cells = tr.find_all("td")
+        if cells and cells[0].get_text(strip=True) == machine:
+            return [td.get_text(strip=True) for td in cells]
+    return []
+
+
+class TestFittingWeeklyFillTotals:
+    """Totals row in the fitting weekly fill table must aggregate correctly
+    when some machines have no WeekFillRow entry for a given week.
+
+    Sparse fixture:
+      MC-F1: weeks 1+2 only  (sched=120, cap=150 each; changeovers: W1=1, W2=0)
+      MC-F2: weeks 1+2+3     (sched=80,  cap=100 each; changeovers: W1=0, W2=1, W3=0)
+      Week 4: no machine has data → cap=0
+
+    Expected tfoot cells (label | W1-sched W1-% | W2-sched W2-% | W3-sched W3-% | W4-sched W4-% | CO):
+      Totals | 200 80% | 200 80% | 80 80% | 0 — | 2
+    """
+
+    def _render_body(self, client) -> str:
+        fitting_res   = _fitting_engine_result(machines=("MC-F1", "MC-F2"))
+        fitting_sched = _sparse_fitting_schedule_result()
+
+        with patch("mp_model.get_plan_run_by_id", MagicMock(return_value=_PENDING_RUN)), \
+             patch("app._mp2_result_from_run",          MagicMock(return_value=_engine_result())), \
+             patch("app._mp3_fitting_result_from_run",  MagicMock(return_value=fitting_res)), \
+             patch("app._mp_schedule_from_run",         MagicMock(return_value=_schedule_result())), \
+             patch("app._mp_fitting_schedule_from_run", MagicMock(return_value=fitting_sched)), \
+             patch("app._build_plan_lookups", MagicMock(return_value=(
+                 {"has_data": False}, {"has_data": False}
+             ))):
+            r = client.get("/machine-planning/runs/11")
+        assert r.status_code == 200, (
+            f"Expected 200 from run view with sparse fitting schedule, got {r.status_code}"
+        )
+        return r.data.decode()
+
+    def test_page_renders_200(self, client):
+        """Sparse fitting schedule must not crash the template (no divide-by-zero)."""
+        self._render_body(client)  # assertion is inside _render_body
+
+    def test_fitting_fill_table_present(self, client):
+        """The 'Fitting Moulding — Weekly Fill' table must be found in the page."""
+        body = self._render_body(client)
+        tbl  = _get_fitting_fill_table(body)
+        assert tbl is not None, (
+            "Could not locate the 'Fitting Moulding — Weekly Fill' table in the rendered page"
+        )
+
+    def test_tfoot_week1_and_week2_both_machines(self, client):
+        """W1 and W2: both machines present → tfoot sched=200, pct=80%."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        # cells: [label, W1-sched, W1-%, W2-sched, W2-%, W3-sched, W3-%, W4-sched, W4-%, CO]
+        assert len(cells) == 10, f"Expected 10 tfoot cells, got {len(cells)}: {cells}"
+        assert cells[1] == "200", f"W1 tfoot sched: expected '200', got '{cells[1]}'"
+        assert cells[2] == "80%", f"W1 tfoot pct:   expected '80%', got '{cells[2]}'"
+        assert cells[3] == "200", f"W2 tfoot sched: expected '200', got '{cells[3]}'"
+        assert cells[4] == "80%", f"W2 tfoot pct:   expected '80%', got '{cells[4]}'"
+
+    def test_tfoot_week3_mc_f1_absent(self, client):
+        """W3: only MC-F2 contributes → tfoot sched=80, pct=80% (MC-F1 skipped, contributes 0)."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[5] == "80",  f"W3 tfoot sched: expected '80', got '{cells[5]}'"
+        assert cells[6] == "80%", f"W3 tfoot pct:   expected '80%', got '{cells[6]}'"
+
+    def test_tfoot_week4_zero_cap_shows_dash(self, client):
+        """W4: no machine has data → cap=0 → tfoot % cell must show '—', not crash."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[7] == "0", f"W4 tfoot sched: expected '0', got '{cells[7]}'"
+        assert cells[8] == "—", (
+            f"W4 tfoot pct: expected '—' (cap=0 branch), got '{cells[8]}'"
+        )
+
+    def test_tfoot_total_changeovers(self, client):
+        """Total changeovers = 2 (MC-F1 W1=1, MC-F2 W2=1) — tfoot CO cell."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tfoot_cell_texts(tbl)
+        assert cells[9] == "2", f"Tfoot CO total: expected '2', got '{cells[9]}'"
+
+    def test_mc_f1_tbody_row_dashes_for_weeks_3_and_4(self, client):
+        """MC-F1 tbody row must show '—' in weeks 3 and 4 (no WeekFillRow for those weeks)."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tbody_machine_row_texts(tbl, "MC-F1")
+        # cells: [machine, W1-sched, W1-%, W2-sched, W2-%, W3-sched, W3-%, W4-sched, W4-%, CO]
+        assert len(cells) == 10, f"MC-F1 row: expected 10 cells, got {len(cells)}: {cells}"
+        assert cells[5] == "—", f"MC-F1 W3 sched: expected '—', got '{cells[5]}'"
+        assert cells[6] == "—", f"MC-F1 W3 pct:   expected '—', got '{cells[6]}'"
+        assert cells[7] == "—", f"MC-F1 W4 sched: expected '—', got '{cells[7]}'"
+        assert cells[8] == "—", f"MC-F1 W4 pct:   expected '—', got '{cells[8]}'"
+
+    def test_mc_f2_tbody_row_has_data_weeks_1_to_3_dash_week4(self, client):
+        """MC-F2 has data for weeks 1–3 but not 4 — only week 4 cells show '—'."""
+        body  = self._render_body(client)
+        tbl   = _get_fitting_fill_table(body)
+        cells = _tbody_machine_row_texts(tbl, "MC-F2")
+        assert len(cells) == 10, f"MC-F2 row: expected 10 cells, got {len(cells)}: {cells}"
+        assert cells[5] != "—", (
+            f"MC-F2 W3 sched should NOT be '—' (has data for week 3), got '{cells[5]}'"
+        )
+        assert cells[7] == "—", f"MC-F2 W4 sched: expected '—', got '{cells[7]}'"
+        assert cells[8] == "—", f"MC-F2 W4 pct:   expected '—', got '{cells[8]}'"
