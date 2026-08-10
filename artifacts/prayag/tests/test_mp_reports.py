@@ -867,6 +867,116 @@ def test_consolidated_tab2_fitting_no_data_graceful():
     assert found_header, "Section header 'FITTING MACHINES' should always be present"
 
 
+# ── Fitting machines in Tab 3: Weekly Fill ───────────────────────────────────
+
+def test_consolidated_tab3_fitting_section_header_always_present():
+    """Tab '3. Weekly Fill' must always contain a 'FITTING MACHINES' section header."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+    found = any(
+        "FITTING MACHINES" in str(cell.value or "")
+        for row in ws.iter_rows()
+        for cell in row
+    )
+    assert found, "Expected 'FITTING MACHINES' section header in tab '3. Weekly Fill'"
+
+
+def test_consolidated_tab3_fitting_rows_appear_when_fitting_schedule_supplied():
+    """Tab '3. Weekly Fill' must show fitting machine rows when fitting_schedule is given."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fit_sched = _make_fitting_schedule(machine="FM-1", scheduled_hrs=200.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    # The machine name "FM-1" must appear in column 2 (Machine col) somewhere
+    col2_values = [ws.cell(row=row, column=2).value for row in range(1, ws.max_row + 1)]
+    assert "FM-1" in col2_values, (
+        f"Expected fitting machine 'FM-1' in column 2 of tab '3. Weekly Fill'; "
+        f"got: {col2_values}"
+    )
+
+
+def test_consolidated_tab3_fitting_scheduled_hrs_correct():
+    """Scheduled hrs in fitting row must match fitting_schedule.weekly_fill.scheduled_hrs."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fit_sched = _make_fitting_schedule(machine="FM-2", scheduled_hrs=175.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    # Find the row where Machine col == "FM-2" and read Scheduled (hrs) (col 4)
+    sched_val = None
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row=row, column=2).value == "FM-2":
+            sched_val = ws.cell(row=row, column=4).value
+            break
+    assert sched_val is not None, "Could not find FM-2 row in tab '3. Weekly Fill'"
+    assert abs(float(sched_val) - 175.0) < 0.1, (
+        f"Scheduled hrs for FM-2 should be 175.0; got {sched_val}"
+    )
+
+
+def test_consolidated_tab3_no_fitting_schedule_graceful():
+    """Tab '3. Weekly Fill' shows a graceful message when fitting_schedule is None."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+    all_values = [
+        str(cell.value or "")
+        for row in ws.iter_rows()
+        for cell in row
+    ]
+    assert any("no fitting schedule available" in v for v in all_values), (
+        "Expected '(no fitting schedule available)' message in tab '3. Weekly Fill' "
+        f"when fitting_schedule is None; cells: {[v for v in all_values if v]}"
+    )
+
+
+def test_consolidated_tab3_both_pipe_and_fitting_sections():
+    """Tab '3. Weekly Fill' shows both pipe rows and fitting rows when both schedules present."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    pipe_sched = _make_schedule_result(machine="M/C-1")
+    fit_sched  = _make_fitting_schedule(machine="FM-1", scheduled_hrs=150.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=_make_engine_result(),
+        fitting_result=None,
+        schedule_result=pipe_sched,
+        fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    col2_values = [ws.cell(row=row, column=2).value for row in range(1, ws.max_row + 1)]
+    assert "M/C-1" in col2_values, "Pipe machine 'M/C-1' should appear in tab 3"
+    assert "FM-1" in col2_values,  "Fitting machine 'FM-1' should appear in tab 3"
+
+
 # ── No-double-engine-run regression ──────────────────────────────────────────
 
 def _minimal_run_payload():

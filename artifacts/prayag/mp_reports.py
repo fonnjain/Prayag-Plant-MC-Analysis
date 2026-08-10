@@ -1116,6 +1116,7 @@ def consolidated_plan_bytes(
     ws3.row_dimensions[r3].height = 32
     r3 += 1
 
+    _N_COLS3 = len(col_hdrs3)
     if schedule_result:
         for wf in schedule_result.weekly_fill:
             over = wf.utilisation_pct > 100
@@ -1135,8 +1136,42 @@ def consolidated_plan_bytes(
                 _data_cell(ws3, r3, ci, v, fmt, aln, fill=row_fill)
             r3 += 1
     else:
-        ws3.merge_cells(start_row=r3, start_column=1, end_row=r3, end_column=12)
+        ws3.merge_cells(start_row=r3, start_column=1, end_row=r3, end_column=_N_COLS3)
         ws3["A" + str(r3)].value = "(schedule not available — upload a demand file)"
+        r3 += 1
+
+    # ── Fitting machines weekly fill ───────────────────────────────────────────
+    r3 += 1  # blank row gap between pipe and fitting sections
+    ws3.merge_cells(start_row=r3, start_column=1, end_row=r3, end_column=_N_COLS3)
+    _fh3 = ws3["A" + str(r3)]
+    _fh3.value     = "FITTING MACHINES"
+    _fh3.font      = Font(name=_FONT, bold=True, size=9, color=WHITE)
+    _fh3.fill      = PatternFill("solid", fgColor="2E6B3E")
+    _fh3.alignment = Alignment(horizontal="left", vertical="center")
+    ws3.row_dimensions[r3].height = 18
+    r3 += 1
+
+    if fitting_schedule:
+        for wf in fitting_schedule.weekly_fill:
+            over = wf.utilisation_pct > 100
+            row_fill = PatternFill("solid", fgColor="FFE0E0") if over else (
+                _LIGHT_FILL if r3 % 2 == 0 else None
+            )
+            ob = wf.origin_breakdown
+            vals3f = [
+                f"W{wf.week}", wf.machine, wf.capacity_hrs,
+                wf.scheduled_hrs, wf.idle_hrs, round(wf.utilisation_pct, 1),
+                wf.changeovers, wf.excess_kg,
+                ob.get(1, 0.0), ob.get(2, 0.0), ob.get(3, 0.0), ob.get(4, 0.0),
+            ]
+            fmts3f = ["General", "General"] + ['#,##0.0'] * 4 + ['#,##0', '#,##0.0'] + ['#,##0.0'] * 4
+            alns3f = ["center", "left"] + ["right"] * 10
+            for ci, (v, fmt, aln) in enumerate(zip(vals3f, fmts3f, alns3f), start=1):
+                _data_cell(ws3, r3, ci, v, fmt, aln, fill=row_fill)
+            r3 += 1
+    else:
+        ws3.merge_cells(start_row=r3, start_column=1, end_row=r3, end_column=_N_COLS3)
+        ws3["A" + str(r3)].value = "(no fitting schedule available)"
 
     # ── TAB 4: Shift Schedule ─────────────────────────────────────────────────
     ws4 = wb.create_sheet("4. Shift Schedule")
