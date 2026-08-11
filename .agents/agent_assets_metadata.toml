@@ -108,3 +108,10 @@ id = "FAVgdtswjnx8hNv4xyHLI"
 uri = "file://Prayag_Logic_and_Formulas.md"
 type = "text"
 title = "Prayag Logic & Formulas Reference"
+
+[[outputs]]
+id = "fp7iBMgdqjJhNs57fojBl"
+uri = "file://prayag-project.zip"
+type = "unspecified"
+title = "Prayag Project — Complete Source"
+description = "Full workspace snapshot (excluding .git, node_modules, __pycache__, venv). 241 MB."
