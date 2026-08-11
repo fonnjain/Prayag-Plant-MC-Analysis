@@ -36,7 +36,7 @@
     </div>
     <div>
       <div class="text-xs text-gray-500 mb-0.5">Rejection %</div>
-      <div class="font-bold text-base {% if overall.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">
+      <div class="font-bold text-base {% if overall.rejection_pct is not none and overall.rejection_pct < 2 %}text-green-600{% elif overall.rejection_pct is not none and overall.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
         {{ overall.rejection_pct }}%
       </div>
     </div>
@@ -72,7 +72,7 @@
             <td class="py-2 font-semibold" style="color:var(--navy)">{{ row.label }}</td>
             <td class="py-2 text-right text-gray-700">{{ "{:,.0f}".format(row.metrics.total_count) }}</td>
             <td class="py-2 text-right text-gray-500">{{ "{:,.0f}".format(row.metrics.actual_hours) }}</td>
-            <td class="py-2 text-right {% if row.metrics.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">
+            <td class="py-2 text-right {% if row.metrics.rejection_pct is not none and row.metrics.rejection_pct < 2 %}text-green-600{% elif row.metrics.rejection_pct is not none and row.metrics.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
               {{ row.metrics.rejection_pct }}%
             </td>
           </tr>

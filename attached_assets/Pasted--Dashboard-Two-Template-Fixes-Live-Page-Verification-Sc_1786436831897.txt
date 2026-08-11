@@ -1,0 +1,85 @@
+# Dashboard — Two Template Fixes + Live-Page Verification
+
+**Scope: templates and a read-only live check ONLY.**
+
+## DO NOT CHANGE ANY PARSING OR METRICS LOGIC
+
+A full trace of `_DAILY_LAYOUTS` confirmed the current data pipeline is **correct and deliberate**. Do not modify any of the following — they are working as designed:
+
+- `pipe_reconcile.py` and the PIPE **Report-5 ↔ Report-11 date-wise-max** reconciliation (Report-11 alone undercounts; this is already solved).
+- MOULDING reading **Report-12** for output with run hours joined from Report-5 (`r5_runhours`).
+- GARDEN reading per-machine `MACHINE n` block tabs for output/rejection, with run hours joined from `Daily Report` (output must NEVER come from `Daily Report`).
+- HDPE self-supplying `IDEAL OUTPUT` and `M/C RUN HOUR` from its `Daily Report` matrix (needs no `baselines.json` entry).
+- PTMT reading `Report-5` with `IDEAL HOUR` as the utilisation baseline.
+- TANK being output-only (`runhours_tracked=False`) with utilisation/efficiency suppressed.
+- The **no-fake-0% invariant** in `api.py::_metrics_json`, and `parse_mc_detail`'s policy of ignoring stored ratio cells and recomputing.
+
+**A blank metric is usually correct** — it means the source genuinely has no basis for it. Do not "fix" blanks by inventing baselines or defaults.
+
+Do not touch any Machine Planning / reports code (`mp_*.py`, `machine_planning_*.html`) — that area was just restored and published.
+
+---
+
+## FIX 1 — Harmonise the rejection colour thresholds (templates only)
+
+The rejection `%` badge uses **two different colour rules** across the app, so the same value is coloured differently on different pages. A 3% rejection shows **amber** on the overview but **red** everywhere else.
+
+The correct rule is the three-tier one already used in `templates/overview.html:182`:
+
+```
+{% if X.rejection_pct < 2 %}text-green-600{% elif X.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}
+```
+
+Apply that same three-tier rule to these **five** two-tier locations (change only the colour condition — leave the surrounding markup, classes and variable names exactly as they are):
+
+1. `templates/plant.html:142` — `m.rejection_pct`
+2. `templates/report_detail.html:135` — `o.rejection_pct`
+3. `templates/report_gom_summary.html:39` — `overall.rejection_pct`
+4. `templates/report_gom_summary.html:75` — `row.metrics.rejection_pct`
+5. `templates/report_tank_location.html:58` — `overall.rejection_pct`
+
+Leave `overview.html:182` as-is (already correct). Do not alter the `is_mixed_unit` by-unit branch in `overview.html`.
+
+**Note:** `rejection_pct` can be `null` (suppressed by the no-fake-0% invariant). Ensure a null value does not crash the template or render as green — keep the existing null/blank handling behaviour identical to what each template does today.
+
+---
+
+## FIX 2 — Distinguish "N/A by design" from "missing data" for TANK
+
+TANK is **output-only** in source: no run hours, no machine dimension. So Utilisation, Output Efficiency, Attainment and Machine View can never be populated. Today they render as an empty cell — visually identical to a genuine data gap, which is why QA reported them as bugs.
+
+In the TANK-facing templates (`report_tank_location.html`, and the plant view when the plant is TANK / TANK_VN / TANK_WB), render these structurally-inapplicable metrics as an em-dash `—` with a tooltip:
+
+> "Not applicable — Tank is output-only (no run hours or machine dimension in source)."
+
+Use the existing tooltip/`info()` helper pattern already present in the templates rather than introducing a new mechanism. **Display only** — do not change how the values are computed or suppressed.
+
+---
+
+## STEP 3 — Live-page verification (read-only, report the numbers)
+
+Before and after the template edits, refresh the cache and load the live pages, then report **observed** values.
+
+The Step 1 audit found GARDEN and MOULDING already have `util_available=True` in the cache, which suggests utilisation may already be rendering and the QA screenshots may be stale. Settle this by observation, not inference:
+
+Report, per segment, what the page actually shows for Apr–Jul 2026:
+
+- **GARDEN** — utilisation, output, rejection %. Expect APR 549h / 38,950kg / 3.06% · MAY 0h / 0 (wages present, no output) · JUN 1,004h / 66,911kg / 3.31% · JUL 0h / 32,191kg / 5.76% · TOTAL 1,553h / 138,052kg / 3.81%. Confirm rejection is **not** showing 0.00% when output exists.
+- **MOULDING** — utilisation renders; output efficiency correctly **blank** (no in-sheet rate).
+- **PIPE** — output/rejection present via the R5↔R11 reconciliation; utilisation present.
+- **HDPE** — MAY only (21h / 1,370kg / 8.76% on M/C-1); APR/JUN/JUL genuinely zero.
+- **PTMT** — utilisation per month; efficiency correctly blank. Note any month where `IDEAL HOUR` is empty in Report-5 (that is a source data-entry gap, not a code bug — flag it, don't fix it).
+- **TANK** — litres render; utilisation/efficiency/attainment show `—` after Fix 2.
+
+For anything that differs from the above, report the observed value and the reason — **do not change parsing logic to make numbers match.** If a figure looks wrong, stop and report it.
+
+---
+
+## Tests
+
+- Template rendering tests: three-tier colour applied at all five locations; null `rejection_pct` does not crash and does not render green; TANK N/A cells render `—` with the tooltip.
+- Confirm `/` returns 200, Machine Planning is untouched, and no `.py` file outside templates was modified.
+
+## Report back
+
+The five template diffs, the TANK labelling diff, and the live observed-value table. Confirm no parsing, metrics, or source-config logic was changed, and nothing was written to Google Sheets.

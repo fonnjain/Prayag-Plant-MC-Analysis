@@ -118,7 +118,7 @@
       <div>
         <div class="flex justify-between text-xs mb-0.5">
           <span class="text-gray-500">{{ lbl }}{{ info(tkey) }}</span>
-          <span class="font-semibold">{% if avail %}{{ val }}%{% else %}<span class="text-gray-400">n/a</span>{% endif %}</span>
+          <span class="font-semibold">{% if avail %}{{ val }}%{% elif item.plant in ('TANK', 'TANK_VN', 'TANK_WB') %}<span class="text-gray-400" title="Not applicable — Tank is output-only (no run hours or machine dimension in source).">—</span>{% else %}<span class="text-gray-400">n/a</span>{% endif %}</span>
         </div>
         <div class="progress-bar">
           <div class="progress-fill" style="width:{% if avail %}{{ [val,100]|min }}{% else %}0{% endif %}%;background:{{ color }}"></div>
@@ -139,7 +139,7 @@
         <div class="text-xs text-gray-400">Attainment{{ info('ATT') }}</div>
       </div>
       <div>
-        <div class="text-sm font-bold {% if m.rejection_pct < 2 %}text-green-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>
+        <div class="text-sm font-bold {% if m.rejection_pct is not none and m.rejection_pct < 2 %}text-green-600{% elif m.rejection_pct is not none and m.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>
         <div class="text-xs text-gray-400">Reject{{ info('REJECT_PCT') }}</div>
       </div>
     </div>
