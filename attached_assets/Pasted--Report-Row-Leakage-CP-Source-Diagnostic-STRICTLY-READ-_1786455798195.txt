@@ -1,0 +1,92 @@
+# Report Row-Leakage & CP Source — Diagnostic (STRICTLY READ-ONLY)
+
+**Purpose:** A QA review reported (a) the Moulding report showing Tank data, (b) the Segment-wise Cost report showing no labour/data, and (c) a "CP Injection M/C Summary" report for a segment that has no sheets. Confirm the cause of each before any fix.
+
+## HARD CONSTRAINTS
+
+- **Do NOT edit any file.** No `.py`, no templates, no config.
+- **Do NOT enter Build mode.** Do not restart, redeploy, or publish.
+- **Do NOT write to Google Sheets.**
+- **Do NOT fix anything**, even if the cause is obvious. Report and stop.
+
+## Working hypothesis to confirm or refute
+
+`report_detail` applies the segment filter **only when the report declares segments**:
+
+```python
+rows = data["rows"]
+if rpt["segments"]:
+    rows = _filter_report_segments(rows, rpt["segments"])
+```
+
+Three reports in `REPORT_TYPES` are declared with **`"segments": []`** (empty):
+- `mould_summary` — "Mould-wise Summary", plant `Moulding`
+- `mould_efficiency` — "Mould Age-in-Efficiency", plant `Moulding`
+- `segment_cost` — "Segment-wise Cost", plant `ALL`
+- (`utilisation` — "Utilisation (Machine & Mould)", plant `ALL` — also empty; include it)
+
+If the hypothesis holds, the filter is skipped and these reports receive **every plant's rows**, which would explain Tank data appearing inside the Moulding report.
+
+**Note:** for `segment_cost` and `utilisation`, plant `ALL` may mean the empty list is *intentional* (they are meant to span all segments). Distinguish "intentionally unfiltered" from "accidentally unfiltered" — do not assume all four are the same bug.
+
+---
+
+## Q1 — Confirm the filter-skip on current main
+
+Print, with line numbers as they exist on main now:
+- the `rows = data["rows"]` / `if rpt["segments"]:` block in `report_detail`,
+- the `REPORT_TYPES` entries for `mould_summary`, `mould_efficiency`, `segment_cost`, `utilisation`, `tank_summary`, showing each one's `segments` value verbatim.
+
+State plainly whether an empty `segments` list causes the filter to be skipped.
+
+## Q2 — Prove the leakage with actual row counts
+
+For **Apr–Jul 2026**, for each of `mould_summary`, `mould_efficiency`, `segment_cost`, `utilisation`:
+
+- the total row count passed to `_build_report_table`,
+- a breakdown of those rows **by `plant`** (e.g. MOULDING 95, TANK 40, PIPE 29, …),
+- the same breakdown **by `segment`**.
+
+Then state, per report, whether rows from plants **other than its own** are present. For `mould_summary` specifically: how many TANK rows reach it, and what output/litre figure do they contribute to the rendered table?
+
+For contrast, print the same plant breakdown for `tank_summary` and `ptmt_summary` (both of which DO declare segments) to confirm the filter works when populated.
+
+## Q3 — What the Moulding report actually renders
+
+For `mould_summary`, Apr–Jul 2026, print the rendered table's row labels and their totals. Identify which rendered rows originate from TANK records. Confirm whether the report's headline/aggregate figure includes Tank quantities — and note that Tank is measured in **litres**, so any mixing with Moulding kilograms is a unit-mixing error, not just an extra row.
+
+## Q4 — Segment-wise Cost: why is data missing?
+
+`segment_cost` is reported as showing no labour/data. Determine which it is:
+
+- Does `_build_report_table` for `segment_cost` receive rows at all (count from Q2)?
+- Does it read the Segment Cost workbook (`1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw`) via the `seg_labour` path, and does that path return rows for Apr–Jul 2026?
+- Print the segment labels the labour parse actually returns (verbatim), and whether they include `Garden Pipe`, `PTMT`, `TANK`, `Pipe`, `HDPE`, `MOULDING`.
+- State whether the failure is: no rows reaching the report, the labour source returning nothing, or a rendering/lookup mismatch between segment labels and report rows.
+
+**Do not fix the labour parse.** Report only.
+
+## Q5 — CP: registered source state
+
+`sources.py` carries a `CP` daily entry with a comment that CP runs on a different cycle and has no Apr-26+ daily file. Confirm on current main:
+
+- print the `CP` entry from the daily sources verbatim (folder_ids and `files`),
+- state whether `files` is empty for FY2026-27,
+- confirm `CP` = "CP Fittings" in the segment/plant label maps,
+- state what `/reports/cp_summary` currently renders for Apr–Jul 2026 (empty table? zeroes? an "awaiting source" notice?),
+- confirm whether the loader surfaces a "flagged at load" warning for CP, and print that warning text verbatim.
+
+This determines whether CP is a phantom report (should be hidden) or a legitimate segment awaiting data (should be labelled).
+
+---
+
+## Report back
+
+1. Q1: the filter-skip block and the four `segments` values, verbatim with line numbers.
+2. Q2: per-report row counts broken down by plant and by segment, plus the contrast reports.
+3. Q3: which rendered Moulding rows come from TANK, and whether units are being mixed.
+4. Q4: the specific reason `segment_cost` shows no data.
+5. Q5: CP's registered files, what the report renders, and the load warning.
+6. Explicit confirmation: **no files changed, no Sheets writes, no restart or publish.**
+
+Then stop. Fixes will be scoped separately once the causes are confirmed.
