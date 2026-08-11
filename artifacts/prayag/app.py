@@ -2272,9 +2272,9 @@ REPORT_TYPES = [
     # "Injection Moulding M/C Summary").
     {"id": "ptmt_summary", "title": "PTMT Injection M/C Summary", "plant": "PTMT", "desc": "Ideal vs actual hours, output, rejection, runner, utilisation %", "segments": ["PTMT"]},
     {"id": "cp_summary", "title": "CP Injection M/C Summary", "plant": "CP", "desc": "Ideal vs actual hours, output, rejection, runner, utilisation %", "segments": ["CP"]},
-    {"id": "mould_summary", "title": "Mould-wise Summary", "plant": "Moulding", "desc": "Per-mould output, run hours, runner %, rejection %, utilisation %", "segments": []},
-    {"id": "mould_efficiency", "title": "Mould Age-in-Efficiency", "plant": "Moulding", "desc": "Per mould production pcs, ideal vs actual hours, efficiency %", "segments": []},
-    {"id": "tank_summary", "title": "Tank Litre Summary", "plant": "Tank", "desc": "Production & rejection by capacity (200–5000L) × layer, litres & pieces", "segments": ["Tanks"]},
+    {"id": "mould_summary", "title": "Mould-wise Summary", "plant": "Moulding", "desc": "Per-mould output, run hours, runner %, rejection %, utilisation %", "segments": ["Moulding", "MOULDING"]},
+    {"id": "mould_efficiency", "title": "Mould Age-in-Efficiency", "plant": "Moulding", "desc": "Per mould production pcs, ideal vs actual hours, efficiency %", "segments": ["Moulding", "MOULDING"]},
+    {"id": "tank_summary", "title": "Tank Litre Summary", "plant": "Tank", "desc": "Production & rejection by capacity (200–5000L) × layer, litres & pieces", "segments": ["Tanks", "Tank", "Tank_Vn", "Tank_Wb"]},
     {"id": "compound_summary", "title": "Compound / Material Compilation", "plant": "Compound", "desc": "Batch weight, mixer output, weight-loss %, by compound type", "segments": []},
     {"id": "segment_cost", "title": "Segment-wise Cost", "plant": "ALL", "desc": "Labour/Power/Solar: headcount, paid hours, wages, per-kg & per-hour cost", "segments": []},
     {"id": "utilisation", "title": "Utilisation (Machine & Mould)", "plant": "ALL", "desc": "Actual vs ideal hours, utilisation %, 3-month utilisation trend", "segments": []},

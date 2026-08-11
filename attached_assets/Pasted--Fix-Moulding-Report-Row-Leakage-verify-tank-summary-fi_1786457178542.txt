@@ -1,0 +1,92 @@
+# Fix — Moulding Report Row Leakage (+ verify `tank_summary` filter)
+
+**Scope: `REPORT_TYPES` segment config and a verification step. Nothing else.**
+
+The diagnostic confirmed: `report_detail` applies the segment filter only when a report declares segments —
+
+```python
+rows = data["rows"]
+if rpt["segments"]:
+    rows = _filter_report_segments(rows, rpt["segments"])
+```
+
+An empty list is falsy, so the filter is skipped and **all 9,327 rows (Apr–Jul 2026) reach the report**, including **1,185 Tank rows** carrying **10,069,350 litres**. Tank rows have blank machine labels and their size tiers ("200L", "500L", "2000L") sit in the `mould` field, so `rollup_by_mould` renders them as if they were moulds and sums litres into a column headed "Output" beside Moulding kg/pcs. The Moulding headline aggregate is therefore arithmetically wrong.
+
+---
+
+## DO NOT CHANGE
+
+- `pipe_reconcile.py` / the R5↔R11 reconciliation, Moulding's Report-12 path, Garden's block-tab output rule, HDPE's in-sheet ideal columns, PTMT's `IDEAL HOUR` baseline, TANK's output-only design.
+- Any `mp_*.py` or `machine_planning_*.html`.
+- `_filter_report_segments` itself — its exact-match + `startswith(f"{w} ")` logic is correct and is what makes PTMT's sub-segments work.
+- The `if rpt["segments"]:` guard — **do not** change it to always-filter. Two reports depend on the empty list (see below).
+- The Phase 1–3 work: rejection `n/a` gating, `_layout_found` warnings, `auth.py`.
+- No Google Sheets writes. No calculation logic changes.
+
+## LEAVE EMPTY DELIBERATELY — these are not bugs
+
+- **`segment_cost`** (plant `ALL`) — "Segment-wise Cost" is *meant* to span every segment. Its ₹0 columns are a **separate missing-join problem** (`Record.labour_cost/power_cost/solar_cost` are never populated), being handled as its own task. Do not touch it here.
+- **`utilisation`** (plant `ALL`) — also intentionally cross-segment. Do not add segments.
+
+Adding segments to either would break them.
+
+---
+
+## FIX 1 — Scope the two Moulding reports
+
+Both name a specific plant (`Moulding`) but filter on nothing:
+
+- `mould_summary` — "Mould-wise Summary"
+- `mould_efficiency` — "Mould Age-in-Efficiency"
+
+Populate their `segments` so only Moulding rows reach them.
+
+**Determine the correct token from the data, not by guessing.** First print the distinct `segment` values on Moulding records for Apr–Jul 2026 (the diagnostic showed `Moulding` and `MOULDING – Grinding / Pulverizing`). Pick the token that matches via `_filter_report_segments`' existing exact-match **or** `startswith(f"{token} ")` rule, so any Moulding process-group sub-segments are included the same way PTMT's are — and nothing else is.
+
+**Report the chosen token and why before applying it.**
+
+### Validate FIX 1
+- Row count reaching `mould_summary` drops from 9,327 to the Moulding-only count; print both numbers.
+- **Zero** TANK / TANK_VN / TANK_WB rows reach it; print the per-plant breakdown after the change.
+- No "200L" / "500L" / "2000L" size-tier rows appear in the rendered table.
+- Moulding's own figures are UNCHANGED against the verified source totals: APR 8,426h / 89,152kg · MAY 7,198h / 75,771kg · JUN 9,771h / 97,007kg · JUL 10,577h / 104,085kg · TOTAL 35,972h / 366,015kg, rejection ~1.00%.
+- Idle Moulding machines (M/C-17, 20, 27) still render as 0, not dropped.
+- `mould_efficiency` gets the same treatment; confirm its row count and plant breakdown too.
+
+---
+
+## FIX 2 — Verify `tank_summary` (do NOT change until confirmed)
+
+Possible **over-filter**, the mirror image of the leak. `tank_summary` declares `segments: ["Tanks"]` (plural), but the daily records carry `Tank`, `Tank_Vn`, `Tank_Wb`. None equals `"Tanks"` and none starts with `"Tanks "`, so on the daily path the filter may yield **zero rows**. It reportedly matches only on the annual path, where records carry `"segment": "Tanks"`.
+
+**Step A — verify first, no change:**
+- Print the distinct `segment` values on Tank records from BOTH the daily path and the annual path, verbatim.
+- Print the row count reaching `tank_summary` for Apr–Jul 2026, broken down by source path.
+- Load `/reports/tank_summary` and report what it actually renders — real litres, or "No data"?
+
+**Step B — only if Step A shows it is genuinely empty/under-filled:** widen the token list so all three real Tank segment labels match, without over-matching anything else. Do not rename segment labels in the parsers or sources; change only the report's `segments` list.
+
+### Validate FIX 2 (if changed)
+- `tank_summary` renders Tank litres for Apr–Jul, unit **Ltr**.
+- No non-Tank rows appear.
+- No labour/hours/machine metrics are fabricated (Tank has none in source).
+- Report the observed per-plant litre totals. **Note:** daily Tank totals (~10,069,350 Ltr, KH ~3,619,600) diverge from the annual summaries (6,810,850 Ltr, KH 633,500). Report the divergence — **do not reconcile it, and do not adjust any parser to close it.** Flag it as a source question.
+
+---
+
+## Regression checks
+
+- `ptmt_summary` unchanged — the `startswith` rule must still admit `PTMT – Injection (standard)` etc.
+- `pipe_summary`, `garden_summary`, `hdpe_summary` row counts unchanged.
+- `segment_cost` and `utilisation` row counts **unchanged** (still unfiltered — that is correct).
+- `cp_summary` still renders "No data for this period" (correct; `files: {}`).
+- Garden rejection still shows `n/a`; Garden May/July utilisation warnings unchanged.
+- `/` returns 200; Machine Planning untouched.
+
+## Tests
+
+pytest: `mould_summary` and `mould_efficiency` receive only Moulding rows; zero Tank rows reach either; `segment_cost` and `utilisation` remain unfiltered; `ptmt_summary` sub-segment matching still works; Moulding totals match the figures above.
+
+## Report back
+
+The chosen Moulding token and the reasoning; before/after row counts and per-plant breakdowns for both Moulding reports; Step A findings for `tank_summary` and whether Step B was applied; the regression-check results; and confirmation that no calculation logic changed and nothing was written to Google Sheets.
