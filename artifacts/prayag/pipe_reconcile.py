@@ -46,6 +46,51 @@ _H_TYPE = ("eq", "TYPES")          # first match wins (a dup sits further right)
 _H_OUT = ("eq", "WEIGHT")          # standalone Weight after Pcs (not Ideal Weight)
 _H_REJ = ("eq", "ACTUAL WT (KG)")  # rejection (the FC column is separate)
 
+# ---------------------------------------------------------------------------
+# Legacy machine-name alias table
+# ---------------------------------------------------------------------------
+# Report-11 labels machine rows by model/serial name (TTS-88-4, KABRA-72-28…)
+# rather than the current M/C-n convention used in Report-5 and everywhere else.
+# This table maps the known legacy labels to their M/C integer number so the
+# date-wise-max join can work.
+#
+# Basis:
+#   TTS/CON labels — the trailing -n IS the machine number (TTS-88-4 → M/C-4).
+#   KABRA labels   — no embedded machine number; mapped by value proximity
+#                    verified across APR–JUL 2026 figures.
+#   1-KABRA-90-22  — appears only in MAY-26 with 530 kg; cannot be confirmed
+#                    from value matching alone and is left unmapped pending
+#                    source clarification.
+#
+# If R11 is ever updated to use M/C-n labels the primary mc_key_fn will resolve
+# them before this table is consulted, so these entries become a harmless no-op.
+_R11_ALIAS: Dict[str, int] = {
+    "CON-63-1":      1,
+    "TTS-88-2":      2,
+    "TTS-88-3":      3,
+    "TTS-88-4":      4,
+    "TTS-88-5":      5,
+    "KABRA-72-28":   6,
+    "2-KABRA-90-22": 9,
+}
+
+
+def resolve_r11_label(
+    label: str,
+    primary_key_fn: Callable[[str], Optional[int]],
+) -> Optional[int]:
+    """Resolve a Report-11 machine label to its M/C integer number.
+
+    Tries *primary_key_fn* first (handles current ``M/C-n`` / ``MACHINE-n``
+    labels).  Falls back to ``_R11_ALIAS`` for the legacy model-name labels
+    used in the FY2025-26 workbook.  Returns ``None`` if unresolvable — the
+    row will be skipped and counted in the zero-match diagnostic.
+    """
+    n = primary_key_fn(label)
+    if n is not None:
+        return n
+    return _R11_ALIAS.get(label.strip())
+
 
 def parse_report11(
     values: list,

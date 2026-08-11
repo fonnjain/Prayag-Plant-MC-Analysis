@@ -7,6 +7,8 @@ Covers:
 - reconcile: date-wise MAX per cell over the UNION of both sources, pro-rata
   Report-11 type split scaled to the corrected output, and "untyped pickup" for
   cells with no Report-11 type signal.
+- resolve_r11_label: alias table for legacy model-name labels, primary-key-fn
+  precedence, and graceful None for unknown labels.
 
 No network. Run: cd artifacts/prayag && python3 -m tests.test_pipe_reconcile
 """
@@ -111,9 +113,78 @@ def test_empty_and_missing_header_safe():
     print("PASS: empty input / missing header degrade safely")
 
 
+def test_resolve_r11_label_primary_fn_takes_precedence():
+    """Primary key function is tried first; alias only applies when it returns None."""
+    # Current label — primary fn resolves it; alias must not interfere.
+    assert pipe_reconcile.resolve_r11_label("PIPE M/C - 4", _mc_key) == 4
+    assert pipe_reconcile.resolve_r11_label("M/C-9", _mc_key) == 9
+    print("PASS: resolve_r11_label — primary mc_key_fn takes precedence")
+
+
+def test_resolve_r11_label_legacy_aliases():
+    """All known FY2025-26 legacy labels resolve to the correct M/C number."""
+    expected = {
+        "CON-63-1":      1,
+        "TTS-88-2":      2,
+        "TTS-88-3":      3,
+        "TTS-88-4":      4,
+        "TTS-88-5":      5,
+        "KABRA-72-28":   6,
+        "2-KABRA-90-22": 9,
+    }
+    for label, mc_n in expected.items():
+        result = pipe_reconcile.resolve_r11_label(label, _mc_key)
+        assert result == mc_n, f"{label!r}: expected {mc_n}, got {result}"
+    print("PASS: resolve_r11_label — all FY2025-26 legacy aliases resolve correctly")
+
+
+def test_resolve_r11_label_unknown_returns_none():
+    """An unrecognised label returns None so the row is skipped, not mis-mapped."""
+    assert pipe_reconcile.resolve_r11_label("1-KABRA-90-22", _mc_key) is None
+    assert pipe_reconcile.resolve_r11_label("UNKNOWN-MACHINE", _mc_key) is None
+    assert pipe_reconcile.resolve_r11_label("", _mc_key) is None
+    print("PASS: resolve_r11_label — unknown labels return None (safe skip)")
+
+
+def test_parse_report11_with_legacy_labels():
+    """parse_report11 resolves legacy labels via resolve_r11_label and joins correctly."""
+    values = [
+        ["M/C & Item Wise Actual Production"],
+        [],
+        [],
+        [],
+        [],
+        ["DATE", "", "MACHINE NO.", "TYPES", "Pcs", "Ideal Weight (KG)",
+         "Weight", "Ideal Wt (Kg)", "Actual Wt (Kg)", "FC"],
+        # TTS-88-4 → M/C-4
+        ["Apr 5, 2026", "", "TTS-88-4", "SWR", "200", "999", "3500", "8", "120", "1"],
+        # KABRA-72-28 → M/C-6
+        ["Apr 5, 2026", "", "KABRA-72-28", "UPVC", "100", "999", "1900", "8", "80", "1"],
+        # 1-KABRA-90-22 → unmapped, must be skipped
+        ["Apr 5, 2026", "", "1-KABRA-90-22", "AGRI", "50", "999", "500", "8", "20", "1"],
+    ]
+    alias_key = lambda lbl: pipe_reconcile.resolve_r11_label(lbl, _mc_key)
+    out = pipe_reconcile.parse_report11(values, "2026-04", alias_key)
+
+    assert (4, "2026-04-05") in out, f"TTS-88-4 not resolved: {list(out.keys())}"
+    assert out[(4, "2026-04-05")]["out"] == 3500.0
+    assert out[(4, "2026-04-05")]["by_type"] == {"SWR": 3500.0}
+
+    assert (6, "2026-04-05") in out, f"KABRA-72-28 not resolved: {list(out.keys())}"
+    assert out[(6, "2026-04-05")]["out"] == 1900.0
+
+    # Unmapped label must not appear in output.
+    assert len(out) == 2, f"Unexpected keys: {list(out.keys())}"
+    print("PASS: parse_report11 resolves legacy labels; unmapped labels are safely skipped")
+
+
 if __name__ == "__main__":
     test_parse_report11_header_based_and_typed()
     test_reconcile_date_wise_max_and_union()
     test_type_split_prorata_and_untyped_pickup()
     test_empty_and_missing_header_safe()
+    test_resolve_r11_label_primary_fn_takes_precedence()
+    test_resolve_r11_label_legacy_aliases()
+    test_resolve_r11_label_unknown_returns_none()
+    test_parse_report11_with_legacy_labels()
     print("\nALL pipe_reconcile tests passed.")

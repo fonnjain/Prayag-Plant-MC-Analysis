@@ -1813,8 +1813,24 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
       r11_tab = spec.get("report11_tab", "Report-11")
       r11 = {}
       if r11_tab in tabs:
-          r11 = pipe_reconcile.parse_report11(
-              read_values(file_id, r11_tab, token), ym, _mc_key)
+          _r11_raw = read_values(file_id, r11_tab, token)
+          _r11_key = lambda lbl: pipe_reconcile.resolve_r11_label(lbl, _mc_key)
+          r11 = pipe_reconcile.parse_report11(_r11_raw, ym, _r11_key)
+          # Zero-match guard: if the tab had data rows but none resolved, the
+          # reconciliation is silently falling back to Report-5 only. Emit a
+          # visible note rather than letting the failure go undetected.
+          _r11_data_rows = sum(
+              1 for row in _r11_raw[5:] if row and len(row) >= 4
+              and str(row[0]).strip()  # has a date cell
+          )
+          if _r11_data_rows > 0 and not r11:
+              report.setdefault("notes", []).append(
+                  f"{emit} {ym}: Report-11 has {_r11_data_rows} data rows but "
+                  f"none matched any known machine label — R11 is excluded from "
+                  f"this month's reconciliation and type split is unavailable. "
+                  f"Check that Report-11 machine names match the current M/C-n "
+                  f"labels or the alias table in pipe_reconcile._R11_ALIAS."
+              )
       # Report-5 output/rejection per (machine number, date) from the matrix rows.
       r5: dict = {}
       label_for: dict = {}
