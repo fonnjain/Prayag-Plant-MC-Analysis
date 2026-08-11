@@ -1,0 +1,116 @@
+# Dashboard Metrics — Read Utilisation & Output Efficiency from the Monthly Masters
+
+**Context:** A QA review flagged Output Efficiency, M/C Efficiency, Utilisation and Rejection as blank across most segments. A read-only diagnostic concluded these were "null by invariant — no baseline configured." **That conclusion was only partly right.** I have now read all six FY26-27 monthly master workbooks cell-by-cell for Apr–Jul 2026. Three segments **already carry an Ideal-Output column and compute Output Efficiency in the sheet**, and four carry **complete per-machine × month utilisation**. The app is suppressing values the source actually has.
+
+**Root cause:** the model encoded in `baselines.json`'s comment is stale. It says GARDEN/TANK are "output-only" and PIPE/MOULDING have "no shift-pattern data." That is no longer true of the source sheets.
+
+---
+
+## GOVERNING RULES (do not violate)
+
+1. **FY2026-27 → live monthly data-entry tabs ONLY.** Annual SUMMARY / roll-up tabs are derived; use them for validation delta and styling only, never as the data source. Pre-FY26-27 years are finalized — leave that path untouched.
+2. **Parse by header text, never fixed column position.** Map months **by label** (sheets run latest-first). Assert the header was found; **fail loudly** with a named error. Never silently fall back to another column.
+3. **Never fabricate.** If a segment's source genuinely lacks a metric, keep it blank/`null` — do NOT invent a baseline, and do NOT show a fake `0%`. The existing "no-fake-0%" invariant in `api.py::_metrics_json` is correct and must stay.
+4. **Do not touch** any Machine Planning / reports code (`mp_*.py`, `machine_planning_*.html`) — that area was just restored and published.
+5. **Do not write to Google Sheets.** Read-only against source, always.
+
+---
+
+## WHAT THE SOURCE ACTUALLY CONTAINS (verified Apr–Jul 2026)
+
+| Segment | Per-machine × month **Utilisation** | **Ideal Output** col | **Output Efficiency** computed in-sheet | Action |
+|---|---|---|---|---|
+| **Pipe** (9 M/C) | ✅ complete | ✅ 120–400 kg/hr | ✅ 44–96% | **surface both** |
+| **PTMT** (48 M/C) | ✅ complete | ❌ none | ❌ none | **surface utilisation only** |
+| **Moulding** (27 M/C) | ✅ complete | ❌ none | ❌ none | **surface utilisation only** |
+| **Garden** (4 M/C) | ✅ (0h in MAY/JUL — real) | ✅ 80 | ✅ 87–90% | **surface both** |
+| **HDPE** (6 M/C) | ✅ (mostly real zeros) | ✅ 250–520 | ✅ 26% | **surface both** |
+| **Tank** (KH/VN/WB) | ❌ no hours, no machine axis | ❌ | ❌ | **leave blank — N/A by design** |
+
+**Consequence:** Output Efficiency must be read from the sheet for **Pipe, Garden, HDPE**. It must stay blank for **PTMT, Moulding, Tank** (genuinely absent). Utilisation must be read for **Pipe, PTMT, Moulding, Garden, HDPE**; stays blank for **Tank**.
+
+---
+
+## STEP 1 — REPORT FIRST (no code changes yet)
+
+Before editing, print for each segment:
+- which tab the FY26-27 route actually reads, and whether it is a **monthly data-entry tab** or an annual SUMMARY roll-up;
+- whether the parser currently locates an `Ideal Output` / `Output Efficiency` / `M/C Utilization in Hours (%)` column at all;
+- the exact reason each metric is currently `null` (which `*_available` flag is false, and why).
+
+Stop and show this table. Do not proceed to Step 2 until it is printed.
+
+---
+
+## STEP 2 — FIX (scoped, one segment family at a time)
+
+Read **Utilisation** and, where present, **Output Efficiency** and **Ideal Output** from the monthly master by header text, and set the corresponding availability flags so `_metrics_json` stops nulling them. Do NOT change the invariant itself — only make the flags true when the source genuinely supplies the value.
+
+Header names to match (case/whitespace-insensitive, slash-tolerant — note `M/C` contains a slash):
+- `M/C Utilization in Hours (%)`
+- `Output Efficiency (%)`
+- `Ideal Output`
+- `Ideal Hours`, `Actual Hours`, `Actual Output (KG)`
+- `Rejection (KG)`, `Rejection in %age`
+
+Order of work: **Pipe → Garden → HDPE → PTMT/Moulding (utilisation only) → Tank (labelling only).**
+
+---
+
+## STEP 3 — VALIDATION TARGETS (recomputed from monthly masters; report OBSERVED vs these)
+
+**PIPE** — segment: APR 833h/190,494kg · MAY 1,832h/344,000 · JUN 1,008h/178,782 · JUL 2,834h/564,695 · TOTAL 6,507h/1,277,971.
+Per-machine M/C-1: APR 140h **28.00%** util / **95.97%** eff · JUL 496h **99.20%** / **90.83%**. M/C-8 is idle all four months (0h) — must render 0, not vanish.
+
+**PTMT** — APR 216 moulds/16,092h/99,262kg/5,917 rej/5.96% · MAY 280/15,752/104,729/7,262/6.93% · JUN 311/20,921/160,478/9,297/5.79% · JUL 298/22,318/172,639/10,476/6.07% · **TOTAL 1,105/75,083/537,109/32,952/6.14%**.
+Output basis = **Nett Output 537,109**, NOT "Weight of Total Production" 541,258, NOT the per-machine block's 454,867.
+Per-machine util e.g. M/C-1: 66.40 / 66.40 / 86.80 / 94.40%. M/C-2 is genuinely 0 in MAY+JUN; M/C-21 (130-TON) 0 all months.
+
+**MOULDING** — APR 8,426h/89,152kg/886 rej · MAY 7,198/75,771/752 · JUN 9,771/97,007/974 · JUL 10,577/104,085/1,038 · TOTAL 35,972h/366,015kg/3,650 rej (~1.00%) / 66.61% util. M/C-17, 20, 27 idle all months.
+
+**GARDEN** — APR 549h/38,950kg/**3.06%** · MAY **0h/0** (wages present, no output) · JUN 1,004h/66,911/**3.31%** · JUL **0h**/32,191/**5.76%** · TOTAL 1,553h/138,052/**3.81%**; labour 56 / ₹426,164 / **₹2.97 per kg**.
+Per-machine APR rejection: M/C-1 **2.23%** · M/C-2 **2.81%** · M/C-3 **3.00%** · M/C-4 **10.48%**.
+**July output must be 32,191** — the "68,390" in the old bug note is wrong.
+
+**HDPE** — only MAY has production: 21h / 1,370kg / **8.76%** on M/C-1. APR, JUN, JUL genuinely zero across all six machines. Wages exist in APR/MAY/JUN with ~no output — surface as an integrity flag, do not hide.
+
+**TANK** — KH 633,500 (JUN only) · VN 1,852,250 · WB 4,325,100 · **combined 6,810,850 Ltr / 86,500 rej (1.27%)**. Unit **Ltr**. No labour, no hours, no machine axis — must render "N/A", not blank-that-looks-broken.
+
+---
+
+## STEP 4 — INTEGRITY FLAGS (surface, never auto-reconcile)
+
+- **Garden MAY**: wages > 0, output = 0 → flag; no ₹/kg.
+- **Garden JUL / PTMT JUL**: output > 0, wages blank → flag; show ⚠ in the ₹/kg cell, never ₹0.
+- **PTMT total ₹/kg**: the sheet states **3.53**, but 2,009,948 ÷ 537,109 = **₹3.74**. This is a period-mismatch artifact (July output counted, July wages blank). Show the recomputed 3.74 and flag the 3.53 — do not silently reproduce it.
+- **HDPE**: wages in APR/MAY/JUN with near-zero output → flag.
+- **Tank**: KH annual shows JUN only while KH daily files exist for APR+MAY+JUN → flag for cross-check with Preeti; do NOT auto-reconcile. WB item-strip JUL 2,198 pcs vs WB TOTAL row 1,834 pcs / 1,432,000 Ltr → use TOTAL-row figures, flag the discrepancy.
+- **Idle machines** (Pipe M/C-8; Moulding 17/20/27; PTMT 21) must render as **0**, not be dropped from the table.
+
+---
+
+## STEP 5 — SMALL DISPLAY FIXES
+
+- **Rejection colour threshold is inconsistent between templates.** `templates/overview.html:182` uses three tiers (`<2` green, `<5` amber, `≥5` red); `templates/plant.html:142` uses two (`<2` green, else red). A 3% value shows amber on one page and red on the other. Harmonise `plant.html` to the three-tier rule.
+- **Tank N/A labelling**: render inapplicable Tank metrics as `—` with a tooltip "Not applicable — Tank is output-only (no run hours or machine dimension)", so N/A is visually distinct from missing data.
+
+---
+
+## STEP 6 — TESTS
+
+pytest per segment:
+- figures sourced from monthly data-entry tabs (assert the route does **not** read the annual SUMMARY for FY26-27);
+- Pipe/Garden/HDPE `eff_available` is true and matches the in-sheet efficiency; PTMT/Moulding/Tank efficiency stays `null`;
+- utilisation present for Pipe/PTMT/Moulding/Garden/HDPE; `null` for Tank;
+- all segment totals match the Step 3 targets;
+- Garden JUL output == 32,191; PTMT Nett Output == 537,109 and Run Moulds == 1,105; Tank combined == 6,810,850 Ltr;
+- integrity flags fire; idle machines render 0;
+- no `0%` is ever substituted for an unmeasurable metric.
+
+Confirm `/` still returns 200, Machine Planning is untouched, and pre-FY26-27 history/YoY is unchanged.
+
+---
+
+## REPORT BACK
+
+Per segment: metric · target · observed · source layer used (monthly / annual) · match or differ. Plus the Step 1 table, the list of integrity flags fired, and confirmation that nothing was written to Google Sheets.
