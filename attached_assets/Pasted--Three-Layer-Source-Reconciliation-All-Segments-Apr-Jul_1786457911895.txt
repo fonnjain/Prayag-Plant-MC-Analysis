@@ -1,0 +1,84 @@
+# Three-Layer Source Reconciliation — All Segments × Apr–Jul 2026 (STRICTLY READ-ONLY)
+
+**Purpose:** Every segment's FY26-27 data exists in up to three layers, and they do not agree. Before deciding which layer is authoritative, produce a complete reconciliation grid showing, for every segment × month, what each layer holds and exactly where data is missing.
+
+**This pass decides nothing. It only measures.**
+
+## HARD CONSTRAINTS
+
+- **Do NOT edit any file.** No `.py`, no templates, no `sources.py`, no `baselines.json`.
+- **Do NOT enter Build mode.** No restart, redeploy, or publish.
+- **Do NOT write to Google Sheets.** Read-only against source.
+- **Do NOT change which layer any report reads from.** Do not "fix" a gap, do not reconcile totals, do not adjust a parser to make numbers match.
+- **Do NOT recommend or select an authoritative basis.** Report the grid and stop. The basis decision is made after the grid is reviewed.
+- If a layer cannot be read, say so plainly — do not substitute another layer's number.
+
+---
+
+## The three layers
+
+| Layer | What it is | Typically carries |
+|---|---|---|
+| **A — Detail / block tabs** | item-level entry rows (per date, per item code, per machine) | output only |
+| **B — Daily Report matrix** | per machine × date matrix | run hours, output, **rejection** |
+| **C — Annual summary** | monthly roll-up in the FY workbook | all, derived |
+
+Layer names differ per segment — locate each by inspecting the workbook, not by assuming a tab name. Parse **by header text**, never by fixed column position. Map months **by label**.
+
+## Segments and months to cover
+
+**Months:** APR, MAY, JUN, JUL 2026 (all four, every segment).
+
+**Segments:** GARDEN, PIPE, HDPE, MOULDING, PTMT, TANK (KH, VN, WB separately).
+
+For segments where a layer does not exist at all (e.g. Tank has no machine/hours dimension; PTMT's daily source is Report-5), record it as **layer absent by design** — that is a finding, not a failure.
+
+---
+
+## For every segment × month, report
+
+1. **Layer A total** — output kg (or Ltr for Tank). State the tab(s) summed and the row count.
+2. **Layer B total** — run hours, output, rejection, and the sheet's own rejection %. State the tab.
+3. **Layer C total** — output, rejection, hours as the annual roll-up shows them.
+4. **Gaps:** A−B, B−C, A−C, each in absolute units and %.
+5. **Per-machine breakdown for A and B** where a machine dimension exists, so partial entry is visible (e.g. a machine present in A but zero in B).
+6. **Classification** — exactly one of:
+   - `ALL AGREE` — the three layers reconcile within 0.5%
+   - `B INCOMPLETE` — Layer B is missing machines/dates that Layer A records
+   - `A INCOMPLETE` — Layer A is missing what B records
+   - `C STALE` — C does not match B (which normally feeds it)
+   - `LAYER ABSENT` — a layer does not exist for this segment (state which, and whether by design)
+   - `SYSTEMATIC GAP` — all layers populated but a consistent non-zero difference remains
+7. **Where a gap exists, characterise it:** is it concentrated in specific machines or dates, or spread evenly? Are there item categories present in A but seemingly excluded from B (e.g. WASTE PIPE, CONNECTION, braided items)?
+
+---
+
+## Known seed values — reproduce these and flag any mismatch
+
+These were verified by direct source reads. If your figures differ, report the difference rather than adopting mine.
+
+| Segment | Month | A (detail) | B (Daily Report) | C (annual) | Known finding |
+|---|---|---:|---:|---:|---|
+| GARDEN | APR | 42,736 | ? | 38,950 | B not yet read |
+| GARDEN | MAY | 53,235 | ? | 0 | C empty; B unknown |
+| GARDEN | JUN | 70,520 | 66,911 | 66,911 | B complete; **~5.4% A−B gap**; C = B exactly |
+| GARDEN | JUL | 68,390 | 32,191 | 32,191 | B missing M/C-1,2,4; C = B |
+
+Garden June per machine (A vs B): M/C-1 45 vs 0 · M/C-2 26,014 vs 25,473 · M/C-3 37,435 vs 35,123 · M/C-4 7,026 vs 6,315.
+
+**The central open question this grid must inform:** Garden June has all three layers populated yet still shows a systematic ~5.4% gap, in the same direction on every machine. Determine whether that gap appears in other segments and months too, or is Garden-specific — and whether it tracks any identifiable item category.
+
+---
+
+## Also report
+
+- For each segment, **which layer the app currently reads** for output, for hours, and for rejection (state it; do not change it).
+- Any month where a layer exists but parses to **zero rows**, distinguishing "tab missing" from "tab present but empty" from "tab present, parse failed".
+- Tank: confirm the three plant files separately, in **Ltr**, and note that hours/machine layers are absent by design.
+- PTMT: note that its daily source is Report-5, not a block/Daily-Report pair — describe what layers actually exist.
+
+## Output format
+
+One row per segment × month in a single table, with the classification column, followed by the per-machine breakdowns and a short list of the distinct patterns found across the grid.
+
+Finish with an explicit confirmation: **no files changed, no Sheets writes, no restart or publish, and no basis selected.**
