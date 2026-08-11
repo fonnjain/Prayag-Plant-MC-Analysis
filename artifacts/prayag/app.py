@@ -6036,17 +6036,6 @@ import mp_scheduler as _mp_scheduler  # noqa: E402
 # In-process run cache (fallback when Postgres unavailable).
 # Key = run_id (str); value = {"demand": [...], "fitting_demand": [...], ...}
 _MP2_RUN_CACHE: dict = {}
-
-# Engine-result cache — avoids re-running the heavy optimiser on the same demand
-# + rejection/wastage state (e.g. the Machine Plan Comparison route calls both
-# functions twice in one request).
-# Key = (run_id, engine_kind, params_fingerprint)
-# engine_kind ∈ {"pipe", "fitting"}
-# params_fingerprint is a short SHA-256 of the rejection + wastage lookup dicts;
-# changing those DB tables (recompute_rejection, wastage seed) changes the key
-# and automatically invalidates cached results.
-_MP2_ENGINE_CACHE: dict = {}
-
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
@@ -6196,30 +6185,12 @@ def _build_plan_lookups(segment: str, effective_month: str) -> tuple:
     return rej_lookup, wastage_lookup
 
 
-def _params_fingerprint(rej_lookup: dict, wastage_lookup: dict) -> str:
-    """Short SHA-256 of the rejection + wastage lookup state.
-
-    Used as part of the _MP2_ENGINE_CACHE key so that the cached EngineResult
-    is invalidated automatically when rejection or wastage DB rows change (e.g.
-    after recompute_rejection or a wastage seed) without requiring any explicit
-    cache-clear call.
-    """
-    import hashlib as _hl, json as _js
-    blob = _js.dumps(
-        {"rej": rej_lookup, "wastage": wastage_lookup},
-        sort_keys=True, default=str,
-    ).encode()
-    return _hl.sha256(blob).hexdigest()[:16]
-
-
 def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
-    """Return pipe EngineResult for the current session run.
+    """Re-run pipe engine from stored demand in session.
 
     Builds rejection and wastage lookups on every call so the result always
-    reflects the latest DB state.  The heavy run_engine() computation is cached
-    in _MP2_ENGINE_CACHE keyed by (run_id, "pipe", params_fingerprint) so that
-    multiple calls within the same request (e.g. the Machine Plan Comparison
-    route) skip re-computation when the rejection/wastage state is unchanged.
+    reflects the latest DB state (rejection recomputes and wastage recomputes
+    are picked up without re-uploading the demand file).
     """
     run_id = session.get("mp2_run_id")
     if not run_id:
@@ -6230,32 +6201,20 @@ def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
     demand = [_mp_engine.DemandItem(**d) for d in payload["demand"]]
     seg = payload.get("segment", _mp_seed.SEGMENT)
     rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
-
-    fp = _params_fingerprint(rej_lookup, wastage_lookup)
-    cache_key = (run_id, "pipe", fp)
-    cached = _MP2_ENGINE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
     try:
-        result = _mp_engine.run_engine(
+        return _mp_engine.run_engine(
             demand, payload["effective_month"], seg,
             rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
-        _MP2_ENGINE_CACHE[cache_key] = result
-        return result
     except Exception as exc:
         app.logger.error("mp2 re-run failed: %s", exc)
         return None
 
 
 def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None":
-    """Return fitting FittingEngineResult for the current session run.
+    """Re-run fitting engine from stored fitting demand in session.
 
-    Both rejection and wastage lookups are always passed.  The heavy
-    run_fitting_engine() computation is cached in _MP2_ENGINE_CACHE keyed by
-    (run_id, "fitting", params_fingerprint) to avoid repeated work within the
-    same request (e.g. the Machine Plan Comparison route).
+    Both rejection and wastage lookups are always passed.
     """
     run_id = session.get("mp2_run_id")
     if not run_id:
@@ -6269,20 +6228,11 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
     fitting_demand = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
     seg = payload.get("segment", _mp_seed.SEGMENT)
     rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
-
-    fp = _params_fingerprint(rej_lookup, wastage_lookup)
-    cache_key = (run_id, "fitting", fp)
-    cached = _MP2_ENGINE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
     try:
-        result = _mp_engine.run_fitting_engine(
+        return _mp_engine.run_fitting_engine(
             fitting_demand, payload["effective_month"], seg,
             rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
-        _MP2_ENGINE_CACHE[cache_key] = result
-        return result
     except Exception as exc:
         app.logger.error("mp3 fitting re-run failed: %s", exc)
         return None
@@ -6306,14 +6256,8 @@ def _ensure_session_run_id() -> None:
         pass
 
 
-def _mp_schedule_from_session(
-    engine_result: "_mp_engine.EngineResult | None" = None,
-) -> "_mp_scheduler.ScheduleResult | None":
-    """Run shift scheduler from stored pipe demand in session.
-
-    Pass *engine_result* when the caller has already computed the pipe engine
-    result to avoid a redundant re-run of the engine inside this helper.
-    """
+def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
+    """Run shift scheduler from stored pipe demand in session."""
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6331,7 +6275,7 @@ def _mp_schedule_from_session(
         d2.setdefault("first_requested_week", 0)
         demand.append(_mp_engine.DemandItem(**d2))
 
-    result = engine_result if engine_result is not None else _mp2_result_from_session()
+    result = _mp2_result_from_session()
     if result is None:
         return None
     em = payload["effective_month"]
@@ -6352,14 +6296,8 @@ def _mp_schedule_from_session(
         app.logger.error("mp_shift_schedule failed: %s", exc)
         return None
 
-def _mp_fitting_schedule_from_session(
-    fitting_result: "_mp_engine.FittingEngineResult | None" = None,
-) -> "_mp_scheduler.ScheduleResult | None":
-    """Run fitting shift scheduler from stored fitting demand in session.
-
-    Pass *fitting_result* when the caller has already computed the fitting engine
-    result to avoid a redundant re-run of the fitting engine inside this helper.
-    """
+def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
+    """Run fitting shift scheduler from stored fitting demand in session."""
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6370,8 +6308,8 @@ def _mp_fitting_schedule_from_session(
     if not fit_dicts:
         return None
 
-    fr = fitting_result if fitting_result is not None else _mp3_fitting_result_from_session()
-    if fr is None:
+    fitting_result = _mp3_fitting_result_from_session()
+    if fitting_result is None:
         return None
     em  = payload["effective_month"]
     seg = payload.get("segment", _mp_seed.SEGMENT)
@@ -6381,7 +6319,7 @@ def _mp_fitting_schedule_from_session(
         dt_recs = []
     try:
         return _mp_scheduler.run_fitting_schedule(
-            fitting_items=fr.items,
+            fitting_items=fitting_result.items,
             fitting_demand=[_mp_engine.FittingDemandItem(**d) for d in fit_dicts],
             segment=seg,
             effective_month=em,
@@ -6690,13 +6628,9 @@ def mp_report_consolidated():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result                  = _mp2_result_from_session()
-    fitting_result          = _mp3_fitting_result_from_session()
-    # Pass the already-computed results so the scheduler helpers do not
-    # re-run the engines a second time inside _mp_schedule_from_session /
-    # _mp_fitting_schedule_from_session.
-    schedule_result         = _mp_schedule_from_session(engine_result=result)
-    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
+    result         = _mp2_result_from_session()
+    fitting_result = _mp3_fitting_result_from_session()
+    schedule_result = _mp_schedule_from_session()
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6706,7 +6640,6 @@ def mp_report_consolidated():
             engine_result=result,
             fitting_result=fitting_result,
             schedule_result=schedule_result,
-            fitting_schedule=fitting_schedule_result,
         )
         month = (result or fitting_result).effective_month
         filename = f"Consolidated_Plan_{month}.xlsx"
@@ -6728,12 +6661,9 @@ def mp_report_zip():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result                  = _mp2_result_from_session()
-    fitting_result          = _mp3_fitting_result_from_session()
-    # Pass the already-computed results so the scheduler helpers do not
-    # re-run the engines a second time.
-    schedule_result         = _mp_schedule_from_session(engine_result=result)
-    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
+    result          = _mp2_result_from_session()
+    fitting_result  = _mp3_fitting_result_from_session()
+    schedule_result = _mp_schedule_from_session()
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6772,7 +6702,6 @@ def mp_report_zip():
                             engine_result=result,
                             fitting_result=fitting_result,
                             schedule_result=schedule_result,
-                            fitting_schedule=fitting_schedule_result,
                         ))
             built += 1
         except Exception as exc:
