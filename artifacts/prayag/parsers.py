@@ -449,6 +449,7 @@ def parse_daily_matrix(
     source_tab: str,
     mc_header_spec=None,
     notes: Optional[List[str]] = None,
+    _layout_found: Optional[list] = None,
 ) -> List[Record]:
     """Parse a wide per-date daily matrix into raw daily-grain Records.
 
@@ -500,6 +501,14 @@ def parse_daily_matrix(
             elif rej_c < 0 and "REJECT" in h:
                 rej_c = c
         groups.append((day, run_c, out_c, rej_c))
+
+    # Signal to callers (via an optional out-param) that the date-row header was
+    # successfully detected even when every data row is later skipped (e.g. an
+    # all-zero monthly sheet where operators haven't yet entered run hours).
+    # This lets _emit_blocks distinguish "layout unrecognisable" from "layout OK
+    # but no data yet" without polluting the user-visible `notes` list.
+    if _layout_found is not None and groups:
+        _layout_found.append(True)
 
     # Warn if a REJECT-ish sub-header exists somewhere in the sheet's date/sub
     # rows but no date group's span matched a rejection column. Without this guard

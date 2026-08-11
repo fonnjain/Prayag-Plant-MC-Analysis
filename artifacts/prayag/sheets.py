@@ -1529,6 +1529,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
   rh_tab = spec.get("runhours_tab")
   rh_tab_found = False
   rh_parsed = 0
+  rh_layout_ok = False   # True when parse_daily_matrix found the date-row header
   runhours_found = False
   if rh_tab:
       rh_actual = next(
@@ -1536,12 +1537,15 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
            if str(t).strip().upper() == rh_tab.upper()), None)
       if rh_actual is not None:
           rh_tab_found = True
+          rh_lf: list = []   # _layout_found out-param: non-empty iff header detected
           rh_rows = parsers.parse_daily_matrix(
               read_values(file_id, rh_actual, token),
               plant=emit, segment=seg, unit=unit, year_month=ym,
               source_file=file_id, source_tab=rh_actual,
+              _layout_found=rh_lf,
           )
           rh_parsed = len(rh_rows)
+          rh_layout_ok = bool(rh_lf)
           rh_map: dict = {}
           for rr in rh_rows:
               if rr.actual_hours and rr.actual_hours > 0:
@@ -1620,11 +1624,20 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           "suppressed (check the workbook layout)."
       )
   elif rh_tab and rh_parsed == 0:
-      report["warning"] = (
-          f"{emit} {ym}: output read from the per-machine tabs, but the "
-          f"'{rh_tab}' matrix could not be parsed (layout not recognised) — "
-          "utilisation suppressed."
-      )
+      if rh_layout_ok:
+          # Layout was parseable but every data cell is zero — operators have
+          # not yet filled in this month's run hours.
+          report["warning"] = (
+              f"{emit} {ym}: output read from the per-machine tabs, but the "
+              f"'{rh_tab}' matrix has no run hours entered yet — utilisation "
+              "suppressed."
+          )
+      else:
+          report["warning"] = (
+              f"{emit} {ym}: output read from the per-machine tabs, but the "
+              f"'{rh_tab}' matrix could not be parsed (layout not recognised) — "
+              "utilisation suppressed."
+          )
   elif rh_tab:
       report["warning"] = (
           f"{emit} {ym}: output read from the per-machine tabs, but the "

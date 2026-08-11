@@ -759,6 +759,75 @@ def test_matrix_ptmt_rejection_outside_group_span_warns():
           "→ drift note fires correctly")
 
 
+# ---------------------------------------------------------------------------
+# _layout_found out-param: lets callers distinguish "layout unrecognisable"
+# from "layout parsed OK but all data rows were zero/skipped".
+# ---------------------------------------------------------------------------
+
+def test_matrix_layout_found_set_when_header_detected_and_records_returned():
+    """_layout_found is populated when the date header is found AND records emit."""
+    values = [
+        ["MACHINE", "Apr, 1", "", "", "Apr, 2", "", ""],
+        ["",        "Run Hours", "Output in KG", "Rejection in KG",
+                    "Run Hours", "Output in KG", "Rejection in KG"],
+        ["MACHINE-1", "8", "1000", "5", "7", "900", "3"],
+    ]
+    lf: list = []
+    recs = parse_daily_matrix(
+        values, plant="GARDEN", segment="Garden Pipe", unit="kg",
+        year_month="2026-04", source_file="f", source_tab="Daily Report",
+        _layout_found=lf,
+    )
+    assert len(recs) > 0, "records must be emitted"
+    assert bool(lf), "_layout_found must be set when header is detected"
+    print("PASS: _layout_found set when header found and records returned")
+
+
+def test_matrix_layout_found_set_even_when_all_data_zero():
+    """_layout_found is populated even when every data row is all-zero (operators
+    haven't filled the sheet yet) — this is the GARDEN May-2026 pattern where
+    the layout IS recognisable but run hours haven't been entered."""
+    values = [
+        ["MACHINE", "May, 1", "", "", "May, 2", "", ""],
+        ["",        "Run Hours", "Output in KG", "Rejection in KG",
+                    "Run Hours", "Output in KG", "Rejection in KG"],
+        ["TOTAL",    "0", "0.00", "0.00", "0", "0.00", "0.00"],  # TOTAL row (skipped)
+        ["MACHINE-1", "0", "0.00", "0.00", "0", "0.00", "0.00"],  # all zeros → skipped
+        ["MACHINE-2", "0", "0.00", "0.00", "0", "0.00", "0.00"],
+    ]
+    lf: list = []
+    recs = parse_daily_matrix(
+        values, plant="GARDEN", segment="Garden Pipe", unit="kg",
+        year_month="2026-05", source_file="f", source_tab="Daily Report",
+        _layout_found=lf,
+    )
+    assert len(recs) == 0, "all-zero sheet must produce no records"
+    assert bool(lf), (
+        "_layout_found must be set even when all data rows are zero — "
+        "callers use this to fire 'no run hours entered yet' not 'layout not recognised'"
+    )
+    print("PASS: _layout_found set for all-zero sheet (layout OK, data not entered)")
+
+
+def test_matrix_layout_found_not_set_when_no_date_row():
+    """_layout_found stays empty when the matrix has no parseable date-row header
+    (genuinely unrecognisable layout)."""
+    values = [
+        ["MACHINE", "JAN TOTAL", "FEB TOTAL"],   # no date cells matching _day_from_label
+        ["",        "100", "200"],
+        ["M/C-1",   "50",  "80"],
+    ]
+    lf: list = []
+    recs = parse_daily_matrix(
+        values, plant="GARDEN", segment="Garden Pipe", unit="kg",
+        year_month="2026-05", source_file="f", source_tab="Daily Report",
+        _layout_found=lf,
+    )
+    assert len(recs) == 0, "unrecognisable layout must return no records"
+    assert not lf, "_layout_found must be empty when no date row is detected"
+    print("PASS: _layout_found not set when no date row is found (true layout failure)")
+
+
 if __name__ == "__main__":
     test_long_parser_aggregates_machine_day_and_drops_empty()
     test_long_parser_drops_total_variant_labels()
@@ -785,4 +854,7 @@ if __name__ == "__main__":
     test_matrix_ptmt_trailing_actual_rejection_weight_silent()
     test_matrix_ptmt_trailing_actual_weight_genuinely_free()
     test_matrix_ptmt_rejection_outside_group_span_warns()
+    test_matrix_layout_found_set_when_header_detected_and_records_returned()
+    test_matrix_layout_found_set_even_when_all_data_zero()
+    test_matrix_layout_found_not_set_when_no_date_row()
     print("\nAll daily parser/normalisation unit tests passed.")

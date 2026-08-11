@@ -50,3 +50,4 @@
 - [MP seed provenance module](prayag-mp-seed-provenance.md) — mp_seed_provenance.py tracks per-table seed freshness; Drive tests must wipe+restore all provenance rows (build_staleness_warnings queries ALL tables, not per-segment).
 - [PIPE monthly workbook auto-discovery](prayag-pipe-source-registry.md) — source_registry.py: pinned sources.py ID wins; else DB cache; else Drive title search. Titles contain "Pipe"+"Fitting"+MON_ABBREV+YEAR. Tie-break: preeti@, else newest. Never overwrites a pin.
 - [Corrective Re-plan engine](prayag-corrective-replan.md) — mp_corrective_replan.py: p90(≥5 days)→mean→NDC; Issue #5 date fix in mp_followup._parse_date; route at /planning/corrective-replan; 45 regression tests.
+- [GARDEN run-hours matrix empty-vs-unrecognisable](prayag-garden-matrix-layout.md) — _layout_found out-param on parse_daily_matrix distinguishes "layout found, data all zero" from "no date row at all"; wrong branch fires misleading "could not be parsed".
