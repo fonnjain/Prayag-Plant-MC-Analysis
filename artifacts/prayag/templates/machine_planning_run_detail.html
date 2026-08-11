@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div style="padding:0 .75rem 5rem; max-width:900px; margin:0 auto;">
+<div style="padding:0 .75rem 5rem; max-width:920px; margin:0 auto;">
 
   {# ── Header ────────────────────────────────────────────────────────────── #}
   <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
@@ -47,6 +47,16 @@
     {% endif %}
   </div>
 
+  {# ── Live preview banner (pending / not frozen) ─────────────────────── #}
+  {% if live_preview %}
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:.5rem;
+              padding:.55rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#1e40af;">
+    ℹ️ <strong>Live preview</strong> — plan regenerated from stored demand.
+    Not saved until frozen.
+    Freeze it from the <strong>Re-run &amp; Freeze</strong> button below.
+  </div>
+  {% endif %}
+
   {# ── Pending run — re-freeze prompt ────────────────────────────────────── #}
   {% if run_status == 'pending' %}
   <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:.6rem;
@@ -82,37 +92,6 @@
         ▶ Re-run &amp; Freeze
       </button>
     </form>
-
-    {# ── Download without freezing ──────────────────────────────────────── #}
-    <div style="margin-top:.85rem;padding-top:.7rem;border-top:1px dashed #fde68a;">
-      <div style="font-size:.74rem;font-weight:700;color:#92400e;margin-bottom:.4rem;">
-        📥 Or download the machine plan Excel without freezing
-        <span style="font-weight:400;">(reports are regenerated from the stored demand — nothing is saved)</span>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:.45rem;">
-        {% if demand_count %}
-        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11') }}"
-           style="background:var(--navy);color:#fff;text-decoration:none;
-                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:700;">
-          📥 Report-11 (Machine Plan)
-        </a>
-        {% for g in ['A','B','C','D'] %}
-        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11'+g) }}"
-           style="background:var(--terra);color:#fff;text-decoration:none;
-                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:600;">
-          📥 11{{ g }}
-        </a>
-        {% endfor %}
-        {% endif %}
-        {% if fitting_count %}
-        <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='12') }}"
-           style="background:var(--navy);color:#fff;text-decoration:none;
-                  padding:.3rem .6rem;border-radius:.35rem;font-size:.76rem;font-weight:700;">
-          📥 Report-12 (Moulding Plan)
-        </a>
-        {% endif %}
-      </div>
-    </div>
     {% else %}
     <div style="font-size:.76rem;color:#991b1b;">
       No demand data found for this run.
@@ -126,7 +105,7 @@
   {% if rej_missing is defined and rej_missing %}
   <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:.5rem;
               padding:.65rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#991b1b;">
-    🚫 <strong>Rejection data was absent</strong> when this plan was frozen — 0%
+    🚫 <strong>Rejection data was absent</strong> when this plan was run — 0%
     rejection rate was applied to all items. Planned quantities may be understated.
     Seed rejection data on the
     <a href="{{ url_for('mp_settings_view') }}" style="color:#991b1b;font-weight:700;">
@@ -156,62 +135,44 @@
   </div>
   {% endif %}
 
-  {# ── Pipe section ─────────────────────────────────────────────────────── #}
+  {# ════════════════════════════════════════════════════════════════════
+     PIPE SECTION
+     ════════════════════════════════════════════════════════════════════ #}
   {% if result and result.machine_loads %}
-  <div style="border-left:3px solid var(--navy);padding-left:.6rem;margin-bottom:.6rem;">
-    <span style="font-size:.78rem;font-weight:800;color:var(--navy);">PIPE · Extrusion Machines</span>
+
+  {# Pipe section label #}
+  <div style="border-left:3px solid var(--navy);padding-left:.6rem;margin-bottom:.7rem;">
+    <span style="font-size:.8rem;font-weight:800;color:var(--navy);">PIPE · Extrusion Machines</span>
+    {% if result %}
     <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
-      Opt peak: {{ "{:.1f}".format(opt_peak_hrs) }}h ({{ "{:.1f}".format(opt_peak_pct) }}%) ·
-      Base peak: {{ "{:.1f}".format(base_peak_hrs) }}h ({{ "{:.1f}".format(base_peak_pct) }}%)
+      {{ result.effective_month }} ·
+      Waste {{ result.params_used.waste_pct | round(1) }}% ·
+      Pulv {{ result.params_used.pulverizer_pct | round(1) }}%
     </span>
+    {% endif %}
   </div>
 
-  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
-              padding:.75rem;margin-bottom:1rem;overflow-x:auto;">
-    <table style="width:100%;border-collapse:collapse;font-size:.75rem;">
-      <thead>
-        <tr style="background:var(--navy);color:#fff;">
-          <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
-          <th style="padding:.35rem .5rem;text-align:right;">Cap h</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt h</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt %</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
-          <th style="padding:.35rem .5rem;text-align:right;">Days</th>
-          <th style="padding:.35rem .5rem;text-align:right;">Mat kg</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for ml in result.machine_loads %}
-        {% set bl = baseline_by_mc.get(ml.machine) %}
-        {% set over = ml.utilisation_pct > 100 %}
-        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
-          <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
-          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
-          <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
-                     color:{{ '#c55a11' if over else '#065f46' }};">
-            {{ "{:,.1f}".format(ml.assigned_hrs) }}
-          </td>
-          <td style="padding:.3rem .5rem;text-align:right;">
-            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct>60 else '#6b7280') }};">
-              {{ "{:.1f}".format(ml.utilisation_pct) }}%
-            </div>
-            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
-              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
-                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
-            </div>
-          </td>
-          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if bl and bl.utilisation_pct>100 else '#4b5563' }};">
-            {% if bl %}{{ "{:.1f}".format(bl.utilisation_pct) }}%{% else %}—{% endif %}
-          </td>
-          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:.1f}".format(ml.machine_days) }}</td>
-          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.material_kg) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  {# ── Pipe material totals cards ───────────────────────────────────── #}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+              gap:.55rem;margin-bottom:1rem;">
+    {% set pipe_cards = [
+      ("Routable Material kg", result.totals.routable_material_kg,   "#e0e7ff", "#4338ca"),
+      ("Fresh Compound kg",    result.totals.routable_fresh_compound_kg, "#d1fae5", "#065f46"),
+      ("Pulverizer kg",        result.totals.routable_pulverizer_kg,  "#fef3c7", "#92400e"),
+      ("Total Demand (pcs)",   result.totals.total_qty_pcs,           "#f0f4ff", "#1e40af"),
+    ] %}
+    {% for lbl, val, bg, fg in pipe_cards %}
+    <div style="background:{{ bg }};border-radius:.6rem;padding:.6rem .7rem;">
+      <div style="font-size:.68rem;font-weight:600;color:{{ fg }};
+                  text-transform:uppercase;letter-spacing:.04em;">{{ lbl }}</div>
+      <div style="font-size:1rem;font-weight:800;color:{{ fg }};margin-top:.15rem;">
+        {{ "{:,.0f}".format(val) }}
+      </div>
+    </div>
+    {% endfor %}
   </div>
 
-  {# Coverage gaps — pipe #}
+  {# ── Pipe coverage gaps ──────────────────────────────────────────── #}
   {% set gaps = result.coverage_gaps %}
   {% if gaps.no_weight or gaps.no_machine or gaps.locked_out_machines or gaps.idle_machines %}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
@@ -253,73 +214,298 @@
   </div>
   {% endif %}
 
-  {# Pipe downloads #}
+  {# ── Pipe machine load table — dual-column Demand + Sched ────────── #}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
-              padding:.65rem;margin-bottom:1rem;">
-    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .5rem;">
-      Download — Pipe Reports
+              padding:.75rem;margin-bottom:1rem;overflow-x:auto;">
+    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .6rem;">
+      Machine Load · Optimised vs Baseline
     </h3>
-    <div style="display:flex;flex-wrap:wrap;gap:.45rem;">
-      <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11') }}"
-         style="background:var(--navy);color:#fff;text-decoration:none;
-                padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:700;">
-        📥 Report-11
-      </a>
-      {% for g in ['A','B','C','D'] %}
-      <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11'+g) }}"
-         style="background:var(--terra);color:#fff;text-decoration:none;
-                padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:600;">
-        📥 11{{ g }}
-      </a>
-      {% endfor %}
+    <table style="width:100%;border-collapse:collapse;font-size:.76rem;">
+      <thead>
+        <tr style="background:var(--navy);color:#fff;">
+          <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Capacity hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;"
+              title="Demand load (pre-capacity): LPT-optimised hours. May exceed 100% when total demand exceeds machine capacity.">Demand hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;"
+              title="Demand load %. May exceed 100% — reflects planned quantity, not achievable output.">Demand %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#14532d;"
+              title="Scheduled load (capacity-enforced): hours placed within working days. Always ≤ 100%.">Sched hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#14532d;"
+              title="Scheduled load %. Always ≤ 100% — this is what the machine can actually run.">Sched %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
+          <th style="padding:.35rem .5rem;text-align:right;">M-days</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Mat kg</th>
+          <th style="padding:.35rem .5rem;text-align:center;">Staff</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ml in result.machine_loads %}
+        {% set bl = baseline_by_mc.get(ml.machine) %}
+        {% set over = ml.utilisation_pct > 100 %}
+        {% set sched_hrs = sched_load_by_mc.get(ml.machine, none) %}
+        {% set sched_pct = (sched_hrs / ml.capacity_hrs * 100) if (sched_hrs is not none and ml.capacity_hrs > 0) else none %}
+        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index % 2 == 0 else '#fff') }};">
+          <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
+          {# Demand — pre-capacity, may exceed 100% #}
+          <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
+                     color:{{ '#c55a11' if over else '#065f46' }};"
+              title="Demand load (pre-capacity) — may exceed 100%">
+            {{ "{:,.1f}".format(ml.assigned_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;"
+              title="Demand load % — may exceed 100%">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
+              {{ "{:.1f}".format(ml.utilisation_pct) }}%{% if over %} ⚠{% endif %}
+            </div>
+            <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
+              <div style="width:{{ [ml.utilisation_pct, 100]|min }}%;height:100%;
+                          background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
+            </div>
+          </td>
+          {# Scheduled — capacity-enforced, always ≤ 100% #}
+          {% if sched_hrs is not none %}
+          <td style="padding:.3rem .5rem;text-align:right;color:#065f46;font-weight:600;"
+              title="Scheduled load (capacity-enforced) — always ≤ 100%">
+            {{ "{:,.1f}".format(sched_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;"
+              title="Scheduled load % — always ≤ 100%">
+            <div style="font-weight:700;color:{% if sched_pct < 85 %}#6b7280{% elif sched_pct <= 100 %}#065f46{% else %}#991b1b{% endif %};">
+              {{ "{:.1f}".format(sched_pct) }}%
+            </div>
+          </td>
+          {% else %}
+          <td colspan="2" style="padding:.3rem .5rem;text-align:center;color:#9ca3af;font-size:.73rem;">—</td>
+          {% endif %}
+          {% if bl %}
+          {% set b_over = bl.utilisation_pct > 100 %}
+          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if b_over else '#4b5563' }};">
+            {{ "{:,.1f}".format(bl.assigned_hrs) }}
+          </td>
+          <td style="padding:.3rem .5rem;text-align:right;font-weight:{% if b_over %}700{% else %}400{% endif %};
+                     color:{{ '#991b1b' if b_over else '#4b5563' }};">
+            {{ "{:.1f}".format(bl.utilisation_pct) }}%
+          </td>
+          {% else %}
+          <td colspan="2" style="padding:.3rem .5rem;text-align:center;color:#9ca3af;">—</td>
+          {% endif %}
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:.1f}".format(ml.machine_days) }}</td>
+          <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.material_kg) }}</td>
+          <td style="padding:.3rem .5rem;text-align:center;">
+            {% if ml.staffing_ok %}
+            <span style="color:#065f46;font-size:.85rem;">✓</span>
+            {% else %}
+            <span style="color:#991b1b;font-size:.8rem;font-weight:700;" title="No staffing configured">⚠</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div style="margin-top:.7rem;font-size:.74rem;color:#374151;
+                border-top:1px solid #e5e7eb;padding-top:.6rem;display:flex;gap:1.5rem;flex-wrap:wrap;">
+      <span>
+        <strong style="color:var(--navy);">Optimised peak:</strong>
+        {{ "{:,.1f}".format(opt_peak_hrs) }} hrs ({{ "{:.1f}".format(opt_peak_pct) }}%)
+      </span>
+      <span>
+        <strong style="color:var(--terra);">Baseline peak:</strong>
+        {{ "{:,.1f}".format(base_peak_hrs) }} hrs ({{ "{:.1f}".format(base_peak_pct) }}%)
+      </span>
+      {% if opt_peak_hrs < base_peak_hrs %}
+      <span style="color:#065f46;font-weight:600;">
+        ↓ {{ "{:,.1f}".format(base_peak_hrs - opt_peak_hrs) }} hrs reduction
+        ({{ "{:.1f}".format(((base_peak_hrs - opt_peak_hrs) / base_peak_hrs * 100) if base_peak_hrs else 0) }}%)
+      </span>
+      {% endif %}
+    </div>
+    {# Context note: Demand vs Sched #}
+    <div style="margin-top:.55rem;font-size:.73rem;color:#6b7280;
+                border-top:1px solid #f3f4f6;padding-top:.45rem;">
+      <strong>Demand % vs Sched %:</strong>
+      Demand % may exceed 100% — it shows how much the plan asks for (pre-capacity).
+      Sched % is always ≤ 100% — it shows what the shift scheduler can actually place
+      within the month's working hours.
     </div>
   </div>
+
+  {# ── Pipe item detail (collapsible) ──────────────────────────────── #}
+  <details style="background:#fff;border-radius:.6rem;
+                  box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:1rem;">
+    <summary style="padding:.75rem;font-size:.82rem;font-weight:800;
+                    color:var(--navy);cursor:pointer;user-select:none;">
+      Pipe Item Detail ({{ result.items | selectattr('has_weight') | selectattr('has_machine') | list | length }}
+      routable SKUs · click to expand)
+    </summary>
+    <div style="padding:.5rem .75rem .75rem;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+        <thead>
+          <tr style="background:var(--navy);color:#fff;">
+            <th style="padding:.3rem .4rem;text-align:left;">Item Code</th>
+            <th style="padding:.3rem .4rem;text-align:center;">Material</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Qty (pcs)</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Wt/pc (kg)</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Material kg</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Rate kg/hr</th>
+            <th style="padding:.3rem .4rem;text-align:center;">Rate</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Mach hrs</th>
+            <th style="padding:.3rem .4rem;text-align:left;">Assignments</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for it in result.items | sort(attribute='item_code') %}
+          {% if it.has_weight and it.has_machine %}
+          <tr style="background:{{ '#fffbeb' if it.rate_estimated else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
+            <td style="padding:.25rem .4rem;font-weight:600;color:var(--navy);">{{ it.item_code }}</td>
+            <td style="padding:.25rem .4rem;text-align:center;">{{ it.material }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:,.0f}".format(it.qty_pcs) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "%.4f" % (it.weight_per_pc_kg or 0) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:,.1f}".format(it.material_kg) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:.1f}".format(it.rate_kg_per_hr) }}</td>
+            <td style="padding:.25rem .4rem;text-align:center;">
+              {% if it.rate_estimated %}
+              <span style="font-size:.68rem;background:#fef3c7;color:#92400e;
+                           border-radius:99px;padding:.05rem .4rem;">est.</span>
+              {% else %}
+              <span style="font-size:.68rem;color:#6b7280;">seeded</span>
+              {% endif %}
+            </td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:.2f}".format(it.machine_hrs) }}</td>
+            <td style="padding:.25rem .4rem;font-size:.69rem;color:#374151;">
+              {% for a in it.assignments %}
+              {{ a.machine }} ({{ "{:.2f}".format(a.hrs) }}h){% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
   {% endif %}{# end pipe section #}
 
-  {# ── Fitting section ──────────────────────────────────────────────────── #}
-  {% if fitting_result and fitting_result.machine_loads %}
-  <div style="border-top:2px solid var(--navy);margin:1.2rem 0 .8rem;"></div>
+  {# ════════════════════════════════════════════════════════════════════
+     FITTINGS SECTION (MP-3)
+     ════════════════════════════════════════════════════════════════════ #}
+  {% if fitting_result %}
 
-  <div style="border-left:3px solid var(--terra);padding-left:.6rem;margin-bottom:.6rem;">
-    <span style="font-size:.78rem;font-weight:800;color:var(--navy);">FITTINGS · Moulding Machines</span>
-    <span style="font-size:.7rem;color:#6b7280;margin-left:.4rem;">
-      Opt peak: {{ "{:.1f}".format(fit_opt_peak_hrs) }}h ({{ "{:.1f}".format(fit_opt_peak_pct) }}%) ·
-      Base peak: {{ "{:.1f}".format(fit_base_peak_hrs) }}h ({{ "{:.1f}".format(fit_base_peak_pct) }}%)
+  <div style="border-top:2px solid var(--navy);margin:1.4rem 0 1rem;
+              display:flex;align-items:center;gap:.6rem;">
+    <span style="background:var(--navy);color:#fff;font-size:.72rem;font-weight:800;
+                 padding:.2rem .65rem;border-radius:99px;white-space:nowrap;">
+      FITTINGS · MP-3
+    </span>
+    <span style="font-size:.71rem;color:#6b7280;">
+      {{ fitting_result.effective_month }} · {{ fitting_result.segment }} ·
+      Waste {{ fitting_result.params_used.waste_pct | round(1) }}% ·
+      Pulverizer {{ fitting_result.params_used.pulverizer_pct | round(1) }}%
     </span>
   </div>
 
-  {% set fgaps = fitting_result.coverage_gaps %}
-  {% if fgaps.no_weight or fgaps.no_machine or fitting_result.n_route_estimated %}
-  <div style="display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.65rem;font-size:.75rem;">
-    {% if fgaps.no_weight %}
-    <span style="background:#fee2e2;color:#991b1b;border-radius:99px;padding:.15rem .55rem;">
-      ⚠ {{ fgaps.no_weight|length }} no-weight
-    </span>
-    {% endif %}
-    {% if fgaps.no_machine %}
-    <span style="background:#fef3c7;color:#92400e;border-radius:99px;padding:.15rem .55rem;">
-      ⚠ {{ fgaps.no_machine|length }} unroutable
-    </span>
-    {% endif %}
-    {% if fitting_result.n_route_estimated %}
-    <span style="background:#eff6ff;color:#1e40af;border-radius:99px;padding:.15rem .55rem;">
-      ℹ {{ fitting_result.n_route_estimated }} material-fallback
-    </span>
+  {% if fit_n_estimated > 0 %}
+  <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:.5rem;
+              padding:.6rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#92400e;">
+    ⚠️ <strong>{{ fit_n_estimated }} fitting item{{ 's' if fit_n_estimated>1 }}</strong>
+    have no seeded cavity/cycle rate — category-average fallback applied
+    and marked <em>estimated</em>.
+  </div>
+  {% endif %}
+
+  {% if fitting_result.n_route_estimated > 0 %}
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:.5rem;
+              padding:.6rem .85rem;margin-bottom:.8rem;font-size:.78rem;color:#1e40af;">
+    ℹ️ <strong>{{ fitting_result.n_route_estimated }} items</strong>
+    had no Report-12 history route — material-level fallback routing applied.
+    {% if fitting_result.n_unroutable > 0 %}
+    <strong style="color:#991b1b;">{{ fitting_result.n_unroutable }} items remain unroutable.</strong>
     {% endif %}
   </div>
   {% endif %}
 
+  {# Fitting material totals #}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+              gap:.55rem;margin-bottom:1rem;">
+    {% set fit_cards = [
+      ("Routable Material kg", fitting_result.totals.routable_material_kg,   "#e0e7ff", "#4338ca"),
+      ("Fresh Compound kg",    fitting_result.totals.routable_fresh_compound_kg, "#d1fae5", "#065f46"),
+      ("Pulverizer kg",        fitting_result.totals.routable_pulverizer_kg,  "#fef3c7", "#92400e"),
+      ("Total Demand (pcs)",   fitting_result.totals.total_qty_pcs,           "#f0f4ff", "#1e40af"),
+    ] %}
+    {% for lbl, val, bg, fg in fit_cards %}
+    <div style="background:{{ bg }};border-radius:.6rem;padding:.6rem .7rem;">
+      <div style="font-size:.68rem;font-weight:600;color:{{ fg }};
+                  text-transform:uppercase;letter-spacing:.04em;">{{ lbl }}</div>
+      <div style="font-size:1rem;font-weight:800;color:{{ fg }};margin-top:.15rem;">
+        {{ "{:,.0f}".format(val) }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# Coverage gaps — fittings #}
+  {% set fgaps = fitting_result.coverage_gaps %}
+  {% if fgaps.no_weight or fgaps.no_machine or fitting_result.n_route_estimated %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .6rem;">
+      Fitting Coverage Gaps &amp; Flags
+    </h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+      {% if fgaps.no_weight %}
+      <div style="background:#fee2e2;border-radius:.4rem;padding:.55rem .7rem;">
+        <div style="font-size:.72rem;font-weight:700;color:#991b1b;">
+          No BOM Weight — {{ fgaps.no_weight|length }} item{{ 's' if fgaps.no_weight|length>1 }}
+        </div>
+        <div style="font-size:.69rem;color:#7f1d1d;margin-top:.25rem;line-height:1.55;">
+          {% for ic in fgaps.no_weight[:12] %}{{ ic }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% if fgaps.no_weight|length > 12 %} … +{{ fgaps.no_weight|length - 12 }} more{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if fgaps.no_machine %}
+      <div style="background:#fef3c7;border-radius:.4rem;padding:.55rem .7rem;">
+        <div style="font-size:.72rem;font-weight:700;color:#92400e;">
+          Unroutable — {{ fgaps.no_machine|length }} item{{ 's' if fgaps.no_machine|length>1 }}
+        </div>
+        <div style="font-size:.69rem;color:#78350f;margin-top:.25rem;line-height:1.55;">
+          {% for ic in fgaps.no_machine[:12] %}{{ ic }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% if fgaps.no_machine|length > 12 %} … +{{ fgaps.no_machine|length - 12 }} more{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if fitting_result.n_route_estimated > 0 %}
+      <div style="background:#eff6ff;border-radius:.4rem;padding:.55rem .7rem;">
+        <div style="font-size:.72rem;font-weight:700;color:#1e40af;">
+          Material-level fallback routing — {{ fitting_result.n_route_estimated }} items
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Fitting machine load table #}
   <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
               padding:.75rem;margin-bottom:1rem;overflow-x:auto;">
-    <table style="width:100%;border-collapse:collapse;font-size:.75rem;">
+    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .6rem;">
+      Moulding Machine Load · Optimised vs Baseline
+    </h3>
+    <table style="width:100%;border-collapse:collapse;font-size:.76rem;">
       <thead>
         <tr style="background:var(--navy);color:#fff;">
           <th style="padding:.35rem .5rem;text-align:left;">Machine</th>
-          <th style="padding:.35rem .5rem;text-align:right;">Cap h</th>
-          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt h</th>
+          <th style="padding:.35rem .5rem;text-align:right;">Capacity hrs</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt hrs</th>
           <th style="padding:.35rem .5rem;text-align:right;background:#1a4a80;">Opt %</th>
+          <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base hrs</th>
           <th style="padding:.35rem .5rem;text-align:right;background:#6b4c30;">Base %</th>
-          <th style="padding:.35rem .5rem;text-align:right;">Days</th>
+          <th style="padding:.35rem .5rem;text-align:right;">M-days</th>
           <th style="padding:.35rem .5rem;text-align:right;">Mat kg</th>
         </tr>
       </thead>
@@ -327,7 +513,7 @@
         {% for ml in fitting_result.machine_loads %}
         {% set bl = fit_baseline_by_mc.get(ml.machine) %}
         {% set over = ml.utilisation_pct > 100 %}
-        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
+        <tr style="background:{{ '#fff7ed' if over else ('#f9fafb' if loop.index % 2 == 0 else '#fff') }};">
           <td style="padding:.3rem .5rem;font-weight:600;color:var(--navy);">{{ ml.machine }}</td>
           <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.capacity_hrs) }}</td>
           <td style="padding:.3rem .5rem;text-align:right;font-weight:600;
@@ -335,7 +521,7 @@
             {{ "{:,.1f}".format(ml.assigned_hrs) }}
           </td>
           <td style="padding:.3rem .5rem;text-align:right;">
-            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct>60 else '#6b7280') }};">
+            <div style="font-weight:700;color:{{ '#991b1b' if over else ('#065f46' if ml.utilisation_pct > 60 else '#6b7280') }};">
               {{ "{:.1f}".format(ml.utilisation_pct) }}%
             </div>
             <div style="height:4px;border-radius:2px;background:#e5e7eb;margin-top:2px;overflow:hidden;">
@@ -343,30 +529,748 @@
                           background:{% if ml.utilisation_pct < 85 %}#22c55e{% elif ml.utilisation_pct <= 100 %}#f59e0b{% else %}#ef4444{% endif %};"></div>
             </div>
           </td>
-          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if bl and bl.utilisation_pct>100 else '#4b5563' }};">
-            {% if bl %}{{ "{:.1f}".format(bl.utilisation_pct) }}%{% else %}—{% endif %}
+          {% if bl %}
+          {% set b_over = bl.utilisation_pct > 100 %}
+          <td style="padding:.3rem .5rem;text-align:right;color:{{ '#991b1b' if b_over else '#4b5563' }};">
+            {{ "{:,.1f}".format(bl.assigned_hrs) }}
           </td>
+          <td style="padding:.3rem .5rem;text-align:right;font-weight:{% if b_over %}700{% else %}400{% endif %};
+                     color:{{ '#991b1b' if b_over else '#4b5563' }};">
+            {{ "{:.1f}".format(bl.utilisation_pct) }}%
+          </td>
+          {% else %}
+          <td colspan="2" style="padding:.3rem .5rem;text-align:center;color:#9ca3af;">—</td>
+          {% endif %}
           <td style="padding:.3rem .5rem;text-align:right;">{{ "{:.1f}".format(ml.machine_days) }}</td>
           <td style="padding:.3rem .5rem;text-align:right;">{{ "{:,.0f}".format(ml.material_kg) }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    <div style="margin-top:.7rem;font-size:.74rem;color:#374151;
+                border-top:1px solid #e5e7eb;padding-top:.6rem;display:flex;gap:1.5rem;flex-wrap:wrap;">
+      <span>
+        <strong style="color:var(--navy);">Optimised peak:</strong>
+        {{ "{:,.1f}".format(fit_opt_peak_hrs) }} hrs ({{ "{:.1f}".format(fit_opt_peak_pct) }}%)
+      </span>
+      <span>
+        <strong style="color:var(--terra);">Baseline peak:</strong>
+        {{ "{:,.1f}".format(fit_base_peak_hrs) }} hrs ({{ "{:.1f}".format(fit_base_peak_pct) }}%)
+      </span>
+    </div>
   </div>
 
-  {# Fitting download #}
-  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
-              padding:.65rem;margin-bottom:1rem;">
-    <h3 style="font-size:.78rem;font-weight:800;color:var(--navy);margin:0 0 .5rem;">
-      Download — Fittings Report
-    </h3>
-    <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='12') }}"
-       style="display:inline-block;background:var(--navy);color:#fff;text-decoration:none;
-              padding:.35rem .65rem;border-radius:.35rem;font-size:.78rem;font-weight:700;">
-      📥 Report-12 (Moulding Plan)
-    </a>
-  </div>
+  {# Fitting item detail (collapsible) #}
+  <details style="background:#fff;border-radius:.6rem;
+                  box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:1rem;">
+    <summary style="padding:.75rem;font-size:.82rem;font-weight:800;
+                    color:var(--navy);cursor:pointer;user-select:none;">
+      Fitting Item Detail ({{ fitting_result.items | selectattr('has_weight') | selectattr('has_machine') | list | length }}
+      routable SKUs · click to expand)
+    </summary>
+    <div style="padding:.5rem .75rem .75rem;overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+        <thead>
+          <tr style="background:var(--navy);color:#fff;">
+            <th style="padding:.3rem .4rem;text-align:left;">Item Code</th>
+            <th style="padding:.3rem .4rem;text-align:center;">Material</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Qty (pcs)</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Wt/pc (kg)</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Material kg</th>
+            <th style="padding:.3rem .4rem;text-align:right;">pcs/hr</th>
+            <th style="padding:.3rem .4rem;text-align:center;">Rate</th>
+            <th style="padding:.3rem .4rem;text-align:right;">Mach hrs</th>
+            <th style="padding:.3rem .4rem;text-align:left;">Machine(s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for it in fitting_result.items | sort(attribute='item_code') %}
+          {% if it.has_weight and it.has_machine %}
+          <tr style="background:{{ '#fffbeb' if it.rate_estimated else ('#f9fafb' if loop.index%2==0 else '#fff') }};">
+            <td style="padding:.25rem .4rem;font-weight:600;color:var(--navy);">{{ it.item_code }}</td>
+            <td style="padding:.25rem .4rem;text-align:center;">{{ it.material }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:,.0f}".format(it.qty_pcs) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "%.4f" % (it.weight_per_pc_kg or 0) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:,.1f}".format(it.material_kg) }}</td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:.1f}".format(it.pcs_per_hr) }}</td>
+            <td style="padding:.25rem .4rem;text-align:center;">
+              {% if it.rate_estimated %}
+              <span style="font-size:.68rem;background:#fef3c7;color:#92400e;
+                           border-radius:99px;padding:.05rem .4rem;">est.</span>
+              {% else %}
+              <span style="font-size:.68rem;color:#6b7280;">seeded</span>
+              {% endif %}
+            </td>
+            <td style="padding:.25rem .4rem;text-align:right;">{{ "{:.2f}".format(it.machine_hrs) }}</td>
+            <td style="padding:.25rem .4rem;font-size:.69rem;color:#374151;">
+              {% for a in it.assignments %}
+              {{ a.machine }} ({{ "{:.2f}".format(a.hrs) }}h){% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
   {% endif %}{# end fitting section #}
+
+  {# ════════════════════════════════════════════════════════════════════
+     CAPACITY-FEASIBLE SUMMARY
+     ════════════════════════════════════════════════════════════════════ #}
+  {% if pipe_demand_hrs > 0 or fit_demand_hrs > 0 %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+    <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0 0 .7rem;">
+      Capacity-Feasible Summary
+    </h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.9rem;">
+
+      {# Pipe #}
+      {% if pipe_demand_hrs > 0 %}
+      <div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:.4rem;
+                    text-transform:uppercase;letter-spacing:.04em;">Pipe</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.35rem;">
+          <div style="background:#e0e7ff;border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:#4338ca;text-transform:uppercase;">Requested</div>
+            <div style="font-size:.88rem;font-weight:800;color:#4338ca;">{{ "{:,.0f}".format(pipe_demand_hrs) }}h</div>
+          </div>
+          <div style="background:#d1fae5;border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:#065f46;text-transform:uppercase;">Feasible</div>
+            <div style="font-size:.88rem;font-weight:800;color:#065f46;">{{ "{:,.0f}".format(pipe_feasible_hrs) }}h</div>
+          </div>
+          <div style="background:{{ '#fee2e2' if pipe_shortfall > 0 else '#f0fdf4' }};border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:{{ '#991b1b' if pipe_shortfall > 0 else '#065f46' }};text-transform:uppercase;">Shortfall</div>
+            <div style="font-size:.88rem;font-weight:800;color:{{ '#991b1b' if pipe_shortfall > 0 else '#065f46' }};">
+              {{ "{:,.0f}".format(pipe_shortfall) }}h
+              {% if pipe_short_pct > 0 %}<span style="font-size:.7rem;">({{ "{:.1f}".format(pipe_short_pct) }}%)</span>{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Fittings #}
+      {% if fit_demand_hrs > 0 %}
+      <div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:.4rem;
+                    text-transform:uppercase;letter-spacing:.04em;">Fittings</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.35rem;">
+          <div style="background:#e0e7ff;border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:#4338ca;text-transform:uppercase;">Requested</div>
+            <div style="font-size:.88rem;font-weight:800;color:#4338ca;">{{ "{:,.0f}".format(fit_demand_hrs) }}h</div>
+          </div>
+          <div style="background:#d1fae5;border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:#065f46;text-transform:uppercase;">Feasible</div>
+            <div style="font-size:.88rem;font-weight:800;color:#065f46;">{{ "{:,.0f}".format(fit_feasible_hrs) }}h</div>
+          </div>
+          <div style="background:{{ '#fee2e2' if fit_shortfall > 0 else '#f0fdf4' }};border-radius:.45rem;padding:.45rem .55rem;">
+            <div style="font-size:.62rem;font-weight:600;color:{{ '#991b1b' if fit_shortfall > 0 else '#065f46' }};text-transform:uppercase;">Shortfall</div>
+            <div style="font-size:.88rem;font-weight:800;color:{{ '#991b1b' if fit_shortfall > 0 else '#065f46' }};">
+              {{ "{:,.0f}".format(fit_shortfall) }}h
+              {% if fit_short_pct > 0 %}<span style="font-size:.7rem;">({{ "{:.1f}".format(fit_short_pct) }}%)</span>{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+    <div style="font-size:.72rem;color:#6b7280;margin-top:.55rem;border-top:1px solid #f3f4f6;padding-top:.45rem;">
+      Requested = total demand hours (pre-capacity). Feasible = hours the shift scheduler
+      can actually place within the month. Shortfall = hours that cannot fit at current
+      capacity. Download the <strong>Capacity-Feasible Plan</strong> below for per-item detail.
+    </div>
+  </div>
+  {% endif %}
+
+  {# ════════════════════════════════════════════════════════════════════
+     SHIFT SCHEDULE — WEEKLY FILL
+     ════════════════════════════════════════════════════════════════════ #}
+  {% if schedule_result %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        📅 Shift Schedule — Weekly Fill
+      </h3>
+      <a href="{{ url_for('mp_schedule_view') }}"
+         style="margin-left:auto;font-size:.74rem;color:var(--terra);text-decoration:none;
+                border:1px solid var(--terra);border-radius:.35rem;padding:.18rem .5rem;">
+        Full Schedule ↗
+      </a>
+    </div>
+
+    {# Key stats row #}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));
+                gap:.45rem;margin-bottom:.8rem;">
+      {% for lbl, val, unit, bg, fg in [
+        ("Capacity", schedule_result.total_capacity_hrs, "h", "#e0e7ff", "#4338ca"),
+        ("Scheduled", schedule_result.total_scheduled_hrs, "h", "#d1fae5", "#065f46"),
+        ("Idle", schedule_result.total_idle_hrs, "h", "#f3f4f6", "#6b7280"),
+        ("Changeovers", schedule_result.total_changeovers, "", "#fef3c7", "#92400e"),
+        ("Excess kg", schedule_result.total_excess_kg, "kg", "#fee2e2", "#991b1b"),
+        ("Unfinished", schedule_result.unfinished | length, " items", "#ede9fe", "#5b21b6"),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.5rem;padding:.45rem .55rem;">
+        <div style="font-size:.63rem;font-weight:600;color:{{ fg }};
+                    text-transform:uppercase;letter-spacing:.03em;">{{ lbl }}</div>
+        <div style="font-size:.92rem;font-weight:800;color:{{ fg }};margin-top:.1rem;">
+          {{ "{:,.0f}".format(val) }}{{ unit }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Weekly fill table #}
+    {% set weeks = [1,2,3,4] %}
+    {% set machines = schedule_result.weekly_fill | map(attribute='machine') | unique | sort | list %}
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead>
+          <tr style="background:var(--navy);color:#fff;">
+            <th style="padding:.3rem .45rem;text-align:left;">Machine</th>
+            {% for wk in weeks %}
+            <th style="padding:.3rem .45rem;text-align:center;" colspan="2">W{{ wk }}
+              <span style="font-size:.6rem;font-weight:400;">
+                ({{ schedule_result.week_days[wk-1] }}d)
+              </span>
+            </th>
+            {% endfor %}
+            <th style="padding:.3rem .45rem;text-align:center;">CO</th>
+          </tr>
+          <tr style="background:#1a2f56;color:#c7d2fe;font-size:.66rem;">
+            <th style="padding:.2rem .45rem;"></th>
+            {% for wk in weeks %}
+            <th style="padding:.2rem .3rem;text-align:right;">hrs</th>
+            <th style="padding:.2rem .3rem;text-align:right;">%</th>
+            {% endfor %}
+            <th style="padding:.2rem .3rem;text-align:center;">total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set fill_lookup = {} %}
+          {% for r in schedule_result.weekly_fill %}
+            {% set _ = fill_lookup.update({(r.machine, r.week): r}) %}
+          {% endfor %}
+          {% for mc in machines %}
+          <tr style="border-bottom:1px solid #f3f4f6;">
+            <td style="padding:.28rem .45rem;font-weight:700;color:var(--navy);
+                       font-size:.73rem;white-space:nowrap;">{{ mc }}</td>
+            {% set mc_co = [0] %}
+            {% for wk in weeks %}
+              {% set r = fill_lookup.get((mc, wk)) %}
+              {% if r %}
+                {% set pct = r.utilisation_pct %}
+                {% set bg = "#d1fae5" if pct >= 95 else ("#fef3c7" if pct >= 70 else "#fee2e2") %}
+                {% set _ = mc_co.append(mc_co.pop() + r.changeovers) %}
+            <td style="padding:.28rem .3rem;text-align:right;font-size:.72rem;">
+              {{ "{:.0f}".format(r.scheduled_hrs) }}
+            </td>
+            <td style="padding:.28rem .3rem;text-align:right;
+                       background:{{ bg }};font-weight:600;font-size:.72rem;">
+              {{ "{:.0f}".format(pct) }}%
+            </td>
+              {% else %}
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+              {% endif %}
+            {% endfor %}
+            <td style="padding:.28rem .3rem;text-align:center;font-size:.71rem;
+                       color:{{ '#92400e' if mc_co[0] > 0 else '#6b7280' }};">
+              {{ mc_co[0] if mc_co[0] > 0 else '—' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        {# ── Pipe totals row ────────────────────────────────────────────────── #}
+        {% set pipe_totals_co = namespace(v=0) %}
+        {% for mc in machines %}
+          {% for wk in weeks %}
+            {% set r = fill_lookup.get((mc, wk)) %}
+            {% if r %}{% set pipe_totals_co.v = pipe_totals_co.v + r.changeovers %}{% endif %}
+          {% endfor %}
+        {% endfor %}
+        <tfoot>
+          <tr style="border-top:2px solid #d1d5db;background:#f1f5f9;">
+            <td style="padding:.3rem .45rem;font-size:.73rem;font-weight:800;
+                       color:var(--navy);white-space:nowrap;">Totals</td>
+            {% for wk in weeks %}
+              {% set wk_ns = namespace(sched=0.0, cap=0.0) %}
+              {% for mc in machines %}
+                {% set r = fill_lookup.get((mc, wk)) %}
+                {% if r %}
+                  {% set wk_ns.sched = wk_ns.sched + r.scheduled_hrs %}
+                  {% set wk_ns.cap   = wk_ns.cap   + r.capacity_hrs %}
+                {% endif %}
+              {% endfor %}
+              {% set wk_pct = (wk_ns.sched / wk_ns.cap * 100) if wk_ns.cap > 0 else 0 %}
+              {% set tot_bg = "#d1fae5" if wk_pct >= 95 else ("#fef3c7" if wk_pct >= 70 else ("#fee2e2" if wk_pct > 0 else "#f1f5f9")) %}
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:700;">
+              {{ "{:.0f}".format(wk_ns.sched) }}
+            </td>
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:800;
+                       background:{{ tot_bg }};">
+              {% if wk_ns.cap > 0 %}{{ "{:.0f}".format(wk_pct) }}%{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+            <td style="padding:.3rem .3rem;text-align:center;font-size:.71rem;font-weight:700;
+                       color:{{ '#92400e' if pipe_totals_co.v > 0 else '#6b7280' }};">
+              {{ pipe_totals_co.v if pipe_totals_co.v > 0 else '—' }}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    {% if schedule_result.unfinished %}
+    <details style="margin-top:.65rem;">
+      <summary style="font-size:.75rem;font-weight:700;color:#991b1b;cursor:pointer;">
+        ⚠️ {{ schedule_result.unfinished | length }} item{{ 's' if (schedule_result.unfinished | length) > 1 else '' }}
+        not fully scheduled within the month
+      </summary>
+      <div style="overflow-x:auto;margin-top:.4rem;">
+        <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+          <thead>
+            <tr style="background:#fee2e2;color:#991b1b;">
+              <th style="padding:.25rem .4rem;text-align:left;">Item Code</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Mat.</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining h</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining kg</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Req. Week</th>
+              <th style="padding:.25rem .4rem;text-align:left;">Capable M/Cs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in schedule_result.unfinished %}
+            <tr style="border-bottom:1px solid #fee2e2;">
+              <td style="padding:.2rem .4rem;font-weight:600;color:var(--navy);">{{ u.item_code }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">{{ u.material }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:.1f}".format(u.remaining_hours) }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:,.0f}".format(u.remaining_kg) }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">W{{ u.origin_week }}</td>
+              <td style="padding:.2rem .4rem;font-size:.68rem;color:#6b7280;">
+                {{ u.capable_machines | join(", ") }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}{# end schedule_result #}
+
+  {# ════════════════════════════════════════════════════════════════════
+     FITTING SCHEDULE — WEEKLY FILL
+     ════════════════════════════════════════════════════════════════════ #}
+  {% if fitting_schedule_result %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        🏭 Fitting Moulding — Weekly Fill
+      </h3>
+      <span style="font-size:.72rem;color:#6b7280;font-weight:500;">
+        {{ fitting_schedule_result.week_days | length }} weeks ·
+        {{ fitting_schedule_result.weekly_fill | map(attribute='machine') | unique | list | length }} machines
+      </span>
+    </div>
+
+    {# Key stats row #}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));
+                gap:.45rem;margin-bottom:.8rem;">
+      {% for lbl, val, unit, bg, fg in [
+        ("Capacity", fitting_schedule_result.total_capacity_hrs, "h", "#e0e7ff", "#4338ca"),
+        ("Scheduled", fitting_schedule_result.total_scheduled_hrs, "h", "#d1fae5", "#065f46"),
+        ("Idle", fitting_schedule_result.total_idle_hrs, "h", "#f3f4f6", "#6b7280"),
+        ("Changeovers", fitting_schedule_result.total_changeovers, "", "#fef3c7", "#92400e"),
+        ("Excess kg", fitting_schedule_result.total_excess_kg, "kg", "#fee2e2", "#991b1b"),
+        ("Unfinished", fitting_schedule_result.unfinished | length, " items", "#ede9fe", "#5b21b6"),
+      ] %}
+      <div style="background:{{ bg }};border-radius:.5rem;padding:.45rem .55rem;">
+        <div style="font-size:.63rem;font-weight:600;color:{{ fg }};
+                    text-transform:uppercase;letter-spacing:.03em;">{{ lbl }}</div>
+        <div style="font-size:.92rem;font-weight:800;color:{{ fg }};margin-top:.1rem;">
+          {{ "{:,.0f}".format(val) }}{{ unit }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Fitting weekly fill table #}
+    {% set fit_weeks = [1,2,3,4] %}
+    {% set fit_machines = fitting_schedule_result.weekly_fill | map(attribute='machine') | unique | sort | list %}
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead>
+          <tr style="background:var(--navy);color:#fff;">
+            <th style="padding:.3rem .45rem;text-align:left;">Machine</th>
+            {% for wk in fit_weeks %}
+            <th style="padding:.3rem .45rem;text-align:center;" colspan="2">W{{ wk }}
+              <span style="font-size:.6rem;font-weight:400;">
+                ({{ fitting_schedule_result.week_days[wk-1] }}d)
+              </span>
+            </th>
+            {% endfor %}
+            <th style="padding:.3rem .45rem;text-align:center;">CO</th>
+          </tr>
+          <tr style="background:#1a2f56;color:#c7d2fe;font-size:.66rem;">
+            <th style="padding:.2rem .45rem;"></th>
+            {% for wk in fit_weeks %}
+            <th style="padding:.2rem .3rem;text-align:right;">hrs</th>
+            <th style="padding:.2rem .3rem;text-align:right;">%</th>
+            {% endfor %}
+            <th style="padding:.2rem .3rem;text-align:center;">total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set fit_fill_lookup = {} %}
+          {% for r in fitting_schedule_result.weekly_fill %}
+            {% set _ = fit_fill_lookup.update({(r.machine, r.week): r}) %}
+          {% endfor %}
+          {% for mc in fit_machines %}
+          <tr style="border-bottom:1px solid #f3f4f6;">
+            <td style="padding:.28rem .45rem;font-weight:700;color:var(--navy);
+                       font-size:.73rem;white-space:nowrap;">{{ mc }}</td>
+            {% set mc_co = [0] %}
+            {% for wk in fit_weeks %}
+              {% set r = fit_fill_lookup.get((mc, wk)) %}
+              {% if r %}
+                {% set pct = r.utilisation_pct %}
+                {% set bg = "#d1fae5" if pct >= 95 else ("#fef3c7" if pct >= 70 else "#fee2e2") %}
+                {% set _ = mc_co.append(mc_co.pop() + r.changeovers) %}
+            <td style="padding:.28rem .3rem;text-align:right;font-size:.72rem;">
+              {{ "{:.0f}".format(r.scheduled_hrs) }}
+            </td>
+            <td style="padding:.28rem .3rem;text-align:right;
+                       background:{{ bg }};font-weight:600;font-size:.72rem;">
+              {{ "{:.0f}".format(pct) }}%
+            </td>
+              {% else %}
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+            <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
+              {% endif %}
+            {% endfor %}
+            <td style="padding:.28rem .3rem;text-align:center;font-size:.71rem;
+                       color:{{ '#92400e' if mc_co[0] > 0 else '#6b7280' }};">
+              {{ mc_co[0] if mc_co[0] > 0 else '—' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        {# ── Fitting totals row ─────────────────────────────────────────────── #}
+        {% set fit_totals_co = namespace(v=0) %}
+        {% for mc in fit_machines %}
+          {% for wk in fit_weeks %}
+            {% set r = fit_fill_lookup.get((mc, wk)) %}
+            {% if r %}{% set fit_totals_co.v = fit_totals_co.v + r.changeovers %}{% endif %}
+          {% endfor %}
+        {% endfor %}
+        <tfoot>
+          <tr style="border-top:2px solid #d1d5db;background:#f1f5f9;">
+            <td style="padding:.3rem .45rem;font-size:.73rem;font-weight:800;
+                       color:var(--navy);white-space:nowrap;">Totals</td>
+            {% for wk in fit_weeks %}
+              {% set wk_ns = namespace(sched=0.0, cap=0.0) %}
+              {% for mc in fit_machines %}
+                {% set r = fit_fill_lookup.get((mc, wk)) %}
+                {% if r %}
+                  {% set wk_ns.sched = wk_ns.sched + r.scheduled_hrs %}
+                  {% set wk_ns.cap   = wk_ns.cap   + r.capacity_hrs %}
+                {% endif %}
+              {% endfor %}
+              {% set wk_pct = (wk_ns.sched / wk_ns.cap * 100) if wk_ns.cap > 0 else 0 %}
+              {% set tot_bg = "#d1fae5" if wk_pct >= 95 else ("#fef3c7" if wk_pct >= 70 else ("#fee2e2" if wk_pct > 0 else "#f1f5f9")) %}
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:700;">
+              {{ "{:.0f}".format(wk_ns.sched) }}
+            </td>
+            <td style="padding:.3rem .3rem;text-align:right;font-size:.72rem;font-weight:800;
+                       background:{{ tot_bg }};">
+              {% if wk_ns.cap > 0 %}{{ "{:.0f}".format(wk_pct) }}%{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+            <td style="padding:.3rem .3rem;text-align:center;font-size:.71rem;font-weight:700;
+                       color:{{ '#92400e' if fit_totals_co.v > 0 else '#6b7280' }};">
+              {{ fit_totals_co.v if fit_totals_co.v > 0 else '—' }}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    {% if fitting_schedule_result.unfinished %}
+    <details style="margin-top:.65rem;">
+      <summary style="font-size:.75rem;font-weight:700;color:#991b1b;cursor:pointer;">
+        ⚠️ {{ fitting_schedule_result.unfinished | length }} fitting item{{ 's' if (fitting_schedule_result.unfinished | length) > 1 else '' }}
+        not fully scheduled within the month
+      </summary>
+      <div style="overflow-x:auto;margin-top:.4rem;">
+        <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+          <thead>
+            <tr style="background:#fee2e2;color:#991b1b;">
+              <th style="padding:.25rem .4rem;text-align:left;">Item Code</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Mat.</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining h</th>
+              <th style="padding:.25rem .4rem;text-align:right;">Remaining kg</th>
+              <th style="padding:.25rem .4rem;text-align:center;">Req. Week</th>
+              <th style="padding:.25rem .4rem;text-align:left;">Capable M/Cs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in fitting_schedule_result.unfinished %}
+            <tr style="border-bottom:1px solid #fee2e2;">
+              <td style="padding:.2rem .4rem;font-weight:600;color:var(--navy);">{{ u.item_code }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">{{ u.material }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:.1f}".format(u.remaining_hours) }}</td>
+              <td style="padding:.2rem .4rem;text-align:right;">{{ "{:,.0f}".format(u.remaining_kg) }}</td>
+              <td style="padding:.2rem .4rem;text-align:center;">W{{ u.origin_week }}</td>
+              <td style="padding:.2rem .4rem;font-size:.68rem;color:#6b7280;">
+                {{ u.capable_machines | join(", ") }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}{# end fitting_schedule_result #}
+
+  {# ════════════════════════════════════════════════════════════════════
+     DOWNLOAD REPORTS — 3-COLUMN TABLE (all reports for this run)
+     ════════════════════════════════════════════════════════════════════ #}
+  {% if result or fitting_result %}
+  <div style="background:#fff;border-radius:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.07);
+              padding:.75rem;margin-bottom:1rem;">
+
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.8rem;">
+      <h3 style="font-size:.82rem;font-weight:800;color:var(--navy);margin:0;">
+        📥 Download Reports — Run #{{ run_id }}
+      </h3>
+      <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='zip') }}"
+         style="margin-left:auto;background:#1e293b;color:#fff;text-decoration:none;
+                padding:.38rem .85rem;border-radius:.35rem;font-size:.8rem;font-weight:700;
+                display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap;">
+        🗜️ Download All as ZIP
+      </a>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;font-size:.78rem;table-layout:fixed;">
+      <colgroup>
+        <col style="width:26%;">
+        <col style="width:57%;">
+        <col style="width:17%;">
+      </colgroup>
+      <thead>
+        <tr style="background:#f1f5f9;border-bottom:2px solid #e2e8f0;">
+          <th style="padding:.4rem .6rem;text-align:left;font-weight:700;color:#374151;">Report</th>
+          <th style="padding:.4rem .6rem;text-align:left;font-weight:700;color:#374151;">What it contains</th>
+          <th style="padding:.4rem .6rem;text-align:right;font-weight:700;color:#374151;">Download</th>
+        </tr>
+      </thead>
+      <tbody>
+
+        {# ── Group A: Pipe plan by machine ── #}
+        {% if result %}
+        <tr style="background:#eff6ff;">
+          <td colspan="3" style="padding:.3rem .6rem;font-size:.72rem;font-weight:700;
+                                  color:#1e40af;letter-spacing:.04em;text-transform:uppercase;">
+            Pipe plan by machine
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Report-11 (Full Pipe Plan)
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            All extrusion machines in one sheet — LPT-optimised assignment, week/shift slots,
+            material requirements.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11') }}"
+               style="background:var(--navy);color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+        {% for g, machines_desc in [
+            ('A', 'Machines A-group'),
+            ('B', 'Machines B-group'),
+            ('C', 'Machines C-group'),
+            ('D', 'Machines D-group'),
+        ] %}
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Report-11{{ g }}
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            Pipe plan for the {{ machines_desc }} — same format as Report-11 filtered to one machine group.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='11'+g) }}"
+               style="background:var(--terra);color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+        {% endif %}
+
+        {# ── Group B: Fitting plan by machine ── #}
+        {% if fitting_result %}
+        <tr style="background:#eff6ff;">
+          <td colspan="3" style="padding:.3rem .6rem;font-size:.72rem;font-weight:700;
+                                  color:#1e40af;letter-spacing:.04em;text-transform:uppercase;">
+            Fitting plan by machine
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Report-12 (Moulding Plan)
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            Full fitting moulding plan — every item across all fitting machines, with week / day / shift assignment.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='12') }}"
+               style="background:var(--navy);color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+        {% endif %}
+
+        {# ── Group C: Full plan workbook ── #}
+        <tr style="background:#f0fdf4;">
+          <td colspan="3" style="padding:.3rem .6rem;font-size:.72rem;font-weight:700;
+                                  color:#065f46;letter-spacing:.04em;text-transform:uppercase;">
+            Full plan workbook
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Consolidated Plan Report
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            One workbook, 7 tabs: Summary · Machine Load (demand vs scheduled) · Weekly Fill · Shift Schedule · Item Assignment · Material &amp; Cost · Coverage &amp; Bottleneck.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='consolidated') }}"
+               style="background:#065f46;color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+
+        {# ── Group D: Rejection & capacity ── #}
+        <tr style="background:#fdf4ff;">
+          <td colspan="3" style="padding:.3rem .6rem;font-size:.72rem;font-weight:700;
+                                  color:#6b21a8;letter-spacing:.04em;text-transform:uppercase;">
+            Rejection &amp; capacity
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Revised Production Plan
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            Net demand grossed up for rejection + measured waste — the quantities you must actually produce to hit target.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='revised') }}"
+               style="background:#7c3aed;color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Machine Plan Comparison
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            Side-by-side of the plan without vs with rejection/waste — shows the extra hours and material the losses cost.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='comparison') }}"
+               style="background:#b45309;color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Capacity-Feasible Plan
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            What the machines can actually make this month at full capacity, per item: Requested / Feasible / Shortfall — no machine over 100%.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='capacity_feasible') }}"
+               style="background:#065f46;color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+
+        {# ── Group E: Run-rate projection ── #}
+        <tr style="background:#fff7ed;">
+          <td colspan="3" style="padding:.3rem .6rem;font-size:.72rem;font-weight:700;
+                                  color:#c2410c;letter-spacing:.04em;text-transform:uppercase;">
+            Run-rate projection
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:.45rem .6rem;font-weight:600;color:var(--navy);vertical-align:top;">
+            Corrective Re-plan
+          </td>
+          <td style="padding:.45rem .6rem;color:#4b5563;line-height:1.45;vertical-align:top;">
+            If the plant keeps producing at the pace seen so far, where will it land?
+            Pace / projected / gap — not a capacity statement.
+          </td>
+          <td style="padding:.45rem .6rem;text-align:right;vertical-align:top;">
+            <a href="{{ url_for('mp_frozen_run_report', run_id=run_id, report_id='corrective') }}"
+               style="background:#ea580c;color:#fff;text-decoration:none;
+                      padding:.32rem .65rem;border-radius:.3rem;font-size:.75rem;font-weight:700;
+                      display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;">
+              📥 Download
+            </a>
+          </td>
+        </tr>
+
+      </tbody>
+    </table>
+
+    <div style="margin-top:.65rem;font-size:.72rem;color:#6b7280;
+                border-top:1px solid #f3f4f6;padding-top:.45rem;">
+      Reports are regenerated from stored demand every time — no freeze required.
+      {% if live_preview %}
+      <strong>This is a live preview (not frozen)</strong> — results may differ from the
+      frozen plan if seed data has changed since the original run.
+      {% endif %}
+    </div>
+
+  </div>
+  {% endif %}
 
 </div>
 {% endblock %}

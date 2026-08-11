@@ -86,7 +86,7 @@
             {% for m in months %}
             {% set cell = items[item].get(m, {}) %}
             {% set pv = cell.prod if cell else 0 %}
-            {% set _ = row_total.__setattr__('v', row_total.v + pv) %}
+            {% set row_total.v = row_total.v + pv %}
             <td class="py-1.5 px-1 text-right text-gray-600">
               {% if pv > 0 %}{{ "{:,.0f}".format(pv) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
             </td>

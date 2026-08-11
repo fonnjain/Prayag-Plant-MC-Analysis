@@ -5,9 +5,12 @@ Tests for mp_reports.py — covers:
   FIX 3  Rate fallback tier populated in ItemResult
   FIX 4  Report-11A-D machine-group filter
   NEW    consolidated_plan_bytes() smoke test (7 tabs, no crash)
+  NEW    _mp_schedule_from_session / _mp_fitting_schedule_from_session
+         do NOT re-run engine when a pre-computed result is supplied
 """
 import io
 import pytest
+from unittest.mock import patch, MagicMock
 
 # ── Minimal stubs so the tests never need a live DB ──────────────────────────
 
@@ -638,3 +641,1032 @@ def test_rate_fallback_note_present_when_estimated():
     ]
     fallback_found = any("Rate Fallback" in t for t in texts)
     assert fallback_found, "Fallback note should appear when estimated items exist"
+
+
+# ── Fitting machine section in tab '2. Machine Load' ─────────────────────────
+
+def _make_fitting_result(machines=None):
+    """Minimal FittingEngineResult with the given machine load list."""
+    from mp_engine import (
+        FittingEngineResult, FittingItemResult, FittingAssignedPortion,
+        MachineLoad, CoverageGaps, PlanTotals,
+    )
+    machines = machines or [
+        MachineLoad(
+            machine="FM-1", capacity_hrs=300.0,
+            assigned_hrs=180.0, utilisation_pct=60.0, machine_days=15.0,
+            material_kg=3000.0, fresh_compound_kg=2250.0, pulverizer_kg=750.0,
+            staffing_ok=True, operators_ot=0, support_w=1,
+        )
+    ]
+    item = FittingItemResult(
+        item_code="CPVC-F-100", raw_code="CPVC-F-100",
+        material="CPVC", qty_pcs=500.0, weight_per_pc_kg=0.15,
+        material_kg=78.0, fresh_compound_kg=58.5, pulverizer_kg=19.5,
+        pcs_per_hr=120.0, rate_estimated=False, machine_hrs=4.17,
+        cavity=4.0, cycle_time_sec=120.0, num_cycles=125.0,
+        capable_machines=[machines[0].machine],
+        route_estimated=False,
+        assignments=[FittingAssignedPortion(
+            machine=machines[0].machine, hrs=4.17, qty_pcs=500.0, material_kg=78.0
+        )],
+        has_weight=True, has_machine=True,
+    )
+    return FittingEngineResult(
+        segment="FITTING", effective_month="2026-08",
+        items=[item],
+        machine_loads=machines,
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=500.0, total_material_kg=78.0,
+            total_fresh_compound_kg=58.5, total_pulverizer_kg=19.5,
+            routable_material_kg=78.0, routable_fresh_compound_kg=58.5,
+            routable_pulverizer_kg=19.5,
+        ),
+        baseline_machine_loads=machines,
+        params_used={}, n_route_estimated=0, n_unroutable=0,
+    )
+
+
+def _make_fitting_schedule(machine="FM-1", scheduled_hrs=200.0, capacity_hrs=300.0):
+    """Minimal fitting ScheduleResult with one WeekFillRow."""
+    from mp_scheduler import ScheduleResult, WeekFillRow
+    util = round(scheduled_hrs / capacity_hrs * 100, 1) if capacity_hrs > 0 else 0.0
+    wf = WeekFillRow(
+        week=1, machine=machine, capacity_hrs=capacity_hrs,
+        scheduled_hrs=scheduled_hrs, idle_hrs=capacity_hrs - scheduled_hrs,
+        utilisation_pct=util, changeovers=0, excess_kg=0.0,
+        origin_breakdown={1: scheduled_hrs},
+    )
+    return ScheduleResult(
+        segment="FITTING", effective_month="2026-08",
+        blocks=[], weekly_fill=[wf], unfinished=[],
+        total_capacity_hrs=capacity_hrs, total_scheduled_hrs=scheduled_hrs,
+        total_idle_hrs=capacity_hrs - scheduled_hrs, total_excess_kg=0.0,
+        total_changeovers=0, week_days=[6, 6, 6, 7], params_used={},
+    )
+
+
+def test_consolidated_tab2_has_fitting_section_when_fitting_result_present():
+    """Tab '2. Machine Load' must contain a 'FITTING MACHINES' section header
+    when a fitting_result is provided."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fitting = _make_fitting_result()
+    data = r.consolidated_plan_bytes(
+        engine_result=None,
+        fitting_result=fitting,
+        schedule_result=None,
+        fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+
+    # Scan all cells for the section header text
+    found = False
+    for row in ws.iter_rows():
+        for cell in row:
+            if "FITTING MACHINES" in str(cell.value or ""):
+                found = True
+                break
+    assert found, "Expected 'FITTING MACHINES' section header in tab '2. Machine Load'"
+
+
+def test_consolidated_tab2_fitting_machine_row_present():
+    """Tab '2. Machine Load' must show the fitting machine name in a data row."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fitting = _make_fitting_result()
+    data = r.consolidated_plan_bytes(
+        engine_result=None,
+        fitting_result=fitting,
+        schedule_result=None,
+        fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+
+    col1_values = [
+        ws.cell(row=row, column=1).value
+        for row in range(1, ws.max_row + 1)
+    ]
+    assert "FM-1" in col1_values, (
+        f"Expected fitting machine 'FM-1' in col-1 of tab 2; got: {col1_values}"
+    )
+
+
+def test_consolidated_tab2_fitting_scheduled_util_never_exceeds_100():
+    """Scheduled util % for fitting machines must be ≤ 100% in tab '2. Machine Load'.
+
+    The fitting scheduler enforces a capacity ceiling, so this invariant must hold
+    regardless of how high the demand util is.
+    """
+    import mp_reports as r
+    from openpyxl import load_workbook
+    from mp_engine import MachineLoad
+
+    # Fitting machine with demand > capacity (150%) but schedule capped at 100%
+    fm = MachineLoad(
+        machine="FM-1", capacity_hrs=300.0,
+        assigned_hrs=450.0, utilisation_pct=150.0, machine_days=20.0,
+        material_kg=4000.0, fresh_compound_kg=3000.0, pulverizer_kg=1000.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    fitting = _make_fitting_result(machines=[fm])
+    # Fitting schedule: scheduler caps at capacity (300 hrs = 100%)
+    fit_sched = _make_fitting_schedule(machine="FM-1",
+                                       scheduled_hrs=300.0, capacity_hrs=300.0)
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None,
+        fitting_result=fitting,
+        schedule_result=None,
+        fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+
+    # Locate "Scheduled util %" column (header row 4)
+    hdr_row = 4
+    sched_util_col = None
+    for c in range(1, 20):
+        v = ws.cell(row=hdr_row, column=c).value or ""
+        if "Scheduled util" in v:
+            sched_util_col = c
+            break
+    assert sched_util_col is not None, "Could not find 'Scheduled util %' column"
+
+    # Collect scheduled util values from ALL data rows (skip header/section rows)
+    sched_utils = []
+    for row in range(hdr_row + 1, hdr_row + 40):
+        machine_val = ws.cell(row=row, column=1).value
+        if machine_val is None:
+            continue
+        if machine_val in ("TOTAL", "FITTING TOTAL", "FITTING MACHINES",
+                           "(pipe engine result not available)"):
+            continue
+        util_val = ws.cell(row=row, column=sched_util_col).value
+        if util_val is not None:
+            try:
+                sched_utils.append(float(util_val))
+            except (TypeError, ValueError):
+                pass
+
+    assert sched_utils, "No fitting-machine scheduled-util data rows found"
+    for u in sched_utils:
+        assert u <= 100.0 + 0.01, (
+            f"Fitting scheduled util % {u} exceeds 100% — breaks capacity guarantee"
+        )
+
+    # Also confirm demand util IS above 100% (columns are genuinely distinct)
+    demand_util_col = None
+    for c in range(1, 20):
+        v = ws.cell(row=hdr_row, column=c).value or ""
+        if "Demand util" in v:
+            demand_util_col = c
+            break
+    assert demand_util_col is not None, "Could not find 'Demand util %' column"
+    demand_utils = []
+    for row in range(hdr_row + 1, hdr_row + 40):
+        machine_val = ws.cell(row=row, column=1).value
+        if machine_val in (None, "TOTAL", "FITTING TOTAL", "FITTING MACHINES"):
+            continue
+        v = ws.cell(row=row, column=demand_util_col).value
+        if v is not None:
+            try:
+                demand_utils.append(float(v))
+            except (TypeError, ValueError):
+                pass
+    assert any(u > 100.0 for u in demand_utils), (
+        "Expected demand util > 100% for FM-1 (150% fixture) — columns must be distinct"
+    )
+
+
+def test_consolidated_tab2_fitting_no_data_graceful():
+    """Tab '2. Machine Load' shows a graceful message when fitting_result is None."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["2. Machine Load"]
+    # Should still have the FITTING MACHINES section header
+    found_header = False
+    for row in ws.iter_rows():
+        for cell in row:
+            if "FITTING MACHINES" in str(cell.value or ""):
+                found_header = True
+                break
+    assert found_header, "Section header 'FITTING MACHINES' should always be present"
+
+
+# ── Fitting machines in Tab 3: Weekly Fill ───────────────────────────────────
+
+def test_consolidated_tab3_fitting_section_header_always_present():
+    """Tab '3. Weekly Fill' must always contain a 'FITTING MACHINES' section header."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+    found = any(
+        "FITTING MACHINES" in str(cell.value or "")
+        for row in ws.iter_rows()
+        for cell in row
+    )
+    assert found, "Expected 'FITTING MACHINES' section header in tab '3. Weekly Fill'"
+
+
+def test_consolidated_tab3_fitting_rows_appear_when_fitting_schedule_supplied():
+    """Tab '3. Weekly Fill' must show fitting machine rows when fitting_schedule is given."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fit_sched = _make_fitting_schedule(machine="FM-1", scheduled_hrs=200.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    # The machine name "FM-1" must appear in column 2 (Machine col) somewhere
+    col2_values = [ws.cell(row=row, column=2).value for row in range(1, ws.max_row + 1)]
+    assert "FM-1" in col2_values, (
+        f"Expected fitting machine 'FM-1' in column 2 of tab '3. Weekly Fill'; "
+        f"got: {col2_values}"
+    )
+
+
+def test_consolidated_tab3_fitting_scheduled_hrs_correct():
+    """Scheduled hrs in fitting row must match fitting_schedule.weekly_fill.scheduled_hrs."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    fit_sched = _make_fitting_schedule(machine="FM-2", scheduled_hrs=175.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    # Find the row where Machine col == "FM-2" and read Scheduled (hrs) (col 4)
+    sched_val = None
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row=row, column=2).value == "FM-2":
+            sched_val = ws.cell(row=row, column=4).value
+            break
+    assert sched_val is not None, "Could not find FM-2 row in tab '3. Weekly Fill'"
+    assert abs(float(sched_val) - 175.0) < 0.1, (
+        f"Scheduled hrs for FM-2 should be 175.0; got {sched_val}"
+    )
+
+
+def test_consolidated_tab3_no_fitting_schedule_graceful():
+    """Tab '3. Weekly Fill' shows a graceful message when fitting_schedule is None."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    data = r.consolidated_plan_bytes(
+        engine_result=None, fitting_result=None,
+        schedule_result=None, fitting_schedule=None,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+    all_values = [
+        str(cell.value or "")
+        for row in ws.iter_rows()
+        for cell in row
+    ]
+    assert any("no fitting schedule available" in v for v in all_values), (
+        "Expected '(no fitting schedule available)' message in tab '3. Weekly Fill' "
+        f"when fitting_schedule is None; cells: {[v for v in all_values if v]}"
+    )
+
+
+def test_consolidated_tab3_both_pipe_and_fitting_sections():
+    """Tab '3. Weekly Fill' shows both pipe rows and fitting rows when both schedules present."""
+    import mp_reports as r
+    from openpyxl import load_workbook
+
+    pipe_sched = _make_schedule_result(machine="M/C-1")
+    fit_sched  = _make_fitting_schedule(machine="FM-1", scheduled_hrs=150.0, capacity_hrs=300.0)
+    data = r.consolidated_plan_bytes(
+        engine_result=_make_engine_result(),
+        fitting_result=None,
+        schedule_result=pipe_sched,
+        fitting_schedule=fit_sched,
+    )
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["3. Weekly Fill"]
+
+    col2_values = [ws.cell(row=row, column=2).value for row in range(1, ws.max_row + 1)]
+    assert "M/C-1" in col2_values, "Pipe machine 'M/C-1' should appear in tab 3"
+    assert "FM-1" in col2_values,  "Fitting machine 'FM-1' should appear in tab 3"
+
+
+# ── No-double-engine-run regression ──────────────────────────────────────────
+
+def _minimal_run_payload():
+    """Minimal payload dict matching the DemandItem / FittingDemandItem field sets
+    that _mp_schedule_from_session / _mp_fitting_schedule_from_session expect."""
+    return {
+        "effective_month": "2026-08",
+        "segment": "PIPE",
+        # Only DemandItem fields: item_code, raw_code, material, qty_pcs, week_qty,
+        # first_requested_week
+        "demand": [
+            {
+                "item_code": "PIPE-001", "raw_code": "PIPE-001",
+                "material": "CPVC", "qty_pcs": 500.0,
+                "week_qty": {"1": 500.0},
+                "first_requested_week": 0,
+            }
+        ],
+        # Only FittingDemandItem fields: item_code, raw_code, material, qty_pcs
+        "fitting_demand": [
+            {
+                "item_code": "FIT-001", "raw_code": "FIT-001",
+                "material": "CPVC", "qty_pcs": 200.0,
+            }
+        ],
+    }
+
+
+def _mock_session(run_id="test-run-42"):
+    """Return a MagicMock that behaves like a Flask session dict with mp2_run_id set."""
+    s = MagicMock()
+    s.get.side_effect = lambda key, default=None: run_id if key == "mp2_run_id" else default
+    return s
+
+
+def test_schedule_helper_does_not_rerun_pipe_engine_when_result_supplied():
+    """_mp_schedule_from_session must NOT invoke run_engine when engine_result is given.
+
+    This prevents a double engine-run (and associated latency) on every
+    Consolidated Plan / ZIP report download that has already computed the pipe result.
+    The fix: passing engine_result to the helper skips the internal
+    _mp2_result_from_session() call that would otherwise re-run run_engine.
+    """
+    import app as appmod
+
+    precomputed = _make_engine_result()
+
+    with patch("app.session", _mock_session()), \
+         patch.object(appmod, "_mp2_load_run",
+                      return_value=_minimal_run_payload()), \
+         patch("mp_engine.run_engine") as mock_run_engine, \
+         patch("mp_model.get_downtime_affecting_month", return_value=[]), \
+         patch("mp_scheduler.run_shift_schedule", return_value=None):
+
+        appmod._mp_schedule_from_session(engine_result=precomputed)
+
+        assert mock_run_engine.call_count == 0, (
+            f"run_engine must NOT be called when engine_result is pre-supplied; "
+            f"got {mock_run_engine.call_count} call(s)"
+        )
+
+
+def test_fitting_schedule_helper_does_not_rerun_fitting_engine_when_result_supplied():
+    """_mp_fitting_schedule_from_session must NOT invoke run_fitting_engine when
+    fitting_result is given.
+
+    This prevents a double fitting-engine-run on every Consolidated Plan / ZIP
+    report download that has already computed the fitting result.
+    The fix: passing fitting_result to the helper skips the internal
+    _mp3_fitting_result_from_session() call that would otherwise re-run run_fitting_engine.
+    """
+    import app as appmod
+
+    precomputed = _make_fitting_result()
+
+    with patch("app.session", _mock_session()), \
+         patch.object(appmod, "_mp2_load_run",
+                      return_value=_minimal_run_payload()), \
+         patch("mp_engine.run_fitting_engine") as mock_run_fitting, \
+         patch("mp_model.get_downtime_affecting_month", return_value=[]), \
+         patch("mp_scheduler.run_fitting_schedule", return_value=None):
+
+        appmod._mp_fitting_schedule_from_session(fitting_result=precomputed)
+
+        assert mock_run_fitting.call_count == 0, (
+            f"run_fitting_engine must NOT be called when fitting_result is "
+            f"pre-supplied; got {mock_run_fitting.call_count} call(s)"
+        )
+
+
+# ── Flask route integration tests ────────────────────────────────────────────
+
+def _make_both_results():
+    """Return (engine_result, fitting_result, pipe_schedule, fitting_schedule)
+    with a fitting machine that is distinct from the pipe machine."""
+    from mp_engine import (
+        EngineResult, FittingEngineResult, FittingItemResult,
+        FittingAssignedPortion, MachineLoad, CoverageGaps, PlanTotals,
+    )
+    from mp_scheduler import ScheduleResult, WeekFillRow
+
+    # ── Pipe side ──
+    pipe_ml = MachineLoad(
+        machine="M/C-1", capacity_hrs=500.0,
+        assigned_hrs=250.0, utilisation_pct=50.0, machine_days=25.0,
+        material_kg=5000.0, fresh_compound_kg=3750.0, pulverizer_kg=1250.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    item = _make_item(machine="M/C-1")
+    pipe_result = EngineResult(
+        segment="PIPE", effective_month="2026-07",
+        items=[item], machine_loads=[pipe_ml],
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=item.qty_pcs, total_material_kg=item.material_kg,
+            total_fresh_compound_kg=item.fresh_compound_kg,
+            total_pulverizer_kg=item.pulverizer_kg,
+            routable_material_kg=item.material_kg,
+            routable_fresh_compound_kg=item.fresh_compound_kg,
+            routable_pulverizer_kg=item.pulverizer_kg,
+        ),
+        baseline_machine_loads=[pipe_ml],
+        params_used={}, effective_costs={}, cost_by_material={}, n_unpriced=0,
+    )
+    pipe_wf = WeekFillRow(
+        week=1, machine="M/C-1", capacity_hrs=500.0,
+        scheduled_hrs=250.0, idle_hrs=250.0, utilisation_pct=50.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 250.0},
+    )
+    pipe_schedule = ScheduleResult(
+        segment="PIPE", effective_month="2026-07",
+        blocks=[], weekly_fill=[pipe_wf], unfinished=[],
+        total_capacity_hrs=500.0, total_scheduled_hrs=250.0,
+        total_idle_hrs=250.0, total_excess_kg=0.0, total_changeovers=0,
+        week_days=[6, 6, 6, 7], params_used={},
+    )
+
+    # ── Fitting side ──
+    fit_ml = MachineLoad(
+        machine="FM-ROUTE-1", capacity_hrs=300.0,
+        assigned_hrs=180.0, utilisation_pct=60.0, machine_days=15.0,
+        material_kg=3000.0, fresh_compound_kg=2250.0, pulverizer_kg=750.0,
+        staffing_ok=True, operators_ot=0, support_w=0,
+    )
+    fit_item = FittingItemResult(
+        item_code="CPVC-F-100", raw_code="CPVC-F-100",
+        material="CPVC", qty_pcs=500.0, weight_per_pc_kg=0.15,
+        material_kg=78.0, fresh_compound_kg=58.5, pulverizer_kg=19.5,
+        pcs_per_hr=120.0, rate_estimated=False, machine_hrs=4.17,
+        cavity=4.0, cycle_time_sec=120.0, num_cycles=125.0,
+        capable_machines=["FM-ROUTE-1"], route_estimated=False,
+        assignments=[FittingAssignedPortion(
+            machine="FM-ROUTE-1", hrs=4.17, qty_pcs=500.0, material_kg=78.0,
+        )],
+        has_weight=True, has_machine=True,
+    )
+    fitting_result = FittingEngineResult(
+        segment="FITTING", effective_month="2026-07",
+        items=[fit_item], machine_loads=[fit_ml],
+        coverage_gaps=CoverageGaps(
+            no_weight=[], no_machine=[], idle_machines=[], locked_out_machines=[]
+        ),
+        totals=PlanTotals(
+            total_qty_pcs=500.0, total_material_kg=78.0,
+            total_fresh_compound_kg=58.5, total_pulverizer_kg=19.5,
+            routable_material_kg=78.0, routable_fresh_compound_kg=58.5,
+            routable_pulverizer_kg=19.5,
+        ),
+        baseline_machine_loads=[fit_ml],
+        params_used={}, n_route_estimated=0, n_unroutable=0,
+    )
+    fit_wf = WeekFillRow(
+        week=1, machine="FM-ROUTE-1", capacity_hrs=300.0,
+        scheduled_hrs=180.0, idle_hrs=120.0, utilisation_pct=60.0,
+        changeovers=0, excess_kg=0.0, origin_breakdown={1: 180.0},
+    )
+    fitting_schedule = ScheduleResult(
+        segment="FITTING", effective_month="2026-07",
+        blocks=[], weekly_fill=[fit_wf], unfinished=[],
+        total_capacity_hrs=300.0, total_scheduled_hrs=180.0,
+        total_idle_hrs=120.0, total_excess_kg=0.0, total_changeovers=0,
+        week_days=[6, 6, 6, 7], params_used={},
+    )
+
+    return pipe_result, fitting_result, pipe_schedule, fitting_schedule
+
+
+def test_route_consolidated_no_plan_redirects():
+    """GET /machine-planning/report/consolidated redirects to upload when no plan
+    has been run (both _mp2_result_from_session and _mp3_fitting_result_from_session
+    return None). Must be a 302 to /machine-planning/upload, not a 500."""
+    import app as appmod
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=None), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=None):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/consolidated")
+
+    assert resp.status_code == 302, (
+        f"Expected 302 redirect when no plan present, got {resp.status_code}"
+    )
+    location = resp.headers.get("Location", "")
+    assert "machine-planning/upload" in location, (
+        f"Expected redirect to /machine-planning/upload, got Location={location!r}"
+    )
+
+
+def test_route_zip_no_plan_redirects():
+    """GET /machine-planning/report/zip redirects to upload when no plan has been
+    run (both _mp2_result_from_session and _mp3_fitting_result_from_session return
+    None). Must be a 302 to /machine-planning/upload, not a 500."""
+    import app as appmod
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=None), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=None), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=None):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 302, (
+        f"Expected 302 redirect when no plan present, got {resp.status_code}"
+    )
+    location = resp.headers.get("Location", "")
+    assert "machine-planning/upload" in location, (
+        f"Expected redirect to /machine-planning/upload, got Location={location!r}"
+    )
+
+
+def test_route_consolidated_with_both_schedules_returns_xlsx():
+    """GET /machine-planning/report/consolidated returns a valid .xlsx with 7 tabs
+    and the fitting machine row in tab '2. Machine Load' when both pipe and fitting
+    plans are present in the session."""
+    import app as appmod
+    from openpyxl import load_workbook
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/consolidated")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert "spreadsheet" in resp.content_type or "octet" in resp.content_type or \
+           resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not xlsx; content_type={resp.content_type}"
+    )
+
+    wb = load_workbook(io.BytesIO(resp.data))
+    assert len(wb.sheetnames) == 7, f"Expected 7 tabs; got {wb.sheetnames}"
+    for prefix in ["1.", "2.", "3.", "4.", "5.", "6.", "7."]:
+        assert any(n.startswith(prefix) for n in wb.sheetnames), (
+            f"Tab starting with {prefix!r} missing; sheets={wb.sheetnames}"
+        )
+
+    # Tab '2. Machine Load' must show the fitting machine name
+    ws2 = wb["2. Machine Load"]
+    col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
+    assert "FM-ROUTE-1" in col1, (
+        f"Fitting machine 'FM-ROUTE-1' not found in tab '2. Machine Load' col-1; "
+        f"values: {[v for v in col1 if v]}"
+    )
+
+    # The section header must also be present
+    found_header = any("FITTING MACHINES" in str(v or "") for v in col1)
+    assert found_header, "Expected 'FITTING MACHINES' section header in tab '2. Machine Load'"
+
+
+def test_route_zip_partial_success_when_report_11_raises():
+    """ZIP route returns 200 with a valid ZIP even when report_11_bytes raises.
+
+    The consolidated plan and report-12 (fittings) must still be present.
+    The failing Report-11 entry must be absent, and the response must NOT be a 500.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11_bytes", side_effect=RuntimeError("simulated report-11 failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when report_11_bytes raises; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Consolidated plan must be present (built successfully)
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain a Consolidated_Plan file even when report-11 fails; got: {names}"
+    )
+
+    # Report-12 (fittings) must be present (built successfully)
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain a Report-12/Fitting file even when report-11 fails; got: {names}"
+    )
+
+    # The failing Report-11 must NOT be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert not report11_entries, (
+        f"Report-11 should be absent when report_11_bytes raises; got: {names}"
+    )
+
+
+def test_route_zip_returns_500_when_all_generators_raise():
+    """ZIP route returns 500 when every single report generator raises an exception.
+
+    The abort(500) guard at built==0 must fire, not return a partial ZIP.
+    The response body must NOT contain a ZIP magic header (PK\\x03\\x04).
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    _boom = RuntimeError("simulated total failure")
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11_bytes", side_effect=_boom), \
+         patch.object(r, "report_11x_bytes", side_effect=_boom), \
+         patch.object(r, "report_12_bytes", side_effect=_boom), \
+         patch.object(r, "consolidated_plan_bytes", side_effect=_boom):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 500, (
+        f"Expected 500 when all report generators raise; got {resp.status_code}"
+    )
+    assert resp.data[:4] != b"PK\x03\x04", (
+        f"Response must NOT be a valid ZIP when all generators fail; "
+        f"first bytes={resp.data[:4]!r}"
+    )
+
+
+def test_route_zip_partial_success_when_consolidated_plan_raises():
+    """ZIP route returns 200 with a valid ZIP even when consolidated_plan_bytes raises.
+
+    Report-11 and Report-12 must still be present in the ZIP.
+    The consolidated plan entry must be absent.
+    The response must NOT be a 500.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "consolidated_plan_bytes",
+                      side_effect=RuntimeError("simulated consolidated plan failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when consolidated_plan_bytes raises; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Report-11 (pipe) must be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert report11_entries, (
+        f"ZIP must contain a Report-11_Pipe file even when consolidated plan fails; got: {names}"
+    )
+
+    # Report-12 (fittings) must be present
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain a Report-12/Fitting file even when consolidated plan fails; got: {names}"
+    )
+
+    # The failing consolidated plan must NOT be present
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert not consolidated_entries, (
+        f"Consolidated_Plan should be absent when consolidated_plan_bytes raises; got: {names}"
+    )
+
+
+def test_route_zip_partial_success_when_report_12_raises():
+    """ZIP route returns 200 with a valid ZIP even when report_12_bytes raises.
+
+    Report-11 (pipe) and the consolidated plan must still be present in the ZIP.
+    The failing Report-12 entry must be absent.
+    The response must NOT be a 500.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_12_bytes",
+                      side_effect=RuntimeError("simulated report-12 failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when report_12_bytes raises; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Report-11 (pipe) must be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert report11_entries, (
+        f"ZIP must contain a Report-11_Pipe file even when report-12 fails; got: {names}"
+    )
+
+    # Consolidated plan must be present
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain a Consolidated_Plan file even when report-12 fails; got: {names}"
+    )
+
+    # The failing Report-12 must NOT be present
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting_Plan" in n]
+    assert not report12_entries, (
+        f"Report-12 should be absent when report_12_bytes raises; got: {names}"
+    )
+
+
+def test_route_zip_partial_success_when_one_11x_subgroup_raises():
+    """ZIP route returns 200 with a valid ZIP when only one 11x sub-group (11B) raises.
+
+    The per-group try/except in the ZIP loop must isolate the failure so that:
+    - Report-11_Pipe, Report-12, and Consolidated_Plan are still present.
+    - Report-11A, 11C, and 11D are still present.
+    - Report-11B (the failing group) is absent.
+    """
+    import app as appmod
+    import mp_reports as r
+    import zipfile as _zipfile
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    _orig_11x = r.report_11x_bytes
+
+    def _raise_for_b(result, group, **kwargs):
+        if group == "B":
+            raise RuntimeError("simulated 11B failure")
+        return _orig_11x(result, group, **kwargs)
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
+         patch.object(r, "report_11x_bytes", side_effect=_raise_for_b):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 even when report_11x_bytes raises for group B; got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a valid ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Report-11 (pipe) must be present
+    report11_entries = [n for n in names if "Report-11_Pipe" in n]
+    assert report11_entries, (
+        f"ZIP must contain Report-11_Pipe even when 11B fails; got: {names}"
+    )
+
+    # Report-12 (fittings) must be present
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain Report-12/Fitting even when 11B fails; got: {names}"
+    )
+
+    # Consolidated plan must be present
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain Consolidated_Plan even when 11B fails; got: {names}"
+    )
+
+    # The failing 11B entry must NOT be present
+    report11b_entries = [n for n in names if "Report-11B" in n]
+    assert not report11b_entries, (
+        f"Report-11B should be absent when report_11x_bytes raises for group B; got: {names}"
+    )
+
+    # The other sub-groups 11A, 11C, 11D must still be present
+    for grp in ("A", "C", "D"):
+        grp_entries = [n for n in names if f"Report-11{grp}" in n]
+        assert grp_entries, (
+            f"ZIP must contain Report-11{grp} even when 11B fails; got: {names}"
+        )
+
+
+def test_route_single_report_11b_failing_returns_non_500():
+    """GET /machine-planning/report/11B returns a non-500 when report_11x_bytes raises.
+
+    The individual download route must catch the RuntimeError and return a 400
+    (bad request / temporarily unavailable) rather than propagating a 500 with
+    a server traceback to the operator's browser.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, _fit_r, pipe_s, _fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(r, "report_11x_bytes",
+                      side_effect=RuntimeError("simulated 11B failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/11B")
+
+    assert resp.status_code != 500, (
+        f"A RuntimeError in report_11x_bytes must NOT produce a 500 traceback; "
+        f"got {resp.status_code}"
+    )
+    assert resp.status_code < 500, (
+        f"Expected a 4xx response when report_11x_bytes raises; got {resp.status_code}"
+    )
+
+
+def test_route_single_report_12_failing_returns_non_500():
+    """GET /machine-planning/report/12 returns a non-500 when report_12_bytes raises.
+
+    The individual download route must catch the RuntimeError and return a 400
+    (bad request / temporarily unavailable) rather than propagating a 500 with
+    a server traceback to the operator's browser.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    _pipe_r, fit_r, _pipe_s, _fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(r, "report_12_bytes",
+                      side_effect=RuntimeError("simulated report-12 failure")):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/12")
+
+    assert resp.status_code != 500, (
+        f"A RuntimeError in report_12_bytes must NOT produce a 500 traceback; "
+        f"got {resp.status_code}"
+    )
+    assert resp.status_code < 500, (
+        f"Expected a 4xx response when report_12_bytes raises; got {resp.status_code}"
+    )
+
+
+def test_route_single_report_11a_succeeds_when_11b_would_fail():
+    """GET /machine-planning/report/11A returns 200 + xlsx even when 11B would fail.
+
+    The per-group failure isolation in the individual download route must not
+    affect other sub-groups: a fault in 11B's generator must have no impact on
+    an independent 11A download.
+    """
+    import app as appmod
+    import mp_reports as r
+
+    pipe_r, _fit_r, pipe_s, _fit_s = _make_both_results()
+
+    _orig_11x = r.report_11x_bytes
+
+    def _raise_for_b(result, group, **kwargs):
+        if group == "B":
+            raise RuntimeError("simulated 11B failure")
+        return _orig_11x(result, group, **kwargs)
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(r, "report_11x_bytes", side_effect=_raise_for_b):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/11A")
+
+    assert resp.status_code == 200, (
+        f"GET /machine-planning/report/11A should succeed (200) independently of 11B; "
+        f"got {resp.status_code}"
+    )
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response for 11A should be a valid xlsx (ZIP magic bytes); "
+        f"first bytes={resp.data[:4]!r}"
+    )
+
+
+def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
+    """GET /machine-planning/report/zip returns a ZIP that contains the consolidated
+    sheet and the fitting-machine report (report-12) when both plans are present."""
+    import app as appmod
+
+    pipe_r, fit_r, pipe_s, fit_s = _make_both_results()
+
+    with patch.object(appmod, "_ensure_session_run_id", return_value=None), \
+         patch.object(appmod, "_mp2_result_from_session", return_value=pipe_r), \
+         patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
+         patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
+         patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s):
+
+        client = appmod.app.test_client()
+        resp = client.get("/machine-planning/report/zip")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert resp.data[:4] == b"PK\x03\x04", (
+        f"Response is not a ZIP; first bytes={resp.data[:4]!r}"
+    )
+
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        names = zf.namelist()
+
+    # Must contain a consolidated plan entry
+    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    assert consolidated_entries, (
+        f"ZIP must contain a Consolidated_Plan file; got: {names}"
+    )
+
+    # Must contain report-12 (fittings)
+    report12_entries = [n for n in names if "Report-12" in n or "Fitting" in n]
+    assert report12_entries, (
+        f"ZIP must contain a Report-12/Fitting file; got: {names}"
+    )
+
+    # Consolidated entry inside the ZIP must be a valid .xlsx with fitting data
+    from openpyxl import load_workbook
+    with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        xlsx_bytes = zf.read(consolidated_entries[0])
+    wb = load_workbook(io.BytesIO(xlsx_bytes))
+    assert len(wb.sheetnames) == 7, (
+        f"Consolidated sheet inside ZIP should have 7 tabs; got {wb.sheetnames}"
+    )
+    ws2 = wb["2. Machine Load"]
+    col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
+    assert "FM-ROUTE-1" in col1, (
+        f"Fitting machine 'FM-ROUTE-1' not found in consolidated sheet inside ZIP; "
+        f"values: {[v for v in col1 if v]}"
+    )

@@ -15,6 +15,7 @@ import hmac
 import threading
 import io
 import zipfile
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlsplit, quote
@@ -6026,17 +6027,33 @@ def mp_reset_section(section: str):
 
 
 # ---------------------------------------------------------------------------
-# Machine Planning — Phase MP-2: demand upload, optimiser, Report-11/11A-D
-# ADDITIVE / ISOLATED: only /machine-planning/* routes. Never touches "/".
+# Machine-planning engine imports (deferred to avoid circular imports at top
+# of file; placed here so all planning routes below can use them).
 # ---------------------------------------------------------------------------
 import mp_engine as _mp_engine        # noqa: E402
 import mp_reports as _mp_reports      # noqa: E402
 import mp_scheduler as _mp_scheduler  # noqa: E402
 
+
+from mp_lru_cache import BoundedLRUCache as _BoundedCache  # noqa: E402
+
+
 # In-process run cache (fallback when Postgres unavailable).
 # Key = run_id (str); value = {"demand": [...], "fitting_demand": [...], ...}
-_MP2_RUN_CACHE: dict = {}
-_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# Capped at 100 entries (LRU) — demand payloads are small, but still bounded.
+_MP2_RUN_CACHE: _BoundedCache = _BoundedCache(maxsize=100)
+
+# Engine-result cache — avoids re-running the heavy optimiser on the same demand
+# + rejection/wastage state (e.g. the Machine Plan Comparison route calls both
+# functions twice in one request).
+# Key = (run_id, engine_kind, params_fingerprint)
+# engine_kind ∈ {"pipe", "fitting"}
+# params_fingerprint is a short SHA-256 of the rejection + wastage lookup dicts;
+# changing those DB tables (recompute_rejection, wastage seed) changes the key
+# and automatically invalidates cached results.
+# Capped at 50 entries (LRU) so a busy worker cannot leak memory indefinitely.
+_MP2_ENGINE_CACHE: _BoundedCache = _BoundedCache(maxsize=50)
+
 _UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
@@ -6146,9 +6163,15 @@ def _mp2_store_run(demand_dicts: list, effective_month: str, segment: str,
 
 
 def _mp2_load_run(run_id: str) -> dict | None:
-    """Retrieve run payload from cache (or re-fetch from DB if cold worker)."""
-    if run_id in _MP2_RUN_CACHE:
-        return _MP2_RUN_CACHE[run_id]
+    """Retrieve run payload from cache (or re-fetch from DB if cold worker).
+
+    Uses a single .get() call so that the membership check and the value read
+    happen under the same lock acquisition — no TOCTOU window where a concurrent
+    LRU eviction could remove the key between the two operations.
+    """
+    cached = _MP2_RUN_CACHE.get(run_id)
+    if cached is not None:
+        return cached
     # Try DB
     try:
         import mp_model as _mpm
@@ -6185,12 +6208,30 @@ def _build_plan_lookups(segment: str, effective_month: str) -> tuple:
     return rej_lookup, wastage_lookup
 
 
+def _params_fingerprint(rej_lookup: dict, wastage_lookup: dict) -> str:
+    """Short SHA-256 of the rejection + wastage lookup state.
+
+    Used as part of the _MP2_ENGINE_CACHE key so that the cached EngineResult
+    is invalidated automatically when rejection or wastage DB rows change (e.g.
+    after recompute_rejection or a wastage seed) without requiring any explicit
+    cache-clear call.
+    """
+    import hashlib as _hl, json as _js
+    blob = _js.dumps(
+        {"rej": rej_lookup, "wastage": wastage_lookup},
+        sort_keys=True, default=str,
+    ).encode()
+    return _hl.sha256(blob).hexdigest()[:16]
+
+
 def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
-    """Re-run pipe engine from stored demand in session.
+    """Return pipe EngineResult for the current session run.
 
     Builds rejection and wastage lookups on every call so the result always
-    reflects the latest DB state (rejection recomputes and wastage recomputes
-    are picked up without re-uploading the demand file).
+    reflects the latest DB state.  The heavy run_engine() computation is cached
+    in _MP2_ENGINE_CACHE keyed by (run_id, "pipe", params_fingerprint) so that
+    multiple calls within the same request (e.g. the Machine Plan Comparison
+    route) skip re-computation when the rejection/wastage state is unchanged.
     """
     run_id = session.get("mp2_run_id")
     if not run_id:
@@ -6201,20 +6242,32 @@ def _mp2_result_from_session() -> _mp_engine.EngineResult | None:
     demand = [_mp_engine.DemandItem(**d) for d in payload["demand"]]
     seg = payload.get("segment", _mp_seed.SEGMENT)
     rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
+
+    fp = _params_fingerprint(rej_lookup, wastage_lookup)
+    cache_key = (run_id, "pipe", fp)
+    cached = _MP2_ENGINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
-        return _mp_engine.run_engine(
+        result = _mp_engine.run_engine(
             demand, payload["effective_month"], seg,
             rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
+        _MP2_ENGINE_CACHE[cache_key] = result
+        return result
     except Exception as exc:
         app.logger.error("mp2 re-run failed: %s", exc)
         return None
 
 
 def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None":
-    """Re-run fitting engine from stored fitting demand in session.
+    """Return fitting FittingEngineResult for the current session run.
 
-    Both rejection and wastage lookups are always passed.
+    Both rejection and wastage lookups are always passed.  The heavy
+    run_fitting_engine() computation is cached in _MP2_ENGINE_CACHE keyed by
+    (run_id, "fitting", params_fingerprint) to avoid repeated work within the
+    same request (e.g. the Machine Plan Comparison route).
     """
     run_id = session.get("mp2_run_id")
     if not run_id:
@@ -6228,11 +6281,20 @@ def _mp3_fitting_result_from_session() -> "_mp_engine.FittingEngineResult | None
     fitting_demand = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
     seg = payload.get("segment", _mp_seed.SEGMENT)
     rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
+
+    fp = _params_fingerprint(rej_lookup, wastage_lookup)
+    cache_key = (run_id, "fitting", fp)
+    cached = _MP2_ENGINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
-        return _mp_engine.run_fitting_engine(
+        result = _mp_engine.run_fitting_engine(
             fitting_demand, payload["effective_month"], seg,
             rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
         )
+        _MP2_ENGINE_CACHE[cache_key] = result
+        return result
     except Exception as exc:
         app.logger.error("mp3 fitting re-run failed: %s", exc)
         return None
@@ -6256,8 +6318,14 @@ def _ensure_session_run_id() -> None:
         pass
 
 
-def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
-    """Run shift scheduler from stored pipe demand in session."""
+def _mp_schedule_from_session(
+    engine_result: "_mp_engine.EngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run shift scheduler from stored pipe demand in session.
+
+    Pass *engine_result* when the caller has already computed the pipe engine
+    result to avoid a redundant re-run of the engine inside this helper.
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6275,7 +6343,7 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
         d2.setdefault("first_requested_week", 0)
         demand.append(_mp_engine.DemandItem(**d2))
 
-    result = _mp2_result_from_session()
+    result = engine_result if engine_result is not None else _mp2_result_from_session()
     if result is None:
         return None
     em = payload["effective_month"]
@@ -6296,8 +6364,14 @@ def _mp_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
         app.logger.error("mp_shift_schedule failed: %s", exc)
         return None
 
-def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None":
-    """Run fitting shift scheduler from stored fitting demand in session."""
+def _mp_fitting_schedule_from_session(
+    fitting_result: "_mp_engine.FittingEngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run fitting shift scheduler from stored fitting demand in session.
+
+    Pass *fitting_result* when the caller has already computed the fitting engine
+    result to avoid a redundant re-run of the fitting engine inside this helper.
+    """
     run_id = session.get("mp2_run_id")
     if not run_id:
         return None
@@ -6308,8 +6382,8 @@ def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None"
     if not fit_dicts:
         return None
 
-    fitting_result = _mp3_fitting_result_from_session()
-    if fitting_result is None:
+    fr = fitting_result if fitting_result is not None else _mp3_fitting_result_from_session()
+    if fr is None:
         return None
     em  = payload["effective_month"]
     seg = payload.get("segment", _mp_seed.SEGMENT)
@@ -6319,7 +6393,7 @@ def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None"
         dt_recs = []
     try:
         return _mp_scheduler.run_fitting_schedule(
-            fitting_items=fitting_result.items,
+            fitting_items=fr.items,
             fitting_demand=[_mp_engine.FittingDemandItem(**d) for d in fit_dicts],
             segment=seg,
             effective_month=em,
@@ -6328,6 +6402,138 @@ def _mp_fitting_schedule_from_session() -> "_mp_scheduler.ScheduleResult | None"
     except Exception as exc:
         app.logger.error("mp_fitting_schedule failed: %s", exc)
         return None
+def _mp2_result_from_run(run_id: int) -> "_mp_engine.EngineResult | None":
+    """Regenerate pipe EngineResult from a stored run by DB id (not session).
+
+    Uses the same _MP2_ENGINE_CACHE as the session helpers so that back-to-back
+    calls within a single request (view page + report download) are free.
+    """
+    payload = _mp2_load_run(str(run_id))
+    if not payload:
+        return None
+    demand = [_mp_engine.DemandItem(**d) for d in (payload.get("demand") or [])]
+    if not demand:
+        return None
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
+    fp        = _params_fingerprint(rej_lookup, wastage_lookup)
+    cache_key = (str(run_id), "pipe", fp)
+    cached    = _MP2_ENGINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = _mp_engine.run_engine(
+            demand, payload["effective_month"], seg,
+            rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
+        )
+        _MP2_ENGINE_CACHE[cache_key] = result
+        return result
+    except Exception as exc:
+        app.logger.error("_mp2_result_from_run(%s): %s", run_id, exc)
+        return None
+
+
+def _mp3_fitting_result_from_run(run_id: int) -> "_mp_engine.FittingEngineResult | None":
+    """Regenerate fitting EngineResult from a stored run by DB id (not session)."""
+    payload   = _mp2_load_run(str(run_id))
+    if not payload:
+        return None
+    fit_dicts = payload.get("fitting_demand") or []
+    if not fit_dicts:
+        return None
+    fitting_demand = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    rej_lookup, wastage_lookup = _build_plan_lookups(seg, payload["effective_month"])
+    fp        = _params_fingerprint(rej_lookup, wastage_lookup)
+    cache_key = (str(run_id), "fitting", fp)
+    cached    = _MP2_ENGINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = _mp_engine.run_fitting_engine(
+            fitting_demand, payload["effective_month"], seg,
+            rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
+        )
+        _MP2_ENGINE_CACHE[cache_key] = result
+        return result
+    except Exception as exc:
+        app.logger.error("_mp3_fitting_result_from_run(%s): %s", run_id, exc)
+        return None
+
+
+def _mp_schedule_from_run(
+    run_id: int,
+    engine_result: "_mp_engine.EngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run pipe shift scheduler from a stored run by DB id (not session)."""
+    payload = _mp2_load_run(str(run_id))
+    if not payload:
+        return None
+    demand_dicts = payload.get("demand") or []
+    if not demand_dicts:
+        return None
+    demand = []
+    for d in demand_dicts:
+        d2 = dict(d)
+        wq_raw = d2.get("week_qty") or {}
+        d2["week_qty"] = {int(k): float(v) for k, v in wq_raw.items()}
+        d2.setdefault("first_requested_week", 0)
+        demand.append(_mp_engine.DemandItem(**d2))
+    result = engine_result if engine_result is not None else _mp2_result_from_run(run_id)
+    if result is None:
+        return None
+    em  = payload["effective_month"]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    try:
+        dt_recs = _mp_model.get_downtime_affecting_month(seg, em)
+    except Exception:
+        dt_recs = []
+    try:
+        return _mp_scheduler.run_shift_schedule(
+            engine_items=result.items,
+            demand_items=demand,
+            segment=seg,
+            effective_month=em,
+            downtime_records=dt_recs,
+        )
+    except Exception as exc:
+        app.logger.error("_mp_schedule_from_run(%s): %s", run_id, exc)
+        return None
+
+
+def _mp_fitting_schedule_from_run(
+    run_id: int,
+    fitting_result: "_mp_engine.FittingEngineResult | None" = None,
+) -> "_mp_scheduler.ScheduleResult | None":
+    """Run fitting shift scheduler from a stored run by DB id (not session)."""
+    payload   = _mp2_load_run(str(run_id))
+    if not payload:
+        return None
+    fit_dicts = payload.get("fitting_demand") or []
+    if not fit_dicts:
+        return None
+    fr  = fitting_result if fitting_result is not None else _mp3_fitting_result_from_run(run_id)
+    if fr is None:
+        return None
+    em  = payload["effective_month"]
+    seg = payload.get("segment", _mp_seed.SEGMENT)
+    try:
+        dt_recs = _mp_model.get_downtime_affecting_month(seg, em)
+    except Exception:
+        dt_recs = []
+    try:
+        return _mp_scheduler.run_fitting_schedule(
+            fitting_items=fr.items,
+            fitting_demand=[_mp_engine.FittingDemandItem(**d) for d in fit_dicts],
+            segment=seg,
+            effective_month=em,
+            downtime_records=dt_recs,
+        )
+    except Exception as exc:
+        app.logger.error("_mp_fitting_schedule_from_run(%s): %s", run_id, exc)
+        return None
+
+
 @app.route("/machine-planning")
 def mp_home():
     """Machine Planning landing — category selector + recent plan runs."""
@@ -6628,9 +6834,13 @@ def mp_report_consolidated():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result         = _mp2_result_from_session()
-    fitting_result = _mp3_fitting_result_from_session()
-    schedule_result = _mp_schedule_from_session()
+    result                  = _mp2_result_from_session()
+    fitting_result          = _mp3_fitting_result_from_session()
+    # Pass the already-computed results so the scheduler helpers do not
+    # re-run the engines a second time inside _mp_schedule_from_session /
+    # _mp_fitting_schedule_from_session.
+    schedule_result         = _mp_schedule_from_session(engine_result=result)
+    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6640,6 +6850,7 @@ def mp_report_consolidated():
             engine_result=result,
             fitting_result=fitting_result,
             schedule_result=schedule_result,
+            fitting_schedule=fitting_schedule_result,
         )
         month = (result or fitting_result).effective_month
         filename = f"Consolidated_Plan_{month}.xlsx"
@@ -6661,9 +6872,12 @@ def mp_report_zip():
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
-    result          = _mp2_result_from_session()
-    fitting_result  = _mp3_fitting_result_from_session()
-    schedule_result = _mp_schedule_from_session()
+    result                  = _mp2_result_from_session()
+    fitting_result          = _mp3_fitting_result_from_session()
+    # Pass the already-computed results so the scheduler helpers do not
+    # re-run the engines a second time.
+    schedule_result         = _mp_schedule_from_session(engine_result=result)
+    fitting_schedule_result = _mp_fitting_schedule_from_session(fitting_result=fitting_result)
 
     if result is None and fitting_result is None:
         return redirect(url_for("mp_upload"))
@@ -6702,6 +6916,7 @@ def mp_report_zip():
                             engine_result=result,
                             fitting_result=fitting_result,
                             schedule_result=schedule_result,
+                            fitting_schedule=fitting_schedule_result,
                         ))
             built += 1
         except Exception as exc:
@@ -6743,7 +6958,7 @@ def mp_report_download(report_id: str):
             filename = f"Report-12_Fitting_Plan_{fitting_result.effective_month}.xlsx"
         except Exception as exc:
             app.logger.error("mp_report_download 12 failed: %s", exc)
-            abort(500)
+            abort(400)
         return _send_file(
             io.BytesIO(xlsx_bytes),
             mimetype=_XLSX_MIME,
@@ -6772,7 +6987,7 @@ def mp_report_download(report_id: str):
             filename = f"Report-11{group}_{mcs}_{result.effective_month}.xlsx"
     except Exception as exc:
         app.logger.error("mp_report_download %s failed: %s", report_id, exc)
-        abort(500)
+        abort(400)
 
     return _send_file(
         io.BytesIO(xlsx_bytes),
@@ -6891,44 +7106,122 @@ def mp_run_list():
 
 @app.route("/machine-planning/runs/<int:run_id>")
 def mp_run_detail(run_id: int):
-    """View a frozen plan run read-only (or prompt to re-freeze a pending run)."""
+    """Full plan view for any run — frozen or pending.
+
+    Always regenerates EngineResult / FittingEngineResult / ScheduleResult
+    from the stored demand so both pending (live-preview) and frozen runs
+    render the full plan on-screen.  Frozen runs additionally surface the
+    stored baseline_machine_loads for the Opt vs Base comparison.
+    """
     from mp_model import get_plan_run_by_id
     row = get_plan_run_by_id(run_id)
     if not row:
         abort(404)
-    if not row.get("results"):
-        # Pending run — show a re-freeze prompt rather than an error redirect.
-        _empty = dict(
-            result=None, fitting_result=None,
-            baseline_by_mc={}, opt_peak_hrs=0, opt_peak_pct=0,
-            base_peak_hrs=0, base_peak_pct=0, n_estimated=0,
+
+    frozen       = bool(row.get("results"))
+    live_preview = not frozen   # pending runs show a banner
+
+    # ── Regenerate plan objects from stored demand ─────────────────────────
+    result         = _mp2_result_from_run(run_id)
+    fitting_result = _mp3_fitting_result_from_run(run_id)
+    schedule_result = _mp_schedule_from_run(run_id, engine_result=result)
+    fitting_sched   = _mp_fitting_schedule_from_run(run_id, fitting_result=fitting_result)
+
+    # sched_load_by_mc: machine → total scheduled hrs (same derivation as
+    # mp_results / Consolidated Plan tab 2).
+    sched_load_by_mc: dict = {}
+    if schedule_result:
+        for _wf in schedule_result.weekly_fill:
+            sched_load_by_mc[_wf.machine] = (
+                sched_load_by_mc.get(_wf.machine, 0.0) + _wf.scheduled_hrs
+            )
+
+    # ── Baseline vars ──────────────────────────────────────────────────────
+    if frozen:
+        # Use stored JSON baseline_machine_loads for Opt/Base comparison;
+        # override result/fitting_result with live EngineResult objects so
+        # the template uses proper attribute access (avoids dict.items() trap).
+        vars_ = _reconstruct_display_vars(row)
+        if result is not None:
+            vars_["result"] = result
+        if fitting_result is not None:
+            vars_["fitting_result"] = fitting_result
+    else:
+        ml_list   = result.machine_loads                                  if result         else []
+        bml_list  = result.baseline_machine_loads                         if result         else []
+        fml_list  = fitting_result.machine_loads                          if fitting_result else []
+        fbml_list = (getattr(fitting_result, "baseline_machine_loads", None) or []) if fitting_result else []
+        pt = result.totals         if result         else None
+        ft = fitting_result.totals if fitting_result else None
+        vars_ = dict(
+            result=result,
+            fitting_result=fitting_result,
+            baseline_by_mc={ml.machine: ml for ml in bml_list},
+            opt_peak_hrs=max((ml.assigned_hrs    for ml in ml_list),  default=0),
+            opt_peak_pct=max((ml.utilisation_pct for ml in ml_list),  default=0),
+            base_peak_hrs=max((ml.assigned_hrs    for ml in bml_list), default=0),
+            base_peak_pct=max((ml.utilisation_pct for ml in bml_list), default=0),
+            n_estimated=sum(1 for it in (result.items if result else []) if it.rate_estimated),
             groups=_mp_engine.REPORT_11_GROUPS,
-            fit_baseline_by_mc={}, fit_opt_peak_hrs=0, fit_opt_peak_pct=0,
-            fit_base_peak_hrs=0, fit_base_peak_pct=0, fit_n_estimated=0,
-            combined_material_kg=0, combined_fresh_kg=0, combined_pulv_kg=0,
+            fit_baseline_by_mc={ml.machine: ml for ml in fbml_list},
+            fit_opt_peak_hrs=max((ml.assigned_hrs    for ml in fml_list),  default=0),
+            fit_opt_peak_pct=max((ml.utilisation_pct for ml in fml_list),  default=0),
+            fit_base_peak_hrs=max((ml.assigned_hrs    for ml in fbml_list), default=0),
+            fit_base_peak_pct=max((ml.utilisation_pct for ml in fbml_list), default=0),
+            fit_n_estimated=sum(1 for it in (fitting_result.items if fitting_result else [])
+                                if getattr(it, "rate_estimated", False)),
+            combined_material_kg=(
+                (pt.routable_material_kg if pt else 0) +
+                (ft.routable_material_kg if ft else 0)
+            ),
+            combined_fresh_kg=(
+                (pt.routable_fresh_compound_kg if pt else 0) +
+                (ft.routable_fresh_compound_kg if ft else 0)
+            ),
+            combined_pulv_kg=(
+                (pt.routable_pulverizer_kg if pt else 0) +
+                (ft.routable_pulverizer_kg if ft else 0)
+            ),
         )
-        return render_template(
-            "machine_planning_run_detail.html",
-            run_row=row,
-            run_id=run_id,
-            run_status=row.get("status", "pending"),
-            frozen=False,
-            **_empty,
-        )
-    vars_ = _reconstruct_display_vars(row)
-    # Derive rej_missing from stored items: if all weighted pipe items used
-    # rej_basis="none", rejection data was absent when this plan was run.
-    _pipe_items = (vars_.get("result") or {}).get("items") or []
-    _weighted   = [it for it in _pipe_items if it.get("has_weight")]
-    vars_["rej_missing"] = bool(_weighted) and all(
-        (it.get("rej_basis") or "none") == "none" for it in _weighted
+
+    # ── Capacity-Feasible summary numbers ──────────────────────────────────
+    _pipe_ml = result.machine_loads          if result         else []
+    _fit_ml  = fitting_result.machine_loads  if fitting_result else []
+    pipe_demand_hrs   = sum(ml.assigned_hrs for ml in _pipe_ml)
+    pipe_feasible_hrs = schedule_result.total_scheduled_hrs if schedule_result else 0.0
+    pipe_shortfall    = max(0.0, pipe_demand_hrs - pipe_feasible_hrs)
+    pipe_short_pct    = (pipe_shortfall / pipe_demand_hrs * 100) if pipe_demand_hrs else 0.0
+    fit_demand_hrs    = sum(getattr(ml, "assigned_hrs", 0) for ml in _fit_ml)
+    fit_feasible_hrs  = fitting_sched.total_scheduled_hrs if fitting_sched else 0.0
+    fit_shortfall     = max(0.0, fit_demand_hrs - fit_feasible_hrs)
+    fit_short_pct     = (fit_shortfall / fit_demand_hrs * 100) if fit_demand_hrs else 0.0
+
+    # ── rej_missing ────────────────────────────────────────────────────────
+    _pipe_items = getattr(result, "items", None) or []
+    _weighted   = [it for it in _pipe_items if getattr(it, "has_weight", False)]
+    rej_missing = bool(_weighted) and all(
+        (getattr(it, "rej_basis", "none") or "none") == "none" for it in _weighted
     )
+
     return render_template(
         "machine_planning_run_detail.html",
         run_row=row,
         run_id=run_id,
-        run_status=row.get("status", "draft"),
-        frozen=True,
+        run_status=row.get("status", "pending"),
+        frozen=frozen,
+        live_preview=live_preview,
+        schedule_result=schedule_result,
+        fitting_schedule_result=fitting_sched,
+        sched_load_by_mc=sched_load_by_mc,
+        pipe_demand_hrs=round(pipe_demand_hrs, 1),
+        pipe_feasible_hrs=round(pipe_feasible_hrs, 1),
+        pipe_shortfall=round(pipe_shortfall, 1),
+        pipe_short_pct=round(pipe_short_pct, 1),
+        fit_demand_hrs=round(fit_demand_hrs, 1),
+        fit_feasible_hrs=round(fit_feasible_hrs, 1),
+        fit_shortfall=round(fit_shortfall, 1),
+        fit_short_pct=round(fit_short_pct, 1),
+        rej_missing=rej_missing,
         **vars_,
     )
 
@@ -7055,54 +7348,252 @@ def mp_run_finalize(run_id: int):
 
 @app.route("/machine-planning/runs/<int:run_id>/report/<report_id>")
 def mp_frozen_run_report(run_id: int, report_id: str):
-    """Download a report from a plan run (re-runs engine from stored demand).
+    """Download any report from a plan run (re-runs engine from stored demand).
 
     Works for BOTH frozen and pending (unfrozen) runs — the report is always
-    regenerated fresh from the stored demand, so freezing is not required to
-    download the machine plan Excel.
+    regenerated fresh from the stored demand, so freezing is not required.
+
+    Supported report_id values:
+      11 / 11A / 11B / 11C / 11D — pipe extrusion plans
+      12                          — fitting moulding plan
+      consolidated                — 7-tab consolidated workbook
+      revised                     — revised production plan (rejection + waste)
+      comparison                  — machine plan comparison (without vs with losses)
+      capacity_feasible           — capacity-feasible plan (Requested/Feasible/Shortfall)
+      corrective                  — corrective re-plan (run-rate pace projection)
+      zip                         — all reports bundled as a ZIP
     """
     from flask import send_file as _send_file2
     from mp_model import get_plan_run_by_id
 
-    allowed = {"11", "11A", "11B", "11C", "11D", "12"}
-    if report_id not in allowed:
+    _PIPE_REPORTS    = {"11", "11A", "11B", "11C", "11D"}
+    _ALL_REPORT_IDS  = _PIPE_REPORTS | {
+        "12", "consolidated", "revised", "comparison",
+        "capacity_feasible", "corrective", "zip",
+    }
+    if report_id not in _ALL_REPORT_IDS:
         abort(404)
+
     row = get_plan_run_by_id(run_id)
     if not row:
         abort(404)
 
+    month = row["month"]
+    seg   = row.get("segment", _mp_seed.SEGMENT)
+
+    # ── Helper: build engine results lazily (cached in _MP2_ENGINE_CACHE) ──
+    def _get_result():
+        return _mp2_result_from_run(run_id)
+
+    def _get_fitting_result():
+        return _mp3_fitting_result_from_run(run_id)
+
+    def _get_schedule(res=None):
+        return _mp_schedule_from_run(run_id, engine_result=res)
+
+    def _get_fitting_schedule(fres=None):
+        return _mp_fitting_schedule_from_run(run_id, fitting_result=fres)
+
+    # ── Pipe sub-group reports (11 / 11A–D) ────────────────────────────────
+    if report_id in _PIPE_REPORTS:
+        demand_dicts = row.get("uploaded_demand") or []
+        if not demand_dicts:
+            abort(404)
+        try:
+            res = _get_result()
+            if res is None:
+                abort(500)
+            sched = _get_schedule(res)
+            if report_id == "11":
+                xlsx_b = _mp_reports.report_11_bytes(res, schedule=sched)
+                fname  = f"Report-11_Pipe_Plan_{month}.xlsx"
+            else:
+                grp    = report_id[2:]
+                xlsx_b = _mp_reports.report_11x_bytes(res, grp, schedule=sched)
+                mcs    = "_".join(
+                    m.replace("/", "").replace(" ", "")
+                    for m in _mp_engine.REPORT_11_GROUPS.get(grp, [])
+                )
+                fname = f"Report-11{grp}_{mcs}_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report %s: %s", report_id, exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── Report-12 (fittings moulding plan) ────────────────────────────────
     if report_id == "12":
         fit_dicts = row.get("fitting_demand") or []
         if not fit_dicts:
             abort(404)
-        fit_dm = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
         try:
-            fres      = _mp_engine.run_fitting_engine(fit_dm, row["month"], row.get("segment", _mp_seed.SEGMENT))
-            xlsx_b    = _mp_reports.report_12_bytes(fres)
-            fname     = f"Report-12_Fitting_Plan_{row['month']}.xlsx"
+            fres   = _get_fitting_result()
+            if fres is None:
+                abort(500)
+            xlsx_b = _mp_reports.report_12_bytes(fres)
+            fname  = f"Report-12_Fitting_Plan_{month}.xlsx"
         except Exception as exc:
             app.logger.error("mp_frozen_run_report 12: %s", exc)
             abort(500)
-        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME, as_attachment=True, download_name=fname)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
 
-    demand_dicts = row.get("uploaded_demand") or []
-    if not demand_dicts:
-        abort(404)
-    dm = [_mp_engine.DemandItem(**d) for d in demand_dicts]
-    try:
-        res = _mp_engine.run_engine(dm, row["month"], row.get("segment", _mp_seed.SEGMENT))
-        if report_id == "11":
-            xlsx_b = _mp_reports.report_11_bytes(res)
-            fname  = f"Report-11_Pipe_Plan_{row['month']}.xlsx"
-        else:
-            grp    = report_id[2:]
-            xlsx_b = _mp_reports.report_11x_bytes(res, grp)
-            mcs    = "_".join(m.replace("/", "").replace(" ", "") for m in _mp_engine.REPORT_11_GROUPS.get(grp, []))
-            fname  = f"Report-11{grp}_{mcs}_{row['month']}.xlsx"
-    except Exception as exc:
-        app.logger.error("mp_frozen_run_report %s: %s", report_id, exc)
-        abort(500)
-    return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME, as_attachment=True, download_name=fname)
+    # ── Consolidated 7-tab workbook ────────────────────────────────────────
+    if report_id == "consolidated":
+        try:
+            res   = _get_result()
+            fres  = _get_fitting_result()
+            sched = _get_schedule(res)
+            fsched = _get_fitting_schedule(fres)
+            xlsx_b = _mp_reports.consolidated_plan_bytes(
+                engine_result=res, fitting_result=fres,
+                schedule_result=sched, fitting_schedule=fsched,
+            )
+            fname = f"Consolidated_Plan_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report consolidated: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── Revised Production Plan (rejection + waste gross-up) ──────────────
+    if report_id == "revised":
+        try:
+            res   = _get_result()
+            fres  = _get_fitting_result()
+            xlsx_b = _mp_reports.revised_production_plan_bytes(res, fres, month)
+            fname  = f"revised_production_plan_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report revised: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── Machine Plan Comparison (without vs with losses) ───────────────────
+    if report_id == "comparison":
+        try:
+            res_with  = _get_result()
+            fres_with = _get_fitting_result()
+            params_row  = _mp_model.get_params(seg, month)
+            old_waste   = float(params_row.waste_pct) if params_row else 0.0
+            demand_dicts = row.get("uploaded_demand") or []
+            fit_dicts    = row.get("fitting_demand") or []
+            dm_flat  = [_mp_engine.DemandItem(**d) for d in demand_dicts]
+            fdm_flat = [_mp_engine.FittingDemandItem(**d) for d in fit_dicts]
+            try:
+                res_flat  = _mp_engine.run_engine(dm_flat, month, seg) if dm_flat else None
+                fres_flat = _mp_engine.run_fitting_engine(fdm_flat, month, seg) if fdm_flat else None
+            except Exception:
+                res_flat = fres_flat = None
+            xlsx_b = _mp_reports.machine_plan_comparison_bytes(
+                res_with, res_flat, fres_with, fres_flat, month,
+                old_waste_pct=old_waste,
+            )
+            fname = f"machine_plan_comparison_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report comparison: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── Capacity-Feasible Plan ─────────────────────────────────────────────
+    if report_id == "capacity_feasible":
+        try:
+            res    = _get_result()
+            fres   = _get_fitting_result()
+            sched  = _get_schedule(res)
+            fsched = _get_fitting_schedule(fres)
+            xlsx_b = _mp_reports.capacity_feasible_plan_bytes(
+                res, fres, sched, month, fitting_schedule=fsched,
+            )
+            fname = f"capacity_feasible_plan_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report capacity_feasible: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── Corrective Re-plan (run-rate pace projection) ──────────────────────
+    if report_id == "corrective":
+        import mp_corrective_replan as _mcr_run
+        import sheets as _sh_run
+        try:
+            plan_recs = load_planning("PIPE", month)
+        except Exception:
+            plan_recs = []
+        actuals = _sh_run.load_corrective_replan_actuals(month)
+        if actuals.get("error") and not actuals["r11"] and not actuals["r12"]:
+            return (
+                f"Could not load Report-11/12 actuals for {month}: {actuals['error']}",
+                503,
+            )
+        try:
+            cr_result = _mcr_run.compute_corrective_replan(
+                month=month, plan_recs=plan_recs,
+                r11_values=actuals["r11"], r12_values=actuals["r12"],
+                as_of_date=_today(), file_id=actuals.get("file_id", ""),
+            )
+            xlsx_b = _mcr_run.corrective_replan_bytes(cr_result)
+            fname  = f"corrective_replan_{month}.xlsx"
+        except Exception as exc:
+            app.logger.error("mp_frozen_run_report corrective: %s", exc)
+            abort(500)
+        return _send_file2(io.BytesIO(xlsx_b), mimetype=_XLSX_MIME,
+                           as_attachment=True, download_name=fname)
+
+    # ── ZIP (all reports bundled) ──────────────────────────────────────────
+    if report_id == "zip":
+        res    = _get_result()
+        fres   = _get_fitting_result()
+        sched  = _get_schedule(res)
+        fsched = _get_fitting_schedule(fres)
+        buf    = io.BytesIO()
+        built  = 0
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            if res is not None:
+                for _rid, _fn in [("11", f"Report-11_Pipe_Plan_{month}.xlsx")] + [
+                    (f"11{g}", f"Report-11{g}_{month}.xlsx") for g in ("A", "B", "C", "D")
+                ]:
+                    try:
+                        _grp = _rid[2:] if len(_rid) > 2 else None
+                        _b   = (_mp_reports.report_11_bytes(res, schedule=sched) if _grp is None
+                                else _mp_reports.report_11x_bytes(res, _grp, schedule=sched))
+                        zf.writestr(_fn, _b); built += 1
+                    except Exception as exc:
+                        app.logger.error("run zip: %s failed: %s", _rid, exc)
+            if fres is not None:
+                try:
+                    zf.writestr(f"Report-12_Fitting_Plan_{month}.xlsx",
+                                _mp_reports.report_12_bytes(fres))
+                    built += 1
+                except Exception as exc:
+                    app.logger.error("run zip: report 12 failed: %s", exc)
+            try:
+                zf.writestr(f"Consolidated_Plan_{month}.xlsx",
+                            _mp_reports.consolidated_plan_bytes(
+                                engine_result=res, fitting_result=fres,
+                                schedule_result=sched, fitting_schedule=fsched))
+                built += 1
+            except Exception as exc:
+                app.logger.error("run zip: consolidated failed: %s", exc)
+            try:
+                zf.writestr(f"revised_production_plan_{month}.xlsx",
+                            _mp_reports.revised_production_plan_bytes(res, fres, month))
+                built += 1
+            except Exception as exc:
+                app.logger.error("run zip: revised failed: %s", exc)
+            try:
+                zf.writestr(f"capacity_feasible_plan_{month}.xlsx",
+                            _mp_reports.capacity_feasible_plan_bytes(
+                                res, fres, sched, month, fitting_schedule=fsched))
+                built += 1
+            except Exception as exc:
+                app.logger.error("run zip: capacity_feasible failed: %s", exc)
+        if built == 0:
+            abort(500)
+        buf.seek(0)
+        return _send_file2(buf, mimetype="application/zip", as_attachment=True,
+                           download_name=f"MachPlanning_Run{run_id}_{month}.zip")
 
 
 # ---------------------------------------------------------------------------
