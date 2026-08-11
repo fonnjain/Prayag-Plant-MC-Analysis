@@ -88,8 +88,8 @@
             {% if r %}
               {% set pct = r.utilisation_pct %}
               {% set bg = "#d1fae5" if pct >= 95 else ("#fef3c7" if pct >= 70 else "#fee2e2") %}
-              {% set mc_co.v = mc_co.v + r.changeovers %}
-              {% set mc_ex.v = mc_ex.v + r.excess_kg %}
+              {% set _ = mc_co.__setattr__('v', mc_co.v + r.changeovers) %}
+              {% set _ = mc_ex.__setattr__('v', mc_ex.v + r.excess_kg) %}
           <td style="padding:.28rem .3rem;text-align:right;">{{ "{:.0f}".format(r.scheduled_hrs) }}</td>
           <td style="padding:.28rem .3rem;text-align:right;background:{{ bg }};font-weight:600;">
             {{ "{:.0f}".format(pct) }}%
@@ -99,8 +99,8 @@
           <td style="padding:.28rem .3rem;text-align:right;color:#9ca3af;">—</td>
             {% endif %}
           {% endfor %}
-          {% set total_co.v = total_co.v + mc_co.v %}
-          {% set total_ex.v = total_ex.v + mc_ex.v %}
+          {% set _ = total_co.__setattr__('v', total_co.v + mc_co.v) %}
+          {% set _ = total_ex.__setattr__('v', total_ex.v + mc_ex.v) %}
           <td style="padding:.28rem .3rem;text-align:center;font-size:.72rem;
                      color:{{ '#92400e' if mc_co.v > 0 else '#6b7280' }};">
             {{ mc_co.v if mc_co.v > 0 else '—' }}
@@ -127,8 +127,8 @@
       {% for wk in [1,2,3,4] %}
         {% set r = fill_map.get((mc, wk)) %}
         {% if r %}
-          {% set mc_fill.total_s = mc_fill.total_s + r.scheduled_hrs %}
-          {% set mc_fill.total_c = mc_fill.total_c + r.capacity_hrs %}
+          {% set _ = mc_fill.__setattr__('total_s', mc_fill.total_s + r.scheduled_hrs) %}
+          {% set _ = mc_fill.__setattr__('total_c', mc_fill.total_c + r.capacity_hrs) %}
         {% endif %}
       {% endfor %}
       {% if mc_fill.total_c > 0 %}
@@ -163,7 +163,7 @@
           <tr style="height:1px;background:#e5e7eb;">
             <td colspan="8" style="padding:0;"></td>
           </tr>
-          {% set prev_day.v = b.day %}
+          {% set _ = prev_day.__setattr__('v', b.day) %}
           {% endif %}
           <tr style="background:{{ row_bg }};">
             <td style="padding:.2rem .35rem;text-align:center;font-weight:600;color:#374151;">

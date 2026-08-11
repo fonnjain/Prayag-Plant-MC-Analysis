@@ -33,58 +33,6 @@
   </div>
   {% endif %}
 
-  {% if integrity_flags %}
-  <div class="kpi-card p-4 mb-4 border-l-4" style="border-color:#d97706;background:#fffbeb;">
-    <div class="flex items-center gap-1.5 mb-2">
-      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#d97706" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-      </svg>
-      <span class="text-xs font-bold text-amber-700">Source Data Notes — cross-check before using totals</span>
-    </div>
-    {% for flag in integrity_flags %}
-    <div class="text-xs text-amber-700 flex gap-1.5 mb-1">
-      <span class="flex-shrink-0">⚠</span><span>{{ flag }}</span>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if tank_summary_delta %}
-  <div class="kpi-card p-4 mb-4">
-    <h3 class="text-sm font-semibold mb-2 text-amber-700">Recomputed vs SUMMARY (LTR) tab — Validation Delta</h3>
-    <p class="text-[11px] text-gray-400 mb-2">
-      Production figures above are recomputed from the item-level data matrix (primary source).
-      The SUMMARY (LTR) tab is a derived roll-up used for validation only.
-      Deltas ≥ 100 Ltr are shown — review the workbook if a month shows a large gap.
-    </p>
-    <div class="table-scroll">
-      <table class="w-full text-xs border-collapse" style="min-width:380px">
-        <thead>
-          <tr style="background:var(--navy)">
-            <th class="text-left text-white px-3 py-2 rounded-l-lg font-semibold">Month</th>
-            <th class="text-right text-white px-3 py-2 font-semibold">Recomputed (Ltr)</th>
-            <th class="text-right text-white px-3 py-2 font-semibold">SUMMARY tab (Ltr)</th>
-            <th class="text-right text-white px-3 py-2 rounded-r-lg font-semibold">Δ Ltr</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for d in tank_summary_delta %}
-          <tr style="background:#fff;border-bottom:1px solid #f3f4f6;">
-            <td class="px-3 py-1.5 font-medium" style="color:var(--navy)">{{ d.month }}</td>
-            <td class="px-3 py-1.5 text-right text-gray-700">{{ "{:,.0f}".format(d.recomputed_ltr) }}</td>
-            <td class="px-3 py-1.5 text-right text-gray-500">{{ "{:,.0f}".format(d.summary_ltr) }}</td>
-            <td class="px-3 py-1.5 text-right font-semibold
-                       {% if d.delta_ltr | abs > 50000 %}text-red-600{% else %}text-amber-600{% endif %}">
-              {% if d.delta_ltr > 0 %}+{% endif %}{{ "{:,.0f}".format(d.delta_ltr) }}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% endif %}
-
   <!-- Overall KPI strip -->
   {% if overall.total_count > 0 %}
   <div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">
@@ -138,7 +86,7 @@
             {% for m in months %}
             {% set cell = items[item].get(m, {}) %}
             {% set pv = cell.prod if cell else 0 %}
-            {% set row_total.v = row_total.v + pv %}
+            {% set _ = row_total.__setattr__('v', row_total.v + pv) %}
             <td class="py-1.5 px-1 text-right text-gray-600">
               {% if pv > 0 %}{{ "{:,.0f}".format(pv) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
             </td>

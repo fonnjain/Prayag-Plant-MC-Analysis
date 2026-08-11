@@ -38,14 +38,11 @@ import store as _store
 # ---------------------------------------------------------------------------
 _token_cache: dict = {"token": None, "exp": 0.0}
 _data_cache: dict = {}          # months_key -> (ts, payload)
-_DATA_TTL = 1800.0              # seconds (30 min) on-demand fallback TTL. The
+_DATA_TTL = 900.0               # seconds (15 min) on-demand fallback TTL. The
                                 # always-on background refresher (bottom of file)
                                 # refills well inside this window, so warm-cache
                                 # hits are the norm; this TTL only governs the
                                 # fallback when no refresher runs (e.g. autoscale).
-                                # 30 min chosen so secondary data (historical months,
-                                # yield, mixer, etc.) stays hot for 3 refresh cycles
-                                # after a first-visit fetch.
 _REFRESH_INTERVAL = 600.0       # seconds (10 min) — always-on background sync
                                 # cadence. Effective only on an always-running
                                 # (Reserved VM) deployment; idle/harmless on a
@@ -119,10 +116,6 @@ def clear_caches() -> None:
     _mixer_cache.clear()
     _toolroom_cache.clear()
     _wastage_cache.clear()
-    _garden_monthly_cache.clear()
-    _ptmt_monthly_cache.clear()
-    _ptmt_summary_tab_cache.clear()
-    _tank_summary_ltr_cache.clear()
     try:
         _store.pg_cache_clear()
     except Exception:
@@ -682,267 +675,31 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
         }
 
     # ── Tank annual 26-27 ─────────────────────────────────────────────────────
-    # Architecture: primary data = per-size tabs (e.g. "500 LTR", "1000 LTR").
-    # Each tab carries a TOTALS row with monthly Ltr production by size.
-    # Per-size totals reconcile exactly to SUMMARY (LTR) for VN (verified).
-    # The DATA/Sheet1 tab is a wide item-matrix in KG (plastic weight) — it does
-    # NOT reconcile to SUMMARY (LTR) and must NOT be used as the primary source.
-    # The SUMMARY (LTR) tab is a derived roll-up — read for validation delta only.
     if kind == "tank_annual_2627":
         tabs = list_tabs(file_id, token)
-
-        # Discover per-size tabs: names matching "N LTR" pattern
-        size_tabs = [t for t in tabs
-                     if re.match(r"^\d+\s*LTR\b", t.strip().upper())]
-
-        # Find SUMMARY (LTR) tab for validation
-        summary_ltr_tab = next(
-            (t for t in tabs
-             if "SUMMARY" in t.upper()
-             and ("LTR" in t.upper() or "LITRE" in t.upper() or "LITER" in t.upper())),
-            None,
-        )
-
-        if not size_tabs:
+        tab = src["tab"]
+        actual_tab = next((t for t in tabs if t.strip().lower() == tab.strip().lower()), None)
+        if actual_tab is None:
             return [], {
                 "family": src["family"], "title": src["title"], "file_id": file_id,
-                "tab": "", "detail_tabs": [], "grain": "monthly",
+                "tab": tab, "detail_tabs": [], "grain": "monthly",
                 "months_available": [], "record_count": 0,
                 "segment": src["segment"], "plant": src["plant"],
-                "reconcile": None, "location": location,
-                "warning": "No per-size LTR tabs found in tank workbook (e.g. '500 LTR', '1000 LTR').",
+                "reconcile": None, "warning": f"Tab '{tab}' not found.",
             }
-
-        # Batch-read all size tabs + summary
-        want_tabs = list(size_tabs)
-        if summary_ltr_tab:
-            want_tabs.append(summary_ltr_tab)
-        matrices = batch_get(file_id, want_tabs, token)
-
-        # Parse each size tab and collect Records
-        all_records: List[Record] = []
-        parse_errors: list = []
-        for tab_name in size_tabs:
-            try:
-                recs = parsers.parse_tank_annual_2627(
-                    matrices.get(tab_name, []),
-                    plant=src["plant"], segment=src["segment"],
-                    unit=src["unit"], source_file=file_id,
-                    source_tab=tab_name, location=location,
-                )
-                all_records.extend(recs)
-            except parsers.TankParseError as exc:
-                parse_errors.append(f"{tab_name}: {exc}")
-
-        if parse_errors and not all_records:
-            raise KeyError(
-                f"Tank parse failed for all size tabs in {src['title']!r}: "
-                + "; ".join(parse_errors)
-            )
-
-        # Cache SUMMARY (LTR) for validation delta; also supplement production
-        # for sizes that have no dedicated per-size tab (e.g. 700/1500/3000 LTR
-        # at WB: those sizes are entered as data rows in SUMMARY (LTR) directly).
-        if summary_ltr_tab:
-            _summary_ltr_vals = matrices.get(summary_ltr_tab, [])
-            ltr_validation = parsers.parse_tank_summary_ltr(
-                _summary_ltr_vals,
-                source_tab=summary_ltr_tab,
-            )
-            _tank_summary_ltr_cache[file_id] = ltr_validation
-
-            # Find sizes already covered by per-size tabs so we don't double-count.
-            _covered_sizes: set = set()
-            for _st in size_tabs:
-                _m = re.match(r"^(\d+)", _st.strip())
-                if _m:
-                    _covered_sizes.add(_m.group(1))
-
-            # Read per-size data rows from SUMMARY (LTR) for uncovered sizes.
-            _extra_sizes = parsers.parse_tank_summary_ltr_sizes(
-                _summary_ltr_vals,
-                source_tab=summary_ltr_tab,
-            )
-            for _sz_label, _sz_monthly in _extra_sizes.items():
-                if _sz_label in _covered_sizes:
-                    continue  # already captured from per-size tab
-                for _ym, _ltr in _sz_monthly.items():
-                    if _ltr > 0:
-                        all_records.append(Record(
-                            period=_ym,
-                            plant=src["plant"],
-                            segment=src["segment"],
-                            machine=_sz_label + " LTR",
-                            total_count=_ltr,
-                            reject_count=0,
-                            actual_hours=0,
-                            ideal_hours=0,
-                            unit=src["unit"],
-                            source_file=file_id,
-                            source_tab=summary_ltr_tab,
-                        ))
-
-        months = sorted({r.period for r in all_records})
-        return all_records, {
+        values = read_values(file_id, actual_tab, token)
+        records = parsers.parse_tank_annual_2627(
+            values, plant=src["plant"], segment=src["segment"],
+            unit=src["unit"], source_file=file_id, source_tab=actual_tab,
+            location=location,
+        )
+        months = sorted({r.period for r in records})
+        return records, {
             "family": src["family"], "title": src["title"], "file_id": file_id,
-            "tab": ", ".join(size_tabs), "detail_tabs": size_tabs,
-            "grain": "monthly", "months_available": months,
-            "record_count": len(all_records),
+            "tab": actual_tab, "detail_tabs": [], "grain": "monthly",
+            "months_available": months, "record_count": len(records),
             "segment": src["segment"], "plant": src["plant"],
             "reconcile": None, "location": location, "grain_note": "summary-only",
-            "parse_warnings": parse_errors if parse_errors else None,
-        }
-
-    # ── PTMT Moulds Summary — no Records emitted; cached for /reports/ptmt_summary ──
-    # Architecture: primary data = data-entry tabs ("Month Wise MC", "PTMT Mould
-    # Apr26-Mar27").  The SUMMARY tab is a DERIVED roll-up — read for validation
-    # delta only, never as the source of truth.
-    if kind == "ptmt_moulds_summary":
-        tabs = list_tabs(file_id, token)
-
-        summary_tab = next(
-            (t for t in tabs if "SUMMARY" in t.strip().upper()), None
-        )
-        # Fix: "Month Wise M/C" contains "M/C" not "MC", so match on "WISE"
-        mc_tab = next(
-            (t for t in tabs
-             if "MONTH" in t.strip().upper() and "WISE" in t.strip().upper()),
-            None,
-        )
-        # Fix: require "PTMT" + "MOULD" + a year/month token to pick
-        # "PTMT Mould Apr'26-Mar'27" and exclude "PTMT Mould Summary Month Wise"
-        # (which has per-month production in KG, not mould-run counts).
-        mould_tab = next(
-            (t for t in tabs
-             if "PTMT" in t.strip().upper()
-             and "MOULD" in t.strip().upper()
-             and any(x in t.upper() for x in ("APR", "26", "27"))),
-            None,
-        )
-
-        want = [t for t in [mc_tab, mould_tab, summary_tab] if t]
-        if not want:
-            return [], {
-                "family": src["family"], "title": src["title"], "file_id": file_id,
-                "tab": "", "detail_tabs": [], "grain": "monthly",
-                "months_available": [], "record_count": 0,
-                "segment": src["segment"], "plant": src["plant"],
-                "reconcile": None,
-                "warning": "No usable tabs found in PTMT Moulds Summary workbook.",
-            }
-        matrices = batch_get(file_id, want, token)
-
-        # Parse SUMMARY tab (always — for validation delta in app.py)
-        summary_rows: list = []
-        if summary_tab:
-            summary_rows = parsers.parse_ptmt_summary_tab(
-                matrices.get(summary_tab, []),
-                plant=src["plant"], segment=src["segment"],
-                source_file=file_id, source_tab=summary_tab,
-            )
-        _ptmt_summary_tab_cache[file_id] = summary_rows
-
-        # Parse data-entry tabs → aggregate to segment monthly
-        mc_data: dict = {}
-        if mc_tab:
-            mc_data = parsers.parse_ptmt_monthly_mc_tab(
-                matrices.get(mc_tab, []),
-                source_file=file_id, source_tab=mc_tab,
-            )
-        mould_data: dict = {}
-        if mould_tab:
-            mould_data = parsers.parse_ptmt_mould_tab(
-                matrices.get(mould_tab, []),
-                source_file=file_id, source_tab=mould_tab,
-            )
-        # 'PTMT Mould Apr\'26-Mar\'27' has blank col 0 for all rows, so
-        # parse_ptmt_mould_tab skips them (first-col guard).  Supplement run_moulds
-        # from SUMMARY which already tracks the per-month mould count.
-        if not mould_data and summary_rows:
-            for _sr in summary_rows:
-                _ym2 = _sr.get("month")
-                if _ym2 and _ym2 != "TOTAL":
-                    mould_data[_ym2] = {"run_moulds": _sr.get("run_moulds", 0)}
-
-        # Layout C (Month Wise M/C) has no rejection column — supplement
-        # reject_kg / runner_kg / lumps_kg from the SUMMARY tab, which is
-        # the only source that tracks these figures.
-        # This keeps source_kind="data_entry_tabs" (hours+output come from
-        # data-entry) while being honest that rejection is supplemented.
-        if mc_data and all(d.get("reject_kg", 0) == 0 for d in mc_data.values()):
-            _summary_by_ym = {r.get("month"): r for r in summary_rows}
-            for _ym, _d in mc_data.items():
-                _sr = _summary_by_ym.get(_ym, {})
-                if _sr:
-                    _d["reject_kg"] = _sr.get("reject_kg", 0.0)
-                    _d["runner_kg"] = _sr.get("runner_kg", 0.0)
-                    _d["lumps_kg"]  = _sr.get("lumps_kg",  0.0)
-
-        if mc_data:
-            # Build rows from data-entry aggregates (labour joined later in app.py)
-            rows_out: list = []
-            all_ym = sorted(mc_data.keys())
-            _tot: dict = {
-                "run_moulds": 0, "mould_hours": 0.0, "nett_output_kg": 0.0,
-                "reject_kg": 0.0, "runner_kg": 0.0, "lumps_kg": 0.0,
-            }
-            for ym in all_ym:
-                d = mc_data[ym]
-                md = mould_data.get(ym, {})
-                hrs    = d.get("hours", 0.0)
-                out_kg = d.get("output_kg", 0.0)
-                rej_kg = d.get("reject_kg", 0.0)
-                rnr_kg = d.get("runner_kg", 0.0)
-                lmp_kg = d.get("lumps_kg", 0.0)
-                moulds = md.get("run_moulds", 0)
-                rej_pct = round(rej_kg / (out_kg + rej_kg) * 100, 2) if (out_kg + rej_kg) > 0 else 0.0
-                rows_out.append({
-                    "month": ym, "run_moulds": moulds, "mould_hours": hrs,
-                    "nett_output_kg": out_kg, "reject_kg": rej_kg, "reject_pct": rej_pct,
-                    "runner_kg": rnr_kg, "lumps_kg": lmp_kg, "wastage_pct": 0.0, "grinder": 0.0,
-                    # Labour filled from seg_labour_cache in app.py
-                    "labour_count": 0, "paid_wages": 0.0, "per_kg_cost": 0.0,
-                    "per_kg_sheet": 0.0, "per_kg_computed": 0.0, "per_kg_mismatch": False,
-                })
-                _tot["run_moulds"]    += moulds
-                _tot["mould_hours"]   += hrs
-                _tot["nett_output_kg"] += out_kg
-                _tot["reject_kg"]     += rej_kg
-                _tot["runner_kg"]     += rnr_kg
-                _tot["lumps_kg"]      += lmp_kg
-            _tot_denom = _tot["nett_output_kg"] + _tot["reject_kg"]
-            _tot_rej_pct = round(_tot["reject_kg"] / _tot_denom * 100, 2) if _tot_denom > 0 else 0.0
-            rows_out.append({
-                "month": "TOTAL",
-                "run_moulds": _tot["run_moulds"], "mould_hours": _tot["mould_hours"],
-                "nett_output_kg": _tot["nett_output_kg"], "reject_kg": _tot["reject_kg"],
-                "reject_pct": _tot_rej_pct, "runner_kg": _tot["runner_kg"],
-                "lumps_kg": _tot["lumps_kg"], "wastage_pct": 0.0, "grinder": 0.0,
-                "labour_count": 0, "paid_wages": 0.0, "per_kg_cost": 0.0,
-                "per_kg_sheet": 0.0, "per_kg_computed": 0.0, "per_kg_mismatch": False,
-            })
-            source_kind = "data_entry_tabs"
-            detail_tabs_used = [t for t in [mc_tab, mould_tab] if t]
-        else:
-            # Fallback: SUMMARY tab (flags in UI as architecture violation)
-            rows_out = summary_rows
-            source_kind = "summary_tab_fallback"
-            detail_tabs_used = []
-
-        _ptmt_monthly_cache[file_id] = {
-            "rows": rows_out,
-            "source_kind": source_kind,
-            "segment": src["segment"],
-            "plant": src["plant"],
-            "title": src["title"],
-        }
-        months = sorted({r["month"] for r in rows_out if r["month"] != "TOTAL"})
-        return [], {
-            "family": src["family"], "title": src["title"], "file_id": file_id,
-            "tab": summary_tab or "", "detail_tabs": detail_tabs_used, "grain": "monthly",
-            "months_available": months, "record_count": len(rows_out),
-            "segment": src["segment"], "plant": src["plant"], "reconcile": None,
-            "source_kind": source_kind,
         }
 
     # ── Segment Labour — no Records emitted; rows cached for dedicated route ──
@@ -957,34 +714,14 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
             raw_rows.extend(parsers.parse_segment_labour(
                 values, unit_label=unit_label, source_file=file_id, source_tab=t
             ))
-
-        # Also read dedicated segment-named tabs which carry per-segment wages
-        # (e.g. "Garden Pipe", "HDPE Pipe", "PTMT") — these are the authoritative
-        # wages sources for segments that have a dedicated tab.
-        _SEGMENT_NAMED_TABS = frozenset([
-            "Garden Pipe", "HDPE Pipe", "TANK", "PTMT", "CP",
-            "SINK", "HARDWARE", "Plumbing",
-        ])
-        named_tabs_read: list = []
-        for t in tabs:
-            if t in _SEGMENT_NAMED_TABS:
-                seg_values = read_values(file_id, t, token)
-                seg_rows = parsers.parse_segment_named_tab(
-                    seg_values, segment=t, source_file=file_id, source_tab=t
-                )
-                if seg_rows:
-                    raw_rows.extend(seg_rows)
-                    named_tabs_read.append(t)
-
-        all_tabs = unit_tabs + named_tabs_read
         _seg_labour_cache[file_id] = {
             "rows": raw_rows, "title": src["title"],
-            "fy": src.get("fy", ""), "tabs": all_tabs,
+            "fy": src.get("fy", ""), "tabs": unit_tabs,
         }
         months = sorted({r["month"] for r in raw_rows})
         return [], {
             "family": src["family"], "title": src["title"], "file_id": file_id,
-            "tab": ", ".join(all_tabs), "detail_tabs": all_tabs,
+            "tab": ", ".join(unit_tabs), "detail_tabs": unit_tabs,
             "grain": "monthly", "months_available": months,
             "record_count": len(raw_rows),
             "segment": src["segment"], "plant": src["plant"], "reconcile": None,
@@ -1019,23 +756,6 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
             "ok": diff <= 0.02,
         }
 
-    # Garden Pipe: also parse the SUMMARY tab for segment-level monthly data
-    # (rejection %, labour) which is not available per-machine.  Cached so the
-    # /reports/garden_summary route can retrieve it without re-reading Sheets.
-    if src.get("family") == "garden":
-        _summary_vals = matrices.get(src["tab"], [])
-        _garden_rows = parsers.parse_garden_summary_tab(
-            _summary_vals,
-            plant=src["plant"], segment=src["segment"],
-            source_file=file_id, source_tab=src["tab"],
-        )
-        _garden_monthly_cache[file_id] = {
-            "rows": _garden_rows,
-            "segment": src["segment"],
-            "plant": src["plant"],
-            "title": src["title"],
-        }
-
     months = sorted({r.period for r in records})
     report = {
         "family": src["family"], "title": src["title"], "file_id": file_id,
@@ -1049,81 +769,6 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
     if mc_notes:
         report["notes"] = list(dict.fromkeys(mc_notes))
     return records, report
-
-
-def get_garden_monthly_summary() -> List[dict]:
-    """Return cached SUMMARY-tab rows for the Garden Pipe annual workbook.
-
-    Populated as a side-effect of the normal ``_load_live_monthly`` call
-    (Garden is in ``ANNUAL_SOURCES``).  Falls back to [] when not yet loaded.
-    """
-    from sources import ANNUAL_SOURCES
-    for src in ANNUAL_SOURCES:
-        if src.get("family") == "garden":
-            cached = _garden_monthly_cache.get(src["file_id"])
-            if cached:
-                return cached.get("rows", [])
-    return []
-
-
-def get_ptmt_monthly_summary() -> List[dict]:
-    """Return data-entry-tab aggregate rows for the PTMT annual Moulds Summary.
-
-    Populated as a side-effect of ``_load_live_monthly`` (ptmt_moulds_summary
-    is in ``ANNUAL_SOURCES``).  When the data-entry tabs were successfully
-    parsed, source_kind = 'data_entry_tabs'; otherwise 'summary_tab_fallback'.
-    Falls back to [] when not yet loaded.
-    """
-    from sources import ANNUAL_SOURCES
-    for src in ANNUAL_SOURCES:
-        if src.get("family") == "ptmt_moulds_summary":
-            cached = _ptmt_monthly_cache.get(src["file_id"])
-            if cached:
-                return cached.get("rows", [])
-    return []
-
-
-def get_ptmt_source_kind() -> str:
-    """Return source_kind for the PTMT monthly cache.
-
-    'data_entry_tabs'      — recomputed from Month Wise MC + PTMT Mould tabs.
-    'summary_tab_fallback' — data-entry tabs not found; fell back to SUMMARY.
-    'unknown'              — cache not yet loaded.
-    """
-    from sources import ANNUAL_SOURCES
-    for src in ANNUAL_SOURCES:
-        if src.get("family") == "ptmt_moulds_summary":
-            cached = _ptmt_monthly_cache.get(src["file_id"])
-            if cached:
-                return cached.get("source_kind", "unknown")
-    return "unknown"
-
-
-def get_ptmt_summary_validation() -> List[dict]:
-    """Return SUMMARY-tab rows for validation delta (NOT the primary source).
-
-    Stored alongside the data-entry cache by the ptmt_moulds_summary loader.
-    Used only in /reports/ptmt_summary to show recomputed-vs-SUMMARY delta.
-    """
-    from sources import ANNUAL_SOURCES
-    for src in ANNUAL_SOURCES:
-        if src.get("family") == "ptmt_moulds_summary":
-            return _ptmt_summary_tab_cache.get(src["file_id"], [])
-    return []
-
-
-def get_tank_summary_ltr_validation(family: str) -> dict:
-    """Return {YYYY-MM: ltr_total} from the SUMMARY (LTR) tab (validation only).
-
-    Populated as a side-effect of loading the tank_annual_2627 family.
-    The primary figures come from parse_tank_annual_2627 (per-item data matrix).
-    """
-    from sources import REPORT_SOURCES
-    for src in REPORT_SOURCES:
-        if src.get("family") == family:
-            return _tank_summary_ltr_cache.get(src["file_id"], {})
-    return {}
-
 
 def _load_live_monthly(token: str) -> dict:
   all_records: List[Record] = []
@@ -1314,15 +959,11 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
 # ---------------------------------------------------------------------------
 _daily_cache: dict = {}          # (plant, ym) -> (ts, [(records, report), ...])
 _index_cache: dict = {}          # file_id -> (ts, [index report dicts])
-_seg_labour_cache: dict = {}         # file_id -> {rows, title, fy, tabs}
+_seg_labour_cache: dict = {}     # file_id -> {rows, title, fy, tabs}
 
 # Report-only annual sources (REPORT_SOURCES) loaded on-demand by /reports/*.
 # Kept OFF the main dashboard critical path so the cold "/" load stays fast.
-_report_cache: dict = {}              # family -> (ts, [Record, ...])
-_garden_monthly_cache: dict = {}      # file_id -> {rows, segment, plant, title}
-_ptmt_monthly_cache: dict = {}        # file_id -> {rows, source_kind, segment, plant, title}
-_ptmt_summary_tab_cache: dict = {}    # file_id -> [rows from SUMMARY tab] (validation only)
-_tank_summary_ltr_cache: dict = {}    # file_id -> {ym -> ltr} (SUMMARY LTR tab, validation)
+_report_cache: dict = {}         # family -> (ts, [Record, ...])
 _REPORT_TTL = 900.0
 _report_lock = threading.Lock()
 
@@ -3016,19 +2657,6 @@ def _refresh_once() -> None:
       get_daily_records(recent)
   except Exception as exc:                       # noqa: BLE001 — best-effort leg
       errors.append(f"daily: {exc}")
-  # Warm compound data and pipe moulds — these are common secondary pages that
-  # are NOT covered by the monthly/daily legs above, so without explicit warming
-  # the first visit after TTL expiry always triggers a cold Sheets fetch.
-  try:
-      load_compound_data(recent)
-  except Exception as exc:                       # noqa: BLE001 — best-effort leg
-      errors.append(f"compound: {exc}")
-  try:
-      import datetime as _dt
-      _cur_ym = _dt.date.today().strftime("%Y-%m")
-      load_pipe_moulds(_cur_ym)
-  except Exception as exc:                       # noqa: BLE001 — best-effort leg
-      errors.append(f"pipe_moulds: {exc}")
   _sync_state["last_attempt_ts"] = time.time()
   _sync_state["last_error"] = "; ".join(errors) if errors else None
   if errors:
@@ -3100,7 +2728,7 @@ _yield_cache        : dict = {}
 _mixer_cache        : dict = {}
 _toolroom_cache     : dict = {}
 _wastage_cache      : dict = {}
-_PLANNING_TTL = 1800.0
+_PLANNING_TTL = 900.0
 _planning_lock      = threading.Lock()
 _ptmt_pc_lock       = threading.Lock()
 _ptmt_ms_lock       = threading.Lock()

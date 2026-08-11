@@ -89,26 +89,15 @@ def parse_mc_detail(
     appear once then blank — we carry them forward across the month rows.
     """
     # Locate header row (contains both ACTUAL and HOUR).
-    # Prefer a row that ALSO mentions REJECT — Garden Pipe per-machine blocks
-    # sometimes have an earlier row that matches ACTUAL+HOUR (e.g. a sub-total
-    # or merged-cell title) but does not carry the rejection columns.  Taking
-    # the first match blindly causes rej_c=-1 and silent 0% rejection.
     header_idx = None
     header: List[str] = []
-    _fb_idx: Optional[int] = None
-    _fb_row: List = []
-    for i, row in enumerate(values[:8]):
+    for i, row in enumerate(values[:6]):
         joined = " ".join(str(c).upper() for c in row)
         if "ACTUAL" in joined and "HOUR" in joined:
-            if _fb_idx is None:
-                _fb_idx, _fb_row = i, list(row)
-            if "REJECT" in joined:          # richer header — prefer this one
-                header_idx, header = i, list(row)
-                break
+            header_idx, header = i, row
+            break
     if header_idx is None:
-        if _fb_idx is None:
-            return []
-        header_idx, header = _fb_idx, _fb_row
+        return []
 
     U = [str(c).strip().upper() for c in header]
 
@@ -213,626 +202,6 @@ def parse_mc_detail(
             source_tab=source_tab,
         ))
     return recs
-
-
-def parse_garden_summary_tab(
-    values: List[list],
-    *,
-    plant: str,
-    segment: str,
-    source_file: str,
-    source_tab: str,
-) -> List[dict]:
-    """Parse the SUMMARY tab of a Garden Pipe (or compatible) annual workbook.
-
-    Returns one dict per month (YYYY-MM) plus one for the TOTAL row::
-
-        {month, run_hours, output_kg, reject_kg, reject_pct,
-         labour_count, paid_hours, wages, per_hour_cost, per_kg_cost}
-
-    Months run LATEST-FIRST in the sheet (MAR'27 → APR'26 → TOTAL).
-    Rows are read strictly by label; column positions are never assumed.
-
-    SUMMARY tab header (source-verified)::
-        MONTHS | M/C Run Hours | Actual Output (KG) | Rejection (KG) |
-        Rejection %age | Total Output with Rejection (KG) | Labour |
-        Actual Paid Hours | Paid Wages | Paid Hours Devoted by Per Person |
-        Per Hour Cost on Paid Hours | Per KG Labour Cost
-    """
-    # ── Find header row ───────────────────────────────────────────────────────
-    header_idx: Optional[int] = None
-    header: List = []
-    for i, row in enumerate(values[:10]):
-        joined = " ".join(str(c).upper() for c in row)
-        if "OUTPUT" in joined and ("MONTH" in joined or "RUN" in joined or "HOUR" in joined):
-            header_idx, header = i, list(row)
-            break
-    if header_idx is None:
-        return []
-
-    U = [str(c).strip().upper() for c in header]
-
-    def _find(pred) -> int:
-        for idx, h in enumerate(U):
-            if pred(h):
-                return idx
-        return -1
-
-    month_c      = _find(lambda h: "MONTH" in h)
-    if month_c < 0:
-        month_c = 0  # default: first column
-
-    run_hrs_c    = _find(lambda h: "RUN" in h and "HOUR" in h)
-    # "Actual Output (KG)" — exclude rows with TOTAL, IDEAL, or REJECT in name
-    output_c     = _find(lambda h: "OUTPUT" in h and "KG" in h
-                         and "TOTAL" not in h and "IDEAL" not in h
-                         and "REJECT" not in h)
-    reject_kg_c  = _find(lambda h: "REJECT" in h and "KG" in h
-                         and "%" not in h and "AGE" not in h
-                         and "TOTAL" not in h)
-    reject_pct_c = _find(lambda h: "REJECT" in h and ("%" in h or "AGE" in h))
-    # "Labour" = headcount column; exclude cost/wage/per/paid variants
-    labour_c     = _find(lambda h: h == "LABOUR" or (
-                         "LABOUR" in h and "COST" not in h and "HOUR" not in h
-                         and "WAGE" not in h and "PER" not in h and "PAID" not in h))
-    # "Actual Paid Hours" — exclude "Paid Hours Devoted by Per Person"
-    paid_hrs_c   = _find(lambda h: "PAID" in h and "HOUR" in h and "PER" not in h)
-    wages_c      = _find(lambda h: "PAID WAGE" in h or "WAGES" in h
-                         or ("WAGE" in h and "PER" not in h))
-    per_hour_c   = _find(lambda h: "PER HOUR" in h and "COST" in h)
-    per_kg_c     = _find(lambda h: "PER KG" in h and ("COST" in h or "LABOUR" in h))
-
-    result: List[dict] = []
-    for row in values[header_idx + 1:]:
-        def g(c: int):
-            return row[c] if 0 <= c < len(row) else ""
-
-        raw = str(g(month_c)).strip()
-        ym = parse_month_label(raw)
-        is_total = (raw.upper() == "TOTAL")
-        if not ym and not is_total:
-            continue
-
-        run_hrs       = num(g(run_hrs_c))    if run_hrs_c >= 0    else 0.0
-        output_kg     = num(g(output_c))     if output_c >= 0     else 0.0
-        reject_kg     = num(g(reject_kg_c))  if reject_kg_c >= 0  else 0.0
-        # Sheet stores rejection % as a percentage value (e.g. "3.06%" → 3.06
-        # after num() strips the % sign).  Values in the 0–100 range are used
-        # directly; recompute from reject_kg/output when the cell is blank.
-        reject_pct_sheet = num(g(reject_pct_c)) if reject_pct_c >= 0 else 0.0
-        if 0 < reject_pct_sheet <= 100:
-            reject_pct = round(reject_pct_sheet, 2)
-        elif (output_kg + reject_kg) > 0:
-            reject_pct = round(reject_kg / (output_kg + reject_kg) * 100, 2)
-        else:
-            reject_pct = 0.0
-
-        labour_count  = int(num(g(labour_c)))  if labour_c >= 0   else 0
-        paid_hours    = num(g(paid_hrs_c))     if paid_hrs_c >= 0 else 0.0
-        wages         = num(g(wages_c))        if wages_c >= 0    else 0.0
-        per_hour_cost = num(g(per_hour_c))     if per_hour_c >= 0 else 0.0
-        per_kg_cost   = num(g(per_kg_c))       if per_kg_c >= 0   else 0.0
-        # Derive per_kg_cost if blank but computable
-        if per_kg_cost == 0.0 and wages > 0 and output_kg > 0:
-            per_kg_cost = round(wages / output_kg, 2)
-
-        result.append({
-            "month":        ym if ym else "TOTAL",
-            "run_hours":    run_hrs,
-            "output_kg":    output_kg,
-            "reject_kg":    reject_kg,
-            "reject_pct":   reject_pct,
-            "labour_count": labour_count,
-            "paid_hours":   paid_hours,
-            "wages":        wages,
-            "per_hour_cost": per_hour_cost,
-            "per_kg_cost":  per_kg_cost,
-        })
-    return result
-
-
-def parse_ptmt_summary_tab(
-    values: List[list],
-    *,
-    plant: str,
-    segment: str,
-    source_file: str,
-    source_tab: str,
-) -> List[dict]:
-    """Parse the SUMMARY tab of the PTMT annual Moulds Summary workbook.
-
-    Returns one dict per month (YYYY-MM) plus one for the TOTAL row::
-
-        {month, run_moulds, mould_hours, nett_output_kg, reject_kg,
-         reject_pct, runner_kg, lumps_kg, wastage_pct, grinder,
-         labour_count, paid_wages, per_kg_cost, per_kg_cost_basis_note}
-
-    Months run LATEST-FIRST in the sheet (e.g. JUL'26 → APR'26 → TOTAL).
-    All column positions are found by header text — never assumed.
-
-    SUMMARY tab headers (source-verified):
-        MONTHS | No. of Run Moulds | Mould Run Hours | Nett Output (KG) |
-        Rejection (KG) | Rejection %age | Runner Produce (KG) | Lumps (KG) |
-        100% Wastage %age | Total Grinder Working | Labour | Paid Wages |
-        Per KG Labour Cost
-    """
-    # ── Find header row ───────────────────────────────────────────────────────
-    header_idx: Optional[int] = None
-    header: List = []
-    for i, row in enumerate(values[:12]):
-        joined = " ".join(str(c).upper() for c in row)
-        if ("MOULD" in joined or "OUTPUT" in joined) and ("MONTH" in joined or "RUN" in joined):
-            header_idx, header = i, list(row)
-            break
-    if header_idx is None:
-        return []
-
-    U = [str(c).strip().upper() for c in header]
-
-    def _find(pred) -> int:
-        for idx, h in enumerate(U):
-            if pred(h):
-                return idx
-        return -1
-
-    month_c        = _find(lambda h: "MONTH" in h)
-    if month_c < 0:
-        month_c = 0
-    # Prefer "No. of Run Moulds" over "No. of Total Mould" — both contain "MOULD"
-    # so the broad fallback guard must exclude "TOTAL" to avoid picking the wrong col.
-    moulds_c       = _find(lambda h: "RUN MOULD" in h)
-    if moulds_c < 0:
-        moulds_c   = _find(lambda h: "MOULD" in h and "HOUR" not in h and "PER" not in h
-                           and "NETT" not in h and "OUTPUT" not in h and "TOTAL" not in h)
-    mould_hrs_c    = _find(lambda h: "MOULD" in h and "HOUR" in h)
-    # "Nett Output (KG)" — prefer NETT over plain OUTPUT; exclude TOTAL/REJECT
-    nett_output_c  = _find(lambda h: "NETT" in h and "OUTPUT" in h)
-    if nett_output_c < 0:
-        nett_output_c = _find(lambda h: "OUTPUT" in h and "KG" in h
-                              and "TOTAL" not in h and "REJECT" not in h)
-    reject_kg_c    = _find(lambda h: "REJECT" in h and "KG" in h
-                           and "%" not in h and "AGE" not in h)
-    reject_pct_c   = _find(lambda h: "REJECT" in h and ("%" in h or "AGE" in h))
-    runner_c       = _find(lambda h: "RUNNER" in h and "KG" in h)
-    lumps_c        = _find(lambda h: "LUMP" in h)
-    wastage_c      = _find(lambda h: "WASTAGE" in h)
-    grinder_c      = _find(lambda h: "GRINDER" in h)
-    labour_c       = _find(lambda h: h == "LABOUR" or (
-                           "LABOUR" in h and "COST" not in h and "HOUR" not in h
-                           and "WAGE" not in h and "PER" not in h and "PAID" not in h))
-    wages_c        = _find(lambda h: "PAID WAGE" in h or "WAGES" in h
-                           or ("WAGE" in h and "PER" not in h))
-    per_kg_c       = _find(lambda h: "PER KG" in h and ("COST" in h or "LABOUR" in h))
-
-    result: List[dict] = []
-    for row in values[header_idx + 1:]:
-        def g(c: int):
-            return row[c] if 0 <= c < len(row) else ""
-
-        raw = str(g(month_c)).strip()
-        ym = parse_month_label(raw)
-        if not ym and raw:
-            # "1-Jul-2026" / "1-Aug-2026" format — _parse_date_cell_manpower
-            # handles %d-%b-%Y; extract YYYY-MM from the full ISO date it returns.
-            _ds = _parse_date_cell_manpower(raw)
-            if _ds and len(_ds) >= 7:
-                ym = _ds[:7]
-        is_total = (raw.upper() == "TOTAL")
-        if not ym and not is_total:
-            continue
-
-        run_moulds   = int(num(g(moulds_c)))   if moulds_c >= 0   else 0
-        mould_hours  = num(g(mould_hrs_c))     if mould_hrs_c >= 0 else 0.0
-        nett_output  = num(g(nett_output_c))   if nett_output_c >= 0 else 0.0
-        reject_kg    = num(g(reject_kg_c))     if reject_kg_c >= 0 else 0.0
-        runner_kg    = num(g(runner_c))        if runner_c >= 0   else 0.0
-        lumps_kg     = num(g(lumps_c))         if lumps_c >= 0    else 0.0
-        wastage_pct  = num(g(wastage_c))       if wastage_c >= 0  else 0.0
-        grinder      = num(g(grinder_c))       if grinder_c >= 0  else 0.0
-        labour_count = int(num(g(labour_c)))   if labour_c >= 0   else 0
-        paid_wages   = num(g(wages_c))         if wages_c >= 0    else 0.0
-        per_kg_sheet = num(g(per_kg_c))        if per_kg_c >= 0   else 0.0
-
-        # Rejection %
-        reject_pct_raw = num(g(reject_pct_c)) if reject_pct_c >= 0 else 0.0
-        if 0 < reject_pct_raw <= 100:
-            reject_pct = round(reject_pct_raw, 2)
-        elif (nett_output + reject_kg) > 0:
-            reject_pct = round(reject_kg / (nett_output + reject_kg) * 100, 2)
-        else:
-            reject_pct = 0.0
-
-        # ₹/kg basis: the sheet's stated Per KG Labour Cost may differ from
-        # wages ÷ Nett Output when July has output but no wages.  Carry the
-        # sheet value AND a flag so the template can explain the discrepancy.
-        computed_per_kg = round(paid_wages / nett_output, 2) if (paid_wages > 0 and nett_output > 0) else 0.0
-        per_kg_cost = per_kg_sheet if per_kg_sheet > 0 else computed_per_kg
-        per_kg_mismatch = (
-            per_kg_sheet > 0 and computed_per_kg > 0
-            and abs(per_kg_sheet - computed_per_kg) / max(per_kg_sheet, computed_per_kg) > 0.02
-        )
-
-        result.append({
-            "month":             ym if ym else "TOTAL",
-            "run_moulds":        run_moulds,
-            "mould_hours":       mould_hours,
-            "nett_output_kg":    nett_output,
-            "reject_kg":         reject_kg,
-            "reject_pct":        reject_pct,
-            "runner_kg":         runner_kg,
-            "lumps_kg":          lumps_kg,
-            "wastage_pct":       wastage_pct,
-            "grinder":           grinder,
-            "labour_count":      labour_count,
-            "paid_wages":        paid_wages,
-            "per_kg_cost":       per_kg_cost,
-            "per_kg_sheet":      per_kg_sheet,
-            "per_kg_computed":   computed_per_kg,
-            "per_kg_mismatch":   per_kg_mismatch,
-        })
-    return result
-
-
-def parse_ptmt_monthly_mc_tab(
-    values: List[list],
-    *,
-    source_file: str = "",
-    source_tab: str = "",
-) -> dict:
-    """Parse the 'Month Wise MC' data-entry tab (PTMT annual Moulds Summary).
-
-    Returns  {YYYY-MM: {"hours": f, "output_kg": f, "reject_kg": f,
-                         "runner_kg": f, "lumps_kg": f}}
-    aggregated (summed) across all machines.
-
-    Auto-detects three layouts:
-
-    Layout A — compound-header matrix (months repeated for each metric group;
-    Sheets API returns the value in the left-most merged cell only):
-      Row H:   [blank, APR'26, "",     "",    MAY'26, "",     "", ...]
-      Row H+1: [blank, Mould Hrs, Output, Reject, Mould Hrs, Output, ...]
-      Rows N:  [M/C-01, 8046, 49631, 2959, 7876, 52365, 3631, ...]
-
-    Layout B — metric-block (month labels in one header row; each metric
-    starts a new label row, blank in second column):
-      Row H:   [blank, APR'26, MAY'26, JUN'26, JUL'26]
-      [MOULD HOURS, "", "", "", ""]
-      [M/C-01, 8046, 7876, 10461, 11159]
-      [NETT OUTPUT (KG), "", "", "", ""]
-      [M/C-01, 49631, 52365, 80239, 86320]
-
-    Layout C — per-machine, per-month rows (machine label in col 1, month
-    label in col 3; actual hours and output per row; no rejection column):
-      Row H:   [blank, 'MOULD MACHINE', '', 'MONTHS', 'Ideal Hours',
-                'Actual Hours', 'Output (KG)', ...]
-      Rows:    [blank, 'M/C - 1', '80-1', "APR'26", '500', '332', '687', ...]
-               [blank, '',        '',     "MAY'26", '',    '332', '738', ...]
-               ...
-      TOTAL rows between machines have 'TOTAL' in the machine column and are skipped.
-      Note: reject_kg=0 in returned dict — caller supplements from SUMMARY tab.
-    """
-    if not values:
-        return {}
-
-    # ── Layout C guard: per-machine per-month rows (Month Wise M/C tab) ──────
-    # This layout has machine labels in col 1 and month in col 3; actual hours
-    # and output are per-machine. However, some machines leave blank actual-hours
-    # entries in this tab (they are tracked via SUMMARY only), so summing Layout C
-    # rows gives an incomplete figure.  Return {} so the caller falls back to the
-    # SUMMARY tab, which has authoritative complete totals.
-    for _lc_row in values[:6]:
-        _lc_upper = [str(c).strip().upper() for c in _lc_row]
-        if "MOULD MACHINE" in _lc_upper and "MONTHS" in _lc_upper:
-            return {}  # layout recognised but incomplete — use SUMMARY fallback
-
-    METRIC_KW = {
-        "HOUR": "hours", "HRS": "hours",
-        "NETT": "output_kg", "NET OUTPUT": "output_kg",
-        "OUTPUT": "output_kg",
-        "REJECT": "reject_kg",
-        "RUNNER": "runner_kg",
-        "LUMP": "lumps_kg",
-        "WASTAGE": "wastage_pct",
-        "GRINDER": "grinder",
-    }
-
-    def _to_ym(s: str) -> Optional[str]:
-        s = str(s).strip()
-        y = parse_month_label(s)
-        if y:
-            return y
-        ds = _parse_date_cell_manpower(s)
-        return ds[:7] if ds and len(ds) >= 7 else None
-
-    # ── Find month-header row (≥2 month-label columns) ───────────────────────
-    month_col_map: dict = {}   # col → ym (distinct month positions)
-    month_row_idx = -1
-    for i, row in enumerate(values[:10]):
-        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
-        if len(tmp) >= 2:
-            month_col_map = tmp
-            month_row_idx = i
-            break
-    if not month_col_map:
-        return {}
-
-    result: dict = {}   # ym → {metric → total}
-
-    # ── Detect Layout A: metric sub-header row directly after month row ───────
-    col_metric_map: dict = {}  # col → metric (Layout A only)
-    if month_row_idx + 1 < len(values):
-        sub = values[month_row_idx + 1]
-        for c, cell in enumerate(sub):
-            s = str(cell).strip().upper()
-            for kw, metric in METRIC_KW.items():
-                if kw in s and s:
-                    col_metric_map[c] = metric
-                    break
-
-    if col_metric_map:
-        # Build full col→ym by propagating month label rightward across blank gaps
-        full_month: dict = {}
-        last_ym = None
-        for c, cell in enumerate(values[month_row_idx]):
-            ym = _to_ym(cell)
-            if ym:
-                last_ym = ym
-            if last_ym:
-                full_month[c] = last_ym
-        for row in values[month_row_idx + 2:]:
-            if not row:
-                continue
-            first = str(row[0]).strip().upper()
-            if not first or "TOTAL" in first or "GRAND" in first:
-                continue
-            for c, metric in col_metric_map.items():
-                ym = full_month.get(c)
-                if ym and c < len(row):
-                    val = num(str(row[c]))
-                    if ym not in result:
-                        result[ym] = {}
-                    result[ym][metric] = result[ym].get(metric, 0.0) + val
-        if result:
-            return result
-
-    # ── Layout B: metric-block ────────────────────────────────────────────────
-    current_metric: Optional[str] = None
-    for row in values[month_row_idx + 1:]:
-        if not row:
-            continue
-        first = str(row[0]).strip().upper()
-        second = str(row[1]).strip() if len(row) > 1 else ""
-        # A label row has a keyword in first cell AND a blank/non-numeric second cell
-        matched_kw_metric = next(
-            (metric for kw, metric in METRIC_KW.items() if kw in first), None
-        )
-        second_is_numeric = False
-        try:
-            float(second.replace(",", ""))
-            second_is_numeric = True
-        except (ValueError, TypeError):
-            pass
-        if matched_kw_metric and not second_is_numeric:
-            current_metric = matched_kw_metric
-            continue
-        if current_metric is None:
-            continue
-        if "TOTAL" in first or "GRAND" in first or not first:
-            continue
-        for c, ym in month_col_map.items():
-            if c < len(row):
-                val = num(str(row[c]))
-                if ym not in result:
-                    result[ym] = {}
-                result[ym][current_metric] = result[ym].get(current_metric, 0.0) + val
-
-    return result
-
-
-def parse_ptmt_mould_tab(
-    values: List[list],
-    *,
-    source_file: str = "",
-    source_tab: str = "",
-) -> dict:
-    """Parse 'PTMT Mould Apr26-Mar27' data-entry tab.
-
-    Expects month labels as column headers; each data row = one mould type
-    with its monthly run count in the corresponding column.
-
-    Returns {YYYY-MM: {"run_moulds": int, "prod_pcs": float, "prod_kg": float}}.
-    """
-    if not values:
-        return {}
-
-    def _to_ym(s: str) -> Optional[str]:
-        s = str(s).strip()
-        y = parse_month_label(s)
-        if y:
-            return y
-        ds = _parse_date_cell_manpower(s)
-        return ds[:7] if ds and len(ds) >= 7 else None
-
-    # Find month header row
-    month_col_map: dict = {}
-    header_idx = -1
-    for i, row in enumerate(values[:10]):
-        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
-        if len(tmp) >= 2:
-            month_col_map = tmp
-            header_idx = i
-            break
-    if not month_col_map:
-        return {}
-
-    # Optional: detect a sub-header (run count / pcs / kg) for the first
-    # metric column.  When present the value column per month shifts.
-    # For now: assume first occurrence of month col = run count.
-    # The mould tab has one value per mould per month (run count is primary).
-    result: dict = {}  # ym → {run_moulds, prod_pcs, prod_kg}
-
-    for row in values[header_idx + 1:]:
-        if not row:
-            continue
-        first = str(row[0]).strip().upper()
-        if not first or "TOTAL" in first or "GRAND" in first:
-            continue
-        for c, ym in month_col_map.items():
-            if c < len(row):
-                val = num(str(row[c]))
-                if ym not in result:
-                    result[ym] = {"run_moulds": 0, "prod_pcs": 0.0, "prod_kg": 0.0}
-                result[ym]["run_moulds"] = int(result[ym]["run_moulds"] + val)
-
-    return result
-
-
-def parse_tank_summary_ltr(
-    values: List[list],
-    *,
-    source_tab: str = "",
-) -> dict:
-    """Parse the SUMMARY (LTR) tab from a Tank annual workbook for validation.
-
-    Returns {YYYY-MM: ltr_total} (monthly production totals in Litres).
-    Looks for a header row containing month labels; TOTAL row is excluded.
-    Two common layouts:
-
-    Row-based (months as rows, one Ltr column):
-      [Month | Ltr]
-      [APR'26 | 636250]
-
-    Column-based (months as columns, one summary row):
-      [blank | APR'26 | MAY'26 | ...]
-      [Total Ltr | 636250 | ...]
-    """
-    if not values:
-        return {}
-
-    def _to_ym(s: str) -> Optional[str]:
-        s = str(s).strip()
-        y = parse_month_label(s)
-        if y:
-            return y
-        ds = _parse_date_cell_manpower(s)
-        return ds[:7] if ds and len(ds) >= 7 else None
-
-    result: dict = {}
-
-    # Try column-based: header row has ≥2 month labels as columns
-    for i, row in enumerate(values[:10]):
-        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
-        if len(tmp) >= 2:
-            # Read subsequent rows for Ltr values
-            for drow in values[i + 1:]:
-                if not drow:
-                    continue
-                first = str(drow[0]).strip().upper()
-                if "TOTAL" in first or "GRAND" in first or "LTR" in first or "LITR" in first or first == "":
-                    for c, ym in tmp.items():
-                        if c < len(drow):
-                            val = num(str(drow[c]))
-                            if val > 0:
-                                result[ym] = result.get(ym, 0.0) + val
-            if result:
-                return result
-
-    # Try row-based: first column has month labels
-    ltr_col = -1
-    for i, row in enumerate(values[:10]):
-        for c, cell in enumerate(row):
-            if "LTR" in str(cell).upper() or "LITR" in str(cell).upper() or "TOTAL" in str(cell).upper():
-                ltr_col = c
-                break
-        if ltr_col >= 0:
-            for drow in values[i + 1:]:
-                if not drow:
-                    continue
-                ym = _to_ym(drow[0]) if drow else None
-                if ym and ltr_col < len(drow):
-                    result[ym] = num(str(drow[ltr_col]))
-            break
-
-    return result
-
-
-def parse_tank_summary_ltr_sizes(
-    values: List[list],
-    *,
-    source_tab: str = "",
-) -> dict:
-    """Read per-SIZE production rows from a SUMMARY (LTR) tank tab.
-
-    Some tank workbooks (e.g. WB) only have per-size data-entry tabs for the
-    common sizes (500 / 750 / 1000 / 2000 LTR) but track less-common sizes
-    (700 / 1500 / 3000 LTR) directly inside SUMMARY (LTR) as data-entry rows.
-    This function parses those rows so the caller can supplement the per-size
-    tab totals without double-counting the sizes that already have dedicated tabs.
-
-    Layout (column-based, months latest-first at stride-2 from col 2):
-      Row H:   [blank, blank, "MAR'27", '', "FEB'27", '', ..., "APR'26"]
-      Row H+1: [blank, blank, 'Production (in Ltr)', 'Rejection (in Ltr)', ...]
-      Rows:    [blank, 'TOTAL', ..., ...]  ← TOTAL row — skipped
-               [blank, '2 Layer ISI', ...]  ← Layer category — skipped
-               [blank, '500', ...]   ← SIZE row — returned
-               [blank, '700', ...]   ← SIZE row — returned
-               ...
-
-    Returns
-    -------
-    {size_label: {YYYY-MM: ltr_production}}
-    where size_label is a numeric string (e.g. "700", "1500", "3000").
-    Only SIZE rows with all-numeric labels are returned.
-    TOTAL rows and layer-category rows (non-numeric labels) are skipped.
-    Returns {} if no month-header row is found.
-    """
-    if not values:
-        return {}
-
-    def _to_ym(s: str) -> Optional[str]:
-        s = str(s).strip()
-        y = parse_month_label(s)
-        if y:
-            return y
-        ds = _parse_date_cell_manpower(s)
-        return ds[:7] if ds and len(ds) >= 7 else None
-
-    # Find the month-header row (≥2 month labels as columns at even positions)
-    month_col_map: dict = {}  # col_idx → YYYY-MM
-    header_idx = -1
-    for i, row in enumerate(values[:6]):
-        tmp = {c: _to_ym(cell) for c, cell in enumerate(row) if _to_ym(cell)}
-        if len(tmp) >= 2:
-            month_col_map = tmp
-            header_idx = i
-            break
-    if not month_col_map:
-        return {}
-
-    # Build production col map: for each month col (at stride-2 from base),
-    # production is at that col (Rejection is at col+1 — ignored here).
-    # The sub-header row (header_idx+1) confirms "Production" at even cols.
-    # We use month_col_map directly: production_col = month_col (not +1).
-    prod_col_map = dict(month_col_map)  # col → ym (production cols)
-
-    size_data: dict = {}  # {size_label: {YYYY-MM: ltr}}
-    for row in values[header_idx + 1:]:
-        if not row:
-            continue
-        label = str(row[1]).strip() if len(row) > 1 else ""
-        # Only SIZE rows have purely-numeric labels (e.g. "500", "700", "1500")
-        if not label or not label.isdigit():
-            continue
-        monthly: dict = {}
-        for col, ym in prod_col_map.items():
-            if col < len(row):
-                val = num(str(row[col]))
-                if val > 0:
-                    monthly[ym] = monthly.get(ym, 0.0) + val
-        if monthly:
-            size_data[label] = monthly
-
-    return size_data
 
 
 def _day_from_label(s) -> Optional[int]:
@@ -1946,10 +1315,6 @@ def parse_tank_annual_2526(
     return recs
 
 
-class TankParseError(ValueError):
-    """Raised when parse_tank_annual_2627 cannot locate required layout elements."""
-
-
 def parse_tank_annual_2627(
     values: List[list],
     *,
@@ -1960,102 +1325,91 @@ def parse_tank_annual_2627(
     source_tab: str,
     location: str = "",
 ) -> List[Record]:
-    """Parse one per-size tab (e.g. '500 LTR', '1000 LTR') from a Tank annual
-    workbook (FY 26-27 layout).
+    """Parse Tank annual summary tab in the 26-27 layout (Sheet1).
 
-    Per-size tab layout
-    -------------------
-    Row k   : month-label row — month strings at cols 8+j×3 (j=0..11),
-              MAR'27 at col 8 through APR'26 at col 41 (latest-first).
-    Row k+1 : TOTALS row  — per-month block: col+0=Pcs, col+1=Kg, col+2=Ltr.
-    Row k+2 : column-header row ('Pcs', 'Kg', 'LTR' repeated per block).
-    Row k+3+: per-item rows (ignored — TOTALS row is authoritative per spec;
-              handles WB inconsistency where item-strip ≠ TOTAL row).
-
-    Rejection is NOT tracked in per-size tabs; reject_count=0 in every Record.
-    SUMMARY (LTR) is read separately in sheets.py and cached for validation.
-
-    Raises
-    ------
-    TankParseError
-        If no month-label row (≥2 parseable month labels) is found, or the
-        LTR column offset within month blocks cannot be determined.
+    Layout: row 2 = header (S.NO. / CODE / LTR. / DESCRIPTION / COLOUR /
+    TOTAL PCS / then per-month pairs Production / Rejection).
+    Row 3+ = one item per row with monthly production + rejection values.
+    Month headers are in the header row, e.g. APR'26, MAY'26 …
     """
     if not values:
-        raise TankParseError(
-            f"{source_tab}: empty values — no data to parse; "
-            "tab may not exist or sheet API returned nothing"
-        )
-
-    # ── 1. Locate month-label row (≥2 parseable month labels) ──────────────
-    month_row_idx = -1
-    month_col_starts: dict = {}  # col_idx → "YYYY-MM"
-    for ri, row in enumerate(values[:10]):
-        hits = {}
-        for ci, cell in enumerate(row):
-            ym = parse_month_label(str(cell).strip())
-            if ym:
-                hits[ci] = ym
-        if len(hits) >= 2:
-            month_row_idx = ri
-            month_col_starts = hits
-            break
-
-    if month_row_idx < 0 or not month_col_starts:
-        raise TankParseError(
-            f"{source_tab}: no month-label row found (≥2 parseable month "
-            "labels required) — tab layout may have changed"
-        )
-
-    # ── 2. Totals row immediately follows month-label row ──────────────────
-    totals_row_idx = month_row_idx + 1
-    if totals_row_idx >= len(values):
-        raise TankParseError(
-            f"{source_tab}: totals row expected at row {totals_row_idx} "
-            "but values has only {len(values)} rows"
-        )
-    totals_row = values[totals_row_idx]
-
-    # ── 3. Determine LTR offset within each month block ────────────────────
-    # Column-header row (month_row_idx+2) should have 'LTR' at col+2 for each block.
-    ltr_offset = 2  # default; Pcs(+0) / Kg(+1) / LTR(+2)
-    hdr_row_idx = month_row_idx + 2
-    if hdr_row_idx < len(values):
-        hdr = [str(c).strip().upper() for c in values[hdr_row_idx]]
-        sample_ci = next(iter(month_col_starts))
-        if sample_ci + ltr_offset < len(hdr) and hdr[sample_ci + ltr_offset] == "LTR":
-            pass  # default confirmed
-        else:
-            # Try to find LTR offset dynamically
-            for off in range(1, 7):
-                if sample_ci + off < len(hdr) and "LTR" in hdr[sample_ci + off]:
-                    ltr_offset = off
-                    break
-            else:
-                raise TankParseError(
-                    f"{source_tab}: 'LTR' column not found within month blocks "
-                    f"(checked offsets 1–6 from month start col {sample_ci}) — "
-                    "tab layout may have changed"
-                )
-
-    # ── 4. Read Ltr per month from the TOTALS row ───────────────────────────
-    month_ltr: dict = {}  # "YYYY-MM" → ltr total
-    for ci, ym in month_col_starts.items():
-        ltr_ci = ci + ltr_offset
-        if ltr_ci < len(totals_row):
-            ltr_val = num(str(totals_row[ltr_ci]))
-            if ltr_val > 0:
-                # Accumulate (multiple col entries for same month are impossible
-                # in a well-formed tab, but guard anyway)
-                month_ltr[ym] = month_ltr.get(ym, 0.0) + ltr_val
-
-    if not month_ltr:
-        # All months are zero (future months / no production recorded yet).
         return []
 
-    # ── 5. Emit one Record per month ────────────────────────────────────────
+    # Find the header row: contains 'DESCRIPTION' or 'CODE' AND month labels.
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        joined = " ".join(str(c).strip().upper() for c in row)
+        if ("DESCRIPTION" in joined or "CODE" in joined) and "APR" in joined:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+
+    header_row = values[header_idx]
+
+    # Build (col, YYYY-MM, "prod"|"rej") mapping from the header.
+    # Month pairs: each month appears twice — Production then Rejection.
+    month_col_map: list = []  # (col, ym, "prod"|"rej")
+    last_ym = None
+    prod_seen = False
+    for c, cell in enumerate(header_row):
+        s = str(cell).strip().upper()
+        ym = parse_month_label(s)
+        if ym:
+            last_ym = ym
+            prod_seen = False
+            continue
+        if last_ym:
+            if "PROD" in s or s in ("", " ") and not prod_seen:
+                month_col_map.append((c, last_ym, "prod"))
+                prod_seen = True
+            elif "REJECT" in s:
+                month_col_map.append((c, last_ym, "rej"))
+                prod_seen = False
+                last_ym = None  # consumed the pair
+
+    if not month_col_map:
+        # Fallback: header row has month labels directly in col headers;
+        # look for month label columns then assume next col = rejection.
+        for c, cell in enumerate(header_row):
+            ym = parse_month_label(str(cell).strip())
+            if ym:
+                month_col_map.append((c, ym, "prod"))
+                if c + 1 < len(header_row):
+                    month_col_map.append((c + 1, ym, "rej"))
+
+    if not month_col_map:
+        return []
+
+    # Find description column (first col with "DESCRIPTION" or "CODE").
+    desc_c = 0
+    for c, cell in enumerate(header_row):
+        s = str(cell).strip().upper()
+        if "DESCRIPTION" in s or s == "CODE":
+            desc_c = c
+            break
+
+    # Parse data rows.
+    prod_by: dict = {}  # (item, ym) -> {prod, rej}
+    for row in values[header_idx + 1:]:
+        item_label = str(row[desc_c]).strip() if desc_c < len(row) else ""
+        if not item_label:
+            continue
+        u = item_label.upper()
+        if "TOTAL" in u or "GRAND" in u or u in ("ITEM", "DESCRIPTION"):
+            continue
+        for col, ym, kind in month_col_map:
+            val = num(row[col]) if col < len(row) else 0.0
+            if val <= 0:
+                continue
+            key = (item_label, ym)
+            a = prod_by.setdefault(key, {"prod": 0.0, "rej": 0.0})
+            a[kind] += val
+
     recs: List[Record] = []
-    for ym, ltr in sorted(month_ltr.items()):
+    for (item_label, ym), a in prod_by.items():
+        if a["prod"] <= 0 and a["rej"] <= 0:
+            continue
         recs.append(Record(
             grain="monthly",
             period=ym,
@@ -2064,9 +1418,9 @@ def parse_tank_annual_2627(
             segment=segment,
             unit=unit,
             machine="",
-            mould=source_tab,           # size tab name as mould label
-            total_count=ltr,
-            reject_count=0.0,           # rejection not tracked in per-size tabs
+            mould=item_label,
+            total_count=a["prod"],
+            reject_count=a["rej"],
             location=location,
             source_family=segment,
             source_file=source_file,
@@ -2152,109 +1506,6 @@ def parse_segment_labour(
             "solar": num(g(solar_c)) if solar_c >= 0 else 0.0,
             "power": num(g(power_c)) if power_c >= 0 else 0.0,
             "total": num(g(total_c)) if total_c >= 0 else 0.0,
-        })
-    return rows_out
-
-
-def parse_segment_named_tab(
-    values: List[list],
-    *,
-    segment: str,
-    source_file: str = "",
-    source_tab: str = "",
-) -> List[dict]:
-    """Parse a dedicated segment-named tab (e.g. 'Garden Pipe', 'HDPE Pipe')
-    from the Segment Labour workbook.
-
-    Layout
-    ------
-    title row(s) then a header row that contains "MONTH" and either "WAGES" or
-    "PAID".  Monthly rows follow; a "TOTAL" row (whose month cell does not
-    parse as a month label) is silently skipped.
-
-    Returns a list of seg_labour-compatible dicts:
-      {unit, segment, month (YYYY-MM), labour, solar, power, total}
-    where
-      total = Paid Wages (non-contractor, non-per-hour)
-            + Paid Wages for Contractor Labour
-
-    Column detection
-    ----------------
-    * month_c   : first col whose header contains "MONTH"
-    * labour_c  : first col whose header contains "LABOUR" but NOT "CONTRACTOR"
-    * paid_wages_c      : first col with "PAID" + "WAGES" + NOT "HOUR" + NOT "CONTRACTOR"
-    * contractor_wages_c: first col with "PAID" + "WAGES" + NOT "HOUR" + "CONTRACTOR"
-    """
-    if not values:
-        return []
-
-    # ── Find header row ─────────────────────────────────────────────────────
-    header_idx = -1
-    for i, row in enumerate(values[:8]):
-        joined = " ".join(str(c).strip().upper() for c in row)
-        if "MONTH" in joined and ("WAGES" in joined or "PAID" in joined):
-            header_idx = i
-            break
-    if header_idx < 0:
-        return []
-
-    header = [str(c).strip().upper() for c in values[header_idx]]
-
-    # ── Column detection ────────────────────────────────────────────────────
-    month_c = next(
-        (ci for ci, h in enumerate(header) if "MONTH" in h), -1
-    )
-    labour_c = next(
-        (ci for ci, h in enumerate(header)
-         if "LABOUR" in h and "CONTRACTOR" not in h),
-        -1,
-    )
-    paid_wages_c = -1
-    contractor_wages_c = -1
-    for ci, h in enumerate(header):
-        if "PAID" in h and "WAGES" in h and "HOUR" not in h:
-            if "CONTRACTOR" in h:
-                if contractor_wages_c < 0:
-                    contractor_wages_c = ci
-            else:
-                if paid_wages_c < 0:
-                    paid_wages_c = ci
-
-    if month_c < 0:
-        return []
-
-    # ── Parse monthly rows ──────────────────────────────────────────────────
-    rows_out: list = []
-    for row in values[header_idx + 1:]:
-        if not row:
-            continue
-
-        def g(c: int):
-            return row[c] if 0 <= c < len(row) else ""
-
-        ym = parse_month_label(g(month_c))
-        if not ym:
-            continue  # TOTAL row, blank rows, future month stubs with no data
-
-        lc  = num(g(labour_c))          if labour_c >= 0          else 0.0
-        pw  = num(g(paid_wages_c))      if paid_wages_c >= 0      else 0.0
-        cw  = num(g(contractor_wages_c)) if contractor_wages_c >= 0 else 0.0
-        total = pw + cw
-
-        # Skip stub rows (future months or months with no entries) where both
-        # wages and headcount are zero — these are placeholder rows only.
-        # A real month with activity will have at least headcount > 0.
-        if total == 0.0 and lc == 0.0:
-            continue
-
-        rows_out.append({
-            "unit": source_tab,
-            "segment": segment,
-            "month": ym,
-            "labour": lc,
-            "solar": 0.0,
-            "power": 0.0,
-            "total": total,
         })
     return rows_out
 
