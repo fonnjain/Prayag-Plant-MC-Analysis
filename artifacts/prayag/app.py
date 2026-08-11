@@ -64,6 +64,7 @@ import ideal_hours
 import verify
 import freshness
 import compound as compound_mod
+import auth
 from pdf_export import generate_report_pdf, generate_ai_report_pdf
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -72,6 +73,22 @@ from glossary import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "prayag-analytics-dev")
+
+# Session cookie hardening — HttpOnly + SameSite always; Secure when over HTTPS.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+# before_request gate — inactive when PRAYAG_APP_PASSWORD is not set.
+app.before_request(auth.gate)
+
+
+@app.context_processor
+def _inject_auth():
+    """Expose auth state to every template (banner + future per-user UI)."""
+    return {
+        "auth_configured": auth.app_password() is not None,
+        "auth_user": auth.current_user(),
+    }
 
 
 @app.context_processor
@@ -2736,6 +2753,36 @@ def export_ai_pdf(report_id: str):
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Login page — exempt from the auth gate."""
+    from flask import make_response
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        identity = auth._verify_credentials(username, password)
+        if identity is not None:
+            session.clear()
+            session["auth_user"] = identity
+            # Apply Secure flag dynamically based on whether the request is HTTPS.
+            resp = make_response(redirect(url_for("hub")))
+            if request.is_secure:
+                app.config["SESSION_COOKIE_SECURE"] = True
+            return resp
+        return render_template("login.html", error=True, username=username), 401
+    # GET — show form (redirect to home if already logged in)
+    if auth.current_user() and auth.app_password() is not None:
+        return redirect(url_for("hub"))
+    return render_template("login.html", error=False, username="")
+
+
+@app.route("/logout")
+def logout():
+    """Clear the session and redirect to /login."""
+    session.clear()
+    return redirect(url_for("login"))
+
 
 @app.route("/health")
 def health():

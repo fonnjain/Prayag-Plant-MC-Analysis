@@ -588,6 +588,19 @@
 <!-- ===== MAIN CONTENT ===== -->
 <main class="main-content max-w-2xl mx-auto px-3 pt-4">
 
+  <!-- Access control not configured banner (shown when PRAYAG_APP_PASSWORD is unset) -->
+  {% if not auth_configured %}
+  <div class="mb-3 rounded-xl p-3 bg-orange-50 border border-orange-300 flex items-start gap-2">
+    <svg width="16" height="16" class="mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#c2410c" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <div class="flex-1 min-w-0">
+      <div class="text-orange-800 text-xs font-semibold">Access control not configured</div>
+      <div class="text-orange-700 text-[11px] mt-0.5">Set the <code class="bg-orange-100 px-1 rounded">PRAYAG_APP_PASSWORD</code> secret to enable the login gate.</div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Stale data banner (live refresh failed, serving cached snapshot) -->
   {% if fetch_status and fetch_status.stale %}
   <div class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-300 flex items-start gap-2">

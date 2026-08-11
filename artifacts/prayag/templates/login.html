@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>Sign in — Prayag Production Analytics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --navy: #1F3864; --terra: #C55A11; }
+    body { background: #f3f4f6; }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center px-4">
+
+  <div class="w-full max-w-sm">
+
+    <!-- Logo / brand -->
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
+           style="background:#1F3864;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+             stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+        </svg>
+      </div>
+      <h1 class="text-xl font-bold" style="color:#1F3864;">Prayag Production Analytics</h1>
+      <p class="text-sm text-gray-500 mt-1">Sign in to continue</p>
+    </div>
+
+    <!-- Error banner -->
+    {% if error %}
+    <div class="mb-4 rounded-xl p-3 bg-red-50 border border-red-200 flex items-center gap-2">
+      <svg width="16" height="16" class="flex-shrink-0" fill="none" viewBox="0 0 24 24"
+           stroke="#b91c1c" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+      </svg>
+      <span class="text-red-700 text-sm">Incorrect password. Please try again.</span>
+    </div>
+    {% endif %}
+
+    <!-- Login card -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+      <form method="post" action="/login" autocomplete="on">
+
+        <!-- Username (accepted but not required today; present for future per-user accounts) -->
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-600 mb-1" for="username">
+            Username <span class="text-gray-400 font-normal">(optional)</span>
+          </label>
+          <input
+            id="username" name="username" type="text"
+            autocomplete="username"
+            placeholder="Your name or email"
+            value="{{ username or '' }}"
+            class="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm
+                   focus:outline-none focus:ring-2 focus:border-transparent"
+            style="--tw-ring-color:#1F3864;"
+          />
+        </div>
+
+        <!-- Password -->
+        <div class="mb-6">
+          <label class="block text-xs font-medium text-gray-600 mb-1" for="password">
+            Password
+          </label>
+          <input
+            id="password" name="password" type="password"
+            autocomplete="current-password"
+            placeholder="••••••••"
+            required
+            class="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm
+                   focus:outline-none focus:ring-2 focus:border-transparent"
+            style="--tw-ring-color:#1F3864;"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="w-full rounded-xl py-2.5 text-sm font-semibold text-white
+                 transition-opacity hover:opacity-90 active:opacity-80"
+          style="background:#1F3864;"
+        >
+          Sign in
+        </button>
+      </form>
+    </div>
+
+    <p class="text-center text-xs text-gray-400 mt-6">
+      Prayag Pipes &amp; Fittings — Internal Use Only
+    </p>
+  </div>
+
+</body>
+</html>

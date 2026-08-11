@@ -1,0 +1,56 @@
+PHASE 3 — Authentication. Minimal, additive, and shaped so per-user accounts can be added later
+without touching the gate or any route.
+
+There is currently NO authentication: no login_required, no before_request gate, no basic auth.
+35 POST routes are reachable without credentials on a public custom domain backed by the
+production Neon database. The only PIN guards /settings/api-key and it opens when unset.
+
+Do NOT restructure routes. Do NOT change any calculation, parser, or template logic beyond adding
+the login page and the warning banner. Do NOT touch mp_*.py or machine_planning_*.html.
+Do NOT write to Google Sheets. Do NOT hardcode any password.
+
+=== FAIL-SAFE BEHAVIOUR (important — prevents lockout) ===
+- Read the shared password from a new secret PRAYAG_APP_PASSWORD.
+- If PRAYAG_APP_PASSWORD is NOT set: the app behaves EXACTLY as today (fully open), but shows a
+  visible banner "Access control not configured". This lets the code land safely before the
+  secret is switched on.
+- If it IS set: the gate is active.
+
+=== THE GATE ===
+- A single @app.before_request handler. Unauthenticated requests redirect to /login.
+- EXEMPT: /login, /logout, static assets, and any health/uptime endpoint. List exactly what you
+  exempt in your report. Everything else — including all 35 POST routes — is gated.
+- Session cookie: HttpOnly, SameSite=Lax, Secure when the request is https.
+- Use hmac.compare_digest for the comparison.
+
+=== SHAPE IT FOR PER-USER ACCOUNTS LATER (do this now, it costs nothing) ===
+1. Put the credential check in ONE function:
+       def _verify_credentials(username: str, password: str) -> str | None
+   It returns a user identity string on success, None on failure. For now it ignores/accepts any
+   username and compares password against PRAYAG_APP_PASSWORD, returning "shared" on success.
+   Later this single function is swapped for a user-table lookup — nothing else changes.
+2. Store IDENTITY, not a boolean: session["auth_user"] = <identity string>. Never session["authed"]=True.
+   The gate checks `session.get("auth_user")`. Per-user accounts then work with no gate changes.
+3. Add a helper `current_user()` returning session.get("auth_user") — even though everything is
+   "shared" today. Future per-user features (audit trails, who-froze-this-plan) call this.
+4. The /login form should have BOTH username and password fields now, so the form and its tests
+   don't change when real accounts arrive. Username may be blank/ignored today.
+5. Add a /logout route that clears the session.
+6. Log each successful login as: identity + timestamp. No passwords in logs, ever.
+
+=== VALIDATE ===
+- Secret UNSET: every page behaves exactly as today, plus the banner. Confirm "/" returns 200.
+- Secret SET: unauthenticated GET "/" redirects to /login; an unauthenticated POST to a mutating
+  route also redirects (does NOT execute). After login, normal use works.
+- Confirm Machine Planning routes work once authenticated, and that freezing/creating a plan
+  still functions.
+- Confirm /logout clears the session and re-gates.
+
+=== TESTS ===
+pytest: gate inactive when secret unset; gate active when set; exempt paths reachable while
+unauthenticated; a POST to a mutating route is blocked pre-auth; correct password sets
+session["auth_user"]; wrong password does not; logout clears it; _verify_credentials is the only
+place the password is compared.
+
+Report: files changed, exempt list, and the validate results for both secret-unset and secret-set
+states. Do not mark implemented unless VALIDATE actually passes.
