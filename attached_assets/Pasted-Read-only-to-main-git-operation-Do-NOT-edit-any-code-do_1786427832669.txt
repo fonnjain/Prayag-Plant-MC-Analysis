@@ -1,0 +1,25 @@
+Read-only-to-main git operation. Do NOT edit any code, do NOT run the app, do NOT open Build mode. Just run these git commands in the shell exactly as written and report the output.
+
+GOAL: Restore "Body A" (the Aug 8–10 machine-planning / reports hardening) by moving ONLY the artifacts/prayag directory forward to the clean checkpoint commit 1196d4d ("Published your App", Aug 10 11:37 UTC). This deliberately EXCLUDES all segment work (Garden/PTMT/Tank recompute), which starts at the next commit 56fcfde and must NOT come back.
+
+Steps:
+1. git fetch origin
+2. git checkout main && git pull --ff-only
+3. Confirm the target exists and is the right one:
+   git show -s --format="%h %ci %s" 1196d4d
+   (expect: 1196d4d  2026-08-10 11:37:37 +0000  Published your App)
+4. Restore only the app code from that commit, leaving everything else (attached_assets, .agents, image assets) untouched:
+   git checkout 1196d4d -- artifacts/prayag
+5. Show what changed before committing:
+   git status
+   git diff --stat --cached
+   Sanity check the staged diff: it should touch app.py, mp_lru_cache.py (new), mp_reports.py, sheets.py, three machine_planning_*.html templates, report_tank_location.html, and the MP test files (test_bounded_cache, test_mp_reports, test_mp_run_view, test_mp_comparison_route, test_mp_result_cache). It must NOT touch parsers.py or sources.py, and must NOT add parse_garden_summary_tab / parse_ptmt_* / parse_tank_summary_ltr / source_kind. If it does, STOP and report — do not commit.
+6. Verify Body B is absent and Body A present in the staged tree:
+   git grep -l "parse_garden_summary_tab" -- artifacts/prayag   (expect: no output)
+   git grep -l "BoundedLRUCache" -- artifacts/prayag            (expect: files found)
+7. If step 5–6 look right, commit and push:
+   git commit -m "Restore Body A (MP/reports hardening) from 1196d4d; keep segment work out"
+   git push origin main
+8. Report: the commit hash created, the push result, and the full staged diff --stat.
+
+Do not mark anything implemented, do not restart the app, do not touch the database. Report output only.
