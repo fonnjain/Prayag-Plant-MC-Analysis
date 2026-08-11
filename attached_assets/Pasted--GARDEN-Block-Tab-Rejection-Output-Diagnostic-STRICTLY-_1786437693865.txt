@@ -1,0 +1,84 @@
+# GARDEN — Block-Tab Rejection & Output Diagnostic (STRICTLY READ-ONLY)
+
+**Purpose:** The plant view shows GARDEN rejection as **0.0%** for every month, and GARDEN output that differs from the annual summary workbook. Before any fix, establish *why* — from the code path that actually serves this view.
+
+## HARD CONSTRAINTS
+
+- **Do NOT edit any file.** No `.py`, no templates, no config, no `baselines.json`.
+- **Do NOT enter Build mode.** Do not restart, redeploy, or publish.
+- **Do NOT write to Google Sheets.** Read-only against source, always.
+- **Do NOT "fix" anything**, even if the cause is obvious. Report and stop.
+- If answering a question would require a code change, skip it and say so.
+
+## CORRECTED CONTEXT — read this before starting
+
+A previous report stated GARDEN's plant view is fed by "monthly-live records from the annual `mc_grid` tab." **That is incorrect.** Per `app.py::get_data`:
+
+> *"The daily files are the SOURCE OF TRUTH for every period. Monthly and FY headline totals are summed from the authoritative daily tabs, not the monthly summary grid… Daily totals are never 'reconciled down' to the lower summary figures."*
+> *"Months in this period without a daily workbook show no data — the monthly summary is not substituted."*
+
+So for any month with a daily file, the plant view reads **daily records only** — there is no mixing of daily and monthly grains, and no double-counting. For GARDEN that means the source is the per-machine **`MACHINE n` block tabs** via `sheets._emit_blocks` → `parsers.parse_daily_blocks`, with run hours joined separately from the `Daily Report` matrix (`runhours_tab`).
+
+`parse_daily_blocks` **does** read rejection — its docstring states output and *"rejection (any `REJECT*` column)"* are both detected from the header band, never by fixed index. `_emit_blocks` also collects **`block_notes`** specifically for *"rejection-header-present-but-unmatched drift per tab"* (deduped across machine tabs).
+
+**Therefore the likeliest cause of 0.0% is that drift condition, not a routing gap.** This diagnostic is to confirm or refute that.
+
+---
+
+## Q1 — The block notes (highest value; do this first)
+
+For GARDEN, Apr–Jul 2026, print the **`block_notes`** produced by `_emit_blocks` for every `MACHINE n` tab — verbatim, one line per distinct note, with the tab name.
+
+- If a "rejection header present but unmatched" note appears: print the **exact header text found** in each tab's header band, and the matcher/predicate it was tested against. This identifies the drift precisely.
+- If **no** rejection-related note appears: state that plainly — it means the parser saw no `REJECT*` header at all, which is a different (source-side) situation.
+
+## Q2 — What the block parser actually produced
+
+For GARDEN, Apr–Jul 2026, print per machine (M/C-1…4) and per month:
+
+- number of daily records emitted,
+- summed **output kg**,
+- summed **rejection kg**,
+- how many of those records have `reject_count > 0` vs `== 0`.
+
+State whether rejection is **zero on every record**, or non-zero on some and lost in aggregation.
+
+## Q3 — Header band, verbatim
+
+For **one** GARDEN block tab (e.g. `MACHINE 3`, the highest-output machine), print the raw header band exactly as read — the DATE row and any sub-header row, all cell values, unmodified. Do not normalise or interpret. This shows whether a rejection column exists in the sheet and what it is literally called.
+
+## Q4 — Output difference: daily vs annual (characterise, do not reconcile)
+
+The daily path reports higher GARDEN output than the annual summary workbook:
+
+| Month | Daily (plant view) | Annual summary |
+|---|---:|---:|
+| APR | 42,736 | 38,950 |
+| JUN | 70,519 | 66,911 |
+| JUL | 66,038 | 32,191 |
+
+Both are legitimate sources; the app treats **daily as authoritative by design**, so this is not automatically a bug. Characterise it:
+
+- Print GARDEN daily output **per machine per date** for **JULY 2026** (the largest divergence).
+- Is the excess **spread evenly across dates** (suggesting a genuine production difference / later backfill), or **concentrated in a few dates or one machine** (suggesting duplicate rows or a parsing artifact)?
+- Are there any **duplicate (machine, date)** pairs within the block-tab records? Report the count.
+- Does any single date carry an implausibly large figure relative to its neighbours?
+
+**Do not reconcile the two sources and do not adjust anything** — just describe the shape of the difference.
+
+## Q5 — Run-hours join sanity (context only)
+
+GARDEN utilisation shows a value for APR/JUN but `n/a` for MAY/JUL. Confirm from the records whether MAY/JUL genuinely have `actual_hours = 0` (run-hours matrix carries nothing for those months), or whether the `Daily Report` join failed. Report which — no fix.
+
+---
+
+## Report back
+
+1. Q1 block notes verbatim (the key result).
+2. Q2 per-machine/per-month record counts, output, rejection.
+3. Q3 raw header band for one tab.
+4. Q4 July per-machine-per-date output, duplicate-pair count, and a one-line characterisation of the divergence.
+5. Q5 MAY/JUL hours finding.
+6. Explicit confirmation: **no files changed, no Sheets writes, no restart/publish.**
+
+Then stop. A fix will be scoped separately once the cause is known.
