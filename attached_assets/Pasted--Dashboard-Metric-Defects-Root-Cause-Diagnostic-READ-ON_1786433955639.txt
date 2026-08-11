@@ -1,0 +1,30 @@
+# Dashboard Metric Defects — Root-Cause Diagnostic (READ-ONLY)
+
+**Purpose:** A QA review flagged many dashboard metrics showing blank (Output Eff, M/C Eff, Utilisation, Rejection, Attainment, Run Hour) across Garden Pipe, PTMT, INJ Moulding, HDPE, and Tank (KH/VN/WB). Before any fix, classify **why each metric is blank**, because the app intentionally renders `null` (not 0%) when a metric isn't measurable (the "no-fake-0% invariant" in `api.py::_metrics_json`). Most blanks are likely missing baseline config or by-design N/A — NOT parser bugs. This pass only diagnoses.
+
+**HARD CONSTRAINTS:** Do NOT edit any file. Do NOT enter Build mode. Do NOT write to Google Sheets. Do NOT restart or publish. Do NOT "fix" anything — a blank is often correct. Report output only. If a step needs a code change to answer, skip it and say so.
+
+## Background the diagnostic must use (already in the code — do not change it)
+- `api.py::_metrics_json` nulls a metric when its availability flag is false: `eff_available`→output_efficiency, `util_available`→utilisation, `oee_available`→oee/availability/performance/quality, `planned_output`→attainment, `total_count`→rejection_pct/runner_pct.
+- `baselines.resolve(plant, machine, month)` returns the ideal/planned baseline from config; `ideal_output` is `None` when no `ideal_output_rate` is configured, and the whole result is `None` when neither a per-machine entry nor a per-plant `formula_defaults` exists. When config is absent the app keeps `ideal_source='sheet'` and uses the sheet's own ideal — if the sheet has none, efficiency/utilisation/attainment cannot be computed and correctly render blank.
+
+## For each flagged (segment · plant · month · view · metric), classify into ONE bucket
+
+**Bucket A — NULL BY INVARIANT (no baseline).** The metric is blank because its `*_available` flag is false. Report, per case: which flag is false (`eff_available` / `util_available` / `oee_available` / `planned_output` / `total_count`), and WHY — did `baselines.resolve()` return None (no config), did it return a baseline but `ideal_output` is None (no `ideal_output_rate`), and did the source sheet carry an ideal/planned figure or not? This bucket is **missing configuration or missing source ideal — not a code bug.** The fix (later) is to populate `ideal_output_rate` / `planned_hours` config, not to touch parsers.
+
+**Bucket B — N/A BY DESIGN.** The metric cannot exist for that segment because the source has no such dimension. Specifically: **Tank** has no machine dimension and no run-hours in source — so Machine View, Utilisation, Run Hour, Output Eff, and Attainment are structurally inapplicable for Tank KH/VN/WB. Confirm this is why Tank shows blank/"no data", and report whether the dashboard currently distinguishes "N/A for this segment" from "missing data". (No fix now; likely a labelling change later, not a data fix.)
+
+**Bucket C — GENUINE BUG (data exists but not shown, or wrong).** The source HAS the value for that month/machine but the dashboard shows blank or wrong. Investigate and confirm these specific reported cases:
+- **HDPE, July, Overview + Plant View:** reviewer says data exists in the July sheets but the dashboard shows nothing. Confirm: is July HDPE data present in the source read (print the parsed rows/count for HDPE July)? If present but null on the dashboard, this is a real display/parse drop — report where it's lost (parse miss vs route filter vs template).
+- **HDPE, Machine View:** only one machine's data shows and other machine NAMES are absent. Confirm whether the machine roster is seeded (names shown even with no data) or omitted when empty.
+- **INJ Moulding, April, Plant View:** rejection value renders in GREEN. Report the conditional-formatting threshold logic for rejection colour — is the threshold inverted / mis-set so a value that should be amber/red shows green?
+- **Garden Pipe, M/C View:** utilisation appears in APR and JUN but not MAY and JUL. Report per-month `util_available` and the `baselines.resolve()` result for the Garden machines in each month — is the difference a per-month config/sheet gap (Bucket A) or a month-mapping parse miss (real bug)?
+
+## Report format
+A table: segment · plant · month · view · metric · bucket (A/B/C) · evidence (which flag false / config-or-sheet gap / data-present-but-dropped). Then a short summary: counts per bucket, and for Bucket C, the specific root cause of each genuine bug.
+
+## Also report (context, no change)
+- Confirm this diagnostic touched no files and made no writes.
+- Note: Pipe & Fitting was not in the defect set — confirm whether its dashboard metrics render (spot-check one month) so we know it's genuinely clean vs unreviewed.
+
+**No fixes in this pass. The output decides which blanks are config (Bucket A), which are labelling (Bucket B), and which are the only real code bugs (Bucket C).**
