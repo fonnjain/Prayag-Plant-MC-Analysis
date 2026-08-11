@@ -132,7 +132,7 @@
       {% for u, pct in o.rejection_pct_by_unit.items() %}<div>{{ pct }}% <span class="text-xs font-normal text-gray-400">{{ u }}</span></div>{% endfor %}
     </div>
     {% else %}
-    <div class="text-lg font-bold {% if o.rejection_pct is not none and o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct is not none and o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>
+    {% if o.rejection_pct is none %}<div class="text-lg font-bold text-gray-400">n/a</div>{% else %}<div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>{% endif %}
     {% endif %}
   </div>
   {% if o.oee_available %}

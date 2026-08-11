@@ -55,9 +55,9 @@
       <div class="text-xs text-gray-500 mb-0.5">Rejection %
         <span class="text-gray-400" title="Rejection % is always on a kilogram basis: kg rejected ÷ kg produced">ⓘ</span>
       </div>
-      <div class="font-bold text-base {% if overall.rejection_pct is not none and overall.rejection_pct < 2 %}text-green-600{% elif overall.rejection_pct is not none and overall.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
+      {% if overall.rejection_pct is none %}<div class="font-bold text-base text-gray-400">n/a</div>{% else %}<div class="font-bold text-base {% if overall.rejection_pct < 2 %}text-green-600{% elif overall.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
         {{ overall.rejection_pct }}%
-      </div>
+      </div>{% endif %}
       <div class="text-xs text-gray-400 mt-0.5">kg basis</div>
     </div>
   </div>

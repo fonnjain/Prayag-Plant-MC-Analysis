@@ -1,0 +1,78 @@
+Three corrections, in phases. STOP and report after each phase — do not run them together.
+Never touch: pipe_reconcile.py, the R5↔R11 reconciliation, Moulding's Report-12 path, Garden's
+block-tabs-for-output rule, HDPE's in-sheet ideal columns, PTMT's IDEAL HOUR baseline, TANK's
+output-only design, or any mp_*.py / machine_planning_*.html (just restored and published).
+Do NOT write to Google Sheets. Do NOT change how any figure is calculated.
+
+=========================================================
+PHASE 1 — Stop the false green "0.0%" rejection (display honesty)
+=========================================================
+BUG: GARDEN's daily MACHINE n block tabs have NO rejection column (verified: header band is
+DATE | CODE | SIZE | LENGTH | NOS | TOTAL | KG | TOTAL | RP CONSUMPTION | Remarks — the word
+"REJECT" appears nowhere). So parse_daily_blocks sets rej_c = -1 and reject_count = 0.0 on every
+record. Because total_count > 0, the no-fake-0% guard in api.py::_metrics_json does NOT fire, and
+the dashboard prints a GREEN 0.00%. That reads as "no rejection" when the truth is "not captured".
+
+The invariant currently protects ratios whose DENOMINATOR is missing. It does not protect a
+missing NUMERATOR COLUMN. Close that gap:
+
+1. Add a Record field `rejection_tracked: bool = True` (default True so NOTHING else changes).
+2. In sheets._emit_blocks, when the block parser reports rej_c < 0 for a tab, set
+   rejection_tracked = False on the records from that tab.
+3. In metrics.compute_metrics, accumulate `m.rejection_available = any(r.rejection_tracked ...)`
+   over the rows contributing to the rollup.
+4. In api.py::_metrics_json, add: if not rejection_available → rejection_pct = None
+   (alongside the existing total_count gate). Do not alter the existing gates.
+5. TEMPLATES — null must render as "n/a", NOT red. The current guard added in the last pass makes
+   a null rejection_pct fall through to RED, which is also wrong. At all six locations
+   (overview.html:182, plant.html:142, report_detail.html:135, report_gom_summary.html:39 and :75,
+   report_tank_location.html:58) render a null rejection_pct as a grey "n/a" / em-dash, never a
+   coloured percentage.
+
+VALIDATE: GARDEN rejection shows n/a (not 0.0% green, not red) for Apr–Jul. PIPE, MOULDING, PTMT,
+TANK rejection percentages are UNCHANGED (Pipe ~8.4–9.7%, Moulding ~1.0%, PTMT 5.6–6.5%).
+Report the observed rejection cell for every segment before and after.
+
+STOP. Report. Do not start Phase 2 until told.
+
+=========================================================
+PHASE 2 — GARDEN May utilisation: diagnose, then fix
+=========================================================
+GARDEN May shows no utilisation. Cause per prior diagnostic: the 'Daily Report' matrix tab EXISTS
+but parse_daily_matrix returns 0 rows — "layout not recognised". (July is different and NOT a bug:
+the tab is present but run hours simply aren't entered yet — leave July alone.)
+
+STEP A (diagnose, no code change): print the raw header band (first ~8 rows, verbatim, unmodified)
+of the 'Daily Report' tab for GARDEN May 2026 (file 1qmTMCWZWLsuA4kCzaAFC4fjG46Zf3rGz5VjOknv_Sy0)
+AND for GARDEN April 2026 (file 1mbxHLgvvruhI-3_d9zoqevZQxHhjxZY4cN0tIyxkzEo, which parses fine).
+Show exactly which row/column detection step succeeds in April and fails in May.
+STOP and report the two header bands before changing anything.
+
+STEP B (only after A is reviewed): make the header detection tolerant of the difference found —
+BY HEADER TEXT, never by fixed index. Do not loosen it into guessing: if the layout still cannot
+be identified, it must keep returning 0 rows and keep the existing honest warning.
+
+VALIDATE: GARDEN May utilisation renders; April/June/July unchanged; no other segment's matrix
+parsing changes. Report May per-machine hours observed.
+
+STOP. Report. Do not start Phase 3 until told.
+
+=========================================================
+PHASE 3 — Authentication (highest priority overall; most invasive, so last)
+=========================================================
+There is currently NO authentication anywhere: no login_required, no before_request gate, no basic
+auth. 35 POST routes are reachable without credentials on a public custom domain backed by the
+production Neon database. The only PIN guards /settings/api-key, and it opens when unset
+("no PIN configured — open access (same level as the dashboard)").
+
+Add a MINIMAL, ADDITIVE session gate. Do not restructure routes.
+
+- Password read from a new env var/secret PRAYAG_APP_PASSWORD.
+- If PRAYAG_APP_PASSWORD is NOT set: app behaves exactly as today (open) but shows a visible
+  warning banner "Access control not configured". This prevents an accidental lockout.
+- If it IS set: a @app.before_request gate redirects unauthenticated requests to a simple
+  /login page; on correct password set a session flag. Use hmac.compare_digest.
+- EXEMPT from the gate: /login, static assets, and any health/uptime endpoint (list what you
+  exempt). Everything else — including all 35 POST routes — is gated.
+- Session cookie: HttpOnly, SameSite=Lax, and Secure when the request is https.
+- Do NOT hardcode any password. Do NOT

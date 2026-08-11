@@ -17,9 +17,10 @@ Port 21800 is registered in `.replit [[ports]]` (externalPort=3001), so the work
 
 ## Normal operation (warm proxy)
 
-When the session/proxy is already warm, `restart_workflow "artifacts/prayag-web: web"` succeeds normally. The artifact-managed workflow is the preferred one to keep running — it binds the canvas iframe correctly.
+When the session/proxy is already warm, `WorkflowsRestart("artifacts/prayag-web: web")` succeeds normally. The artifact-managed workflow is the preferred one to keep running — it binds the canvas iframe correctly.
 
-**To restart Flask normally:** `restart_workflow "artifacts/prayag-web: web"`.
+**To restart Flask after a code change:** always use `WorkflowsRestart("artifacts/prayag-web: web")`.
+`WorkflowsRestart("Prayag App")` only restarts the echo no-op workflow and does NOT restart the Flask server — the gunicorn/Flask process keeps running with old code. This cost significant debug time when L1 cache couldn't be cleared because the wrong workflow was being restarted.
 
 ## Cold-start recovery (when artifact workflow fails health check)
 

@@ -122,6 +122,10 @@ def _metrics_json(m: MetricsResult) -> dict:
         d["headline_rating"] = None
     if not d.get("planned_output"):
         d["attainment"] = None
+    # Rejection column absent from source tab(s) — numerator was never captured.
+    # Suppress rather than display a false 0% ("not captured" ≠ "no rejection").
+    if not d.get("rejection_available", True):
+        d["rejection_pct"] = None
     if not d.get("total_count"):
         d["rejection_pct"] = None
         d["runner_pct"] = None

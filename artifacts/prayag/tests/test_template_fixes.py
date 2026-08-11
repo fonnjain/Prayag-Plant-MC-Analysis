@@ -169,12 +169,21 @@ class TestTemplateSourceContainsTiers:
 
     @pytest.mark.parametrize("filename,var", LOCATIONS)
     def test_amber_tier_present(self, filename, var):
+        """Amber tier is present — either via the old null-guarded form or the
+        new null-branch form ({% if ... is none %}...{% elif ... < 5 %}...)."""
         path = os.path.join(TEMPLATES_DIR, filename)
         with open(path) as f:
             src = f.read()
-        assert f"{var} is not none and {var} < 5" in src or \
-               f"{var} is not none and {var} < 5" in src, \
+        # Old form: guard with is-not-none; new form: null branch + bare < 5.
+        # Both patterns include "< 5" as the amber threshold.
+        assert f"{var} < 5" in src, \
             f"amber tier not found for {var} in {filename}"
+        # Null rendering: new form wraps the whole colour block in a none-check.
+        # Either the old is-not-none guard OR the new is-none branch must exist.
+        has_null_guard = f"{var} is not none and {var} < 5" in src
+        has_null_branch = f"{var} is none" in src
+        assert has_null_guard or has_null_branch, \
+            f"null-safe guard missing for {var} in {filename}"
 
     @pytest.mark.parametrize("filename,var", LOCATIONS)
     def test_two_tier_pattern_removed(self, filename, var):

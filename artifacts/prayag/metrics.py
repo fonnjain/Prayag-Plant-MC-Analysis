@@ -100,6 +100,12 @@ class Record:
     # --- tonnage band (Group-of-Moulding) ---
     tonnage_band: str = ""        # "150" | "200" | "250" | "275" | "350" | "450"
 
+    # --- rejection tracking ---
+    rejection_tracked: bool = True  # False when the source tab has no rejection column
+                                    # (e.g. GARDEN MACHINE n block tabs). Causes
+                                    # rejection_pct to be suppressed rather than shown
+                                    # as a false 0% ("not captured" ≠ "no rejection").
+
 
 # Backwards-compatible alias for older call sites / demo data.
 ShiftRow = Record
@@ -167,6 +173,11 @@ class MetricsResult:
     # denominator is currently gated to 0 for want of reported run hours. Lets the
     # UI say "run hours not recorded" instead of the misleading "no baseline set".
     baseline_set: bool = False
+
+    # False when NONE of the contributing records have a rejection column in their
+    # source tab (see Record.rejection_tracked). Suppresses rejection_pct in the
+    # UI so a missing numerator column never reads as "no rejection occurred".
+    rejection_available: bool = True
 
     # Costs
     labour_cost: float = 0.0
@@ -327,7 +338,8 @@ class MetricsResult:
             "mc_eff_rating": self.mc_eff_rating,
             "baseline_set": self.baseline_set,
             "headline_available": self.headline_available,
-            "rejection_pct": self.rejection_pct_display,
+            "rejection_pct": self.rejection_pct_display if self.rejection_available else None,
+            "rejection_available": self.rejection_available,
             "runner_pct": round(self.runner_pct * 100, 2),
             "attainment": self.attainment_pct,
             "utilisation": self.utilisation_pct,
@@ -472,6 +484,12 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     # but production unit is "Ltr"); fall back to total_count for all other plants.
     _rej_denom = _reject_denom_sum if _reject_denom_sum > 0 else m.total_count
     m.rejection_pct = _safe_div(m.reject_count, _rej_denom)
+    # Rejection is available only when at least one contributing record actually
+    # tracked a rejection column. Old pickles from L2 cache lack the field; default
+    # True (conservative — don't suppress data we can't confirm is absent).
+    m.rejection_available = any(
+        getattr(r, "rejection_tracked", True) for r in prod_rows
+    )
     # Derive a single reject_unit for the rollup (set when all rows agree on one unit).
     _rej_units = [u for u, v in m.reject_by_unit.items() if v > 0]
     m.reject_unit = _rej_units[0] if len(_rej_units) == 1 else ""

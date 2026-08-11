@@ -139,7 +139,7 @@
         <div class="text-xs text-gray-400">Attainment{{ info('ATT') }}</div>
       </div>
       <div>
-        <div class="text-sm font-bold {% if m.rejection_pct is not none and m.rejection_pct < 2 %}text-green-600{% elif m.rejection_pct is not none and m.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>
+        {% if m.rejection_pct is none %}<div class="text-sm font-bold text-gray-400">n/a</div>{% else %}<div class="text-sm font-bold {% if m.rejection_pct < 2 %}text-green-600{% elif m.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>{% endif %}
         <div class="text-xs text-gray-400">Reject{{ info('REJECT_PCT') }}</div>
       </div>
     </div>

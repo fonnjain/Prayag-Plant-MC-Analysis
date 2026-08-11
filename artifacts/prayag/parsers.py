@@ -712,6 +712,10 @@ def parse_daily_blocks(
             source_family=segment,
             source_file=source_file,
             source_tab=source_tab,
+            # rej_c < 0 means no rejection column exists in this tab's header.
+            # Mark the records so compute_metrics can suppress rejection_pct
+            # rather than displaying a false 0% ("not captured" ≠ "no rejection").
+            rejection_tracked=(rej_c >= 0),
         ))
     return recs
 
