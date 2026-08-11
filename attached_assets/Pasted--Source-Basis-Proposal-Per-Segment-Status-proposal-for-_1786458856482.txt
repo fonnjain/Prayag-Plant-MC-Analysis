@@ -1,0 +1,104 @@
+# Source Basis Proposal — Per Segment
+
+**Status: proposal for decision. Nothing here has been implemented.** Every figure below is from direct source reads or the three-layer reconciliation grid.
+
+---
+
+## 1. The rule that explains most of the grid
+
+The layers do not disagree because data is missing. **They measure different things.**
+
+> **Annual summary output = Report-5 net output + rejection.**
+> The annual grids count **gross throughput** (everything the machine put out, rejects included). Report-5 records **net output** and rejection as separate columns.
+
+Verified to the kilogram:
+
+| Segment | Month | Net output | + Rejection | = Gross | Annual says | Diff |
+|---|---|---:|---:|---:|---:|---:|
+| PIPE | APR | 175,669 | 14,825 | 190,494 | 190,494 | **0** |
+| PIPE | MAY | 313,516 | 30,484 | 344,000 | 344,000 | **0** |
+| PTMT | MAY | 111,991 (gross) | −7,262 | 104,729 (net) | 104,729 | **0** |
+| PTMT | JUL | 183,115 (gross) | −10,476 | 172,639 (net) | 172,639 | **0** |
+| PTMT | APR | 105,180 (gross) | −5,917 | 99,263 (net) | 99,262 | +1 |
+
+Five near-exact matches across two independent segments. This is a definitional difference, not a data gap — and it means **no reconciliation is needed for PIPE or PTMT output.** They already agree once the basis is stated.
+
+**Proposed convention:** report **net output** everywhere, with rejection shown separately. Net is what the business actually shipped, it keeps rejection% meaningful (rejection ÷ gross, not ÷ net), and it matches how Report-5 records reality. Where a page shows a figure that reconciles to an annual sheet, label it **gross** explicitly.
+
+**Consequence to accept knowingly:** every PIPE figure quoted so far — APR 190,494 · MAY 344,000 · JUN 178,782 · JUL 564,695 · **total 1,277,971** — is **gross**. On a net basis the total is materially lower. The same applies to PTMT's annual Nett Output already being net (537,109), so PTMT is already consistent.
+
+---
+
+## 2. Per-segment basis
+
+### MOULDING — no decision needed
+All three layers agree within 2 kg across 366,015 kg. Keep as-is: output and rejection from **Report-12**, hours joined from Report-5.
+`APR 89,152 · MAY 75,771 · JUN 97,007 · JUL 104,086 · rejection ~1.0%`
+
+### PIPE — keep current reconciliation, restate the basis
+Keep **MAX(Report-5, Report-11) per machine-date**; hours from Report-5. Present output as **net**, rejection separately, and label the annual comparison as gross so the ~8–10% delta reads as definitional rather than as an error.
+*Blocked by open question D below — the reconciliation is not actually functioning in APR and JUL.*
+
+### PTMT — keep Report-5, exclude grinding, no cross-check exists
+Report-5 is the only source; there is no Layer A or Layer C. Report **net output** (gross − rejection). **Exclude Grinding/regrind** from the headline (38,460 / 38,225 / 49,745 / 47,985 kg) — it is finishing throughput, not production.
+Net: `APR 99,263 · MAY 104,729 · JUL 172,639` — matching the annual Moulds Summary exactly. **JUN is unresolved (see A).**
+
+### HDPE — Layer B only; most months genuinely idle
+Only **MAY** has production: 21 h / 1,370 kg / 120 kg rejection, M/C-1 alone, and all layers agree. APR, JUN, JUL parse to zero rows. Report those as **zero with an "idle or not entered" flag**, not as missing data. Layer A (MACHINE 1–6 tabs) is unread by the app; leave it that way unless a month appears where B is empty and A is not.
+
+### GARDEN — the only segment needing both layers
+Neither layer is reliable alone:
+
+| Month | Layer A (block tabs) | Layer B (Daily Report) | Assessment |
+|---|---:|---:|---|
+| APR | 42,736 | 38,950 | A inflated by a bad M/C-2 row (see B) |
+| MAY | 53,235 | **0** | B never filled — A is the only record |
+| JUN | 70,520 | 66,911 | both complete; ~5.1% gap unexplained |
+| JUL | 68,390 (66,038 parsed) | 32,191 | B missing M/C-1/2/4; A has undated rows (see C) |
+
+**Proposal:** take **output from Layer A**, **hours and rejection from Layer B**, and **flag every month where the two diverge by more than 2%**. Do not auto-reconcile. Garden is the one segment where a visible divergence indicator is worth more than a single chosen number.
+
+Note: Layer B **does** carry per-date detail (Run Hours / Output / Rejection / RP per day, machines as rows and dates as columns). It is a wide matrix, not a monthly hand-summary — so per-date rejection is available if wanted later.
+
+### TANK (KH / VN / WB) — Layer A only, and one plant is unusable
+Only the per-item `PROD. REPORT` exists; no hours, no machine axis, by design. VN and WB daily track their annuals closely (VN 1,854,250 vs 1,852,250). **KH does not** — see open question B. Until that is settled, KH's numbers should not be published alongside VN and WB.
+
+---
+
+## 3. Open source questions — data issues, not code
+
+These four must be answered before the basis above is implemented. None is fixable in the app.
+
+**A. PTMT June breaks the gross/net rule.**
+APR, MAY and JUL reconcile exactly. June gives gross 156,978 − rejection 9,141 = 147,837 against the annual's 160,478 — off by **12,641 kg**. The June rejection figures also disagree between layers (9,141 vs 9,297). Something in PTMT June is wrong on one side. *Question: which June figure is correct — Report-5's or the Moulds Summary's?*
+
+**B. Tank KH daily is 5.7× its annual.**
+Daily `PROD. REPORT`: MAY 846,600 · JUN 1,419,500 · JUL 1,353,500 = **3,619,600 Ltr**. Annual KH: **633,500 Ltr (June only)**. Even June alone is 1,419,500 vs 633,500. VN and WB show no such gap, so this is KH-specific. *Question: is the KH annual drastically under-filled, or is the KH daily tab recording something else (a different unit, or multiple plants)?*
+
+**C. Garden July has undated rows, and a bad April row.**
+- **Undated rows:** six rows in MACHINE-2 and two in MACHINE-3 carry no date. They total **2,352.2 kg**, which exactly accounts for the 68,390-vs-66,038 difference. The parser correctly skips them; the dates are simply missing at source. *Question: can the dates be filled in?*
+- **April M/C-2:** Layer A records **3,815 kg over 11 run hours (~347 kg/hr)** against a plant norm of 60–70 kg/hr. Layer B's 676 kg (61 kg/hr) is rate-consistent. *Question: is the 3,815 figure a data-entry error?* This matters beyond one cell — it shows the more complete layer is not automatically the more correct one.
+
+**D. Report-11 machine names don't match Report-5 in APR and JUL.**
+R11 uses legacy names (TTS-88-2, KABRA-72-28…) against R5's M/C-1…9, so `pipe_reconcile` cannot join them and **silently falls back to R5 alone** for those two months. The date-wise-max exists precisely to catch machine-days present in one source but not the other; it is not doing that job in half the period, and nothing surfaces the failure. MAY and JUN use consistent names. *Question: can R11's naming be aligned — and meanwhile, should the app flag when a reconciliation join produces zero matches?*
+
+**E. Tank rejection units are ambiguous.**
+Daily rejection totals ~**6,139 Ltr** (VN 1,406 + WB 4,733) against the annual's **86,500 Ltr** — roughly 14×. That is the signature of a **pcs-vs-Ltr** mix-up, the same class of error as the fittings pieces-as-kg problem. *Question: is the daily rejection column in pieces rather than litres?* No Tank rejection figure should be quoted until this is settled.
+
+---
+
+## 4. What has no cross-check at all
+
+**PTMT** and **TANK KH/WB** have no Layer C registered, so their figures are uncorroborated — nothing would detect drift. Worth knowing when reading those numbers, and worth registering an annual source for them if one exists.
+
+---
+
+## 5. Suggested order
+
+1. Answer **D** (silent reconciliation failure — the only item that is actively producing a wrong process today).
+2. Answer **A**, **B**, **E** — the three numeric contradictions blocking PTMT and Tank.
+3. Adopt the **net-output convention** and label gross figures where they appear.
+4. Implement the per-segment bases above, with the Garden divergence flag.
+5. Answer **C** (Garden data entry) — real but the smallest in value.
+
+**No code has been changed and no basis has been implemented.** This is for review.
