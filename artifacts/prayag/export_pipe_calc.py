@@ -52,7 +52,7 @@ def _pick_month(token: str):
             d["rej"] += r.reject_count
             label_for.setdefault(k, r.machine)
         v11 = sheets.read_values(file_id, "Report-11", token)
-        r11 = pipe_reconcile.parse_report11(v11, ym, sheets._mc_key)
+        r11, _skipped, _matched = pipe_reconcile.parse_report11(v11, ym, sheets._mc_key)
         corrected, audit = pipe_reconcile.reconcile(r5, r11)
         if audit["out_total"] > 0:
             return ym, r5, r11, corrected, audit, raw, label_for, unit

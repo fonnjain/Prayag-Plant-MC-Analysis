@@ -2043,26 +2043,15 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   # machine-date has output but NO run hours (flagged: efficiency understated).
   if spec.get("pipe_reconcile"):
       r11_tab = spec.get("report11_tab", "Report-11")
-      r11 = {}
+      r11: dict = {}
+      _r11_skipped: dict = {}
+      _r11_matched: frozenset = frozenset()
       if r11_tab in tabs:
           _r11_raw = read_values(file_id, r11_tab, token)
           _r11_key = lambda lbl: pipe_reconcile.resolve_r11_label(lbl, _mc_key)
-          r11 = pipe_reconcile.parse_report11(_r11_raw, ym, _r11_key)
-          # Zero-match guard: if the tab had data rows but none resolved, the
-          # reconciliation is silently falling back to Report-5 only. Emit a
-          # visible note rather than letting the failure go undetected.
-          _r11_data_rows = sum(
-              1 for row in _r11_raw[5:] if row and len(row) >= 4
-              and str(row[0]).strip()  # has a date cell
+          r11, _r11_skipped, _r11_matched = pipe_reconcile.parse_report11(
+              _r11_raw, ym, _r11_key
           )
-          if _r11_data_rows > 0 and not r11:
-              report.setdefault("notes", []).append(
-                  f"{emit} {ym}: Report-11 has {_r11_data_rows} data rows but "
-                  f"none matched any known machine label — R11 is excluded from "
-                  f"this month's reconciliation and type split is unavailable. "
-                  f"Check that Report-11 machine names match the current M/C-n "
-                  f"labels or the alias table in pipe_reconcile._R11_ALIAS."
-              )
       # Report-5 output/rejection per (machine number, date) from the matrix rows.
       r5: dict = {}
       label_for: dict = {}
@@ -2111,9 +2100,15 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
                   )
               raw.append(newr)
               r11_only_out[k] = r11_only_out.get(k, 0.0) + c["out"]
+      # R-27 join-quality diagnostic: detect and warn when R11 labels
+      # fail to match R5's M/C-n convention so the degradation is visible.
+      _join_warn = pipe_reconcile.r11_join_warning(
+          emit, ym, _r11_matched, _r11_skipped
+      )
       report["pipe_reconcile"] = {
           "audit": audit,
           "report11_present": bool(r11),
+          "r5_labels": len({k for k, _ in r5}),
           "r5_out": round(sum(d["out"] for d in r5.values()), 1),
           "r11_out": round(sum(d["out"] for d in r11.values()), 1),
           "r5_rej": round(sum(d["rej"] for d in r5.values()), 1),
@@ -2124,7 +2119,15 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
               label_for.get(k, f"M/C-{k}"): round(v, 1)
               for k, v in sorted(r11_only_out.items())
           },
+          "r11_join": _join_warn,
       }
+      # Surface the join warning in the standard report warning field (R-27 / R-06).
+      if _join_warn:
+          _jt = _join_warn["text"]
+          if report.get("warning") is None:
+              report["warning"] = _jt
+          else:
+              report["warning"] = report['warning'] + ' | ' + _jt
       # Efficiency sanity check (non-blocking): machines whose output includes
       # Report-11-only production carry output with no matching run hours, so any
       # output-per-hour / efficiency reading for them is understated.

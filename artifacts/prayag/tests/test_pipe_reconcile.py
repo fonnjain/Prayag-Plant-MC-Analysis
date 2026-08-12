@@ -34,7 +34,7 @@ def test_parse_report11_header_based_and_typed():
         ["Apr 1, 2026", "", "GRAND TOTAL", "", "0", "0", "9999", "0", "9999", "0"],
         ["Apr 2, 2026", "", "PIPE M/C - 2", "UPVC", "100", "999", "2000", "8", "20", "1"],
     ]
-    out = pipe_reconcile.parse_report11(values, "2026-04", _mc_key)
+    out, skipped, matched = pipe_reconcile.parse_report11(values, "2026-04", _mc_key)
     # M/C-1 on Apr-1: two item rows summed; TOTAL row skipped.
     one = out[(1, "2026-04-01")]
     assert one["out"] == 1500.0, one["out"]
@@ -44,6 +44,8 @@ def test_parse_report11_header_based_and_typed():
     assert out[(2, "2026-04-02")]["out"] == 2000.0
     # GRAND TOTAL must never become a machine.
     assert all(k[0] in (1, 2) for k in out), out.keys()
+    # No unresolvable labels in this fixture → skipped empty.
+    assert skipped == {}, f"Expected no skipped labels, got {skipped}"
     print("PASS: parse_report11 header-based, typed, sums items, skips TOTAL")
 
 
@@ -104,10 +106,12 @@ def test_type_split_prorata_and_untyped_pickup():
 
 
 def test_empty_and_missing_header_safe():
-    assert pipe_reconcile.parse_report11([], "2026-04", _mc_key) == {}
+    agg, skipped, matched = pipe_reconcile.parse_report11([], "2026-04", _mc_key)
+    assert agg == {} and skipped == {} and matched == frozenset()
     # No DATE header anywhere → empty (never a crash).
-    assert pipe_reconcile.parse_report11(
-        [["foo", "bar"], ["1", "2"]], "2026-04", _mc_key) == {}
+    agg2, sk2, ma2 = pipe_reconcile.parse_report11(
+        [["foo", "bar"], ["1", "2"]], "2026-04", _mc_key)
+    assert agg2 == {} and sk2 == {} and ma2 == frozenset()
     corrected, audit = pipe_reconcile.reconcile({}, {})
     assert corrected == {} and audit["n_cells"] == 0
     print("PASS: empty input / missing header degrade safely")
@@ -164,7 +168,7 @@ def test_parse_report11_with_legacy_labels():
         ["Apr 5, 2026", "", "1-KABRA-90-22", "AGRI", "50", "999", "500", "8", "20", "1"],
     ]
     alias_key = lambda lbl: pipe_reconcile.resolve_r11_label(lbl, _mc_key)
-    out = pipe_reconcile.parse_report11(values, "2026-04", alias_key)
+    out, skipped, matched = pipe_reconcile.parse_report11(values, "2026-04", alias_key)
 
     assert (4, "2026-04-05") in out, f"TTS-88-4 not resolved: {list(out.keys())}"
     assert out[(4, "2026-04-05")]["out"] == 3500.0
@@ -175,7 +179,117 @@ def test_parse_report11_with_legacy_labels():
 
     # Unmapped label must not appear in output.
     assert len(out) == 2, f"Unexpected keys: {list(out.keys())}"
-    print("PASS: parse_report11 resolves legacy labels; unmapped labels are safely skipped")
+
+    # Skipped dict must name 1-KABRA-90-22 (500 kg) — the unmapped label.
+    assert "1-KABRA-90-22" in skipped, f"Expected 1-KABRA-90-22 in skipped, got {skipped}"
+    assert skipped["1-KABRA-90-22"] == 500.0, skipped
+
+    # matched must contain the two resolved label strings.
+    assert "TTS-88-4" in matched and "KABRA-72-28" in matched, matched
+    print("PASS: parse_report11 resolves legacy labels; unmapped labels tracked in skipped")
+
+
+# ---------------------------------------------------------------------------
+# R-27 — r11_join_warning: join-quality diagnostic
+# ---------------------------------------------------------------------------
+
+def test_r11_join_warning_clean_join_returns_none():
+    """No skipped labels → clean join, no warning (R-27 no-false-alarm)."""
+    result = pipe_reconcile.r11_join_warning(
+        "PIPE", "2026-06",
+        matched_labels=frozenset({"PIPE M/C - 1", "PIPE M/C - 2"}),
+        skipped={},
+    )
+    assert result is None, f"Expected None for clean join, got {result}"
+    print("PASS: r11_join_warning — clean join returns None")
+
+
+def test_r11_join_warning_genuinely_empty_r11_returns_none():
+    """R11 had no data at all (matched=empty, skipped=empty) → no warning."""
+    result = pipe_reconcile.r11_join_warning(
+        "PIPE", "2026-08",
+        matched_labels=frozenset(),
+        skipped={},
+    )
+    assert result is None, f"Expected None for empty R11, got {result}"
+    print("PASS: r11_join_warning — genuinely empty R11 (no data rows) returns None")
+
+
+def test_r11_join_warning_all_unmatched():
+    """All R11 labels unmatched (April/July case) → full-fallback warning (R-27)."""
+    skipped = {"TTS-88-2": 12000.0, "KABRA-72-28": 8500.0, "TTS-88-3": 5000.0}
+    result = pipe_reconcile.r11_join_warning(
+        "PIPE", "2026-04",
+        matched_labels=frozenset(),
+        skipped=skipped,
+    )
+    assert result is not None, "Expected warning for all-unmatched join"
+    assert result["r11_matched"] == 0
+    assert result["r11_unmatched"] == 3
+    assert result["r11_total_labels"] == 3
+    # Unmatched labels listed by kg descending.
+    assert result["unmatched_labels"][0]["label"] == "TTS-88-2", result["unmatched_labels"]
+    assert result["unmatched_labels"][0]["kg"] == 12000.0
+    # Warning text must mention 0 of N and "falls back to Report-5 only".
+    text = result["text"]
+    assert "0 of 3" in text, text
+    assert "Report-5 only" in text, text
+    assert "PIPE 2026-04" in text, text
+    print("PASS: r11_join_warning — all-unmatched fires with 0-of-N wording")
+
+
+def test_r11_join_warning_partial_match():
+    """Some labels matched, some not (May case: 1-KABRA-90-22 unmatched) → partial warning."""
+    result = pipe_reconcile.r11_join_warning(
+        "PIPE", "2026-05",
+        matched_labels=frozenset({"PIPE M/C - 1", "PIPE M/C - 2", "TTS-88-4"}),
+        skipped={"1-KABRA-90-22": 530.0},
+    )
+    assert result is not None, "Expected warning for partial-match join"
+    assert result["r11_matched"] == 3
+    assert result["r11_unmatched"] == 1
+    assert result["r11_total_labels"] == 4
+    assert result["unmatched_labels"][0] == {"label": "1-KABRA-90-22", "kg": 530.0}
+    text = result["text"]
+    assert "3 of 4" in text, text
+    assert "1-KABRA-90-22" in text, text
+    assert "530" in text, text
+    assert "PIPE 2026-05" in text, text
+    print("PASS: r11_join_warning — partial match fires with M-of-N and names the unmatched label")
+
+
+def test_r11_join_warning_unmatched_labels_sorted_by_kg():
+    """Unmatched labels must be listed by kg descending so the biggest miss is first."""
+    skipped = {"LABEL-A": 100.0, "LABEL-B": 9000.0, "LABEL-C": 500.0}
+    result = pipe_reconcile.r11_join_warning("PIPE", "2026-04", frozenset(), skipped)
+    labels = [e["label"] for e in result["unmatched_labels"]]
+    assert labels == ["LABEL-B", "LABEL-C", "LABEL-A"], labels
+    print("PASS: r11_join_warning — unmatched labels sorted by kg desc")
+
+
+def test_r11_join_warning_unmatched_with_zero_kg_not_counted():
+    """Labels that appeared but had 0 output are not tracked in skipped (no false alarm)."""
+    # parse_report11 only adds to skipped when out > 0; simulate that here.
+    values = [
+        ["M/C & Item Wise Actual Production"],
+        [],
+        [],
+        [],
+        [],
+        ["DATE", "", "MACHINE NO.", "TYPES", "Pcs", "Ideal Weight (KG)",
+         "Weight", "Ideal Wt (Kg)", "Actual Wt (Kg)", "FC"],
+        # Unmapped label, but 0 output — must not appear in skipped.
+        ["Apr 1, 2026", "", "UNKNOWN-LABEL", "SWR", "0", "0", "0", "0", "0", "0"],
+        # Matched label, real output.
+        ["Apr 1, 2026", "", "PIPE M/C - 1", "CPVC", "100", "0", "1000", "0", "50", "0"],
+    ]
+    agg, skipped, matched = pipe_reconcile.parse_report11(values, "2026-04", _mc_key)
+    assert "UNKNOWN-LABEL" not in skipped, (
+        f"Zero-output unmatched label must not pollute skipped: {skipped}")
+    assert "PIPE M/C - 1" in matched, matched
+    warn = pipe_reconcile.r11_join_warning("PIPE", "2026-04", matched, skipped)
+    assert warn is None, f"Zero-output unmatched label must not trigger warning: {warn}"
+    print("PASS: r11_join_warning — zero-output unmatched labels do not trigger warning")
 
 
 if __name__ == "__main__":
@@ -187,4 +301,10 @@ if __name__ == "__main__":
     test_resolve_r11_label_legacy_aliases()
     test_resolve_r11_label_unknown_returns_none()
     test_parse_report11_with_legacy_labels()
+    test_r11_join_warning_clean_join_returns_none()
+    test_r11_join_warning_genuinely_empty_r11_returns_none()
+    test_r11_join_warning_all_unmatched()
+    test_r11_join_warning_partial_match()
+    test_r11_join_warning_unmatched_labels_sorted_by_kg()
+    test_r11_join_warning_unmatched_with_zero_kg_not_counted()
     print("\nALL pipe_reconcile tests passed.")

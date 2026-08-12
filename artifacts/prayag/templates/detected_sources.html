@@ -166,6 +166,81 @@
   </div>
   {% endif %}
 
+  {% if r.pipe_reconcile %}
+  {%- set prc = r.pipe_reconcile %}
+  {%- set jw = prc.r11_join %}
+  <details class="mt-2 group" {% if jw %}open{% endif %}>
+    <summary class="text-xs font-medium text-gray-600 cursor-pointer select-none flex items-center gap-1.5">
+      <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" class="transition-transform group-open:rotate-90"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      R5 ↔ R11 reconciliation
+      {% if jw %}
+      <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800">
+        {{ jw.r11_unmatched }} label{{ 's' if jw.r11_unmatched != 1 }} unmatched
+      </span>
+      {% elif prc.report11_present %}
+      <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-800">all matched</span>
+      {% else %}
+      <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400">R11 not present</span>
+      {% endif %}
+    </summary>
+    <div class="mt-2 text-[11px]">
+      {# ── Join counts ── #}
+      <div class="grid grid-cols-4 gap-1 mb-2">
+        <div class="bg-gray-50 rounded p-1.5 text-center">
+          <div class="text-gray-400 text-[10px] mb-0.5">R5 machines</div>
+          <div class="font-semibold text-gray-700">{{ prc.r5_labels }}</div>
+        </div>
+        <div class="bg-gray-50 rounded p-1.5 text-center">
+          <div class="text-gray-400 text-[10px] mb-0.5">R11 labels</div>
+          <div class="font-semibold text-gray-700">{{ (jw.r11_total_labels if jw else (prc.r11_matched if prc.report11_present else '—')) }}</div>
+        </div>
+        <div class="bg-green-50 rounded p-1.5 text-center">
+          <div class="text-green-700 text-[10px] mb-0.5">matched</div>
+          <div class="font-semibold text-green-800">{{ (jw.r11_matched if jw else (prc.r11_matched if prc.report11_present else '—')) }}</div>
+        </div>
+        <div class="{% if jw and jw.r11_unmatched > 0 %}bg-amber-50{% else %}bg-gray-50{% endif %} rounded p-1.5 text-center">
+          <div class="{% if jw and jw.r11_unmatched > 0 %}text-amber-700{% else %}text-gray-400{% endif %} text-[10px] mb-0.5">unmatched</div>
+          <div class="font-semibold {% if jw and jw.r11_unmatched > 0 %}text-amber-800{% else %}text-gray-500{% endif %}">{{ (jw.r11_unmatched if jw else 0) }}</div>
+        </div>
+      </div>
+      {# ── Unmatched label detail ── #}
+      {% if jw and jw.unmatched_labels %}
+      <div class="rounded bg-amber-50 border border-amber-100 p-2 mb-2">
+        <div class="text-amber-800 font-medium mb-1">Unmatched labels — not counted in this month's output:</div>
+        <table class="w-full text-[10px]">
+          <thead><tr class="text-left text-amber-600">
+            <th class="pb-0.5 pr-2 font-medium">Label</th>
+            <th class="pb-0.5 text-right font-medium">Output (kg)</th>
+          </tr></thead>
+          <tbody>
+          {% for ul in jw.unmatched_labels %}
+          <tr class="border-t border-amber-100">
+            <td class="py-0.5 pr-2 font-mono text-amber-900">{{ ul.label }}</td>
+            <td class="py-0.5 text-right text-amber-900">{{ "{:,.0f}".format(ul.kg) }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <div class="mt-1.5 text-[10px] text-amber-700">
+          {% if jw.r11_matched == 0 %}
+          Output falls back to Report-5 only for this month. Machine-days recorded only in Report-11 are not counted.
+          {% else %}
+          Machine-days for these labels are not counted. Add aliases to <code class="bg-amber-100 px-0.5 rounded">pipe_reconcile._R11_ALIAS</code> once the correct M/C mapping is confirmed.
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {# ── Summary totals ── #}
+      <div class="text-[10px] text-gray-500 flex gap-3 flex-wrap">
+        <span>R5 out: <strong>{{ "{:,.0f}".format(prc.r5_out) }} kg</strong></span>
+        <span>R11 out: <strong>{{ "{:,.0f}".format(prc.r11_out) }} kg</strong></span>
+        <span>Reconciled: <strong>{{ "{:,.0f}".format(prc.audit.out_total) }} kg</strong></span>
+        <span>Untyped pickup: <strong>{{ "{:,.0f}".format(prc.untyped_kg) }} kg</strong></span>
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
   {% if r.field_map %}
   <details class="mt-2 group">
     <summary class="text-xs font-medium text-gray-500 cursor-pointer select-none flex items-center gap-1">

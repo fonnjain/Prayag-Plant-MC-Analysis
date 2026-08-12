@@ -32,7 +32,7 @@ layout.  The standalone "Weight" column (immediately after "Pcs") is the output
 kept separate); the FIRST "TYPES" column is the type (a duplicate sits further
 right).  Pure: no network, no I/O.
 """
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Optional, Set, Tuple
 
 import parsers
 
@@ -96,16 +96,31 @@ def parse_report11(
     values: list,
     year_month: str,
     mc_key: Callable[[str], Optional[int]],
-) -> Dict[Tuple[int, str], dict]:
+) -> Tuple[Dict[Tuple[int, str], dict], Dict[str, float], FrozenSet[str]]:
     """Parse Report-11 into ``{(machine_n, "YYYY-MM-DD"): {out, rej, by_type}}``.
 
     ``mc_key`` maps a machine label ("PIPE M/C - 1") to its integer number; a
     label that does not resolve (None) is skipped.  Multiple item rows for the
     same (machine, date) are summed.  Subtotal rows (label containing "TOTAL")
-    are dropped.  Returns ``{}`` if the header cannot be located.
+    are dropped.  Returns ``({}, {}, frozenset())`` if the header cannot be
+    located (genuinely empty — no data to join).
+
+    Returns ``(agg, skipped, matched_labels)`` where:
+
+    * ``agg``            — per-(machine, date) aggregates for resolved labels.
+    * ``skipped``        — ``{label: total_output_kg}`` for labels that appeared
+                           in Report-11 with positive output but could NOT be
+                           resolved to an M/C number (R-27 join diagnostic).
+    * ``matched_labels`` — frozenset of the original label strings that resolved
+                           successfully (used to compute matched/total counts).
+
+    Distinction that matters for R-27: ``skipped == {}`` and ``matched_labels ==
+    frozenset()`` means Report-11 had *no data rows at all* — that is NOT a
+    degraded join.  ``skipped`` non-empty means labels were present but
+    unresolvable — that IS a degraded join.
     """
     if not values:
-        return {}
+        return {}, {}, frozenset()
 
     # Header row = the first row (within the top band) carrying the DATE label.
     hdr = -1
@@ -114,7 +129,7 @@ def parse_report11(
             hdr = i
             break
     if hdr < 0:
-        return {}
+        return {}, {}, frozenset()
 
     band = values[hdr]
 
@@ -130,9 +145,12 @@ def parse_report11(
     out_c = find(_H_OUT)
     rej_c = find(_H_REJ)
     if date_c < 0 or mc_c < 0 or out_c < 0:
-        return {}
+        return {}, {}, frozenset()
 
     agg: Dict[Tuple[int, str], dict] = {}
+    skipped: Dict[str, float] = {}   # label → total output kg (R-27)
+    matched: Set[str] = set()        # original label strings that resolved
+
     for row in values[hdr + 1:]:
         day = parsers._long_date_day(row[date_c] if date_c < len(row) else "")
         if day is None:
@@ -140,11 +158,15 @@ def parse_report11(
         label = str(row[mc_c]).strip() if mc_c < len(row) else ""
         if not label or "TOTAL" in label.upper():
             continue
+        out = parsers.num(row[out_c]) if 0 <= out_c < len(row) else 0.0
         n = mc_key(label)
         if n is None:
+            # Track unmatched labels that carry real output (R-27 join diagnostic).
+            if out > 0:
+                skipped[label] = skipped.get(label, 0.0) + out
             continue
+        matched.add(label)
         date = f"{year_month}-{day:02d}"
-        out = parsers.num(row[out_c]) if 0 <= out_c < len(row) else 0.0
         rej = parsers.num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
         typ = str(row[type_c]).strip().upper() if 0 <= type_c < len(row) else ""
         a = agg.get((n, date))
@@ -155,7 +177,70 @@ def parse_report11(
         a["rej"] += rej
         if typ and out > 0:
             a["by_type"][typ] = a["by_type"].get(typ, 0.0) + out
-    return agg
+
+    return agg, skipped, frozenset(matched)
+
+
+def r11_join_warning(
+    plant: str,
+    ym: str,
+    matched_labels: FrozenSet[str],
+    skipped: Dict[str, float],
+) -> Optional[dict]:
+    """Warning dict when R11's machine labels fail to join against R5 (R-27).
+
+    Returns ``None`` when the join is clean:
+
+    * ``skipped`` is empty → all labels resolved, or R11 genuinely had no
+      data rows (the two cases are distinguishable at the caller because
+      ``matched_labels`` is also empty in the "no data" case, but neither
+      warrants a warning).
+
+    Returns a dict with ``text`` (user-facing warning string) and join counts
+    when ``skipped`` is non-empty:
+
+    * All labels unmatched (``matched_labels`` empty): full fallback to R5
+      — machine-days that appear *only* in Report-11 are not counted.
+    * Partial match: ``skipped`` names the labels that were lost.
+
+    The dict keys: ``text``, ``r11_total_labels``, ``r11_matched``,
+    ``r11_unmatched``, ``unmatched_labels`` (list of ``{label, kg}`` dicts
+    sorted by kg descending).
+    """
+    n_skipped = len(skipped)
+    if n_skipped == 0:
+        return None  # Clean join or R11 genuinely empty — not a degradation.
+
+    n_matched = len(matched_labels)
+    n_total = n_matched + n_skipped
+    unmatched = sorted(skipped.items(), key=lambda kv: -kv[1])
+    unmatched_str = ", ".join(
+        f"{lbl} ({kg:,.0f} kg)" for lbl, kg in unmatched
+    )
+
+    if n_matched == 0:
+        text = (
+            f"{plant} {ym}: Report-11 reconciliation matched 0 of {n_total} "
+            f"machine label(s) (unmatched: {unmatched_str}). "
+            f"Output falls back to Report-5 only; machine-days recorded "
+            f"only in Report-11 are not counted."
+        )
+    else:
+        text = (
+            f"{plant} {ym}: Report-11 reconciliation matched {n_matched} of "
+            f"{n_total} machine label(s); {n_skipped} unmatched "
+            f"({unmatched_str}). Machine-days for unmatched labels are not counted."
+        )
+
+    return {
+        "text": text,
+        "r11_total_labels": n_total,
+        "r11_matched": n_matched,
+        "r11_unmatched": n_skipped,
+        "unmatched_labels": [
+            {"label": lbl, "kg": round(kg, 1)} for lbl, kg in unmatched
+        ],
+    }
 
 
 def reconcile(
