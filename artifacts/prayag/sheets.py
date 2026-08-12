@@ -245,7 +245,15 @@ _discovery_state: dict = {
     "last_scan_ts": 0.0,   # epoch of the last folder scan (ok or not)
     "added": {},           # {plant: [ym, ...]} discovered on top of the pins
     "error": None,         # message of the most recent scan failure, if any
+    "vanished": None,      # {plant:ym -> file_id} months previously seen, now gone
 }
+
+# Postgres key for the persistent "discovery_seen" registry.
+# This is NOT a data cache — it is an append-only map of every (plant, ym)
+# that discovery has ever successfully resolved, with the file ID it found.
+# It must survive all normal TTL windows and process restarts (1-year TTL).
+_DS_SEEN_KEY = "discovery_seen"
+_DS_SEEN_TTL = 31_536_000  # seconds ≈ 1 year
 _DISCOVERY_TTL = 600.0     # re-scan folders at most this often (10 min)
 _discovery_lock = threading.Lock()
 
@@ -461,6 +469,41 @@ def ensure_daily_discovery(force: bool = False) -> dict:
                 applied[plant].sort()
             _discovery_state["added"] = applied
             _discovery_state["error"] = None
+
+            # ── Seen-month registry + vanished-file detection ─────────────────
+            # Load the persistent map of every (plant, ym) discovery has ever
+            # resolved.  Use a 1-year TTL — this is a registry, not a data cache.
+            seen_map: dict = _store.pg_cache_read(_DS_SEEN_KEY, _DS_SEEN_TTL) or {}
+            new_seen = False
+            for (ds_plant, ds_ym), (ds_fid, _mt) in found.items():
+                k = f"{ds_plant}:{ds_ym}"
+                if seen_map.get(k) != ds_fid:
+                    seen_map[k] = ds_fid
+                    new_seen = True
+
+            # A month is vanished when it was previously seen, is not in this
+            # scan's found set, and is not pinned in sources.py.  Future months
+            # (beyond today) are not flagged — they may not have files yet.
+            current_ym_str = time.strftime("%Y-%m")
+            vanished: dict = {}
+            for sk, sfid in seen_map.items():
+                sk_parts = sk.split(":", 1)
+                if len(sk_parts) != 2:
+                    continue
+                sk_plant, sk_ym = sk_parts
+                if sk_ym > current_ym_str:
+                    continue  # future month — not yet expected
+                if sk_ym in (sources.DAILY_SOURCES.get(sk_plant, {})
+                             .get("files") or {}):
+                    continue  # still pinned — always reliable
+                if (sk_plant, sk_ym) not in found:
+                    vanished[sk] = sfid  # discovered before, absent now
+
+            _discovery_state["vanished"] = vanished
+            if new_seen or vanished:
+                _store.pg_cache_write(_DS_SEEN_KEY, seen_map)
+            # ─────────────────────────────────────────────────────────────────
+
         except Exception as exc:  # noqa: BLE001 — best-effort, never break a page
             _discovery_state["error"] = str(exc)
             logger.warning("Drive folder discovery failed: %s", exc)
@@ -474,7 +517,63 @@ def discovery_status() -> dict:
         "last_scan_ts": _discovery_state.get("last_scan_ts", 0.0),
         "added": dict(_discovery_state.get("added") or {}),
         "error": _discovery_state.get("error"),
+        "vanished": dict(_discovery_state.get("vanished") or {}),
     }
+
+
+def _get_vanished_file_id(plant: str, ym: str) -> Optional[str]:
+    """Return the last-known file ID for a discovered month that is no longer
+    reachable, or None when the month never had a discovered file or is pinned.
+
+    Checks the in-process ``_discovery_state["vanished"]`` map first (populated
+    by the most recent ``ensure_daily_discovery`` call).  Falls back to the
+    persistent Postgres ``discovery_seen`` registry when discovery has not yet
+    run in this process (cold-start / fresh gunicorn worker).
+    """
+    # Pinned months are always authoritative and never considered vanished,
+    # regardless of stale entries that may exist in the vanished map.
+    if ym in (sources.DAILY_SOURCES.get(plant, {}).get("files") or {}):
+        return None
+    key = f"{plant}:{ym}"
+    # Fast path: in-memory state updated by the most recent scan.
+    v = _discovery_state.get("vanished")
+    if v is not None:
+        return v.get(key)
+    # Cold-start fallback: discovery hasn't run yet in this worker process.
+    # Check the persistent registry directly.
+    seen_map = _store.pg_cache_read(_DS_SEEN_KEY, _DS_SEEN_TTL) or {}
+    fid = seen_map.get(key)
+    return fid if fid else None
+
+
+def _vanished_reports(plant: str, ym: str, vanished_fid: str) -> List[Tuple[List, dict]]:
+    """Build ([], warning-report) tuples for a month whose discovered file has vanished.
+
+    Mirrors the shape of ``_load_daily`` output so callers can treat it the same
+    way: one entry per logical emitter the workbook would have produced.  Uses
+    ``_DAILY_LAYOUTS`` to determine the emitter names; falls back to a single
+    plant-keyed report when no layout spec is registered.
+    """
+    short = vanished_fid[:20] + "…"
+    msg = (
+        f"{plant} {ym}: a previously discovered source file is no longer readable "
+        f"(was {short}). This month may show no data. Source may have been "
+        f"deleted, moved, or had access revoked."
+    )
+    specs = _DAILY_LAYOUTS.get(plant, [])
+    if specs:
+        return [
+            ([], {
+                "emit": spec["emit"], "plant": spec["emit"], "ym": ym,
+                "record_count": 0, "vanished_source": True, "warning": msg,
+            })
+            for spec in specs
+        ]
+    # Plants with no layout spec: emit one report keyed to the plant itself.
+    return [([], {
+        "plant": plant, "ym": ym, "record_count": 0,
+        "vanished_source": True, "warning": msg,
+    })]
 
 
 # ---------------------------------------------------------------------------
@@ -2176,6 +2275,13 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
   emits (the PIPE workbook emits both PIPE and Moulding)."""
   file_id = sources.DAILY_SOURCES.get(plant, {}).get("files", {}).get(ym)
   if not file_id:
+      # Three distinct states must not be conflated:
+      #   1. never had a file        → return [] (existing "awaiting source" behaviour)
+      #   2. genuinely zero output   → handled below via EMPTY_SOURCES
+      #   3. had a discovered file, now unreadable → new vanished warning
+      vanished_fid = _get_vanished_file_id(plant, ym)
+      if vanished_fid:
+          return _vanished_reports(plant, ym, vanished_fid)
       return []
   # Known-empty template (e.g. a prior-year month whose workbook is all zeros):
   # do NOT read it as a real zero-output month — return an "awaiting source"
@@ -2269,6 +2375,23 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
           # Daily-vs-grid reconciliation data is kept in report["reconcile"]
           # for the Sources diagnostic page, but is no longer emitted as a
           # user-visible warning — daily files are the authoritative source.
+
+  # Surface vanished-file warnings for months that discovery once found but
+  # can no longer reach.  These are NOT in ``pairs`` (no file in sources.py
+  # nor discovered this run), so they would silently render as "no data"
+  # without this explicit check.  The report dict carries vanished_source=True
+  # so the data-health panel can render an appropriate indicator.
+  for ym in months:
+      for dp in _daily_plants():
+          if ym in (sources.DAILY_SOURCES.get(dp, {}).get("files") or {}):
+              continue  # covered by the pairs loop above
+          v_fid = _get_vanished_file_id(dp, ym)
+          if v_fid:
+              for _, v_report in _vanished_reports(dp, ym, v_fid):
+                  reports.append(v_report)
+                  if v_report.get("warning"):
+                      warnings.append(v_report["warning"])
+
   return all_recs, reports, warnings
 
 
