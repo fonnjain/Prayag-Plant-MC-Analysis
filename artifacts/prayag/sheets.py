@@ -254,6 +254,7 @@ _discovery_state: dict = {
 # It must survive all normal TTL windows and process restarts (1-year TTL).
 _DS_SEEN_KEY = "discovery_seen"
 _DS_SEEN_TTL = 31_536_000  # seconds ≈ 1 year
+_DS_MISS_THRESHOLD = 3     # consecutive *informative* misses before warning fires
 _DISCOVERY_TTL = 600.0     # re-scan folders at most this often (10 min)
 _discovery_lock = threading.Lock()
 
@@ -398,6 +399,52 @@ def _list_drive_folder(folder_id: str, token: str) -> List[dict]:
     return out
 
 
+def _seen_entry(v) -> dict:
+    """Normalise a ``discovery_seen`` map value.
+
+    The registry was originally written as ``{key: file_id_str}``.  The current
+    format is ``{key: {"fid": str, "miss": int, "confirmed_gone": bool}}``.
+    This helper migrates old string values on first read so callers always work
+    with the richer dict without needing to know about the legacy shape.
+    """
+    if isinstance(v, dict):
+        return v
+    if v is None:
+        return {"fid": "", "miss": 0, "confirmed_gone": False}
+    return {"fid": str(v), "miss": 0, "confirmed_gone": False}
+
+
+def _probe_file_readable(file_id: str, drive_token: str) -> Optional[bool]:
+    """Probe whether a Drive file is still accessible via a lightweight metadata GET.
+
+    Returns:
+        ``True``  — file exists and is readable (reset miss counter; don't warn)
+        ``False`` — file is confirmed gone: 403 (access revoked) or 404 (deleted)
+        ``None``  — inconclusive: 429 / 5xx / timeout / other network error
+                    (do NOT emit a warning; let the miss counter keep climbing
+                    until a definitive answer arrives)
+
+    This is the "direct read confirmation" step required by Failure Mode #9:
+    a month absent from a folder scan is not necessarily deleted — the file
+    must also fail a direct fetch before the app warns operators.
+    """
+    url = (
+        f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        f"?fields=id&supportsAllDrives=true"
+    )
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {drive_token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            _ = json.load(r)
+            return True
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return False       # confirmed gone
+        return None            # 429, 5xx, etc. — inconclusive
+    except Exception:
+        return None            # timeout / network error — inconclusive
+
+
 def ensure_daily_discovery(force: bool = False) -> dict:
     """List each plant's Drive folder(s) and ADD any newly-found monthly file.
 
@@ -427,31 +474,57 @@ def ensure_daily_discovery(force: bool = False) -> dict:
             _discovery_state["last_scan_ts"] = now  # don't hot-loop on missing token
             return _discovery_state["added"]
 
-        # (plant, ym) -> (file_id, modifiedTime) for months not already pinned.
+        # ── Phase 1: Scan each plant's Drive folders with per-folder isolation ──
+        # A single folder's 403/429/timeout must NOT mark every other plant's
+        # months as absent. Per-folder try/except confines each failure to that
+        # one folder, and the plant_scan_productive map records whether each
+        # plant's scan was genuinely informative (Failure Mode #9).
         found: dict = {}
-        try:
-            for plant, cfg in sources.DAILY_SOURCES.items():
-                if plant not in _DAILY_LAYOUTS:
-                    continue  # only auto-add plants the daily pipeline can read
-                pinned = cfg.get("files") or {}
-                for fid in (cfg.get("folder_ids") or []):
-                    for f in _list_drive_folder(fid, token):
+        plant_scan_productive: dict = {}  # plant → True | False | None
+
+        for plant, cfg in sources.DAILY_SOURCES.items():
+            if plant not in _DAILY_LAYOUTS:
+                continue  # only auto-add plants the daily pipeline can read
+            pinned = cfg.get("files") or {}
+            plant_any_file = False
+            plant_any_ok_call = False
+            for folder_id in (cfg.get("folder_ids") or []):
+                try:
+                    files = _list_drive_folder(folder_id, token)
+                    plant_any_ok_call = True
+                    for f in files:
+                        plant_any_file = True
                         ym = parse_month_from_title(f.get("name", ""))
                         if not ym or ym in pinned:
                             continue  # unparseable, or a pinned month wins
                         mtime = f.get("modifiedTime", "") or ""
                         prev = found.get((plant, ym))
-                        # If two discovered files claim the same month, keep the
-                        # most recently modified (don't guess silently past it).
+                        # Keep most-recently-modified when two folders claim
+                        # the same month (don't guess silently past it).
                         if prev is None or mtime >= prev[1]:
                             found[(plant, ym)] = (f.get("id", ""), mtime)
-            # Group additions per plant, then swap each plant's ``files`` dict by
-            # reference (copy-on-write) rather than mutating it in place. The
-            # reference reassignment is atomic under the GIL, so a request handler
-            # mid-iteration over the OLD dict (app.py/freshness/confirm all read
-            # DAILY_SOURCES from background-thread-adjacent request paths) finishes
-            # cleanly on its snapshot instead of hitting "dictionary changed size
-            # during iteration"; the next read simply sees the fuller map.
+                except Exception as scan_exc:  # noqa: BLE001
+                    logger.warning("Drive folder scan failed (%s / %s): %s",
+                                   plant, folder_id, scan_exc)
+            # Classify scan quality for this plant:
+            #   None  → all folder calls errored          (inconclusive)
+            #   False → calls succeeded but found nothing (inconclusive if
+            #           this plant had prior discoveries)
+            #   True  → at least one file found           (informative)
+            if not plant_any_ok_call:
+                plant_scan_productive[plant] = None
+            elif plant_any_file:
+                plant_scan_productive[plant] = True
+            else:
+                plant_scan_productive[plant] = False
+
+        # ── Phase 2: Apply additions + seen-map / vanished detection ─────────
+        # Wrapped separately so a Postgres failure doesn't discard the scan.
+        errored_plants = [p for p, ok in plant_scan_productive.items()
+                          if ok is None]
+        try:
+            # Group additions per plant; copy-on-write to avoid mid-iteration
+            # dict-resize in concurrent request handlers.
             adds_by_plant: dict = {}
             for (plant, ym), (fid, _mt) in found.items():
                 if fid:
@@ -468,39 +541,88 @@ def ensure_daily_discovery(force: bool = False) -> dict:
             for plant in applied:
                 applied[plant].sort()
             _discovery_state["added"] = applied
-            _discovery_state["error"] = None
+            _discovery_state["error"] = (
+                f"folder scan errored for: {', '.join(errored_plants)}"
+                if errored_plants else None
+            )
 
-            # ── Seen-month registry + vanished-file detection ─────────────────
-            # Load the persistent map of every (plant, ym) discovery has ever
-            # resolved.  Use a 1-year TTL — this is a registry, not a data cache.
+            # ── Seen-map + vanished-file detection ────────────────────────────
+            # Registry format: {f"{plant}:{ym}": {"fid": str, "miss": int,
+            #                                      "confirmed_gone": bool}}
+            # Rules (Failure Mode #9 / R-35):
+            #   • Only productive scans (True) count toward the miss counter.
+            #   • An errored or empty scan is inconclusive — do NOT touch counters.
+            #   • A warning fires only after N=_DS_MISS_THRESHOLD consecutive
+            #     informative misses AND a direct file probe returns 403/404.
+            #   • A 429/5xx/timeout on the probe is inconclusive — no warning yet.
             seen_map: dict = _store.pg_cache_read(_DS_SEEN_KEY, _DS_SEEN_TTL) or {}
-            new_seen = False
+            map_changed = False
+
+            # 2a. Merge found months (reset any stale miss counter).
             for (ds_plant, ds_ym), (ds_fid, _mt) in found.items():
                 k = f"{ds_plant}:{ds_ym}"
-                if seen_map.get(k) != ds_fid:
-                    seen_map[k] = ds_fid
-                    new_seen = True
+                entry = _seen_entry(seen_map.get(k))
+                if (k not in seen_map or entry["fid"] != ds_fid
+                        or entry.get("miss", 0) > 0
+                        or entry.get("confirmed_gone")):
+                    seen_map[k] = {"fid": ds_fid, "miss": 0, "confirmed_gone": False}
+                    map_changed = True
 
-            # A month is vanished when it was previously seen, is not in this
-            # scan's found set, and is not pinned in sources.py.  Future months
-            # (beyond today) are not flagged — they may not have files yet.
+            # 2b. For each previously-seen month absent from this scan, check
+            #     whether the scan was actually informative for that plant before
+            #     counting it as a miss.
             current_ym_str = time.strftime("%Y-%m")
-            vanished: dict = {}
-            for sk, sfid in seen_map.items():
+            newly_confirmed: dict = {}
+
+            for sk, raw_entry in list(seen_map.items()):
+                entry = _seen_entry(raw_entry)
                 sk_parts = sk.split(":", 1)
                 if len(sk_parts) != 2:
                     continue
                 sk_plant, sk_ym = sk_parts
                 if sk_ym > current_ym_str:
-                    continue  # future month — not yet expected
+                    continue  # future — may not exist yet
                 if sk_ym in (sources.DAILY_SOURCES.get(sk_plant, {})
                              .get("files") or {}):
-                    continue  # still pinned — always reliable
-                if (sk_plant, sk_ym) not in found:
-                    vanished[sk] = sfid  # discovered before, absent now
+                    continue  # pinned — always exempt (R-12)
+                if (sk_plant, sk_ym) in found:
+                    continue  # found this cycle; already reset in 2a
 
-            _discovery_state["vanished"] = vanished
-            if new_seen or vanished:
+                if plant_scan_productive.get(sk_plant) is not True:
+                    # Inconclusive scan: all folders errored (None) or empty
+                    # scan for a plant that previously had discoveries (False).
+                    # Do NOT increment miss counter; do NOT touch the registry.
+                    continue
+
+                # Genuine informative miss: increment counter.
+                new_miss = entry.get("miss", 0) + 1
+                entry = {**entry, "miss": new_miss}
+                seen_map[sk] = entry
+                map_changed = True
+
+                if entry.get("confirmed_gone"):
+                    # Confirmed on a previous cycle — keep emitting the warning.
+                    newly_confirmed[sk] = entry["fid"]
+                elif new_miss >= _DS_MISS_THRESHOLD:
+                    # Threshold reached: probe the file before raising the alarm
+                    # (folder absence ≠ file deleted — Failure Mode #9).
+                    probe = _probe_file_readable(entry["fid"], token)
+                    if probe is False:
+                        # 403/404: confirmed deleted or access revoked.
+                        entry = {**entry, "confirmed_gone": True}
+                        seen_map[sk] = entry
+                        map_changed = True
+                        newly_confirmed[sk] = entry["fid"]
+                    elif probe is True:
+                        # Reads fine — folder scan was a transient false miss.
+                        # Reset so the clock starts fresh next cycle.
+                        entry = {**entry, "miss": 0}
+                        seen_map[sk] = entry
+                        map_changed = True
+                    # probe None (429/5xx/timeout): inconclusive; hold off.
+
+            _discovery_state["vanished"] = newly_confirmed
+            if map_changed:
                 _store.pg_cache_write(_DS_SEEN_KEY, seen_map)
             # ─────────────────────────────────────────────────────────────────
 
@@ -540,10 +662,17 @@ def _get_vanished_file_id(plant: str, ym: str) -> Optional[str]:
     if v is not None:
         return v.get(key)
     # Cold-start fallback: discovery hasn't run yet in this worker process.
-    # Check the persistent registry directly.
+    # Check the persistent registry and honour confirmed_gone — months that
+    # have only accumulated miss counts (but no direct-probe confirmation) are
+    # NOT yet treated as vanished, matching the in-process behaviour.
     seen_map = _store.pg_cache_read(_DS_SEEN_KEY, _DS_SEEN_TTL) or {}
-    fid = seen_map.get(key)
-    return fid if fid else None
+    raw = seen_map.get(key)
+    if not raw:
+        return None
+    entry = _seen_entry(raw)
+    if not entry.get("confirmed_gone"):
+        return None  # miss threshold not yet reached or probe was inconclusive
+    return entry["fid"] if entry["fid"] else None
 
 
 def _vanished_reports(plant: str, ym: str, vanished_fid: str) -> List[Tuple[List, dict]]:

@@ -205,22 +205,27 @@ class TestTemplateSourceContainsTiers:
 class TestTankNALabelling:
     """Verify the em-dash tooltip renders for Tank plants in plant.html."""
 
+    # Updated wording per R-25: Tank has run-hours columns in the source;
+    # "not applicable" was factually wrong. Now says "not currently tracked".
     TANK_SNIPPET = (
         "{% if avail %}{{ val }}%"
         "{% elif item.plant in ('TANK', 'TANK_VN', 'TANK_WB') %}"
-        '<span class="text-gray-400" title="Not applicable — Tank is output-only'
-        ' (no run hours or machine dimension in source).">\u2014</span>'
+        '<span class="text-gray-400" title="Not currently tracked for Tank'
+        ' — run hours are recorded in the source but are not yet complete'
+        ' or reconciled.">\u2014</span>'
         "{% else %}"
         '<span class="text-gray-400">n/a</span>'
         "{% endif %}"
     )
+    # Canonical text that must appear in the actual plant.html file (R-25).
+    _TOOLTIP_TEXT = "Not currently tracked for Tank"
 
     def test_tank_plant_renders_emdash(self):
         env = _make_env()
         tpl = env.from_string(self.TANK_SNIPPET)
         result = tpl.render(avail=False, val=0, item={"plant": "TANK"})
         assert "—" in result, "em-dash missing for TANK plant"
-        assert "Not applicable" in result, "tooltip missing for TANK"
+        assert self._TOOLTIP_TEXT in result, "tooltip missing for TANK"
         assert "n/a" not in result, "n/a must not appear for TANK"
 
     def test_tank_vn_renders_emdash(self):
@@ -228,14 +233,14 @@ class TestTankNALabelling:
         tpl = env.from_string(self.TANK_SNIPPET)
         result = tpl.render(avail=False, val=0, item={"plant": "TANK_VN"})
         assert "—" in result
-        assert "Not applicable" in result
+        assert self._TOOLTIP_TEXT in result
 
     def test_tank_wb_renders_emdash(self):
         env = _make_env()
         tpl = env.from_string(self.TANK_SNIPPET)
         result = tpl.render(avail=False, val=0, item={"plant": "TANK_WB"})
         assert "—" in result
-        assert "Not applicable" in result
+        assert self._TOOLTIP_TEXT in result
 
     def test_non_tank_plant_renders_na(self):
         """GARDEN, HDPE, MOULDING etc. keep showing n/a (not em-dash)."""
@@ -262,8 +267,8 @@ class TestTankNALabelling:
             src = f.read()
         assert "item.plant in ('TANK', 'TANK_VN', 'TANK_WB')" in src, \
             "Tank plant guard missing from plant.html"
-        assert "Not applicable" in src, \
-            "Tank tooltip text missing from plant.html"
+        assert "Not currently tracked for Tank" in src, \
+            "Tank tooltip text missing or outdated in plant.html (R-25 requires 'not currently tracked')"
 
     def test_plant_html_source_still_has_na_for_others(self):
         """Confirm plant.html still shows n/a for non-Tank unavailable metrics."""

@@ -243,6 +243,178 @@ def test_discovery_status_vanished_empty_when_no_vanished():
 
 
 # ---------------------------------------------------------------------------
+# Fix 1 (N=3 miss threshold) — _seen_entry migration
+# ---------------------------------------------------------------------------
+
+class TestSeenEntryMigration:
+    """_seen_entry must transparently migrate legacy string values."""
+
+    def test_dict_passthrough(self):
+        v = {"fid": "abc", "miss": 2, "confirmed_gone": False}
+        assert sheets._seen_entry(v) is v
+
+    def test_string_migrates_to_dict(self):
+        e = sheets._seen_entry("some-fid-xyz")
+        assert e["fid"] == "some-fid-xyz"
+        assert e["miss"] == 0
+        assert e["confirmed_gone"] is False
+
+    def test_none_gives_empty_entry(self):
+        e = sheets._seen_entry(None)
+        assert e["fid"] == ""
+        assert e["miss"] == 0
+        assert e["confirmed_gone"] is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — cold-start path honours confirmed_gone flag
+# ---------------------------------------------------------------------------
+
+class TestColdStartVanished:
+    """_get_vanished_file_id cold-start path (discovery hasn't run yet in process)."""
+
+    def setup_method(self):
+        # Force cold-start by setting vanished to None (not yet populated)
+        self._orig = sheets._discovery_state.get("vanished")
+        sheets._discovery_state["vanished"] = None
+
+    def teardown_method(self):
+        sheets._discovery_state["vanished"] = self._orig
+
+    def _mock_seen(self, entry: dict):
+        """Patch pg_cache_read to return a single-entry seen_map."""
+        key = "TANK:2026-07"
+        return mock.patch.object(
+            sheets._store, "pg_cache_read", return_value={key: entry}
+        )
+
+    def test_confirmed_gone_true_returns_fid(self):
+        entry = {"fid": _FAKE_FID, "miss": 3, "confirmed_gone": True}
+        with self._mock_seen(entry):
+            result = sheets._get_vanished_file_id("TANK", "2026-07")
+        assert result == _FAKE_FID, (
+            f"confirmed_gone=True should return fid, got {result!r}")
+
+    def test_confirmed_gone_false_returns_none(self):
+        """miss=3 but probe not yet confirmed → no warning on cold start."""
+        entry = {"fid": _FAKE_FID, "miss": 3, "confirmed_gone": False}
+        with self._mock_seen(entry):
+            result = sheets._get_vanished_file_id("TANK", "2026-07")
+        assert result is None, (
+            "confirmed_gone=False (probe inconclusive) must NOT warn on cold start")
+
+    def test_miss_below_threshold_returns_none(self):
+        entry = {"fid": _FAKE_FID, "miss": 2, "confirmed_gone": False}
+        with self._mock_seen(entry):
+            result = sheets._get_vanished_file_id("TANK", "2026-07")
+        assert result is None
+
+    def test_empty_seen_map_returns_none(self):
+        with mock.patch.object(sheets._store, "pg_cache_read", return_value={}):
+            result = sheets._get_vanished_file_id("TANK", "2026-07")
+        assert result is None
+
+    def test_legacy_string_entry_never_warns(self):
+        """Old-format string values are migrated; they have miss=0 → no warning."""
+        with mock.patch.object(
+            sheets._store, "pg_cache_read",
+            return_value={"TANK:2026-07": _FAKE_FID},  # legacy string
+        ):
+            result = sheets._get_vanished_file_id("TANK", "2026-07")
+        assert result is None, (
+            "Migrated legacy string entry has miss=0 → confirmed_gone=False → no warning")
+
+    def test_pinned_month_always_returns_none_even_if_confirmed_gone(self):
+        """A pinned month must never warn, even with a stale confirmed_gone entry."""
+        entry = {"fid": _FAKE_FID, "miss": 5, "confirmed_gone": True}
+        # Find any month that IS pinned in TANK
+        pinned_ym = next(
+            (ym for ym in sources.DAILY_SOURCES.get("TANK", {}).get("files", {})), None
+        )
+        if pinned_ym is None:
+            return  # No pinned TANK months registered — skip
+        with mock.patch.object(
+            sheets._store, "pg_cache_read",
+            return_value={f"TANK:{pinned_ym}": entry},
+        ):
+            result = sheets._get_vanished_file_id("TANK", pinned_ym)
+        assert result is None, (
+            f"Pinned TANK {pinned_ym} must return None even with confirmed_gone=True")
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — _probe_file_readable HTTP classification
+# ---------------------------------------------------------------------------
+
+class TestProbeFileReadable:
+    """_probe_file_readable must map HTTP responses to True/False/None correctly."""
+
+    _FID = "some-drive-file-id-123"
+    _TOKEN = "fake-drive-token"
+
+    def _patch_urlopen(self, *, status=200, body=b'{"id":"x"}', exc=None):
+        if exc:
+            return mock.patch("urllib.request.urlopen", side_effect=exc)
+        resp = mock.MagicMock()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = mock.MagicMock(return_value=False)
+        resp.read.return_value = body
+        resp.status = status
+        # json.load reads from the response object; simulate via read()
+        import io
+        resp.read.return_value = body
+        # urlopen is used as context manager; json.load(r) calls r.read()
+        ctx = mock.MagicMock()
+        ctx.__enter__ = lambda s: io.BytesIO(body)
+        ctx.__exit__ = mock.MagicMock(return_value=False)
+        return mock.patch("urllib.request.urlopen", return_value=ctx)
+
+    def test_200_returns_true(self):
+        with self._patch_urlopen(status=200, body=b'{"id":"abc"}'):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is True
+
+    def test_404_returns_false(self):
+        import urllib.error
+        e = urllib.error.HTTPError(
+            url="https://x", code=404, msg="Not Found", hdrs={}, fp=None)
+        with mock.patch("urllib.request.urlopen", side_effect=e):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is False
+
+    def test_403_returns_false(self):
+        import urllib.error
+        e = urllib.error.HTTPError(
+            url="https://x", code=403, msg="Forbidden", hdrs={}, fp=None)
+        with mock.patch("urllib.request.urlopen", side_effect=e):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is False
+
+    def test_429_returns_none(self):
+        import urllib.error
+        e = urllib.error.HTTPError(
+            url="https://x", code=429, msg="Too Many Requests", hdrs={}, fp=None)
+        with mock.patch("urllib.request.urlopen", side_effect=e):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is None, "429 (throttle) must be inconclusive, not False"
+
+    def test_500_returns_none(self):
+        import urllib.error
+        e = urllib.error.HTTPError(
+            url="https://x", code=500, msg="Internal Error", hdrs={}, fp=None)
+        with mock.patch("urllib.request.urlopen", side_effect=e):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is None
+
+    def test_timeout_returns_none(self):
+        import socket
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=socket.timeout("timed out")):
+            result = sheets._probe_file_readable(self._FID, self._TOKEN)
+        assert result is None, "Timeout must be inconclusive, not False"
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
