@@ -1774,19 +1774,63 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           )
           rh_parsed = len(rh_rows)
           rh_layout_ok = bool(rh_lf)
+          # Build maps from the Daily Report matrix rows.
+          # rh_map:     run-hours per (machine_num, date) — gated on actual_hours > 0
+          #             (existing behaviour, keeps utilisation logic unchanged).
+          # rej_map:    rejection kg per (machine_num, date) — NOT gated on hours
+          #             so July (0 hours, 1,853.50 kg reject) is captured (Trap 1).
+          # dr_out_map: DR's own output kg per (machine_num, date) — NOT gated on hours
+          #             so the rejection denominator uses the DR's output basis, not the
+          #             block-tab output, preventing the ratio contamination (Trap 2).
           rh_map: dict = {}
+          rej_map: dict = {}
+          dr_out_map: dict = {}
           for rr in rh_rows:
+              _mn = re.search(r"(\d+)", rr.machine)
+              if not _mn:
+                  continue
+              _k = (_mn.group(1), rr.date)
               if rr.actual_hours and rr.actual_hours > 0:
-                  m = re.search(r"(\d+)", rr.machine)
-                  if m:
-                      rh_map[(m.group(1), rr.date)] = (
-                          rh_map.get((m.group(1), rr.date), 0.0) + rr.actual_hours)
+                  rh_map[_k] = rh_map.get(_k, 0.0) + rr.actual_hours
+              # Rejection and DR-output: unconditional (Trap 1 fix)
+              rej_map[_k] = rej_map.get(_k, 0.0) + rr.reject_count
+              dr_out_map[_k] = dr_out_map.get(_k, 0.0) + rr.total_count
+
           for r in raw:
-              m = re.search(r"(\d+)", r.machine)
-              key = (m.group(1), r.date) if m else None
-              if key and key in rh_map:
-                  r.actual_hours = rh_map[key]
-                  runhours_found = True
+              _m = re.search(r"(\d+)", r.machine)
+              key = (_m.group(1), r.date) if _m else None
+              if key:
+                  if key in rh_map:
+                      r.actual_hours = rh_map[key]
+                      runhours_found = True
+                  if key in dr_out_map:
+                      # DR has a record for this machine-date: rejection is now
+                      # tracked (even if the rejection value is 0 — genuinely
+                      # zero is not "not captured").  Leave rejection_tracked
+                      # False only where the DR has no row at all for this
+                      # machine-date (e.g. entire month empty → May → n/a).
+                      r.reject_count = rej_map.get(key, 0.0)
+                      r.reject_denominator = dr_out_map[key]   # DR basis (Trap 2)
+                      r.rejection_tracked = True
+
+          # Basis-divergence note (R-23, R-35):  block-tab output (the displayed
+          # figure) and the DR output (the rejection denominator) differ because
+          # they come from different data sources.  Surface this when the gap
+          # exceeds 2% so a reader cannot accidentally multiply displayed output
+          # by the rejection % and arrive at the correct rejection kg.
+          if rej_map:
+              _dr_total = sum(dr_out_map.values())
+              _blk_total = sum(r.total_count for r in raw)
+              if _dr_total > 0 and _blk_total > 0:
+                  _gap = abs(_blk_total - _dr_total) / max(_blk_total, _dr_total)
+                  if _gap > 0.02:
+                      _basis_note = (
+                          f"{emit} {ym}: rejection % is measured against the "
+                          f"Daily Report output basis "
+                          f"({_dr_total:,.0f} kg), which differs from the "
+                          f"displayed block-tab output ({_blk_total:,.0f} kg)."
+                      )
+                      report.setdefault("notes", []).append(_basis_note)
 
   # ----- Ideal-hours denominator --------------------------------------------
   # Lowest-priority app-logic default (GARDEN=500/machine/month). For a
