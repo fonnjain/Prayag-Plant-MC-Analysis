@@ -1,0 +1,88 @@
+# Garden — Capture Rejection-Only Machine-Dates (155 kg silently dropped)
+
+Read `PRAYAG_RULES.md` first. Touches **R-06, R-08, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+## The defect (root cause confirmed by live diagnostic)
+
+The Daily Report rejection join landed correctly — APR 3.06% and JUN 3.31% match source exactly. But **July shows 5.28% against a true 5.76%**, with **155 kg unattributed**:
+
+| M/C | Date | Rej kg | DR output | Block-tab record? | Transferred |
+|---|---|---:|---:|---|---|
+| M/C-2 | 2026-07-31 | 70.00 | 0.00 | **No** | **dropped** |
+| M/C-3 | 2026-07-10 | 1,513.50 | 0.00 | Yes | ✓ |
+| M/C-3 | 2026-07-27 | 95.00 | 1,378.30 | Yes | ✓ |
+| M/C-3 | 2026-07-30 | 90.00 | 1,352.90 | Yes | ✓ |
+| M/C-3 | 2026-07-31 | 85.00 | 0.00 | **No** | **dropped** |
+
+**The maps are not the problem.** `rej_map` and `dr_out_map` are written in the same unconditional loop, so their key sets are identical and both dropped rows are present in both. The limiting factor is the **outer transfer loop, which iterates over block-tab records** — a rejection whose `(machine, date)` has no block-tab row has no `r` to attach to and is discarded with no warning.
+
+Both dropped rows are **31 July with zero output** — a month-end rejection entry booked against no production. That is a legitimate and probably recurring business pattern, so this will drop silently every month it occurs. It fails in the worst way: no error, just a plausible-looking figure that is too low (**R-08**, **R-35**).
+
+---
+
+## Required change
+
+**Emit a synthetic record for rejection-only machine-dates**, so rejection with no matching production row is still counted.
+
+1. After the existing transfer loop, identify keys present in `rej_map` with a non-zero rejection that were **not** matched to any block-tab record.
+2. For each, append a Record carrying: the machine label (same `machine_prefix` convention as the block rows), the date, `total_count = 0`, `reject_count` from `rej_map`, `reject_denominator` from `dr_out_map` (may be 0), and `rejection_tracked = True`.
+3. These records must roll up into the segment rejection total exactly as normal records do. They must **not** add output, hours, or utilisation.
+4. Do **not** change how matched rows are handled. Do **not** change output figures.
+
+### Also required — surface it (R-35)
+
+These records represent rejection booked against no production. Note them in the existing warning / data-health mechanism, e.g.:
+
+> `GARDEN 2026-07: 155 kg of rejection recorded on machine-dates with no production row (M/C-2 31-Jul 70 kg, M/C-3 31-Jul 85 kg) — counted in the rejection total, shown separately as no output is attributed to those dates.`
+
+The point is that a reader can see the figure is complete *and* understand why those dates carry rejection without output.
+
+---
+
+## Validation targets
+
+| Month | Rejection kg | Denominator | Rejection % |
+|---|---:|---:|---:|
+| APR | 1,191 | 38,950 | **3.06%** (unchanged) |
+| MAY | 0 — DR empty | 0 | **n/a** (unchanged) |
+| JUN | 2,215 | 66,911 | **3.31%** (unchanged) |
+| **JUL** | **1,853.50** | 32,191 | **5.76%** ← was 5.28% |
+| **Total** | **5,260** | **138,052** | **3.81%** |
+
+Per-machine July after the fix: **M/C-2 = 70.00 kg**, **M/C-3 = 1,783.50 kg**.
+
+Also confirm:
+- Garden **output unchanged**: APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 68,390 (parsed 66,038). The synthetic records add **zero** output.
+- Garden **utilisation unchanged**: APR 27.5% · JUN 66.9% · MAY and JUL still `n/a`. Synthetic records must not create hours or a utilisation denominator.
+- **Machine count unchanged** — no new machine appears in the machine view; M/C-2 and M/C-3 already exist.
+- **No other segment changes**: PIPE ~8.4–9.7% · MOULDING 0.99–1.0% · PTMT 5.6–6.5% · TANK unchanged.
+
+---
+
+## One thing to check and report, not fix
+
+M/C-3 on **10 July** carries **1,513.50 kg rejection against DR output of 0.00**, yet it transferred because a block-tab record existed. Its `reject_denominator` is therefore zero.
+
+The segment total still reconciles (5,260 ÷ 138,052 = 3.81%), so the aggregate is fine. **Report what the per-machine July rejection % renders as for M/C-3** — a zero denominator on one contributing row could produce a divide-by-zero, an infinity, or a distorted machine-grain figure. Report the observed value; do not change the denominator logic in this task.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` / R5↔R11 (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` stored-ratio policy (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Tank's `pcs × size` rejection fix (**R-09**) or `machine=""` (**R-25**) · vanished-file detection · R-27 join warning · `auth.py`.
+
+Do **not** change Garden's output source — **R-23** remains open. Do **not** add rejection to `parse_daily_blocks`; the block tabs have no rejection column. Do **not** create synthetic records for anything other than rejection-only dates (no output backfill, no hours). No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Report back
+
+- Observed rejection kg / denominator / % per month against the table above, and per-machine July.
+- Confirmation that July now reaches 1,853.50 kg / 5.76% and that the 155 kg is attributed to M/C-2 (70) and M/C-3 (85).
+- The warning text as it renders.
+- Output, utilisation and machine count unchanged; no other segment moved.
+- The M/C-3 10-July zero-denominator observation.
