@@ -1,0 +1,93 @@
+# Tank Daily Workbook Coverage — Diagnostic (STRICTLY READ-ONLY)
+
+**Purpose:** The Phase 1 rejection fix reported that **7 of 12 Tank plant-months have "no workbook"**. That contradicts an earlier three-layer diagnostic which reported daily production figures for several of those same plant-months. One of the two is wrong, and until we know which, no Tank figure — production or rejection — can be trusted.
+
+**This pass only measures. It fixes nothing and decides nothing.**
+
+## HARD CONSTRAINTS
+
+- **Do NOT edit any file** — no `.py`, no `sources.py`, no templates, no config.
+- **Do NOT register, add, or wire any file ID**, even if you find one that obviously belongs.
+- **Do NOT enter Build mode.** No restart, redeploy, or publish.
+- **Do NOT write to Google Sheets.**
+- **Do NOT reconcile or adjust any figure** to make the two accounts agree.
+- Report only. If something cannot be determined, say so plainly rather than inferring.
+
+---
+
+## The contradiction to resolve
+
+**Phase 1 rejection run reported (registered daily workbooks):**
+
+| Plant | APR | MAY | JUN | JUL |
+|---|---|---|---|---|
+| KH | present (0 rej pcs) | present (0 rej pcs) | present — 45,000 Ltr rej | **no workbook** |
+| VN | **no workbook** | **no workbook** | present — 8,500 Ltr rej | present — 5,500 Ltr rej |
+| WB | **no workbook** | **no workbook** | **no workbook** | present — 33,500 Ltr rej |
+
+**The earlier three-layer diagnostic reported daily production (Layer A) for plant-months now shown as absent:**
+
+| Plant | APR | MAY | JUN | JUL |
+|---|---:|---:|---:|---:|
+| KH | 0 rows | 846,600 | 1,419,500 | 1,353,500 |
+| VN | 221,250 | 534,000 | 533,500 | 565,500 |
+| WB | 415,000 | 1,048,500 | 1,430,000 | 1,702,000 |
+
+Both cannot be right. **Q3 below is the crux.**
+
+---
+
+## Q1 — What is actually registered
+
+Print, verbatim from `sources.py`, the complete daily-source entries for **TANK**, **TANK_VN**, **TANK_WB**: every `folder_ids` value and every key/value pair in `files`, exactly as written.
+
+For each of the 12 plant-months (KH/VN/WB × Apr–Jul 2026), state: **registered file ID, or "not registered"**.
+
+## Q2 — Do the files exist in Drive but are unregistered?
+
+For each registered `folder_ids` value, list the files actually present in that Drive folder — full title, file ID, owner, and last-modified date. Do **not** register anything found.
+
+Then state, per missing plant-month, which of these is true:
+- **(a) file exists in Drive, not registered in `sources.py`** — a config gap;
+- **(b) no file exists in Drive for that plant-month** — a genuine source gap;
+- **(c) cannot determine** (e.g. folder inaccessible, permission error) — say so and give the error.
+
+Titles may vary; search by title pattern as well as folder listing, since Drive folder enumeration is unreliable for shared folders. Report both methods' results if they differ.
+
+## Q3 — Where did the earlier diagnostic's numbers come from? (the crux)
+
+The earlier diagnostic reported specific Layer A production figures for plant-months now shown as unregistered — e.g. **WB April 415,000 Ltr / 65 rows** and **VN May 534,000 Ltr / 94 rows**.
+
+Trace and state exactly which source produced those numbers:
+- a **daily** workbook (which file ID?),
+- an **annual/REPORT_SOURCES** entry (which one?),
+- a **cached** payload from an earlier registration since removed (check the pg cache keys, e.g. `daily_TANK_VN_2026-05`),
+- or figures that cannot be reproduced from any currently wired source.
+
+For each of WB APR/MAY/JUN and VN APR/MAY specifically, print the row count and litre total the app can produce **right now**, and name the source path it used. If it produces nothing, say so.
+
+## Q4 — Cache vs live
+
+For every Tank plant-month, report whether a cached payload exists (`daily_TANK*_<ym>` keys), its row count, and its litre total. Flag any case where **a cache holds data for a plant-month that has no registered file** — that would mean the dashboard is serving figures from a source no longer wired, which is important to know and must **not** be cleared in this pass.
+
+## Q5 — Consequence check (report, do not act)
+
+Given Q1–Q4, state for **Apr–Jul 2026**:
+- the Tank production and rejection totals the app can currently produce **from registered sources only**, per plant and combined;
+- how those compare with the annual summary figures (KH 633,500 · VN 1,852,250 · WB 4,325,100 · combined 6,810,850 Ltr; rejection 86,500 Ltr);
+- whether the previously reported "Tank KH daily = 3,619,600 Ltr, 5.7× its annual" divergence still holds once only registered sources are counted — this was the premise of ticket #129 and may no longer stand.
+
+**Do not adjust anything to close any gap.**
+
+---
+
+## Report back
+
+1. Q1 — the verbatim `sources.py` Tank entries and the 12-cell registered/not-registered grid.
+2. Q2 — Drive folder contents and the (a)/(b)/(c) classification per missing plant-month.
+3. Q3 — the traced origin of the earlier diagnostic's figures, per plant-month.
+4. Q4 — cache state, flagging any data-without-registered-file case.
+5. Q5 — currently-producible totals vs annual, and whether the KH divergence still stands.
+6. Explicit confirmation: **no files changed, nothing registered, no Sheets writes, no cache cleared, no restart or publish.**
+
+Then stop. Whether to register missing files is a separate decision, made after this grid is reviewed.
