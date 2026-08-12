@@ -1,0 +1,67 @@
+# Recover KH July Data + Warn on Vanished Discovered Files
+
+Two phases. **STOP and report after Phase 1** — it is time-sensitive and must not be mixed with a code change.
+
+## ⚠️ CLEAR NOTHING. OVERWRITE NOTHING.
+
+The Postgres row `daily_TANK_2026-07` is **the only surviving copy of KH July 2026 production**. Its backing Drive file (`10_CbcKzvWdeKPW9fQ251ONjvkGjcJtlXj2_OCikHl9w`) now returns **HTTP 404** — deleted or access-revoked. Discovery cannot rebuild it.
+
+- Do **NOT** run `DELETE`, `TRUNCATE`, or any cache-clear on `sheet_cache`.
+- Do **NOT** call `pg_cache_write` with key `daily_TANK_2026-07` — the write is an **upsert** and would destroy the payload.
+- Do **NOT** trigger a refresh, restart, redeploy, or publish during Phase 1. A refresh can overwrite cache keys.
+- Do **NOT** pin the 404 file ID into `sources.py`. Pinning a dead ID makes the failure permanent and blocks discovery if the file ever returns.
+
+**Note:** every cached daily entry is already past its TTL (`_DATA_TTL` = 900 s, written 06:18 today), so `pg_cache_read` already returns `None` for all of them. They are inert — **no cache clearing is needed for the Phase 1 rejection fix to take effect.** The rows are historical records only.
+
+---
+
+## PHASE 1 — Recover the KH July payload to a file (read-only against the DB)
+
+Read the row `daily_TANK_2026-07` from `sheet_cache` with **no age filter** (`pg_cache_read` applies a 900 s window and will return `None` — query the table directly with a plain `SELECT payload ... WHERE cache_key = 'daily_TANK_2026-07'`, no `cached_at` predicate). Unpickle it.
+
+Write the contents to a durable file in the repo (e.g. `recovered/tank_kh_2026-07.csv` plus a `.json` of the report dict). One row per record, with at minimum:
+
+`date · plant · segment · mould (item code) · unit · total_count (Ltr) · secondary_counts (pcs, kg) · reject_count · reject_unit · source_file · source_tab`
+
+Also record, in a short header or sidecar note: the `cached_at` timestamp (2026-08-12 06:18:05 UTC), the dead `file_id`, the `tab` (`PROD. REPORT`), the 17 `detail_tabs`, and a one-line provenance statement — *"recovered from Postgres sheet_cache; source workbook returned HTTP 404 on 2026-08-12; no live source exists."*
+
+**Validate before reporting:** 111 records · date range 2026-07-02 to 2026-07-31 · total 1,353,500 Ltr · 17 distinct item codes · rejection 0. If any of these do not match, **stop and report** — do not write a partial or altered file.
+
+Commit the recovered files. **STOP and report.**
+
+---
+
+## PHASE 2 — Warn when a previously-discovered file becomes unreadable
+
+Today a discovered file vanished from Drive and KH July silently became "no data": discovery no longer finds it → `_load_daily` gets `file_id = None` → `return []` → the month renders empty with **no error, no flag, no note**. A month of production disappearing silently is exactly the failure this codebase exists to prevent.
+
+**Add a non-silent path. Do not change discovery's behaviour or any parsing logic.**
+
+1. Keep a small persistent record of `(plant, ym) → file_id` for months that discovery has previously resolved (a `sheet_cache` key such as `discovery_seen` is fine — do not create a new table, and do not touch existing daily keys).
+2. When `ensure_daily_discovery` runs and a `(plant, ym)` that was previously seen is **no longer found in the folder scan**, or its file ID now errors (404/403) on read, emit a warning that surfaces in the same place other source warnings appear (the report dict `warning` field / data-health panel):
+   > `TANK 2026-07: a previously discovered source file is no longer readable (was 10_CbcKzvWd…). This month may show no data. Source may have been deleted, moved, or had access revoked.`
+3. **Distinguish three states** and do not conflate them:
+   - never had a file → existing "awaiting source" behaviour, unchanged
+   - has a file, genuinely zero production → existing known-empty behaviour, unchanged
+   - **had a file, now unreadable → the NEW warning**
+4. Do not auto-remove the discovered entry, do not fall back to another month, and do not fabricate a figure. The month still shows no data — it just says why.
+
+**Validate:** the warning fires for `TANK 2026-07`; no warning for months that never had a file; no warning for genuinely-empty months (e.g. KH April, whose registered workbook has zero rows); no change to any figure anywhere; discovery still picks up new months normally (August entries unaffected).
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` / the R5↔R11 reconciliation · Moulding's Report-12 path · Garden's block-tab output rule · HDPE's in-sheet ideal columns · PTMT's Report-5 basis · the no-fake-0% invariant · Phase 1–3 work (rejection `n/a` gating, `_layout_found`, `auth.py`) · the Tank rejection pcs×size fix · any `mp_*.py` or `machine_planning_*.html`. No Google Sheets writes.
+
+## Out of scope — do not attempt
+
+- **Why the July file vanished.** A Drive/data question, not a code one.
+- **The KH June divergence** (daily 1,419,500 vs annual 633,500 = 2.24×). Unrelated and still open.
+- **Registering the six unpinned plant-months.** `sources.py` holds *pins*; discovery finds the rest at runtime, so "unregistered" does not mean unreadable. Separate decision.
+
+## Report back
+
+Phase 1: the recovered file paths, the five validation figures, and confirmation that nothing was cleared or overwritten.
+Phase 2: the files changed, the warning text as it renders, and the three-state validation results.
+Both: confirm `/` returns 200, Machine Planning untouched, no Sheets writes.
