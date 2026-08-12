@@ -1,0 +1,69 @@
+# Orphaned Cache Entry — `daily_TANK_2026-07` (STRICTLY READ-ONLY)
+
+**Purpose:** The Postgres cache holds `daily_TANK_2026-07` — 111 records, 1,353,500 Ltr of KH July production, dates 02-Jul to 31-Jul — but **KH July has no registered file** in `sources.py` (`TANK.files` contains only `2026-04`, `2026-05`, `2026-06`). The auto-refresh at 05:45 today wrote this entry. Something fed it. We need to know what, because a cache path that can populate a plant-month with no wired source could affect any segment, not just Tank.
+
+The dashboard is currently serving live KH July figures from this entry.
+
+## HARD CONSTRAINTS
+
+- **Do NOT clear, delete, expire, or overwrite ANY cache entry.** The orphan is the evidence — destroying it destroys the answer.
+- **Do NOT edit any file.** No `.py`, no `sources.py`, no config, no templates.
+- **Do NOT register any file ID**, even if you identify the one that produced this data.
+- **Do NOT trigger a refresh, restart, redeploy, or publish.** A refresh could overwrite the entry.
+- **Do NOT write to Google Sheets.**
+- Report only. If something cannot be determined, say so plainly rather than inferring.
+
+---
+
+## Q1 — What exactly is in the entry
+
+Print the full metadata for `daily_TANK_2026-07`: `written_at` timestamp, TTL/expiry, payload size, record count, date range, `reject_unit`, and any `source_file_id`, `file_id`, `source`, `warning`, `notes`, or provenance field the payload carries. Print the **first 3 and last 3 records verbatim** — every field, unmodified.
+
+If the payload names a file ID, print it and fetch that file's **title, owner, and last-modified date**. Do not register it.
+
+## Q2 — How can a write happen with no registered file?
+
+Trace the code path that writes `daily_TANK_<ym>` cache keys — the auto-refresh job and `_load_daily` / `_emit_tank`.
+
+The expected behaviour is: `sources.DAILY_SOURCES["TANK"]["files"].get("2026-07")` returns `None` → return `[]` → **no cache write**. Establish which of these actually happened:
+
+- **(a) Folder scan** — does the refresh enumerate `folder_ids` and pick up files by name pattern, bypassing the `files` map? `TANK` has two `folder_ids` registered. If so, print the discovery code and state whether it can write a cache key for an unregistered month.
+- **(b) Month rollover / carry-forward** — does any code derive a month key from another month, or copy a prior payload forward?
+- **(c) Write-through from a different key** — could `daily_TANK_2026-08` or another plant's load have written into this key? Note `daily_TANK_2026-08` exists with 0 records.
+- **(d) Stale write from a registration since removed** — was `2026-07` in `TANK.files` earlier? Check git history for `sources.py` and print any commit that added or removed a `2026-07` entry under `TANK`, with hash and date.
+- **(e) Something else** — describe it.
+
+**Name the mechanism.** If more than one is possible, say which is most consistent with the 05:45 write time and the 111-record payload.
+
+## Q3 — Is this happening anywhere else?
+
+List **every** cache key currently present, and for each state whether its plant-month has a registered file in `sources.py`. Flag every entry where **data exists but no file is registered** — Tank or otherwise.
+
+If the mechanism from Q2 is a folder scan or rollover, it could apply to GARDEN, PIPE, HDPE, MOULDING, PTMT and the other Tank plants too. Report which segments are exposed to the same path.
+
+## Q4 — Is the orphaned data correct?
+
+Separate question from where it came from. The payload reports 1,353,500 Ltr for KH July across 111 records.
+
+- Do the record dates, sizes and item codes look like a coherent KH July month, or like another plant's or month's data mislabelled?
+- Compare its shape against the registered `daily_TANK_2026-06` (KH June, 88 rows, 1,419,500 Ltr): similar item codes, similar size mix, plausible daily cadence?
+- Does it carry `REJECTION IN PCS.` values, and does it show `reject_unit='kg'` (pre-Phase-1) as reported?
+
+State whether the data appears **genuine-but-unregistered** or **wrong data under a KH July label**. Do not correct it either way.
+
+## Q5 — What the dashboard is showing right now
+
+State which pages currently render figures derived from this entry, and what KH July shows on them today. Confirm whether clearing it (later, not now) would make KH July display **zero** or **no data**.
+
+---
+
+## Report back
+
+1. Q1 — full metadata and the six verbatim records; any file ID found and its Drive title/owner.
+2. Q2 — the named mechanism, with the code path printed and the git-history check for a removed `2026-07` registration.
+3. Q3 — the full cache-key table with registered/not-registered per key, and which segments share the exposure.
+4. Q4 — whether the data is genuine-but-unregistered or mislabelled, with the June comparison.
+5. Q5 — pages affected and what changes if it is cleared later.
+6. Explicit confirmation: **no cache cleared, nothing registered, no files changed, no refresh triggered, no Sheets writes, no restart or publish.**
+
+Then stop. Clearing the stale `kg`-unit entries and registering any missing files are separate decisions, made after this is understood.
