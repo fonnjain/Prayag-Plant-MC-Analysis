@@ -160,16 +160,18 @@ def test_gen_pipe_moulds_calls_load_pipe_moulds():
 
 
 # ---------------------------------------------------------------------------
-# A3 guard — _tank_model reads rej_kg from r.reject_count (not secondary_counts)
+# A3 guard — _tank_model routes rejection via r.reject_count (Ltr basis after
+# Phase-1 fix), not by reaching into secondary_counts for a kg value.
 # ---------------------------------------------------------------------------
 def test_tank_model_reads_reject_count_not_secondary_rej_kg():
     from reports import generators
     src = inspect.getsource(generators._tank_model)
     assert 'r.reject_count' in src, (
-        "_tank_model reads rej_kg from sc.get('rej_kg') (always 0) "
-        "instead of r.reject_count — VN/WB rejection will compute as 0%")
+        "_tank_model does not read r.reject_count — "
+        "rejection figures will be missing from Tank reports")
     assert "sc.get(\"rej_kg\"" not in src and "sc.get('rej_kg'" not in src, (
-        "_tank_model still reads rej_kg from secondary_counts — this is always 0")
+        "_tank_model reads rej_kg from secondary_counts — this key no longer "
+        "carries rejection (it was replaced by r.reject_count in Ltr)")
 
 
 # ---------------------------------------------------------------------------

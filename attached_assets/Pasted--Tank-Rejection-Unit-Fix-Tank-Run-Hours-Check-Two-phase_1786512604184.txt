@@ -1,0 +1,87 @@
+# Tank Rejection Unit Fix + Tank Run-Hours Check
+
+Two phases. **STOP and report after Phase 1.** Do not run them together.
+
+**Do not touch PTMT.** Ticket #128 is a source-data question, not a code fix — see the note at the end.
+
+**Never change:** `pipe_reconcile.py` / the R5↔R11 reconciliation · Moulding's Report-12 path · Garden's block-tabs-for-output rule · HDPE's in-sheet ideal columns · PTMT's Report-5 basis · the no-fake-0% invariant in `api.py::_metrics_json` · Phase 1–3 work (rejection `n/a` gating, `_layout_found`, `auth.py`) · any `mp_*.py` or `machine_planning_*.html`. No Google Sheets writes.
+
+---
+
+## PHASE 1 — Tank rejection is being read in KILOGRAMS and displayed as LITRES
+
+**Verified from source** (TANK VN, June 2026, `1Vsba-WDcYwSstEZsX37ntm_N05yPn0T5DzSkls9zRUw`). The daily `PROD. REPORT` / DAILY PRODUCTION table has **three separate rejection columns**:
+
+| Column header (verbatim) | VN June TOTAL |
+|---|---:|
+| `REJECTION IN PCS.` | 9 |
+| `REJECTION MOUTH LID IN KG.` | 291.3 |
+| `REJECTION IN KG.` | 221.2 |
+
+The app currently reports **513** for VN June. That is `291.3 + 221.2 = 512.5` — **two unrelated kilogram columns added together**, then rendered under a Litres heading. It is not a meaningful quantity in any unit.
+
+**The correct litre figure** is `REJECTION IN PCS.` × `SIZE (LTR.)`, summed per row. For VN June the nine rejected tanks were 2×1000 + 1×1000 + 1×1000 + 1×500 + 2×1000 + 2×1000 = **8,500 Ltr**, which matches the annual VN June rejection of **8,500 Ltr exactly**.
+
+Production already reconciles perfectly (daily 533,500 Ltr / 735 pcs vs annual 533,500 Ltr / 735 pcs), so **only rejection is wrong**.
+
+### Do
+
+1. In the tank parser, locate columns **by header text** (slash- and case-tolerant): `SIZE (LTR.)`, `PRODUCTION IN PCS.`, `PRODUCTION IN LTR.`, `REJECTION IN PCS.`, `REJECTION IN KG.`, `REJECTION MOUTH LID IN KG.`
+2. Compute **rejection in litres = Σ (REJECTION IN PCS. × SIZE (LTR.))** per row. This is the figure the Tank reports display.
+3. **Stop summing the two kg columns.** Keep them available separately if wanted, but never add mouth-lid kg to tank kg, and never label a kg figure as Ltr.
+4. Assert the pcs and size columns are found; **raise a named error** if not — do not silently fall back to a kg column.
+
+### Validate (report observed vs target)
+
+- **VN June: 8,500 Ltr** rejection (against annual 8,500) and 533,500 Ltr / 735 pcs production.
+- Recompute VN, WB and KH for **Apr–Jul** and report the new litre rejection per plant per month. Expect totals far above the current ~6,139 Ltr and roughly in line with the annual's 86,500 Ltr — **report the observed figures; do not adjust anything to hit that number.**
+- Rejection % must be `rejection Ltr ÷ production Ltr`. No kg anywhere in the Tank rejection path.
+- Confirm no labour/hours are fabricated for Tank and that production figures are unchanged.
+
+**STOP. Report before Phase 2.**
+
+---
+
+## PHASE 2 — Tank DOES have run hours (read-only; do not change behaviour yet)
+
+`PLANTS_WITHOUT_RUNHOURS = {TANK, TANK_VN, TANK_WB}` and the "Tank is output-only" tooltip added earlier both assume Tank has no hours and no machine dimension. **The source contradicts this.** The VN June workbook contains:
+
+- A dashboard block: `Running Hrs. 208` · `No. of cycle 186` · `Actual Output/Hr. (kg) 65.03` · `Rejection (%) 3.79%`
+- A per-row `PRODUCTION HOURS` and `NO. OF CYCLE` column in the daily table
+- A separate `Daily Report` tab with a `MACHINE-1` row: **184 run hours**, 12,067.90 kg output, 344.10 kg rejection, broken out per date
+
+**Report only — change nothing:**
+
+1. For each of KH / VN / WB and each month Apr–Jul, state whether these hour fields exist and what they contain.
+2. Note the internal disagreement: the VN June dashboard says **208** hours, the `Daily Report` tab says **184**. Report the equivalent figures for the other plants/months.
+3. State whether a machine dimension exists (VN shows a single `MACHINE-1`) and whether KH and WB do too.
+4. Do **not** enable Tank utilisation, do **not** edit `PLANTS_WITHOUT_RUNHOURS`, and do **not** remove the N/A tooltip yet — the two hour figures disagree within one file, so the basis is not yet established.
+
+The immediate consequence to note: the tooltip currently tells users *"Not applicable — Tank is output-only (no run hours or machine dimension in source)"*, and that statement is **false**. Flag it; we will decide the wording once the hours question is settled.
+
+---
+
+## NOT IN SCOPE — PTMT (#128) is a source question
+
+Report-5's own TOTAL rows were read directly for all four months. Against the annual Moulds Summary:
+
+| Month | R5 gross (R5 output + blow + corrugator) | − R5 rejection | Annual Nett Output | Diff |
+|---|---:|---:|---:|---:|
+| APR | 105,180 | 99,426 | 99,262 | +164 |
+| MAY | 111,991 | 104,928 | 104,729 | +199 |
+| **JUN** | **156,977** | 148,010 | **160,478** | **−12,468** |
+| **JUL** | **160,856** | 150,538 | **172,639** | **−22,101** |
+
+April and May reconcile to within 0.2%. **June and July do not — and they fail in an arithmetically impossible direction: the annual reports more *net* output than Report-5 recorded *gross*** (June by 3,501 kg; July by 11,783 kg).
+
+Meanwhile hours and rejection track closely in **all four** months (hours +175 to +926; rejection −158 to −330), so both layers clearly describe the same operation. Only **output**, and only **from June onward**, diverges.
+
+No code change can resolve this — one of the two sources is wrong for June and July. It needs a source answer before anything is built on either figure. **Do not adjust any PTMT parser or figure to close this gap.**
+
+---
+
+## Tests + report
+
+pytest for Phase 1: rejection litres computed as pcs × size; the two kg columns are never summed; named error when headers are missing; VN June == 8,500 Ltr; production unchanged.
+
+Confirm `/` returns 200, Machine Planning untouched, no Sheets writes, and that Phase 2 changed nothing.

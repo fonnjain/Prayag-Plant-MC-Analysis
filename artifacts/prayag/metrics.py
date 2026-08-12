@@ -480,8 +480,9 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
         or (getattr(r, "plant", "") in ideal_hours.APP_DEFAULT_IDEAL_HOURS)
         for r in prod_rows
     )
-    # Rejection %: use the kg-production denominator for Tank (where reject_unit="kg"
-    # but production unit is "Ltr"); fall back to total_count for all other plants.
+    # Rejection %: Tank records carry reject_denominator = prod_ltr (same unit as
+    # reject_count after Phase-1 fix).  For all other plants reject_denominator is 0
+    # and total_count serves as the denominator.
     _rej_denom = _reject_denom_sum if _reject_denom_sum > 0 else m.total_count
     m.rejection_pct = _safe_div(m.reject_count, _rej_denom)
     # Rejection is available only when at least one contributing record actually

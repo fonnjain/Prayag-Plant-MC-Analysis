@@ -1672,10 +1672,14 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   report["columns_seen"] = [
       str(c).strip() for c in (values[0] if values else []) if str(c).strip()
   ][:40]
-  raw = parsers.parse_tank_prod(
-      values, plant=emit, segment=seg, unit="Ltr", year_month=ym,
-      source_file=file_id, source_tab=actual,
-  )
+  try:
+      raw = parsers.parse_tank_prod(
+          values, plant=emit, segment=seg, unit="Ltr", year_month=ym,
+          source_file=file_id, source_tab=actual,
+      )
+  except parsers.TankRejectionColumnError as exc:
+      report["warning"] = str(exc)
+      return [], report
   # TANK is output-only (no run hours), so utilisation/efficiency stay suppressed.
   # Mark runhours_tracked=False so that a manager OVERRIDE may set a planned-hours
   # baseline without the metrics gate ever fabricating a 0% utilisation, while the

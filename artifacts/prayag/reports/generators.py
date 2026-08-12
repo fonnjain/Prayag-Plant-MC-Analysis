@@ -609,13 +609,18 @@ def gen_tank_kh(rid, label, plant, ym) -> ReportModel:
 def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
     """Multi-unit Tank report: headline Litres, secondary Pcs + KG (material).
 
-    Rejection is always on a KG basis per spec (total_rej_kg / prod_kg).
-    Where a stream carries only pcs rejection (KH), the pcs count is shown and
-    no kg-basis % is computed.  Litres leads when available.
+    Rejection headline is in Litres (daily records: pcs × tank size;
+    annual records: read directly from the SUMMARY (LTR) tab).
+    Rejection % = rej_ltr / prod_ltr — no cross-unit division.
+
+    Routing by reject_unit:
+      "Ltr"  — daily records after the Phase-1 fix.
+      ""     — annual records (parse_tank_annual_*); unit="Ltr" so infer Ltr.
+    A pcs secondary count is shown where no Ltr rejection exists (zero-rej months).
     """
     by_item: dict = defaultdict(lambda: {
         "ltr": 0.0, "pcs": 0.0, "kg": 0.0,
-        "rej_kg": 0.0, "rej_pcs": 0.0,
+        "rej_ltr": 0.0, "rej_pcs": 0.0,
     })
     for r in recs:
         k = r.mould or getattr(r, "product", None) or "—"
@@ -632,28 +637,32 @@ def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
             by_item[k]["kg"]  += r.total_count
             by_item[k]["ltr"] += sc.get("Ltr", 0.0)
             by_item[k]["pcs"] += sc.get("pcs", 0.0)
-        # KG-basis rejection: stored in r.reject_count (not secondary_counts).
-        # secondary_counts only carries rej_pcs / rej_ltr — never rej_kg.
-        by_item[k]["rej_kg"]  += r.reject_count
-        by_item[k]["rej_pcs"] += sc.get("rej_pcs", 0.0)
+        # Rejection routing: prefer explicit reject_unit; when blank, infer from
+        # production unit (annual records carry unit="Ltr" with Ltr rejection but
+        # no reject_unit field).  r.reject_count is always in the resolved unit.
+        _rej_unit = getattr(r, "reject_unit", "") or r.unit
+        if _rej_unit == "Ltr":
+            by_item[k]["rej_ltr"] += r.reject_count
+        # else: unusual path — ignore rather than mis-label.
+        by_item[k]["rej_pcs"] += sc.get("rej_pcs", 0.0)  # raw pcs (secondary only)
 
     cols = [
         Column("item",    "Item",          "text", width=24),
         Column("pcs",     "Pcs",           "num",  total=True),
         Column("ltr",     "Litres",        "num",  total=True),
         Column("kg",      "KG (material)", "num",  total=True),
-        Column("rej",     "Rejection",     "num",  total=True),
+        Column("rej",     "Rejection (L)", "num",  total=True),
         Column("rej_pct", "Rejection %",   "pct"),
     ]
     rows = []
-    t_ltr = t_pcs = t_kg = t_rej_kg = t_rej_pcs = 0.0
+    t_ltr = t_pcs = t_kg = t_rej_ltr = t_rej_pcs = 0.0
     for k in sorted(by_item):
         v = by_item[k]
-        t_ltr     += v["ltr"];     t_pcs     += v["pcs"];     t_kg     += v["kg"]
-        t_rej_kg  += v["rej_kg"];  t_rej_pcs += v["rej_pcs"]
-        # Rejection display: prefer KG basis; fall back to pcs count (KH).
-        rej_val   = v["rej_kg"]   if v["rej_kg"]   > 0 else v["rej_pcs"]
-        rej_denom = v["kg"]       if v["rej_kg"]   > 0 else v["pcs"]
+        t_ltr     += v["ltr"];      t_pcs     += v["pcs"];      t_kg     += v["kg"]
+        t_rej_ltr += v["rej_ltr"];  t_rej_pcs += v["rej_pcs"]
+        # Rejection display: prefer Ltr; show raw pcs count as fallback (zero-rej).
+        rej_val   = v["rej_ltr"] if v["rej_ltr"] > 0 else v["rej_pcs"]
+        rej_denom = v["ltr"]     if v["rej_ltr"] > 0 else v["pcs"]
         rows.append({
             "item":    k,
             "pcs":     v["pcs"]  or None,
@@ -662,14 +671,14 @@ def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
             "rej":     rej_val   or None,
             "rej_pct": _pct(rej_val, rej_denom) if rej_denom > 0 else None,
         })
-    t_rej_val   = t_rej_kg  if t_rej_kg  > 0 else t_rej_pcs
-    t_rej_denom = t_kg      if t_rej_kg  > 0 else t_pcs
+    t_rej_val   = t_rej_ltr if t_rej_ltr > 0 else t_rej_pcs
+    t_rej_denom = t_ltr     if t_rej_ltr > 0 else t_pcs
     total = {
         "item":    "TOTAL",
-        "pcs":     t_pcs    or None,
-        "ltr":     t_ltr    or None,
-        "kg":      t_kg     or None,
-        "rej":     t_rej_val or None,
+        "pcs":     t_pcs      or None,
+        "ltr":     t_ltr      or None,
+        "kg":      t_kg       or None,
+        "rej":     t_rej_val  or None,
         "rej_pct": _pct(t_rej_val, t_rej_denom) if t_rej_denom > 0 else None,
     }
     headline = f"{t_ltr:,.0f} L" if t_ltr > 0 else f"{t_pcs:,.0f} tanks"
@@ -677,7 +686,7 @@ def _tank_model(rid, label, plant, ym, recs, loc, note) -> ReportModel:
         month_disp=month_disp(ym),
         sheets=[ReportSheet(name=f"Tanks {plant}",
             title=f"Tanks ({loc}) — {month_disp(ym)}",
-            subtitle=f"{loc} · Litres headline · Rejection % on KG basis · {note}",
+            subtitle=f"{loc} · Litres headline · Rejection % on Ltr basis · {note}",
             sections=[Section(cols, rows, total)])],
         headline=headline)
 
