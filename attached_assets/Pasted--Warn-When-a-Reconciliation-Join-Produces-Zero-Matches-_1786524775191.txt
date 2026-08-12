@@ -1,0 +1,67 @@
+# Warn When a Reconciliation Join Produces Zero Matches (R-27)
+
+Read `PRAYAG_RULES.md` first. This change touches **R-06, R-27, R-35** and closes the same class of silent-degradation defect as the vanished-file fix.
+
+---
+
+## The defect
+
+`pipe_reconcile.py` takes the date-wise **max of Report-5 and Report-11** over the union of all machine-dates, because *"neither source is complete on its own — each one misses machine-days the other records."* That reconciliation is correct and validated (April 2026 reproduced the audited 157,883 kg; six machine-days appear **only** in Report-11). **Do not change the reconciliation logic itself (R-15).**
+
+The problem is what happens when the join fails. In **April and July 2026**, Report-11 uses legacy machine labels (`TTS-88-2`, `KABRA-72-28`, …) that do not match Report-5's `M/C-1…9`. No labels join, so the max degrades to **Report-5 alone** — and nothing anywhere says so. A safeguard built specifically to catch machine-days missing from one source is switched off for half the period, silently.
+
+Task #127 added aliases; one label (`1-KABRA-90-22`, 530 kg, May only) is still unmapped.
+
+Per **R-35**, the app's job is to surface this, not to paper over it. Per **R-06**, a degraded path must not be silent.
+
+---
+
+## Required behaviour
+
+**(a) Detect and warn on a degenerate join.** For each (plant, month) reconciliation, compute the join outcome and warn when it degrades:
+
+- **zero R11 labels matched** while R11 carried rows → this is the April/July case. Warn.
+- **some matched, some didn't** → warn, and name the unmatched labels and their kg.
+- **R11 genuinely empty for that month** → not a degradation. No warning. (Distinguish "nothing to join" from "join failed" — same principle as the vanished-file fix: absence of input is not evidence of failure.)
+
+**(b) Warning text must name specifics**, not just report a state. For example:
+
+> `PIPE 2026-04: Report-11 reconciliation matched 0 of 9 machine labels (unmatched: TTS-88-2, KABRA-72-28, …). Output falls back to Report-5 only; machine-days recorded only in Report-11 are not counted.`
+
+And for the partial case, name the label and its quantity (e.g. `1-KABRA-90-22, 530 kg`).
+
+**(c) Surface it where other source warnings already appear** — the report dict `warning` field and the data-health panel. Use the existing mechanism; do not invent a new one.
+
+**(d) Report the counts on the reconciliation panel**: labels in R5, labels in R11, matched, unmatched. A reader should be able to see at a glance whether the reconciliation actually ran.
+
+**(e) Do NOT change any figure.** No auto-mapping of unrecognised labels, no fuzzy matching, no guessing that `TTS-88-2` is `M/C-3`. If a label doesn't resolve through the existing alias table, it stays unmatched and gets named in the warning. Adding aliases is a **separate, evidence-based decision** — the app must not invent them (**R-07**).
+
+---
+
+## Validate — report observed
+
+- **APR 2026** and **JUL 2026**: warning fires, naming the unmatched legacy labels and stating the fallback to R5-only.
+- **MAY 2026**: the partial case — warning names `1-KABRA-90-22` (530 kg) as unmatched while other labels match.
+- **JUN 2026**: labels match; **no** warning.
+- A month where R11 has no rows at all: **no** warning (nothing to join ≠ join failed).
+- **Every PIPE output figure is unchanged**: APR 190,494 · MAY 344,000 · JUN 178,782 · JUL 564,695 · total 1,277,971 kg / 6,507 h (these are **gross** — see R-22 context). Rejection unchanged.
+- The MOULDING Report-12 path is untouched: APR 89,152 · MAY 75,771 · JUN 97,007 · JUL 104,086.
+
+---
+
+## Do not touch
+
+The R5↔R11 date-wise-max logic itself (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` stored-ratio policy (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · the Tank rejection `pcs × size` fix (**R-09**) · the rejection `n/a` gating · `auth.py` · the vanished-file detection just landed.
+
+**Do not add machine-label aliases in this task.** Detection only. Which legacy label maps to which machine is a data question for the owners (**R-35**) — and getting it wrong silently reassigns production between machines.
+
+No Google Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Report back
+
+- The warning text as it actually renders for APR, MAY and JUL.
+- The matched/unmatched label counts per month, with unmatched labels and their kg.
+- Confirmation that the "R11 empty" case stays silent, and how it is distinguished from a failed join.
+- Confirmation that no PIPE or MOULDING figure moved, `/` still serves, and Machine Planning is untouched.
