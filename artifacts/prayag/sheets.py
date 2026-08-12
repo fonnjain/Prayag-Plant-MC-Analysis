@@ -1813,6 +1813,71 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
                       r.reject_denominator = dr_out_map[key]   # DR basis (Trap 2)
                       r.rejection_tracked = True
 
+          # ----- Synthetic records for rejection-only machine-dates ----------
+          # A DR row with reject_count > 0 whose (machine_num, date) has NO
+          # matching block-tab record is silently dropped by the transfer loop
+          # above — both its rej_map and dr_out_map entries exist (maps are
+          # unconditional), but there is no `r` in raw to attach them to.
+          #
+          # Real-world pattern: month-end rejection booked on a date with zero
+          # production (GARDEN July 2026: M/C-2 31-Jul 70 kg, M/C-3 31-Jul 85
+          # kg).  Dropping silently produces a plausible-but-low % with no
+          # warning — R-08 / R-35 failure.
+          #
+          # Fix: emit a synthetic daily Record per unmatched key carrying ONLY
+          # rejection — zero output, zero hours — so the kg rolls up correctly.
+          if rej_map:
+              _matched_keys: set = set()
+              for r in raw:
+                  _m2 = re.search(r"(\d+)", r.machine)
+                  if _m2:
+                      _matched_keys.add((_m2.group(1), r.date))
+
+              _synth_items = []   # (mc_num_str, date_str, rej_kg, dr_out_kg)
+              for _k, _rej_kg in sorted(rej_map.items()):
+                  if _rej_kg > 0 and _k not in _matched_keys:
+                      _synth_items.append((_k[0], _k[1], _rej_kg,
+                                           dr_out_map.get(_k, 0.0)))
+
+              if _synth_items:
+                  for _mc_num, _sdate, _rej_kg, _dr_out_kg in _synth_items:
+                      raw.append(Record(
+                          grain="daily",
+                          period=ym,
+                          date=_sdate,
+                          plant=emit,
+                          segment=seg,
+                          unit=unit,
+                          machine=f"{prefix}{_mc_num}",
+                          actual_hours=0.0,
+                          total_count=0.0,
+                          reject_count=_rej_kg,
+                          reject_denominator=_dr_out_kg,
+                          rejection_tracked=True,
+                          source_family=seg,
+                          source_file=file_id,
+                          source_tab=rh_actual,
+                      ))
+
+                  # R-35: surface a note so a reader can see the figure is
+                  # complete and understand why those dates have no output.
+                  def _fmt_dmy(iso_date: str) -> str:
+                      _dt = datetime.datetime.strptime(iso_date, "%Y-%m-%d")
+                      return f"{_dt.day}-{_dt.strftime('%b')}"
+
+                  _synth_parts = ", ".join(
+                      f"M/C-{mc} {_fmt_dmy(dt)} {rkg:.2f} kg"
+                      for mc, dt, rkg, _ in _synth_items
+                  )
+                  _synth_total = sum(rkg for _, _, rkg, _ in _synth_items)
+                  report.setdefault("notes", []).append(
+                      f"{emit} {ym}: {_synth_total:,.2f} kg of rejection "
+                      f"recorded on machine-dates with no production row "
+                      f"({_synth_parts}) — counted in the rejection total, "
+                      f"shown separately as no output is attributed to those "
+                      f"dates."
+                  )
+
           # Basis-divergence note (R-23, R-35):  block-tab output (the displayed
           # figure) and the DR output (the rejection denominator) differ because
           # they come from different data sources.  Surface this when the gap
