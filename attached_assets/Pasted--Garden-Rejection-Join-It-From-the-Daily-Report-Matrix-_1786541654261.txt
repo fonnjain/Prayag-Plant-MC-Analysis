@@ -1,0 +1,103 @@
+# Garden Rejection — Join It From the Daily Report Matrix
+
+Read `PRAYAG_RULES.md` first. Touches **R-04, R-06, R-08, R-09, R-23, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis` (main at `098d349`).
+
+---
+
+## The defect
+
+QA reports, across four months: *"REJECTION IS IN SHEET IN DAILY REPORT WORKING SHEET BUT NOT IN DASHBOARD"*, and for July specifically *"REJECTION DATA IS IN SHEET MACHINE 3 BUT NOT IN DASHBOARD"*. **They are right.**
+
+Garden output comes from the `MACHINE 1-4` block tabs, which genuinely have **no rejection column** (verified header band: `DATE | CODE | SIZE | LENGTH | NOS | TOTAL | KG | TOTAL | RP CONSUMPTION | Remarks`). That is why Phase 1 gated Garden rejection to `n/a` — correct reasoning, wrong premise.
+
+**Rejection IS in the daily source** — in the `Daily Report` matrix, the same tab the app already opens for run hours. `parse_daily_matrix` explicitly reads *"the raw triplet (run hours, output, rejection)"*. The Garden join in `sheets.py` (~line 1776–1792) then discards everything except hours:
+
+```python
+for rr in rh_rows:
+    if rr.actual_hours and rr.actual_hours > 0:      # ← guard
+        rh_map[(machine, date)] = ... + rr.actual_hours
+for r in raw:
+    if key in rh_map:
+        r.actual_hours = rh_map[key]                 # ← hours only
+```
+
+Rejection is parsed, then thrown away.
+
+---
+
+## TWO TRAPS — a naive fix fails on both
+
+**Trap 1 — the hours guard would skip July entirely.**
+July's Garden `Daily Report` has **0 run hours** but **1,853.50 kg of rejection** (MACHINE-2 = 70.00, MACHINE-3 = 1,783.50). A rejection map built inside `if rr.actual_hours > 0` misses exactly the month QA complained about. **Build the rejection join independently of the hours guard.**
+
+**Trap 2 — the denominator belongs to a different output basis.**
+Output on screen comes from the block tabs (July **68,390 kg**). The rejection comes from the `Daily Report`, whose own output for July is **32,191 kg**. Pairing them naively gives 1,853.50 ÷ 68,390 = **2.71%** — wrong. The sheet's own answer is **5.76%**.
+
+Use the existing mechanism: `Record.reject_denominator` (added for the Tank fix; `compute_metrics` already sums it as `_reject_denom_sum`). Join the `Daily Report`'s **own output** for that machine-date as the denominator, giving 1,853.50 ÷ 32,191 = **5.76%** — matching the sheet and the annual.
+
+---
+
+## Required change (Garden path only)
+
+In the Garden run-hours join:
+
+1. Build a **rejection map** from the same `rh_rows`, keyed `(machine number, date)` — **not** gated on `actual_hours > 0`.
+2. Build an **output map** from the same rows (the `Daily Report`'s own output kg per machine-date).
+3. On each block-tab record where the key matches: set `reject_count` from the rejection map, `reject_denominator` from the output map, and `rejection_tracked = True`.
+4. Where the matrix supplied **no** rejection value for a machine-date, leave `rejection_tracked` as it is (`False` from `parse_daily_blocks`) so the no-fake-0% invariant still suppresses rather than showing a false zero (**R-08**).
+5. Do **not** change output. Output stays from the block tabs. Do not sum, average, or reconcile the two bases (**R-23** is still open).
+
+### Basis divergence must be visible (R-23, R-35)
+
+Displayed output (block tabs, 232,528 kg Apr–Jul) and the rejection denominator (`Daily Report`, 138,052 kg) are different bases. A user seeing "output 232,528, rejection 3.81%" could reasonably multiply them and get the wrong kg.
+
+Where the two bases differ by more than **2%** for a month, surface a note in the existing warning/data-health mechanism naming both figures — e.g. *"Garden rejection % is measured against the Daily Report output basis (32,191 kg), which differs from the displayed block-tab output (68,390 kg)."* Do not silently reconcile them.
+
+---
+
+## Validation targets (from source; the annual matches the Daily Report exactly)
+
+| Month | Rejection kg | Denominator (DR output) | Rejection % |
+|---|---:|---:|---:|
+| APR | 1,191 | 38,950 | **3.06%** |
+| MAY | 0 — genuinely empty | 0 | **n/a** (not 0.00%) |
+| JUN | 2,215 | 66,911 | **3.31%** |
+| JUL | 1,853.50 | 32,191 | **5.76%** |
+| **Total** | **5,260** | **138,052** | **3.81%** |
+
+Per-machine July: MACHINE-2 **70.00 kg**, MACHINE-3 **1,783.50 kg**.
+
+Also confirm:
+- Garden **output is unchanged**: APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 68,390 (parsed 66,038 — undated rows are correctly skipped).
+- Garden **utilisation unchanged**: APR 27.5% · JUN 66.9% · MAY and JUL still `n/a` (no hours in source — correct, not a bug).
+- **May shows `n/a`, not 0.00%** — the Daily Report is empty for May, so there is nothing to join.
+- **No other segment's rejection changes**: PIPE ~8.4–9.7% · MOULDING ~1.0% · PTMT 5.6–6.5% · TANK unchanged (Ltr, `pcs × size`).
+
+---
+
+## SEPARATE, READ-ONLY — verify the Moulding report
+
+QA also reports *"INJ MOULDING — REJECTION IS NOT SHOWING"* (April, Plant View). **I cannot reproduce this from code:** `rejection_tracked` is set only in `parse_daily_blocks` (`parsers.py:734`); MOULDING reads Report-12 via `layout: "long"`, and `rejection_available` defaults to `True`. An earlier live run showed Moulding April at **0.99% green**.
+
+**Load the live Moulding plant view for April–July and report what the rejection cell actually shows.** Change nothing. If it renders 0.99% / ~1.0%, the QA screenshot is stale. If it is blank, report the `rejection_available` value and which records reached the rollup — do not fix it in this task.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` / R5↔R11 (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` stored-ratio policy (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · the Tank rejection `pcs × size` fix (**R-09**) · Tank's `PROD. REPORT` source or `machine=""` (**R-25** — separate decision) · vanished-file detection · R-27 join warning · `auth.py`.
+
+Do **not** change Garden's output source (**R-23** open). Do **not** add rejection to the block-tab parser — the column does not exist there. No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Report back
+
+- Observed rejection kg, denominator and % for each month against the table above, plus per-machine July.
+- Confirmation that the rejection join is **not** gated on `actual_hours > 0`, and that July therefore populates despite 0 hours.
+- Confirmation that May renders `n/a` rather than 0.00%.
+- The basis-divergence note as it renders.
+- Output and utilisation unchanged; no other segment's rejection moved.
+- The read-only Moulding finding.
