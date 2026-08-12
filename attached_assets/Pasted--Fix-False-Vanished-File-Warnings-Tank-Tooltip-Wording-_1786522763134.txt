@@ -1,0 +1,80 @@
+# Fix False Vanished-File Warnings + Tank Tooltip Wording
+
+Read `PRAYAG_RULES.md` first. This change touches **R-06, R-25, R-35** and fixes a violation of **Failure Mode #9**.
+
+Two small, independent fixes. Report after both.
+
+---
+
+## FIX 1 — Vanished-file detection fires on a single miss (violates Failure Mode #9)
+
+**The defect:** `ensure_daily_discovery` marks a `(plant, ym)` vanished after **one** scan cycle in which it isn't found. A single Drive `403`/`429`/timeout on the folder endpoint makes *every* discovered month for that plant look absent at once, firing false warnings on the next page load.
+
+**This is a real, observed failure, not hypothetical:** the KH July workbook (`10_CbcKzvWdeKPW9fQ251ONjvkGjcJtlXj2_OCikHl9w`) returned HTTP 404, was concluded deleted, and read back perfectly about an hour later. Per Failure Mode #9: *"a file can 404 once and read fine minutes later — do not conclude 'deleted' from a single failure."*
+
+A warning that cries wolf gets ignored, which then conceals the real one. **R-35** requires surfacing problems clearly — a false alarm is the opposite.
+
+### Required behaviour
+
+**(a) Distinguish "scan failed" from "file absent" — this is the core of the fix.**
+A folder listing that errors, times out, or returns zero files for a folder that previously returned files is **no information**, not evidence of absence. On such a cycle:
+- do **not** compute vanished entries for that folder/plant,
+- do **not** touch the `discovery_seen` registry for it,
+- do **not** reset or increment any miss counter,
+- record that the cycle was inconclusive.
+
+**(b) Require N consecutive *informative* misses before warning.**
+Use **N = 3**. With the 10-minute `_DISCOVERY_TTL` that is roughly 30 minutes before the app speaks — long enough to ride out a transient outage, short enough to be useful. Only cycles that actually succeeded (per (a)) count toward N. Any successful scan that finds the file **resets the counter to zero**.
+
+**(c) A file that still reads is not vanished.**
+Before emitting the warning, attempt a direct read of the last-known file ID. If it succeeds, the file is fine — reset the counter and emit nothing. This alone would have prevented the KH July false alarm. Treat `404`/`403` on this read as a miss; treat `429`/`5xx`/timeout as inconclusive per (a).
+
+**(d) Pins remain exempt**, as now.
+
+### Validate
+- A simulated single failed folder scan produces **no** vanished warning and does not alter the seen-map.
+- Three consecutive informative misses **do** produce the warning; two do not.
+- A successful find after two misses resets the counter to zero.
+- A month whose file still reads directly never warns, even after 3 folder-scan misses.
+- Existing pinned months are unaffected; August discovery entries still populate normally.
+- No change to any production figure anywhere.
+
+---
+
+## FIX 2 — Tank tooltip states something factually wrong (R-25)
+
+The tooltip currently reads:
+
+> "Not applicable — Tank is output-only (no run hours or machine dimension in source)."
+
+**That is false.** Every Tank workbook has a `PRODUCTION HOURS` column, a `DAILY REPORT` tab, and a `MACHINE` row. VN carries real hours (June 208 vs 184, July 224 vs 232 — the two tabs disagree and the sign flips between months). KH and WB leave them unfilled.
+
+Change the wording to:
+
+> "Not currently tracked for Tank — run hours are recorded in the source but are not yet complete or reconciled."
+
+**Display text only.** Do **not** change `PLANTS_WITHOUT_RUNHOURS`, do **not** enable Tank utilisation, do **not** alter any figure. The 208-vs-184 disagreement is unresolved (**R-25**) and no basis has been chosen.
+
+### Validate
+Tank utilisation/efficiency/attainment still render as `—` with the corrected tooltip. No figure changes. Other segments' `n/a` handling untouched.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` and the R5↔R11 reconciliation (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` stored-ratio policy (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` and `machine_planning_*.html` (**R-20**) · the Phase 1 Tank rejection `pcs × size` fix (**R-09**) · the rejection `n/a` gating · `auth.py`.
+
+**Do not rewrite discovery to use title search.** R-14 conflicts with the current folder-enumeration approach, but `_list_drive_folder` uses `supportsAllDrives=true&includeItemsFromAllDrives=true` and is finding files narrower calls missed. That rule is being amended, not the code. Out of scope here.
+
+**Do not implement the R-27 zero-match reconciliation warning.** Separate task.
+
+No Google Sheets writes. No cache clearing (**R-34**).
+
+---
+
+## Report back
+
+- The N chosen and, precisely, **how a failed scan is distinguished from a genuine absence** — this is the part that matters.
+- Whether the direct-read confirmation in (c) was implemented, and how `429`/`5xx` are classified.
+- The validation results for all five Fix 1 cases and the Fix 2 wording.
+- Confirmation that no figure changed, `/` returns 200, and Machine Planning is untouched.
