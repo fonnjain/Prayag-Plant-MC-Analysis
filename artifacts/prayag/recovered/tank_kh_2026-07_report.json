@@ -1,0 +1,68 @@
+{
+  "provenance": "recovered from Postgres sheet_cache; source workbook returned HTTP 404 on 2026-08-12; no live source exists.",
+  "cached_at": "2026-08-12 06:49:56.151612+00:00",
+  "dead_file_id": "10_CbcKzvWdeKPW9fQ251ONjvkGjcJtlXj2_OCikHl9w",
+  "source_tab": "PROD. REPORT",
+  "validation": {
+    "record_count": 111,
+    "date_first": "2026-07-02",
+    "date_last": "2026-07-31",
+    "total_ltr": 1353500.0,
+    "item_code_count": 17,
+    "item_codes": [
+      "WCT-3LC-05",
+      "WCT-3LC-07",
+      "WCT-3LC-10",
+      "WCT-3LL-05",
+      "WCT-3LL-07",
+      "WCT-3LL-10",
+      "WT-3LL-15",
+      "WT-3LL-20",
+      "WT-3LL-50",
+      "WT-4LL-05",
+      "WT-4LL-07",
+      "WT-4LL-10",
+      "WT-4LL-20",
+      "WT-ISI-05",
+      "WT-ISI-10",
+      "WT-ISI-15",
+      "WT-ISI-30"
+    ],
+    "rejection_total": 0.0
+  },
+  "report_dict": {
+    "family": "tank",
+    "title": "Tanks (KH) \u2014 daily (2026-07)",
+    "file_id": "10_CbcKzvWdeKPW9fQ251ONjvkGjcJtlXj2_OCikHl9w",
+    "tab": "PROD. REPORT",
+    "detail_tabs": [
+      "WCT-3LC-05",
+      "WCT-3LC-07",
+      "WCT-3LC-10",
+      "WCT-3LL-05",
+      "WCT-3LL-07",
+      "WCT-3LL-10",
+      "WT-3LL-15",
+      "WT-3LL-20",
+      "WT-3LL-50",
+      "WT-4LL-05",
+      "WT-4LL-07",
+      "WT-4LL-10",
+      "WT-4LL-20",
+      "WT-ISI-05",
+      "WT-ISI-10",
+      "WT-ISI-15",
+      "WT-ISI-30"
+    ],
+    "grain": "daily",
+    "months_available": [
+      "2026-07"
+    ],
+    "record_count": 111,
+    "segment": "Tank",
+    "plant": "TANK",
+    "reconcile": null,
+    "warning": "TANK 2026-07: tank output is recorded per item (no machine or run hours), so utilisation/efficiency are not available \u2014 output is shown.",
+    "columns_seen": []
+  }
+}
