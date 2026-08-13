@@ -17,164 +17,135 @@ Key invariants tested here:
              DR output by > 2%.
   R-23    — output from block tabs is never changed by the rejection join.
 
-Fully offline: Records are constructed directly; no Google Sheets calls.
+Fully offline: list_tabs and read_values are patched; the real
+sheets._emit_blocks is called so any production drift in that function is
+caught immediately — there is no mirrored reimplementation in this file.
 
 Run: cd artifacts/prayag && python3 -m pytest tests/test_garden_rejection.py -v
 """
-import datetime
 import os
 import re
 import sys
+import unittest.mock
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
+import sheets
 from metrics import Record, compute_metrics
 
 
 # ---------------------------------------------------------------------------
-# Helpers: build Records that mimic parser output
+# Fixture builders — produce raw Sheets cell-array values
 # ---------------------------------------------------------------------------
 
-def _dr_row(machine_num: int, date: str, ym: str, *,
-            run_hours: float, output_kg: float, reject_kg: float) -> Record:
-    """Mimic a row returned by parse_daily_matrix for Garden's Daily Report."""
-    return Record(
-        grain="daily",
-        period=ym,
-        date=date,
-        plant="GARDEN",
-        segment="GARDEN",
-        unit="kg",
-        machine=f"GARDEN MACHINE-{machine_num}",
-        actual_hours=run_hours,
-        total_count=output_kg,
-        reject_count=reject_kg,
-        source_family="GARDEN",
-    )
+_MONTH_ABBR: dict[str, tuple[str, str]] = {
+    "2026-04": ("Apr", "26"),
+    "2026-05": ("May", "26"),
+    "2026-06": ("Jun", "26"),
+    "2026-07": ("Jul", "26"),
+}
 
 
-def _block_row(machine_num: int, date: str, ym: str, *,
-               output_kg: float) -> Record:
-    """Mimic a row returned by parse_daily_blocks (block tab, no rejection column)."""
-    return Record(
-        grain="daily",
-        period=ym,
-        date=date,
-        plant="GARDEN",
-        segment="GARDEN",
-        unit="kg",
-        machine=f"GARDEN M/C - {machine_num}",
-        total_count=output_kg,
-        rejection_tracked=False,    # block tabs have no rejection column
-    )
+def _block_values(ym: str, day_kg: list) -> list:
+    """Raw cell values for one GARDEN block tab (one machine, no rejection column).
 
-
-# ---------------------------------------------------------------------------
-# The join logic (mirrors the fix in sheets._emit_blocks)
-# ---------------------------------------------------------------------------
-
-def _apply_garden_rejection_join(raw, rh_rows, *, prefix="GARDEN M/C - ",
-                                   plant="GARDEN", ym="2026-07"):
-    """Apply the Garden rejection join to *raw* (in place) using *rh_rows*.
-
-    Mirrors sheets._emit_blocks exactly, including the synthetic-record step.
-    Returns (rej_map, dr_out_map, notes).
+    day_kg: [(day_of_month, output_kg), ...]  — pass [] for no production.
+    Block tabs never carry a rejection column; all rejection comes from the
+    Daily Report matrix so rejection_tracked stays False until the join.
     """
-    rh_map = {}
-    rej_map = {}
-    dr_out_map = {}
+    abbr, yr = _MONTH_ABBR[ym]
+    rows: list = [["DATE", "KG"]]
+    for day, kg in day_kg:
+        rows.append([f"{abbr} {day}, 20{yr}", str(kg)])
+    return rows
 
-    for rr in rh_rows:
-        _mn = re.search(r"(\d+)", rr.machine)
-        if not _mn:
-            continue
-        _k = (_mn.group(1), rr.date)
-        if rr.actual_hours and rr.actual_hours > 0:
-            rh_map[_k] = rh_map.get(_k, 0.0) + rr.actual_hours
-        rej_map[_k] = rej_map.get(_k, 0.0) + rr.reject_count
-        dr_out_map[_k] = dr_out_map.get(_k, 0.0) + rr.total_count
 
-    for r in raw:
-        _m = re.search(r"(\d+)", r.machine)
-        key = (_m.group(1), r.date) if _m else None
-        if key:
-            if key in rh_map:
-                r.actual_hours = rh_map[key]
-            if key in dr_out_map:
-                r.reject_count = rej_map.get(key, 0.0)
-                r.reject_denominator = dr_out_map[key]
-                r.rejection_tracked = True
+def _dr_values(ym: str, dates: list, machines: dict) -> list:
+    """Raw cell values for the GARDEN 'Daily Report' wide matrix.
 
-    notes = []
-
-    # Synthetic records for rejection-only machine-dates (mirrors production)
-    if rej_map:
-        _matched_keys = set()
-        for r in raw:
-            _m2 = re.search(r"(\d+)", r.machine)
-            if _m2:
-                _matched_keys.add((_m2.group(1), r.date))
-
-        _synth_items = []
-        for _k, _rej_kg in sorted(rej_map.items()):
-            if _rej_kg > 0 and _k not in _matched_keys:
-                _synth_items.append((_k[0], _k[1], _rej_kg,
-                                     dr_out_map.get(_k, 0.0)))
-
-        if _synth_items:
-            for _mc_num, _sdate, _rej_kg, _dr_out_kg in _synth_items:
-                raw.append(Record(
-                    grain="daily",
-                    period=ym,
-                    date=_sdate,
-                    plant=plant,
-                    segment="garden",
-                    unit="kg",
-                    machine=f"{prefix}{_mc_num}",
-                    actual_hours=0.0,
-                    total_count=0.0,
-                    reject_count=_rej_kg,
-                    reject_denominator=_dr_out_kg,
-                    rejection_tracked=True,
-                    source_family="garden",
-                ))
-
-            def _fmt_dmy(iso_date):
-                _dt = datetime.datetime.strptime(iso_date, "%Y-%m-%d")
-                return f"{_dt.day}-{_dt.strftime('%b')}"
-
-            _synth_parts = ", ".join(
-                f"M/C-{mc} {_fmt_dmy(dt)} {rkg:.2f} kg"
-                for mc, dt, rkg, _ in _synth_items
-            )
-            _synth_total = sum(rkg for _, _, rkg, _ in _synth_items)
-            notes.append(
-                f"{plant} {ym}: {_synth_total:,.2f} kg of rejection "
-                f"recorded on machine-dates with no production row "
-                f"({_synth_parts}) — counted in the rejection total, "
-                f"shown separately as no output is attributed to those "
-                f"dates."
-            )
-
-    # Basis-divergence note
-    if rej_map:
-        _dr_total = sum(dr_out_map.values())
-        _blk_total = sum(r.total_count for r in raw)
-        if _dr_total > 0 and _blk_total > 0:
-            _gap = abs(_blk_total - _dr_total) / max(_blk_total, _dr_total)
-            if _gap > 0.02:
-                notes.append(
-                    f"{plant} {ym}: rejection % is measured against the "
-                    f"Daily Report output basis "
-                    f"({_dr_total:,.0f} kg), which differs from the "
-                    f"displayed block-tab output ({_blk_total:,.0f} kg)."
-                )
-    return rej_map, dr_out_map, notes
+    dates   : ordered list of day-of-month integers; must have >= 2 entries
+              for parse_daily_matrix to recognise the date-row header.
+    machines: {label_str: [(day, run_hours, output_kg, reject_kg), ...]}
+              Omitted (day, machine) pairs default to (0, 0, 0).
+    """
+    abbr, yr = _MONTH_ABBR[ym]
+    # Row 0: machine-label column + three sub-columns per date group
+    date_row: list = ["MACHINE"]
+    for d in dates:
+        date_row += [f"{d:02d}-{abbr}-{yr}", "", ""]
+    # Row 1: sub-headers (Run Hours / Output / Rejection per group)
+    sub_row: list = [""]
+    for _ in dates:
+        sub_row += ["Run Hours", "Output", "Rejection"]
+    rows: list = [date_row, sub_row]
+    for label, entries in machines.items():
+        d_map = {d: (rh, out, rej) for d, rh, out, rej in entries}
+        row: list = [label]
+        for d in dates:
+            rh, out, rej = d_map.get(d, (0, 0, 0))
+            row += [str(rh), str(out), str(rej)]
+        rows.append(row)
+    return rows
 
 
 # ---------------------------------------------------------------------------
-# Test cases
+# Shared constants and test-runner helper
+# ---------------------------------------------------------------------------
+
+_TABS = ["MACHINE 1", "MACHINE 2", "MACHINE 3", "MACHINE 4", "Daily Report"]
+_FAKE_FID = "fixture-file-id"
+_FAKE_TOK  = "fixture-token"
+_SPEC = {
+    "tab_re": r"MACHINE\s+\d+",
+    "runhours_tab": "Daily Report",
+    "machine_prefix": "GARDEN M/C - ",
+}
+
+
+def _full_block_map(ym: str, explicit: dict) -> dict:
+    """Block-map with all 4 MACHINE tabs; tabs not in *explicit* are empty."""
+    return {t: explicit.get(t, _block_values(ym, []))
+            for t in _TABS if t.startswith("MACHINE")}
+
+
+def _run_emit_blocks(ym: str, block_map: dict, dr: list) -> tuple:
+    """Patch list_tabs + read_values and invoke the real sheets._emit_blocks.
+
+    Returns (raw_records, report_dict).  Notes accumulated by _emit_blocks
+    are in report.get('notes', []).
+    """
+    def _list_tabs(file_id, token):
+        return _TABS
+
+    def _read_values(file_id, tab, token):
+        if tab == "Daily Report":
+            return dr
+        return block_map.get(tab, [])
+
+    with (
+        unittest.mock.patch("sheets.list_tabs",   side_effect=_list_tabs),
+        unittest.mock.patch("sheets.read_values", side_effect=_read_values),
+    ):
+        raw, report = sheets._emit_blocks(
+            "GARDEN", ym, _FAKE_FID, _SPEC, _FAKE_TOK, "GARDEN", "kg", {}
+        )
+    return raw, report
+
+
+def _by_machine_date(raw: list) -> dict:
+    """Index raw records by (machine_number_str, date_str)."""
+    idx: dict = {}
+    for r in raw:
+        m = re.search(r"(\d+)", r.machine)
+        if m:
+            idx[(m.group(1), r.date)] = r
+    return idx
+
+
+# ---------------------------------------------------------------------------
+# Test classes
 # ---------------------------------------------------------------------------
 
 class TestJulyRejection:
@@ -182,49 +153,38 @@ class TestJulyRejection:
 
     YM = "2026-07"
 
-    def _make_rh_rows(self):
-        # July: M2 and M3 have rejection but NO run hours
-        return [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=8000, reject_kg=70.00),
-            _dr_row(3, "2026-07-15", self.YM, run_hours=0, output_kg=22000, reject_kg=1783.50),
-            _dr_row(1, "2026-07-15", self.YM, run_hours=0, output_kg=2191, reject_kg=0.0),
-        ]
+    def _block_map(self):
+        return _full_block_map(self.YM, {
+            "MACHINE 1": _block_values(self.YM, [(15, 15000)]),
+            "MACHINE 2": _block_values(self.YM, [(15, 18000)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 35000)]),
+        })
 
-    def _make_raw(self):
-        return [
-            _block_row(1, "2026-07-15", self.YM, output_kg=15000),
-            _block_row(2, "2026-07-15", self.YM, output_kg=18000),
-            _block_row(3, "2026-07-15", self.YM, output_kg=35000),
-        ]
+    def _dr(self):
+        # Two date groups required for parse_daily_matrix to detect the header.
+        return _dr_values(self.YM, [15, 16], {
+            "MACHINE-1": [(15, 0, 2191,  0.0)],
+            "MACHINE-2": [(15, 0, 8000, 70.00)],
+            "MACHINE-3": [(15, 0, 22000, 1783.50)],
+        })
 
     def test_reject_count_populated_despite_zero_hours(self):
         """Trap 1: rejection join must NOT be gated on actual_hours > 0."""
-        raw = self._make_raw()
-        rh_rows = self._make_rh_rows()
-        rej_map, dr_out_map, _ = _apply_garden_rejection_join(raw, rh_rows)
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        idx = _by_machine_date(raw)
 
         # rej_map must have entries for M2 and M3 even though hours=0
-        assert ("2", "2026-07-15") in rej_map
-        assert rej_map[("2", "2026-07-15")] == pytest.approx(70.0)
-        assert ("3", "2026-07-15") in rej_map
-        assert rej_map[("3", "2026-07-15")] == pytest.approx(1783.50)
-
-        # Block records must have their rejection joined
-        by_mc = {r.machine: r for r in raw}
-        assert by_mc["GARDEN M/C - 2"].reject_count == pytest.approx(70.0)
-        assert by_mc["GARDEN M/C - 3"].reject_count == pytest.approx(1783.50)
-        assert by_mc["GARDEN M/C - 2"].rejection_tracked is True
-        assert by_mc["GARDEN M/C - 3"].rejection_tracked is True
+        assert idx[("2", "2026-07-15")].reject_count == pytest.approx(70.0)
+        assert idx[("3", "2026-07-15")].reject_count == pytest.approx(1783.50)
+        assert idx[("2", "2026-07-15")].rejection_tracked is True
+        assert idx[("3", "2026-07-15")].rejection_tracked is True
 
     def test_rejection_pct_uses_dr_output_not_block_output(self):
         """Trap 2: denominator is DR output (32,191 kg), not block-tab output."""
-        raw = self._make_raw()
-        rh_rows = self._make_rh_rows()
-        _apply_garden_rejection_join(raw, rh_rows)
-
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
         metrics = compute_metrics(raw)
 
-        # DR output total = 8000 + 22000 + 2191 = 32,191
+        # DR output total = 2191 + 8000 + 22000 = 32,191
         # Reject = 70 + 1783.50 = 1,853.50
         # Pct = 1853.50 / 32191 ≈ 5.76%
         assert metrics.reject_count == pytest.approx(1853.50)
@@ -232,13 +192,11 @@ class TestJulyRejection:
 
     def test_block_output_unchanged(self):
         """R-23: block-tab output must not change after the rejection join."""
-        raw = self._make_raw()
-        block_output_before = {r.machine: r.total_count for r in raw}
-        _apply_garden_rejection_join(raw, self._make_rh_rows())
-        for r in raw:
-            assert r.total_count == block_output_before[r.machine], (
-                f"{r.machine} output changed: {block_output_before[r.machine]} → {r.total_count}"
-            )
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        idx = _by_machine_date(raw)
+        assert idx[("1", "2026-07-15")].total_count == pytest.approx(15000.0)
+        assert idx[("2", "2026-07-15")].total_count == pytest.approx(18000.0)
+        assert idx[("3", "2026-07-15")].total_count == pytest.approx(35000.0)
 
 
 class TestMayRejection:
@@ -246,16 +204,15 @@ class TestMayRejection:
 
     YM = "2026-05"
 
-    def _make_raw(self):
-        return [
-            _block_row(1, "2026-05-10", self.YM, output_kg=13000),
-            _block_row(2, "2026-05-10", self.YM, output_kg=12000),
-        ]
+    def _block_map(self):
+        return _full_block_map(self.YM, {
+            "MACHINE 1": _block_values(self.YM, [(10, 13000)]),
+            "MACHINE 2": _block_values(self.YM, [(10, 12000)]),
+        })
 
     def test_may_rejection_suppressed_when_dr_empty(self):
         """Empty DR → no rh_rows → rejection_tracked stays False → n/a."""
-        raw = self._make_raw()
-        _apply_garden_rejection_join(raw, rh_rows=[])  # empty DR
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), [])
 
         for r in raw:
             assert r.rejection_tracked is False, (
@@ -265,12 +222,11 @@ class TestMayRejection:
 
         metrics = compute_metrics(raw)
         assert metrics.rejection_available is False
-        assert metrics.rejection_pct == 0.0   # 0/0 via _safe_div, but not displayed
+        assert metrics.rejection_pct == 0.0  # 0/0 via _safe_div, but not displayed
 
     def test_may_no_fake_zero_percent(self):
         """R-08: May must not display 0.00% (rejection_available must be False)."""
-        raw = self._make_raw()
-        _apply_garden_rejection_join(raw, rh_rows=[])
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), [])
         metrics = compute_metrics(raw)
         assert not metrics.rejection_available, "May: rejection_available must be False"
 
@@ -280,34 +236,31 @@ class TestAprilRejection:
 
     YM = "2026-04"
 
-    def _make_rh_rows(self):
-        # Spread across multiple dates and machines
-        return [
-            _dr_row(1, "2026-04-10", self.YM, run_hours=8, output_kg=9000, reject_kg=300.0),
-            _dr_row(2, "2026-04-10", self.YM, run_hours=8, output_kg=8000, reject_kg=250.0),
-            _dr_row(3, "2026-04-15", self.YM, run_hours=8, output_kg=12000, reject_kg=441.0),
-            _dr_row(4, "2026-04-15", self.YM, run_hours=8, output_kg=9950, reject_kg=200.0),
-        ]  # total reject = 1191; total DR out = 38950
+    def _block_map(self):
+        return _full_block_map(self.YM, {
+            "MACHINE 1": _block_values(self.YM, [(10, 10500)]),
+            "MACHINE 2": _block_values(self.YM, [(10, 9500)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 13200)]),
+            "MACHINE 4": _block_values(self.YM, [(15, 9536)]),
+        })
 
-    def _make_raw(self):
-        return [
-            _block_row(1, "2026-04-10", self.YM, output_kg=10500),
-            _block_row(2, "2026-04-10", self.YM, output_kg=9500),
-            _block_row(3, "2026-04-15", self.YM, output_kg=13200),
-            _block_row(4, "2026-04-15", self.YM, output_kg=9536),
-        ]  # total block out = 42736
+    def _dr(self):
+        return _dr_values(self.YM, [10, 15], {
+            "MACHINE-1": [(10, 8, 9000,  300.0)],
+            "MACHINE-2": [(10, 8, 8000,  250.0)],
+            "MACHINE-3": [(15, 8, 12000, 441.0)],
+            "MACHINE-4": [(15, 8, 9950,  200.0)],
+        })
 
     def test_april_rejection_kg_and_pct(self):
-        raw = self._make_raw()
-        _apply_garden_rejection_join(raw, self._make_rh_rows())
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
         metrics = compute_metrics(raw)
 
         assert metrics.reject_count == pytest.approx(1191.0)
         assert metrics.rejection_pct == pytest.approx(1191.0 / 38950.0, rel=1e-4)
 
     def test_april_rejection_tracked(self):
-        raw = self._make_raw()
-        _apply_garden_rejection_join(raw, self._make_rh_rows())
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
         assert all(r.rejection_tracked for r in raw)
         metrics = compute_metrics(raw)
         assert metrics.rejection_available is True
@@ -320,46 +273,55 @@ class TestBasisDivergenceNote:
 
     def test_note_fires_when_gap_exceeds_2pct(self):
         """Large divergence (July: block 68390 vs DR 32191 ≈ 52%) → note."""
-        raw = [
-            _block_row(2, "2026-07-15", self.YM, output_kg=30000),
-            _block_row(3, "2026-07-15", self.YM, output_kg=38390),
-        ]
-        rh_rows = [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=10000, reject_kg=70.0),
-            _dr_row(3, "2026-07-15", self.YM, run_hours=0, output_kg=22191, reject_kg=1783.50),
-        ]
-        _, _, notes = _apply_garden_rejection_join(raw, rh_rows)
+        bm = _full_block_map(self.YM, {
+            "MACHINE 2": _block_values(self.YM, [(15, 30000)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 38390)]),
+        })
+        dr = _dr_values(self.YM, [15, 16], {
+            "MACHINE-2": [(15, 0, 10000,  70.0)],
+            "MACHINE-3": [(15, 0, 22191, 1783.50)],
+        })
+        _, report = _run_emit_blocks(self.YM, bm, dr)
+        notes = report.get("notes", [])
         assert notes, "Basis-divergence note must fire when gap > 2%"
-        assert "Daily Report output basis" in notes[0]
-        assert "block-tab output" in notes[0]
+        assert any("Daily Report output basis" in n for n in notes)
+        assert any("block-tab output" in n for n in notes)
 
     def test_note_suppressed_when_gap_within_2pct(self):
         """Small divergence (< 2%) → no note."""
-        raw = [
-            _block_row(1, "2026-06-10", "2026-06", output_kg=10000),
-        ]
-        rh_rows = [
-            _dr_row(1, "2026-06-10", "2026-06", run_hours=8, output_kg=9900, reject_kg=50.0),
-        ]
-        _, _, notes = _apply_garden_rejection_join(raw, rh_rows)
-        assert not notes, f"Unexpected note for <2% gap: {notes}"
+        bm = _full_block_map("2026-06", {
+            "MACHINE 1": _block_values("2026-06", [(10, 10000)]),
+        })
+        dr = _dr_values("2026-06", [10, 11], {
+            "MACHINE-1": [(10, 8, 9900, 50.0)],
+        })
+        _, report = _run_emit_blocks("2026-06", bm, dr)
+        notes = report.get("notes", [])
+        div_notes = [n for n in notes if "Daily Report output basis" in n]
+        assert not div_notes, f"Unexpected divergence note for <2% gap: {div_notes}"
 
     def test_note_suppressed_when_no_rejection_data(self):
-        """No rejection in DR (rej_map empty after join) → no note."""
-        raw = [_block_row(1, "2026-05-10", "2026-05", output_kg=13000)]
-        rh_rows = []   # empty DR
-        _, _, notes = _apply_garden_rejection_join(raw, rh_rows)
+        """No rejection in DR (empty) → no note."""
+        bm = _full_block_map("2026-05", {
+            "MACHINE 1": _block_values("2026-05", [(10, 13000)]),
+        })
+        _, report = _run_emit_blocks("2026-05", bm, [])
+        notes = report.get("notes", [])
         assert not notes
 
     def test_note_names_both_output_figures(self):
         """Note text must include both the DR basis and block-tab figures."""
-        raw = [_block_row(2, "2026-07-15", self.YM, output_kg=68390)]
-        rh_rows = [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=32191, reject_kg=1853.50),
-        ]
-        _, _, notes = _apply_garden_rejection_join(raw, rh_rows)
-        assert notes
-        note = notes[0]
+        bm = _full_block_map(self.YM, {
+            "MACHINE 2": _block_values(self.YM, [(15, 68390)]),
+        })
+        dr = _dr_values(self.YM, [15, 16], {
+            "MACHINE-2": [(15, 0, 32191, 1853.50)],
+        })
+        _, report = _run_emit_blocks(self.YM, bm, dr)
+        notes = report.get("notes", [])
+        div_notes = [n for n in notes if "Daily Report output basis" in n]
+        assert div_notes, "Divergence note must fire"
+        note = div_notes[0]
         assert "32,191" in note, f"DR output figure missing from note: {note}"
         assert "68,390" in note, f"Block-tab output figure missing from note: {note}"
 
@@ -371,29 +333,32 @@ class TestRejectionTrackedGating:
 
     def test_machine_without_dr_row_keeps_rejection_tracked_false(self):
         """A block record with no matching DR entry stays rejection_tracked=False."""
-        raw = [
-            _block_row(1, "2026-07-20", self.YM, output_kg=5000),  # machine 1
-            _block_row(2, "2026-07-20", self.YM, output_kg=8000),  # machine 2
-        ]
-        rh_rows = [
+        bm = _full_block_map(self.YM, {
+            "MACHINE 1": _block_values(self.YM, [(20, 5000)]),
+            "MACHINE 2": _block_values(self.YM, [(20, 8000)]),
+        })
+        dr = _dr_values(self.YM, [20, 21], {
             # DR only has machine 2; machine 1 is absent
-            _dr_row(2, "2026-07-20", self.YM, run_hours=0, output_kg=7500, reject_kg=100.0),
-        ]
-        _apply_garden_rejection_join(raw, rh_rows)
-        by_mc = {r.machine: r for r in raw}
-        assert by_mc["GARDEN M/C - 1"].rejection_tracked is False, (
+            "MACHINE-2": [(20, 0, 7500, 100.0)],
+        })
+        raw, _ = _run_emit_blocks(self.YM, bm, dr)
+        idx = _by_machine_date(raw)
+        assert idx[("1", "2026-07-20")].rejection_tracked is False, (
             "Machine-1 has no DR entry: rejection_tracked must stay False"
         )
-        assert by_mc["GARDEN M/C - 2"].rejection_tracked is True
+        assert idx[("2", "2026-07-20")].rejection_tracked is True
 
     def test_machine_date_with_zero_rejection_but_output_gets_tracked(self):
         """If DR has output for a machine-date but reject=0, rejection is tracked as 0."""
-        raw = [_block_row(1, "2026-04-01", "2026-04", output_kg=9000)]
-        rh_rows = [
-            _dr_row(1, "2026-04-01", "2026-04", run_hours=8, output_kg=8500, reject_kg=0.0),
-        ]
-        _apply_garden_rejection_join(raw, rh_rows)
-        r = raw[0]
+        bm = _full_block_map("2026-04", {
+            "MACHINE 1": _block_values("2026-04", [(1, 9000)]),
+        })
+        dr = _dr_values("2026-04", [1, 2], {
+            "MACHINE-1": [(1, 8, 8500, 0.0)],
+        })
+        raw, _ = _run_emit_blocks("2026-04", bm, dr)
+        idx = _by_machine_date(raw)
+        r = idx[("1", "2026-04-01")]
         assert r.rejection_tracked is True
         assert r.reject_count == 0.0
         assert r.reject_denominator == pytest.approx(8500.0)
@@ -405,28 +370,24 @@ class TestJulyPerMachineKg:
     YM = "2026-07"
 
     def test_per_machine_rejection_kg(self):
-        raw = [
-            _block_row(2, "2026-07-15", self.YM, output_kg=18000),
-            _block_row(3, "2026-07-15", self.YM, output_kg=35000),
-        ]
-        rh_rows = [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=8000, reject_kg=70.00),
-            _dr_row(3, "2026-07-15", self.YM, run_hours=0, output_kg=22000, reject_kg=1783.50),
-        ]
-        _apply_garden_rejection_join(raw, rh_rows)
-
-        by_mc = {r.machine: r for r in raw}
-        assert by_mc["GARDEN M/C - 2"].reject_count == pytest.approx(70.00)
-        assert by_mc["GARDEN M/C - 3"].reject_count == pytest.approx(1783.50)
+        bm = _full_block_map(self.YM, {
+            "MACHINE 2": _block_values(self.YM, [(15, 18000)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 35000)]),
+        })
+        dr = _dr_values(self.YM, [15, 16], {
+            "MACHINE-2": [(15, 0, 8000,  70.00)],
+            "MACHINE-3": [(15, 0, 22000, 1783.50)],
+        })
+        raw, _ = _run_emit_blocks(self.YM, bm, dr)
+        idx = _by_machine_date(raw)
+        assert idx[("2", "2026-07-15")].reject_count == pytest.approx(70.00)
+        assert idx[("3", "2026-07-15")].reject_count == pytest.approx(1783.50)
 
         # Per-machine metrics
-        m2_metrics = compute_metrics([by_mc["GARDEN M/C - 2"]])
-        m3_metrics = compute_metrics([by_mc["GARDEN M/C - 3"]])
-
-        assert m2_metrics.reject_count == pytest.approx(70.00)
-        assert m3_metrics.reject_count == pytest.approx(1783.50)
-
-
+        m2 = compute_metrics([idx[("2", "2026-07-15")]])
+        m3 = compute_metrics([idx[("3", "2026-07-15")]])
+        assert m2.reject_count == pytest.approx(70.00)
+        assert m3.reject_count == pytest.approx(1783.50)
 
 
 class TestSyntheticRejectionOnlyRecords:
@@ -434,107 +395,110 @@ class TestSyntheticRejectionOnlyRecords:
 
     YM = "2026-07"
 
-    def _make_july_raw(self):
-        """Block records: M/C-3 has entries for Jul-10, Jul-27, Jul-30 only."""
-        return [
-            _block_row(3, "2026-07-10", self.YM, output_kg=1513.40),
-            _block_row(3, "2026-07-27", self.YM, output_kg=1474.80),
-            _block_row(3, "2026-07-30", self.YM, output_kg=1425.40),
-        ]
+    # Spec fixture: M/C-2 31-Jul 70.00; M/C-3 10-Jul 1,513.50, 27-Jul 95.00,
+    # 30-Jul 90.00, 31-Jul 85.00.  M/C-3 block tab: Jul-10, Jul-27, Jul-30.
+    # M/C-2 has no block entries at all → entire M/C-2 rejection is synthetic.
 
-    def _make_july_rh_rows(self):
-        """DR rows: M/C-2 Jul-31 70 kg, M/C-3 Jul-10 1513.50 kg,
-           M/C-3 Jul-27 95 kg, M/C-3 Jul-30 90 kg, M/C-3 Jul-31 85 kg."""
-        return [
-            _dr_row(2, "2026-07-31", self.YM, run_hours=0, output_kg=0, reject_kg=70.00),
-            _dr_row(3, "2026-07-10", self.YM, run_hours=0, output_kg=0, reject_kg=1513.50),
-            _dr_row(3, "2026-07-27", self.YM, run_hours=0, output_kg=1378.30, reject_kg=95.00),
-            _dr_row(3, "2026-07-30", self.YM, run_hours=0, output_kg=1352.90, reject_kg=90.00),
-            _dr_row(3, "2026-07-31", self.YM, run_hours=0, output_kg=0, reject_kg=85.00),
-        ]
+    def _block_map(self):
+        return _full_block_map(self.YM, {
+            "MACHINE 3": _block_values(self.YM, [
+                (10, 1513.40),
+                (27, 1474.80),
+                (30, 1425.40),
+            ]),
+        })
+
+    def _dr(self):
+        # Four date groups (10, 27, 30, 31) → ≥2, parser happy.
+        return _dr_values(self.YM, [10, 27, 30, 31], {
+            "MACHINE-2": [(31, 0, 0,      70.00)],
+            "MACHINE-3": [
+                (10, 0, 0,       1513.50),
+                (27, 0, 1378.30,   95.00),
+                (30, 0, 1352.90,   90.00),
+                (31, 0, 0,         85.00),
+            ],
+        })
 
     def test_total_rejection_kg_reaches_spec_target(self):
         """Full July: 1,853.50 kg total = 1,698.50 transferred + 155.00 synthetic."""
-        raw = self._make_july_raw()
-        rh_rows = self._make_july_rh_rows()
-        _apply_garden_rejection_join(raw, rh_rows, ym=self.YM)
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
         metrics = compute_metrics(raw)
         assert metrics.reject_count == pytest.approx(1853.50, abs=0.01)
 
     def test_two_synthetic_records_appended(self):
         """M/C-2 Jul-31 and M/C-3 Jul-31 each get a synthetic record."""
-        raw = self._make_july_raw()
-        n_before = len(raw)
-        _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
-        synth = [r for r in raw[n_before:]]
-        assert len(synth) == 2, f"Expected 2 synthetic records, got {len(synth)}"
-
-        by_mc = {re.search(r"(\d+)", r.machine).group(1): r for r in synth}
-        assert "2" in by_mc, "Synthetic record for M/C-2 missing"
-        assert "3" in by_mc, "Synthetic record for M/C-3 missing"
-        assert by_mc["2"].reject_count == pytest.approx(70.00)
-        assert by_mc["3"].reject_count == pytest.approx(85.00)
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        # Synthetic records: total_count == 0 and rejection_tracked == True
+        synth = [r for r in raw if r.total_count == 0.0 and r.rejection_tracked]
+        assert len(synth) == 2, (
+            f"Expected 2 synthetic records, got {len(synth)}; "
+            f"synth machines: {[r.machine for r in synth]}"
+        )
+        synth_mcs = {re.search(r"(\d+)", r.machine).group(1) for r in synth}
+        assert "2" in synth_mcs, "Synthetic record for M/C-2 missing"
+        assert "3" in synth_mcs, "Synthetic record for M/C-3 missing"
+        for r in synth:
+            mc = re.search(r"(\d+)", r.machine).group(1)
+            if mc == "2":
+                assert r.reject_count == pytest.approx(70.00)
+            else:
+                assert r.reject_count == pytest.approx(85.00)
 
     def test_synthetic_records_have_zero_output_and_hours(self):
         """Synthetic records must not add output or hours (R-23 / util invariant)."""
-        raw = self._make_july_raw()
-        n_before = len(raw)
-        _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
-        for r in raw[n_before:]:
-            assert r.total_count == 0.0, f"{r.machine}: synthetic record has output {r.total_count}"
-            assert (r.actual_hours or 0.0) == 0.0, f"{r.machine}: synthetic record has hours"
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        synth = [r for r in raw if r.total_count == 0.0 and r.rejection_tracked]
+        for r in synth:
+            assert r.total_count == 0.0, (
+                f"{r.machine}: synthetic record has output {r.total_count}"
+            )
+            assert (r.actual_hours or 0.0) == 0.0, (
+                f"{r.machine}: synthetic record has hours {r.actual_hours}"
+            )
 
     def test_synthetic_records_rejection_tracked_true(self):
         """rejection_tracked must be True so the kg is not suppressed."""
-        raw = self._make_july_raw()
-        n_before = len(raw)
-        _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
-        for r in raw[n_before:]:
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        synth = [r for r in raw if r.total_count == 0.0 and r.rejection_tracked]
+        for r in synth:
             assert r.rejection_tracked is True
 
     def test_per_machine_rejection_after_fix(self):
         """M/C-2 total = 70.00, M/C-3 total = 1,783.50 (1513.50 + 95 + 90 + 85)."""
-        raw = self._make_july_raw()
-        _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
-        # Group by machine number
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
         from collections import defaultdict
-        by_mc = defaultdict(float)
+        by_mc: dict = defaultdict(float)
         for r in raw:
-            _mn = re.search(r"(\d+)", r.machine)
-            if _mn:
-                by_mc[_mn.group(1)] += r.reject_count
+            mn = re.search(r"(\d+)", r.machine)
+            if mn:
+                by_mc[mn.group(1)] += r.reject_count
         assert by_mc["2"] == pytest.approx(70.00)
         assert by_mc["3"] == pytest.approx(1783.50, abs=0.01)
 
     def test_rejection_pct_reaches_576(self):
         """After fix: 1853.50 / 32191 ≈ 5.76%."""
-        raw = self._make_july_raw()
-        # Add M/C-2 block rows so the DR output denominator is anchored
-        raw += [_block_row(2, "2026-07-27", self.YM, output_kg=709.60)]
-        rh_rows = self._make_july_rh_rows()
-        # Add DR output for M/C-2 on Jul-27 to make denominator = 32191
-        rh_rows.append(
-            _dr_row(2, "2026-07-27", self.YM, run_hours=0, output_kg=32191 - 0 - 1378.30 - 1352.90, reject_kg=0)
-        )
-        # Use a simpler fixture: known denom = 32191
-        raw2 = [
-            _block_row(2, "2026-07-15", self.YM, output_kg=18000),
-            _block_row(3, "2026-07-15", self.YM, output_kg=35000),
-        ]
-        rh2 = [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=32191, reject_kg=1698.50),
-            _dr_row(2, "2026-07-31", self.YM, run_hours=0, output_kg=0, reject_kg=70.00),
-            _dr_row(3, "2026-07-31", self.YM, run_hours=0, output_kg=0, reject_kg=85.00),
-        ]
-        _apply_garden_rejection_join(raw2, rh2, ym=self.YM)
-        metrics = compute_metrics(raw2)
+        # Simpler fixture: known total DR output = 32191 on Jul-15.
+        bm = _full_block_map(self.YM, {
+            "MACHINE 2": _block_values(self.YM, [(15, 18000)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 35000)]),
+        })
+        dr = _dr_values(self.YM, [15, 31], {
+            "MACHINE-2": [
+                (15, 0, 32191, 1698.50),
+                (31, 0, 0,       70.00),
+            ],
+            "MACHINE-3": [(31, 0, 0, 85.00)],
+        })
+        raw, _ = _run_emit_blocks(self.YM, bm, dr)
+        metrics = compute_metrics(raw)
         assert metrics.reject_count == pytest.approx(1853.50)
         assert metrics.rejection_pct == pytest.approx(1853.50 / 32191.0, rel=1e-3)
 
     def test_warning_note_emitted(self):
         """R-35: a note must be appended listing the dropped dates and total kg."""
-        raw = self._make_july_raw()
-        _, _, notes = _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
+        raw, report = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        notes = report.get("notes", [])
         synth_notes = [n for n in notes if "no production row" in n]
         assert synth_notes, f"No synthetic-record note emitted; all notes: {notes}"
         note = synth_notes[0]
@@ -545,28 +509,33 @@ class TestSyntheticRejectionOnlyRecords:
 
     def test_warning_note_absent_when_all_matched(self):
         """When every DR rejection row has a block record, no synthetic note fires."""
-        raw = [
-            _block_row(2, "2026-07-15", self.YM, output_kg=18000),
-            _block_row(3, "2026-07-15", self.YM, output_kg=35000),
-        ]
-        rh_rows = [
-            _dr_row(2, "2026-07-15", self.YM, run_hours=0, output_kg=8000, reject_kg=70.0),
-            _dr_row(3, "2026-07-15", self.YM, run_hours=0, output_kg=22000, reject_kg=85.0),
-        ]
-        _, _, notes = _apply_garden_rejection_join(raw, rh_rows, ym=self.YM)
+        bm = _full_block_map(self.YM, {
+            "MACHINE 2": _block_values(self.YM, [(15, 18000)]),
+            "MACHINE 3": _block_values(self.YM, [(15, 35000)]),
+        })
+        dr = _dr_values(self.YM, [15, 16], {
+            "MACHINE-2": [(15, 0, 8000,  70.0)],
+            "MACHINE-3": [(15, 0, 22000, 85.0)],
+        })
+        _, report = _run_emit_blocks(self.YM, bm, dr)
+        notes = report.get("notes", [])
         synth_notes = [n for n in notes if "no production row" in n]
         assert not synth_notes, f"Unexpected synthetic note: {synth_notes}"
 
     def test_block_output_unchanged_after_synthetic_emit(self):
         """R-23: synthetic records must not alter any pre-existing block record."""
-        raw = self._make_july_raw()
-        before = {(r.machine, r.date): r.total_count for r in raw}
-        _apply_garden_rejection_join(raw, self._make_july_rh_rows(), ym=self.YM)
+        raw, _ = _run_emit_blocks(self.YM, self._block_map(), self._dr())
+        # Expected total_count for the three real block-tab entries
+        expected = {
+            ("GARDEN M/C - 3", "2026-07-10"): 1513.40,
+            ("GARDEN M/C - 3", "2026-07-27"): 1474.80,
+            ("GARDEN M/C - 3", "2026-07-30"): 1425.40,
+        }
         for r in raw:
             key = (r.machine, r.date)
-            if key in before:
-                assert r.total_count == before[key], (
-                    f"{r.machine} {r.date}: output changed {before[key]} -> {r.total_count}"
+            if key in expected:
+                assert r.total_count == pytest.approx(expected[key]), (
+                    f"{r.machine} {r.date}: block output changed to {r.total_count}"
                 )
 
 
@@ -577,26 +546,33 @@ class TestMC3Jul10ZeroDenominator:
 
     def test_zero_denominator_record_is_tracked(self):
         """Block record exists for Jul-10, so rejection IS transferred and tracked."""
-        raw = [_block_row(3, "2026-07-10", self.YM, output_kg=1513.40)]
-        rh_rows = [
-            _dr_row(3, "2026-07-10", self.YM, run_hours=0, output_kg=0, reject_kg=1513.50),
-        ]
-        _apply_garden_rejection_join(raw, rh_rows, ym=self.YM)
-        r = raw[0]
+        bm = _full_block_map(self.YM, {
+            "MACHINE 3": _block_values(self.YM, [(10, 1513.40)]),
+        })
+        # Two date groups needed for parse_daily_matrix to find the header.
+        dr = _dr_values(self.YM, [10, 11], {
+            "MACHINE-3": [(10, 0, 0, 1513.50)],
+        })
+        raw, _ = _run_emit_blocks(self.YM, bm, dr)
+        idx = _by_machine_date(raw)
+        r = idx[("3", "2026-07-10")]
         assert r.rejection_tracked is True
         assert r.reject_count == pytest.approx(1513.50)
         assert r.reject_denominator == pytest.approx(0.0)
 
     def test_zero_denominator_does_not_crash_compute_metrics(self):
         """compute_metrics must not raise on a zero reject_denominator."""
-        raw = [_block_row(3, "2026-07-10", self.YM, output_kg=1513.40)]
-        rh_rows = [
-            _dr_row(3, "2026-07-10", self.YM, run_hours=0, output_kg=0, reject_kg=1513.50),
-        ]
-        _apply_garden_rejection_join(raw, rh_rows, ym=self.YM)
+        bm = _full_block_map(self.YM, {
+            "MACHINE 3": _block_values(self.YM, [(10, 1513.40)]),
+        })
+        dr = _dr_values(self.YM, [10, 11], {
+            "MACHINE-3": [(10, 0, 0, 1513.50)],
+        })
+        raw, _ = _run_emit_blocks(self.YM, bm, dr)
         metrics = compute_metrics(raw)   # must not raise
         # reject_count accumulates; rejection_pct with denom=0 is suppressed
         assert metrics.reject_count == pytest.approx(1513.50)
+
 
 if __name__ == "__main__":
     import subprocess, sys as _sys
