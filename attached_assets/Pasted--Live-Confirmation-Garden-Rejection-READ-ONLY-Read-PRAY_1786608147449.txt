@@ -1,0 +1,64 @@
+# Live Confirmation — Garden Rejection (READ-ONLY)
+
+Read `PRAYAG_RULES.md`. This is **R-29**: a fix is not done until a live run prints the recomputed number from production code.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`, main at `a5168f6`.
+
+## Why this pass exists
+
+`tests/test_garden_rejection.py` **mirrors** `sheets._emit_blocks` rather than calling it — its own docstring says *"Mirrors sheets._emit_blocks exactly, including the synthetic-record step"*, and it reimplements `_synth_items`, the note text and the transfer loop. So the `1,853.50` assertion proves the **algorithm** is right; it does not prove the **shipped code path** produces it. If production drifts, that test keeps passing against its own copy. That is Failure Mode #8.
+
+This pass closes the gap. **Make no changes.**
+
+## Constraints
+
+- Do **NOT** edit any file, enter Build mode, restart, redeploy or publish.
+- Do **NOT** write to Google Sheets (**R-21**) or clear any cache (**R-34**).
+- Report observed values only. If a figure differs from the target, **report it — do not adjust anything to make it match** (**R-30**).
+
+---
+
+## Q1 — Garden rejection, from the live app
+
+For **GARDEN, Apr–Jul 2026**, print what the running application produces (via the route/API, not by re-running test helpers):
+
+| Month | Rejection kg | Denominator | Rejection % | Target |
+|---|---|---|---|---|
+| APR | | | | 1,191 / 38,950 / **3.06%** |
+| MAY | | | | 0 / 0 / **n/a** (not 0.00%) |
+| JUN | | | | 2,215 / 66,911 / **3.31%** |
+| JUL | | | | 1,853.50 / 32,191 / **5.76%** |
+| **Total** | | | | 5,260 / 138,052 / **3.81%** |
+
+July is the one that matters — it was 5.28% before the synthetic-record fix.
+
+## Q2 — The synthetic records, as production built them
+
+For GARDEN July, print each record in the emitted set that has `total_count == 0` and `reject_count > 0`:
+
+`machine · date · reject_count · reject_denominator · actual_hours · rejection_tracked`
+
+Expected: exactly two — **M/C-2 31-Jul 70.00 kg** and **M/C-3 31-Jul 85.00 kg**. Confirm both carry `actual_hours = 0.0` and `total_count = 0.0`.
+
+## Q3 — The note, as it renders
+
+Print the `parse_notes` entry produced for GARDEN July verbatim, and confirm it appears on the pages that render `parse_notes` (`machine.html`, `overview.html`). Also print the basis-divergence note (block-tab output vs DR denominator), if it fired.
+
+## Q4 — Nothing else moved
+
+Confirm from the live app:
+- Garden **output** unchanged: APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 66,038 parsed (68,390 in-sheet; undated rows correctly skipped).
+- Garden **utilisation** unchanged: APR 27.5% · JUN 66.9% · MAY and JUL `n/a`.
+- Garden **machine count** unchanged — no machine appears that has *only* synthetic records.
+- **No other segment moved**: PIPE ~8.4–9.7% · MOULDING 0.99–1.0% · PTMT 5.6–6.5% · TANK (Ltr, `pcs × size`).
+
+## Q5 — Two structural questions (report, do not fix)
+
+1. **Can `_emit_blocks` be called directly in a test**, or does it require live Sheets access? If it can be invoked with fixture rows, say so — the mirrored test could then be pointed at the real function, closing the drift risk. Report feasibility only.
+2. **Latent behaviour:** if a machine ever had *only* rejection-only dates and no block-tab rows at all, a synthetic record would introduce a machine that appears nowhere else in the data. Confirm whether that is currently possible for any segment/month in Apr–Jul 2026. If it cannot occur, say so.
+
+---
+
+## Report back
+
+Q1 table with observed vs target; Q2 the two synthetic records field-by-field; Q3 the note text verbatim; Q4 the unchanged confirmations; Q5 the two answers. Then confirm: **no files changed, no Sheets writes, no cache cleared, no restart or publish.**
