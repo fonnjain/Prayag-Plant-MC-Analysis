@@ -1,0 +1,66 @@
+# Fix — Tank Annual SUMMARY (LTR) Parse Failure (task #133)
+
+Read `PRAYAG_RULES.md`. Touches **R-02, R-03, R-04, R-06, R-30, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+The previous change repointed the Tank FY26-27 annual entries to the correct files, tab and unit. The named error is now firing correctly: all three plants report `TankSummaryParseFailure` because the FY26-27 `SUMMARY (LTR)` template puts item names in **column 1** while the parser reads **column 0**. Until that is fixed, annual reads 0 and every daily-vs-annual delta equals daily production — the reconciliation is aimed correctly but not yet working.
+
+---
+
+## STEP 1 — Answer this before writing any code
+
+The previous change also set **`kind` from `tank_annual_2627` to `tank_annual_2526`** on all three FY26-27 entries. That was **not requested**, and `kind` drives which parser handles the tab.
+
+Report:
+- Why was it changed? Was `tank_annual_2627` unable to read `SUMMARY (LTR)` at all, or was `tank_annual_2526` simply the closer match?
+- What are the **actual structural differences** between the FY25-26 and FY26-27 `SUMMARY (LTR)` tabs — print the first 6 rows of each, verbatim, for the same plant.
+- Is the col-0 vs col-1 offset the **only** difference, or are there others (month header placement, column labels, extra leading columns)?
+
+An entry marked `fy: "26-27"` now carries `kind: tank_annual_2526`. Either that is right and should be commented as deliberate, or the correct fix is to repair `tank_annual_2627` and restore it. **State which, with the evidence, and stop for review before proceeding to Step 2.**
+
+---
+
+## STEP 2 — Fix the parse (only after Step 1 is reviewed)
+
+Whichever parser is correct, locate the item/description column **by header text, not by index** (**R-04**). Do not hardcode "column 1" — that just moves the brittleness one column across. Match the header band for the description/item column and the `Production in Ltr` / `Rejection in Ltr` columns, and map months **by label** (**R-05**).
+
+Keep the named error (**R-06**): if the headers are not found, raise `TankSummaryParseFailure` and surface it. **No fallback to `Sheet1`**, no silent zero.
+
+---
+
+## STEP 3 — Validate
+
+Print the daily-vs-annual delta per plant for **Apr–Jul 2026**. Expected shape:
+
+- **VN and WB should reconcile closely.** VN Jun daily 533,500 vs annual 533,500 was an exact match when read directly from source; VN Jul daily 565,500 vs annual 563,500 (≈2,000 apart); WB Jul daily 1,702,000 vs annual 1,432,000.
+- **KH will still show a large gap** — June daily 1,419,500 vs annual 633,500 (≈2.24×). This is a **known open source question (R-26)**. Report it; **do not adjust anything to close it** (**R-30**).
+
+Annual rejection should also become readable — VN Jun annual rejection **8,500 Ltr**, matching the daily `pcs × size` figure exactly.
+
+If VN and WB do **not** close up after the fix, stop and report — that would mean the parse is still reading the wrong cells, not that the data disagrees.
+
+---
+
+## Must not change
+
+Daily Tank production and rejection, which are correct and verified:
+
+| | Production | Rejection |
+|---|---|---|
+| VN Jun | 533,500 Ltr | 8,500 Ltr |
+| VN Jul | 565,500 Ltr | 5,500 Ltr |
+| WB Jul | 1,702,000 Ltr | 33,500 Ltr |
+| KH Jun | 1,419,500 Ltr | 45,000 Ltr |
+
+Rejection stays `REJECTION IN PCS. × SIZE (LTR.)` (**R-09**). Unit stays `Ltr`. No labour or hours fabricated for Tank.
+
+Do **not** touch: FY25-26 entries (**R-03**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · the two-spec `_DAILY_LAYOUTS["PIPE"]` arrangement (intentional) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden rejection join and synthetic records · vanished-file detection · R-27 join warning · `auth.py` · `PLANTS_WITHOUT_RUNHOURS` (**R-25** open).
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Report back
+
+Step 1 answers with the two verbatim header samples and the `kind` decision; the parse fix and how the columns are located; the daily-vs-annual delta table with KH flagged as open; confirmation that no daily figure moved, `/` still serves, and Machine Planning is untouched.
