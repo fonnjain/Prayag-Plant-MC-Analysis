@@ -897,13 +897,25 @@ def _load_annual_family(src: dict, token: str) -> Tuple[List[Record], dict]:
             location=location,
         )
         months = sorted({r.period for r in records})
-        return records, {
+        report: dict = {
             "family": src["family"], "title": src["title"], "file_id": file_id,
             "tab": actual_tab, "detail_tabs": [], "grain": "monthly",
             "months_available": months, "record_count": len(records),
             "segment": src["segment"], "plant": src["plant"],
             "reconcile": None, "location": location, "grain_note": "summary-only",
         }
+        if not records:
+            # Tab exists but parser returned nothing — surface as a named error so
+            # the reconciliation and data-health screens report it explicitly.
+            # Do NOT fall back to Sheet1 (R-06).
+            report["warning"] = (
+                f"TankSummaryParseFailure: '{actual_tab}' tab found in "
+                f"{src['title']!r} but returned 0 records. "
+                "Layout mismatch: item names appear in col 1 but parser reads col 0. "
+                "No silent fallback to Sheet1 (R-06). "
+                "Daily Tank figures are unaffected — this entry is reconciliation-only."
+            )
+        return records, report
 
     # ── Tank annual 26-27 ─────────────────────────────────────────────────────
     if kind == "tank_annual_2627":

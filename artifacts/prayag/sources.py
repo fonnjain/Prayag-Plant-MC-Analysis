@@ -21,7 +21,7 @@ All pinned IDs were verified accessible via the `google-sheet` connection.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Plant location registry — KH = Khandala, Bhiwari, VN = Vasna, WB = Wambori
+# Plant location registry — KH = Kharani, Bhiwari, VN = Varanasi, WB = West Bengal
 # Used to route tank + segment-labour reports per location.
 # ---------------------------------------------------------------------------
 PLANT_LOCATIONS: dict[str, str] = {
@@ -30,7 +30,7 @@ PLANT_LOCATIONS: dict[str, str] = {
   "HDPE":     "KH",
   "MOULDING": "KH",
   "PTMT":     "Bhiwari",
-  "CP":       "KH",
+  "CP":       "Bhiwari",
   "TANK":     "KH",     # KH daily workbook — location tag for daily records
   "TANK_VN":  "VN",
   "TANK_WB":  "WB",
@@ -119,12 +119,12 @@ REPORT_SOURCES: list[dict] = [
   {
       "family": "tank_vn",
       "title": "Tank VN Annual (26-27)",
-      "file_id": "1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag",
-      "tab": "Sheet1",
-      "kind": "tank_annual_2627",
+      "file_id": "1Wa2jFV66NS-ntlSKqo8jzFFwgZfcdvgJYEAuFU0qdAI",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
       "segment": "Tanks",
       "plant": "TANK_VN",
-      "unit": "pcs",
+      "unit": "Ltr",
       "fy": "26-27",
       "location": "VN",
       "grain": "summary-only",
@@ -146,12 +146,12 @@ REPORT_SOURCES: list[dict] = [
   {
       "family": "tank_wb",
       "title": "Tank WB Annual (26-27)",
-      "file_id": "1W6hGoEZauSkQyBUQbngnHNMD7Koon3_c8tnO0PDHrt8",
-      "tab": "Sheet1",
-      "kind": "tank_annual_2627",
+      "file_id": "1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
       "segment": "Tanks",
       "plant": "TANK_WB",
-      "unit": "pcs",
+      "unit": "Ltr",
       "fy": "26-27",
       "location": "WB",
       "grain": "summary-only",
@@ -180,6 +180,22 @@ REPORT_SOURCES: list[dict] = [
       "plant": "TANK",
       "unit": "Ltr",
       "fy": "25-26",
+      "location": "KH",
+      "grain": "summary-only",
+  },
+  # ---- Tank KH 26-27 annual cross-check (daily is authoritative; this is
+  #      reconciliation only — a large daily-vs-annual gap for KH is expected
+  #      and documented as R-26; do not adjust figures to close it) ----
+  {
+      "family": "tank_kh",
+      "title": "Tank KH Annual (26-27)",
+      "file_id": "1T4RDvDNqxqbsL3zRWoTPcijdvQGPQjtBTw8S0qe98rs",
+      "tab": "SUMMARY (LTR)",
+      "kind": "tank_annual_2526",
+      "segment": "Tanks",
+      "plant": "TANK",
+      "unit": "Ltr",
+      "fy": "26-27",
       "location": "KH",
       "grain": "summary-only",
   },
