@@ -1228,8 +1228,25 @@ def parse_gom_grid(
 
 
 # ---------------------------------------------------------------------------
-# Tank annual summary parsers (25-26 SUMMARY (LTR) and 26-27 Sheet1)
+# Tank annual summary parsers (25-26 and 26-27 SUMMARY (LTR); Sheet1 legacy)
 # ---------------------------------------------------------------------------
+#
+# SUMMARY (LTR) layout — identical in both FY25-26 and FY26-27 workbooks:
+#
+#   row 0 (month row):     ['', '', "MAR'XX", '', "FEB'XX", '', "JAN'XX", …]
+#                          Month labels at cols 2, 4, 6, … (reversed, merged cells)
+#   row 1 (sub-headers):   ['', '', 'Production (in Ltr)', 'Rejection (in Ltr)', …]
+#                          Alternating Production / Rejection from col 2.
+#   row 2 (TOTAL):         ['', 'TOTAL', <totals…>]  — skipped
+#   row 3+ (items):        ['', 'item name', prod_mar, rej_mar, prod_feb, rej_feb, …]
+#                          Item name in col 1 (col 0 is always blank).
+#
+# Column mapping is header-text-based (R-04, R-05):
+#   - Months located by parse_month_label() hits in the month row.
+#   - Production / Rejection cols located by "PRODUCTION" / "REJECTION" in
+#     the sub-header row text.
+#   - Item column discovered as the last non-empty prefix col before the
+#     first Production col — never hardcoded.
 
 def parse_tank_annual_2526(
     values: List[list],
@@ -1241,27 +1258,28 @@ def parse_tank_annual_2526(
     source_tab: str,
     location: str = "",
 ) -> List[Record]:
-    """Parse Tank annual summary tab in the 25-26 layout (SUMMARY (LTR) tab).
+    """Parse Tank SUMMARY (LTR) tab — FY25-26 and FY26-27 share the same layout.
 
-    Layout: row 0 = month column headers (APR, MAY … MAR or APR'25 …);
-    each item occupies 2 rows: Production row then Rejection row.
-    The first column carries the item description.
-    Returns one Record per (item, month) with production + rejection.
+    Columns are discovered by header text (R-04): months from the month row,
+    Production/Rejection columns from the sub-header row, item column from the
+    last non-empty prefix column.  One Record is emitted per (item, month).
+    Returns [] without raising if the header structure is not recognised; the
+    caller surfaces TankSummaryParseFailure when [] is returned (R-06).
     """
     if not values:
         return []
 
-    # Find the header row: the one with the most month-like labels.
+    # ── 1. Locate the month row ───────────────────────────────────────────────
+    # The row with the greatest number of parse_month_label() hits.
     header_idx = -1
     best = 1
-    for i, row in enumerate(values[:6]):
-        cnt = sum(1 for c in row if parse_month_label(c) is not None
+    for i, row in enumerate(values[:8]):
+        cnt = sum(1 for c in row if parse_month_label(str(c).strip()) is not None
                   or str(c).strip().upper()[:3] in _MONTHS3)
         if cnt > best:
             best, header_idx = cnt, i
 
     if header_idx < 0:
-        # Try: look for a row that contains 'APR' somewhere
         for i, row in enumerate(values[:8]):
             joined = " ".join(str(c).strip().upper() for c in row)
             if "APR" in joined and ("MAY" in joined or "JUN" in joined):
@@ -1270,35 +1288,138 @@ def parse_tank_annual_2526(
     if header_idx < 0:
         return []
 
-    header_row = values[header_idx]
+    month_row = values[header_idx]
 
-    # Build month columns: (col, YYYY-MM).
-    # The header may use "APR", "APR'25", "APR 25" etc.
-    month_cols: list = []
-    for c, cell in enumerate(header_row):
+    # Build {col → YYYY-MM} from the month row.
+    month_at_col: dict = {}
+    for c, cell in enumerate(month_row):
         s = str(cell).strip().upper()
         ym = parse_month_label(s)
         if ym is None:
-            # Try bare 3-letter month name — assume current FY year context.
             mon = _MONTHS3.get(s[:3])
             if mon:
-                # 25-26 FY: Apr-Dec = 2025, Jan-Mar = 2026
                 yr = 2025 if mon >= 4 else 2026
                 ym = f"{yr:04d}-{mon:02d}"
         if ym:
-            month_cols.append((c, ym))
+            month_at_col[c] = ym
 
-    if not month_cols:
+    if not month_at_col:
         return []
 
-    # Parse data rows. Items are in pairs: PRODUCTION / REJECTION.
-    # The item description is in col 0 (or first non-empty col).
-    recs: List[Record] = []
-    i = header_idx + 1
+    # ── 2. Locate the sub-header row ─────────────────────────────────────────
+    # The first row after the month row that contains PRODUCTION or REJECTION.
+    sub_header_idx = -1
+    for i in range(header_idx + 1, min(header_idx + 5, len(values))):
+        joined = " ".join(str(c).strip().upper() for c in values[i])
+        if "PRODUCTION" in joined or "REJECTION" in joined:
+            sub_header_idx = i
+            break
+
+    # ── 3. Build col_map from sub-header (header-text-based, R-04) ───────────
+    # col_map: list of (col, YYYY-MM, "prod"|"rej")
+    # Each Production/Rejection cell is paired with the last month_at_col
+    # entry whose column index is ≤ current column.
+    col_map: list = []
+    item_col: int = 0           # discovered below
+    data_start: int             # first data row index
+
+    if sub_header_idx >= 0:
+        sub_row = values[sub_header_idx]
+        sorted_month_cols = sorted(month_at_col.keys())  # ascending
+
+        for c, cell in enumerate(sub_row):
+            s = str(cell).strip().upper()
+            if "PRODUCTION" not in s and "REJECTION" not in s:
+                continue
+            # Find the month whose column is the largest ≤ c.
+            ym = None
+            for mc in reversed(sorted_month_cols):
+                if mc <= c:
+                    ym = month_at_col[mc]
+                    break
+            if ym is None:
+                continue
+            kind = "prod" if "PRODUCTION" in s else "rej"
+            col_map.append((c, ym, kind))
+
+        # Discover item column: rightmost prefix col (< first data col) that
+        # carries non-blank, non-numeric content in early data rows.
+        if col_map:
+            first_data_col = col_map[0][0]
+            item_col = 0  # safe default
+            for prefix_c in range(first_data_col - 1, -1, -1):
+                for data_row in values[sub_header_idx + 1: sub_header_idx + 6]:
+                    cell_val = str(data_row[prefix_c]).strip() if prefix_c < len(data_row) else ""
+                    # Non-blank and not a pure number → item label column.
+                    if cell_val and not cell_val.replace(",", "").replace(".", "").isdigit():
+                        item_col = prefix_c
+                        break
+                if item_col != 0:
+                    break
+
+        data_start = sub_header_idx + 1
+
+        # ── 4a. One-row-per-item parse (col-interleaved prod/rej) ─────────────
+        #
+        # The SUMMARY (LTR) tab may contain multiple pivot sections (e.g. one
+        # breakdown by product type followed by one by tank size), separated by
+        # an empty row and a repeated TOTAL header.  We must stop at the second
+        # TOTAL row so we don't double-count the same production figures.
+        # Strategy: once at least one item row has been emitted (seen_data=True),
+        # any TOTAL/GRAND row signals the start of a new section → stop.
+        if col_map:
+            recs: List[Record] = []
+            seen_data = False
+            for row in values[data_start:]:
+                item_label = str(row[item_col]).strip() if item_col < len(row) else ""
+                if not item_label:
+                    continue
+                u = item_label.upper()
+                if "TOTAL" in u or "GRAND" in u or u in ("ITEM", "DESCRIPTION", "S.NO", "S.NO."):
+                    if seen_data:
+                        break   # Second section begins — stop here to avoid double-count.
+                    continue    # First TOTAL row (summary header) — skip and keep going.
+
+                seen_data = True
+                by_ym: dict = {}
+                for col, ym, kind in col_map:
+                    val = num(row[col]) if col < len(row) else 0.0
+                    if val <= 0:
+                        continue
+                    a = by_ym.setdefault(ym, {"prod": 0.0, "rej": 0.0})
+                    a[kind] += val
+
+                for ym, a in by_ym.items():
+                    if a["prod"] <= 0 and a["rej"] <= 0:
+                        continue
+                    recs.append(Record(
+                        grain="monthly",
+                        period=ym,
+                        date=ym,
+                        plant=plant,
+                        segment=segment,
+                        unit=unit,
+                        machine="",
+                        mould=item_label,
+                        total_count=a["prod"],
+                        reject_count=a["rej"],
+                        location=location,
+                        source_family=segment,
+                        source_file=source_file,
+                        source_tab=source_tab,
+                    ))
+            return recs
+
+    # ── 4b. Fallback: row-pair layout (no sub-header row found) ──────────────
+    # Kept for any layout variant where items occupy two rows
+    # (Production row then Rejection row) rather than interleaved columns.
+    month_cols = sorted(month_at_col.items())   # [(col, ym), …]
+    data_start = header_idx + 1
+    recs = []
+    i = data_start
     while i < len(values):
         row = values[i]
-        item_label = str(row[0]).strip() if row else ""
-        # Skip blank or header-like rows.
+        item_label = str(row[item_col]).strip() if row else ""
         if not item_label or item_label.upper() in ("", "ITEM", "DESCRIPTION", "S.NO", "S.NO."):
             i += 1
             continue
@@ -1307,7 +1428,6 @@ def parse_tank_annual_2526(
             i += 1
             continue
 
-        # Check if this row is a PRODUCTION row (look ahead for REJECTION).
         prod_row = row
         rej_row = values[i + 1] if i + 1 < len(values) else []
         rej_label = str(rej_row[0]).strip().upper() if rej_row else ""
@@ -1334,7 +1454,6 @@ def parse_tank_annual_2526(
                 source_tab=source_tab,
             ))
 
-        # Advance: if we consumed a PRODUCTION+REJECTION pair, skip 2; else 1.
         if "REJECT" in rej_label:
             i += 2
         else:
