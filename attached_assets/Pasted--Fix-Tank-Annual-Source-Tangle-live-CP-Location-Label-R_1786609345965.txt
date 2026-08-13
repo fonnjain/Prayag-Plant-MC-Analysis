@@ -1,0 +1,81 @@
+# Fix — Tank Annual Source Tangle (live) + CP Location Label
+
+Read `PRAYAG_RULES.md`. Touches **R-04, R-06, R-09, R-13, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Config-only change. Do not touch any parser, metric or reconciliation logic.**
+
+---
+
+## FIX 1 — Tank FY26-27 annual entries point at the wrong files (live defect)
+
+`sources.py` currently has, for FY 26-27:
+
+| Entry | Currently points at | Problem |
+|---|---|---|
+| `TANK_VN` | `1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag` | **This is WB's file.** VN is reading WB's data. |
+| `TANK_WB` | `1W6hGoEZauSkQyBUQbngnHNMD7Koon3_c8tnO0PDHrt8` | Non-data styling sheet; returns 401/404. |
+
+Both also declare `"unit": "pcs"` and `"tab": "Sheet1"`.
+
+**Verified correct IDs (Drive title lookup is ground truth — `sources.py` and the project inventory are both internally inconsistent on VN/WB, so trust these):**
+
+```
+KH  = 1T4RDvDNqxqbsL3zRWoTPcijdvQGPQjtBTw8S0qe98rs
+VN  = 1Wa2jFV66NS-ntlSKqo8jzFFwgZfcdvgJYEAuFU0qdAI
+WB  = 1_ugk2V3Vs8MrKLsSeElz8L3M6YnSy6BM6TgUH2iydag
+```
+
+This was fixed once before and lost in the rollback; it was never re-applied.
+
+### Required changes (FY 26-27 entries only — leave all FY 25-26 entries untouched, **R-03**)
+
+1. **Repoint** `TANK_VN` → `1Wa2jFV66NS…` and `TANK_WB` → `1_ugk2V3…`.
+2. **Unit** → `"Ltr"` on all three FY26-27 Tank annual entries. The headline Tank metric is litres; `"pcs"` under a column headed Ltr is a unit mismatch (**R-09**).
+3. **Tab**: `"Sheet1"` is **not** the source. Per the documented chain (`PROD. REPORT → DATA → Sheet 1 → SUMMARY LTR → Annual`), Sheet 1 is two steps downstream and derived. Point the annual entry at the **`SUMMARY (LTR)`** tab — the same tab the FY25-26 entries already use — so the cross-check compares like with like. If `SUMMARY (LTR)` does not parse for a plant, **raise a named error and report it — do not silently fall back to Sheet1** (**R-06**).
+4. **KH FY26-27 annual**: confirm whether it is registered. If not, register `1T4RDvDNqx…` with `unit: "Ltr"` and the same tab convention. If it is already present, leave it and say so.
+5. **Before overwriting** the `TANK_WB` entry, fetch and report the title of `1W6hGoEZ…` so we know what is being discarded. Do not keep it.
+
+### What this affects (and what it must not)
+
+The annual path is **not** the headline production source — Tank figures come from the daily `PROD. REPORT`. The annual entries feed the **reconciliation badge, verify, manifest and data-health** screens. Today VN's daily figures are being cross-checked against WB's annual data, producing a meaningless delta that reads as a data problem when it is a wiring problem.
+
+**Daily Tank production and rejection figures must not change.** Confirm after the fix:
+
+- Tank rejection still computed as `REJECTION IN PCS. × SIZE (LTR.)` (**R-09**), unchanged: VN Jun **8,500 Ltr**, VN Jul **5,500**, WB Jul **33,500**, KH Jun **45,000**.
+- Daily production unchanged: VN Jun 533,500 · VN Jul 565,500 · WB Jul 1,702,000 · KH Jun 1,419,500 · KH Jul 1,353,500 Ltr.
+- No labour or hours fabricated for Tank.
+
+### Report the reconciliation, do not close it
+
+After repointing, print for **Apr–Jul 2026** the daily-vs-annual delta per plant. Expected: **VN and WB should now reconcile far more closely**; **KH will still show a large gap** (June daily 1,419,500 vs annual 633,500 ≈ 2.24×). That KH gap is a known open source question (**R-26**) — **report it, do not adjust anything to close it** (**R-30**, **R-35**).
+
+---
+
+## FIX 2 — `CP` is tagged to the wrong plant, and three place names are wrong
+
+Per the source documentation: **KH = Kharani** (Plant 1 Pipe & Fittings; Plant 2 Tank & Garden Pipe) · **Bhiwari Plant 1 = PTMT, CP, Sink, Hardware** · **VN = Varanasi** · **WB = West Bengal (Durgapur, then Bankura from February)**.
+
+In `sources.py`:
+
+1. `PLANT_LOCATIONS["CP"]` is `"KH"` — should be **`"Bhiwari"`**, alongside PTMT which is already correct.
+2. The comment reads *"KH = Khandala, Bhiwari, VN = Vasna, WB = Wambori"*. **Khandala, Vasna and Wambori are all wrong.** Correct to Kharani / Varanasi / West Bengal.
+
+`CP` has no FY26-27 files registered, so this changes no figure — it corrects a label and a comment that a future reader would otherwise trust (**R-13**).
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` / R5↔R11 (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` stored-ratio policy (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · the two-spec `_DAILY_LAYOUTS["PIPE"]` arrangement that emits both PIPE and MOULDING from one workbook (**intentional — confirmed**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden rejection join and synthetic records · vanished-file detection · R-27 join warning · `auth.py`.
+
+Do **not** change `PLANTS_WITHOUT_RUNHOURS` or wire the Tank machine dimension — **R-25** is open and the two hour sources disagree with a sign flip. No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Tests + report
+
+pytest: the three Tank FY26-27 IDs resolve to the correct plant titles; VN no longer reads WB; `unit == "Ltr"` on all three; a named error is raised if the summary tab is missing; FY25-26 entries unchanged; `PLANT_LOCATIONS["CP"] == "Bhiwari"`.
+
+Report: the title of the discarded `1W6hGoEZ…`; the three repointed entries; whether KH FY26-27 needed registering; the daily-vs-annual delta table per plant with the KH gap flagged as open; confirmation that no daily Tank figure moved, `/` still serves, and Machine Planning is untouched.
