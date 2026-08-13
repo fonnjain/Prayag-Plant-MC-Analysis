@@ -1,0 +1,55 @@
+# Cleanup — Test Drift and Dependency Gaps
+
+Read `PRAYAG_RULES.md`. Touches **Failure Mode #8** and environment robustness.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+Two small, independent items. Neither changes a figure. Report after both.
+
+---
+
+## FIX 1 — Point the Garden test at the real function
+
+`tests/test_garden_rejection.py` **mirrors** `sheets._emit_blocks` instead of calling it — its own docstring says *"Mirrors sheets._emit_blocks exactly, including the synthetic-record step"*, and it reimplements the transfer loop, `_synth_items` and the note text. The `1,853.50` assertion therefore proves the **algorithm**, not the **shipped code path**. If production drifts, the test keeps passing against its own copy. That is Failure Mode #8.
+
+A previous read-only pass confirmed this is fixable: `_emit_blocks(emit, ym, file_id, spec, token, seg, unit, report)` makes exactly four live calls — `list_tabs` twice and `read_values` twice — both module-level functions that can be patched.
+
+**Do this:**
+- Patch `list_tabs` and `read_values` with fixture data (tab list + raw cell arrays) reproducing Garden July: block-tab rows for M/C-1..4, and a `Daily Report` matrix carrying the five rejection rows (M/C-2 31-Jul 70.00; M/C-3 10-Jul 1,513.50, 27-Jul 95.00, 30-Jul 90.00, 31-Jul 85.00).
+- Call the **real `_emit_blocks`** and assert on its return value.
+- Delete the mirrored reimplementation so there is only one copy of the logic.
+
+**Must still assert:** total `reject_count == 1853.50`; exactly two synthetic records (M/C-2 and M/C-3, both 31-Jul) each with `total_count == 0` and `actual_hours == 0`; `rejection_tracked == True` on both; the synthetic-record note text; and that no synth-only machine is created.
+
+If any of this cannot be done without a live Sheets call, **stop and report which part** rather than reintroducing a mirror.
+
+---
+
+## FIX 2 — Two runtime dependencies are undeclared
+
+`openpyxl` and `beautifulsoup4` are imported but appear in neither `pyproject.toml` nor `uv.lock`:
+
+- `openpyxl` — imported by `mp_reports.py` (`from openpyxl import Workbook`). Report downloads depend on it.
+- `beautifulsoup4` — imported by `tests/test_mp_run_view.py`; its absence previously caused 12 test failures.
+
+Both are currently installed in the environment, so nothing is broken today. But a clean environment rebuild from the lockfile would break report downloads and reintroduce those failures.
+
+Add both as explicit dependencies and regenerate the lockfile. **Do not change any import or any code that uses them.** Confirm the app still starts and report downloads still work.
+
+---
+
+## Not in scope
+
+- **The Garden basis-divergence note.** It fires every month, which is correct — the two bases genuinely differ in every month (Apr 8.9%, Jun 5.1%, Jul 51%). It is a true statement about an open question (**R-23**) and must not be suppressed or thresholded away. It stops when the basis is decided, not before.
+- **`PLANTS_WITHOUT_RUNHOURS` / Tank machine dimension** — **R-25** still open, the two hour sources disagree with a sign flip.
+- **The KH annual gap** (**R-26**) — a source question, now confirmed against a working reconciliation.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · the two-spec `_DAILY_LAYOUTS["PIPE"]` arrangement · `mp_*.py` / `machine_planning_*.html` (**R-20**) · the Garden rejection join and synthetic records · the Tank annual parser and its double-count guard · vanished-file detection · R-27 join warning · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**). No figure may move.
+
+## Report back
+
+Whether `_emit_blocks` is now called directly and the mirror deleted; the test results; the two dependencies added and the lockfile regenerated; confirmation that report downloads work, `/` still serves, and no figure changed.
