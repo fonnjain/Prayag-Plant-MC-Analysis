@@ -1,0 +1,116 @@
+# Register Missing Sources — WB Garden Plant + Four Tank Workbooks
+
+Read `PRAYAG_RULES.md`. Touches **R-04, R-05, R-06, R-07, R-12, R-13, R-23, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Two phases. STOP and report after Phase 1.**
+
+Both parts are the same class of gap: a workbook sitting in Drive that the application does not read. Part A is a whole plant. Part B is four months of two existing plants.
+
+---
+
+# PART A — A West Bengal Garden Pipe plant the app does not read at all
+
+Its workbooks live in Drive folder `19L5X6fnknSMyY-6qxB5mDaaGgbZPkSRD`, which appears **nowhere** in `sources.py`. The `GARDEN` entry has one folder (`1NbzEo0JdWAQ…`) and reads KH only.
+
+Known files:
+- `18oWvrtgvvTqI176_h8y2eGywUKvWOue3BYIxINlIBiU` — "1. Garden (PDWB) - June' 2026"
+- `1RK2hF-h6dF9aaNzCwKkMraAcMDoDAS1HZ30pX2LFoo0` — "2. Garden (PDWB) - July' 2026"
+
+**Verified by direct source read (June 2026):** production **22,152.8 kg**, **3,374 rolls**, **0 kg rejection**, machines **1, 2 and 3**. The 55 data rows sum exactly to the sheet's own TOTAL.
+
+**Scale:** 33% on top of KH's Daily Report figure — roughly **25% of a combined Garden total**. Every Garden figure the system reports today is understated by about a quarter, and Garden labour cost per kg is correspondingly overstated.
+
+# PART B — Four Tank workbooks that exist but are unregistered
+
+All four sit in the folders `sources.py` **already scans**, all owned by preeti.chauhan@:
+
+| Plant-month | File ID | Title |
+|---|---|---|
+| VN April | `1Rhj5wo6otYF59FJDV_tn_RnsmpNs7-blSGWqUDbz5Xw` | 1. Tank (PRV) - Apr' 2026 |
+| VN May | `19ePrvfsHIFoJuy1wvjL0DcukYh6-UkOFW3AueqToRNE` | 2. Tank (PRV) - May' 2026 |
+| WB April | `1okt9jsFmYGv7utTxYuDrfIoW-717KJ_HYmtv8g8-Cts` | 1. Tank (PDWB) - Apr' 2026 |
+| WB May | `1BHc-RaGE4sICnXhBr7xR-pmwcfkVUE2ZfxicYZnNVOM` | 2 Tank (PDWB) - May' 2026 |
+
+WB June was not found by title search — report whether it exists.
+
+**Note the naming:** the WB prefix is **`PDWB`**, not `PWB` as the rulebook currently says. Also `"2 Tank (PDWB) - May' 2026"` has **no period** after the 2, unlike its siblings.
+
+---
+
+## PHASE 1 — Discovery (READ-ONLY, change nothing)
+
+### A. WB Garden
+
+1. **Find every Garden (PDWB) file** for FY2026-27, April onward, by title pattern. Report file ID, exact title, owner, modified date; state which months are absent.
+2. **List the tabs** in the June and July workbooks, verbatim. I read June's *contents* but not its tab names — do not assume them.
+3. **Print the header band** (first 6 rows, verbatim) of the production tab in both months. June shows a merged header `DAILY PRODUCTION GARDEN PIPE` above:
+   `DATE | MACHINE NO. | ITEM CODE | SIZE (MM) | COLOR | PRODUCTION IN ROLL. PCS | ROLL WEIGHT | PRODUCTION IN KG. | REJECTION IN KG. | REMARK'S`
+   Confirm July matches.
+4. **State which existing layout fits, or that a new one is needed.** This is unlike either KH Garden layout — one flat row per date + machine + item, machine as a *column*, and **output and rejection in the same tab**. It resembles the `long` layout used for Report-12. Do not write it yet.
+5. **Check the `Daily Report` tab.** In June it lists MACHINE-1..5 and is entirely zero. Confirm July. If hours are never recorded, utilisation stays suppressed (**R-07**) — do not invent it.
+6. **Design questions — answer before wiring:**
+   - **Separate plant or merged?** Tank precedent is separate (`TANK`, `TANK_VN`, `TANK_WB`). Recommend `GARDEN_WB` on that pattern so KH figures stay untouched. Confirm or argue otherwise.
+   - **What `segment` label?** If WB takes a distinct label it will **not** be picked up by the labour join, which matches the segment tab `Garden Pipe`. Report whether the Segment Cost workbook has a WB Garden entry at all. **Do not guess** — if there is no WB labour source, leave labour unjoined rather than attributing KH wages to WB output.
+   - **Machine labels.** KH uses `GARDEN M/C - n`. Use a distinct prefix for WB so the two plants' machines never collide.
+
+### B. Tank — why did discovery miss these?
+
+7. **This is the more valuable question.** All four files sit in folders `ensure_daily_discovery` already scans, and discovery demonstrably works — it found KH July unpinned. So why not these?
+   - Trace `parse_month_from_title` against each of the four titles and report what it returns.
+   - Compare against a title it *does* resolve (e.g. `4. Tank (PRV) - July' 2026`, which is pinned, and `3. TANK Date Sheet & Monthly Report - July ' 2026`, which was discovered).
+   - State whether **every** currently-registered VN/WB month was manually pinned rather than discovered.
+   - If the parser is the cause, **that is the real fix** — pinning four files is a patch, teaching discovery to read the `(PRV)`/`(PDWB)` pattern picks up every future month automatically.
+8. **Confirm each of the four files opens** and its `PROD. REPORT` tab parses, and report the production and rejection totals each yields. Do not register yet.
+9. **Report whether a WB June Tank file exists.**
+
+**STOP. Report 1–9. Do not proceed to Phase 2 until reviewed.**
+
+---
+
+## PHASE 2 — Wire it (only after Phase 1 is reviewed)
+
+### A. WB Garden
+Add the plant on the agreed design. Parse **by header text** (**R-04**), months **by label** (**R-05**), assert headers and **raise a named error** if not found (**R-06**). Register folder `19L5X6fnknSMyY…` so discovery picks up future months (**R-12**), pin the known files, add to `PLANT_LOCATIONS` as `WB` with a display name (**R-13**).
+
+### B. Tank
+If Phase 1 shows `parse_month_from_title` is the cause, **fix the parser** so the `(PRV)` / `(PDWB)` titles resolve — including the missing period in `"2 Tank (PDWB)"`. Pin the four files as well, so the months are available regardless. If the parser is *not* the cause, pin them and report what the actual cause was.
+
+### Validation
+
+**WB Garden:** June **22,152.8 kg · 3,374 rolls · 0 kg rejection · machines 1, 2, 3**, 55 rows. July — report observed, unverified by me.
+
+**Tank — the guardrail.** Registering April and May must **not** change any existing figure:
+- VN Jun 533,500 Ltr · VN Jul 565,500 · WB Jul 1,702,000 · KH Jun 1,419,500 · KH Jul 1,353,500
+- Rejection: VN Jun **8,500** · VN Jul 5,500 · WB Jul 33,500 · KH Jun 45,000 (all `pcs × size`, **R-09**)
+- Annual reconciliation must still hold: **VN June daily = annual exactly (±0)**, VN July within 0.4%, WB July +18.9%, and **KH June still ~2.24×** (**R-26**, open — report it, do not close it)
+- New months should now reconcile too: VN Apr annual 221,250 · VN May 534,000 · WB Apr 415,000 · WB May 1,048,500 Ltr. **Report the deltas; do not adjust anything to close them.**
+
+**KH Garden must not move**: APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 66,038 parsed; Daily Report basis APR 38,950 · JUN 66,911 · JUL 32,191; rejection APR 1,191 · JUN 2,215 · JUL 1,853.50 (3.81%). **If any KH figure changes, stop** — the new plant has leaked into the existing one.
+
+**No other segment moves**: PIPE, MOULDING, PTMT, HDPE unchanged. WB Garden utilisation stays blank if no hours exist. No fabricated hours or labour.
+
+---
+
+## Out of scope — report, do not wire
+
+The WB Garden workbook also holds a **`SALE` tab** (customers, bill numbers, quantities — 1,920 units in June) and an **`RM Stock Report`** (daily opening / received / issue / balance for PVC Resin, CP, Tin Stabilizer, pigments, TiO₂, DOP). Both are out of scope. Report that they exist and their shape; wire neither.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` and the KH Garden block-tab path (**R-17**) · the Garden rejection join and synthetic records · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · the Tank annual parser and its double-count guard (**R-37**) · vanished-file detection · R-27 join warning · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## For the rulebook, after this lands
+
+- **R-23 changes scope.** Garden's basis question was "which of two figures within KH". It becomes "which basis, *and which plants*". Both acceptance figures — 138,052 and 232,528 kg — are **KH-only** and must be relabelled.
+- **R-14 correction:** the WB title prefix is `PDWB`, not `PWB`.
+
+## Report back
+
+Phase 1: answers 1–9 with header bands verbatim and the `parse_month_from_title` findings.
+Phase 2: WB Garden observed against targets; the four Tank months' figures and their annual deltas; confirmation that every KH, VN, WB and other-segment figure is unchanged; whether the discovery parser was fixed or the files merely pinned; and confirmation that SALE and RM Stock were left unwired.
