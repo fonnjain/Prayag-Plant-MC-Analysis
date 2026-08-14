@@ -1,0 +1,87 @@
+# Costing Module — What Does It Actually Read? (STRICTLY READ-ONLY)
+
+Read `PRAYAG_RULES.md`. Touches **R-01, R-09, R-11, R-22, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+A full read of the source costing workbook turned up four things worth checking against the application. **This pass measures only — change nothing.**
+
+**Source:** `Annual 26-27 Segment Wise Labour Cost, Solar Cost & Power Cost`, file ID `1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw`.
+
+## Constraints
+
+- Do **NOT** edit any file, enter Build mode, restart, redeploy or publish.
+- Do **NOT** write to Google Sheets (**R-21**) or clear any cache (**R-34**).
+- Do **NOT** adjust any figure to match a target (**R-30**).
+- Two known source errors are being handled separately — **do not code around either**:
+  - Garden wages: our ₹426,164 is not in the workbook (it says ₹220,797 payroll Apr–Jun + ₹50,547 contractor).
+  - Fittings: the Rejection tab's "Production (Kgs)" of ~1.34M is **pieces**, and the Ideal Labour tab multiplies it by a per-kg rate.
+
+---
+
+## Q1 — Gross or net? (R-22)
+
+The workbook states explicitly, on four tabs: **"Note: Production in KG has Rejection included."** Verified exactly for Garden — 40,141 gross − 1,191 rejection = 38,950 net, matching the Daily Report; and 69,126 − 2,215 = 66,911.
+
+This also explains a difference we had noted: the workbook's Garden rejection percentages (APR 2.97%, JUN 3.20%) are computed on **gross**, ours (3.06%, 3.31%) on **net**. Neither is wrong.
+
+Report, for each segment:
+- which basis the app's **production** figure uses — gross or net;
+- which basis the app's **rejection %** denominator uses;
+- whether any page shows a gross figure and a net-based percentage together, or labels either explicitly.
+
+**Do not change anything.** The question is whether a reader can tell which basis they are looking at.
+
+## Q2 — Are the ideal-cost standards read at all?
+
+The workbook carries business-supplied standards we had recorded as missing:
+
+| Segment | Ideal labour ₹/kg | Ideal power ₹/kg |
+|---|---:|---:|
+| Pipe | 2.50 | 4 |
+| Fittings | 6.50 | 8 |
+| Garden | 3.00 | 3 |
+| HDPE | 1.25 | 4 |
+| Tank | 6.00 | 5 |
+
+Report whether `costing_*.py` reads either the **Ideal Labour Cost** or **Ideal Power Cost** tab, and if so where those values surface. If they are not read, say so.
+
+**Note:** these are *segment-level cost* standards. They are **not** the per-machine planned hours or ideal output rates that `baselines.json` needs — that gap is unchanged (**R-16**: do not populate it with these).
+
+**Caution:** if the app does read the Ideal Labour tab, its figures inherit the Fittings pieces error and are wrong by roughly fifteen-fold. Report it; do not fix it.
+
+## Q3 — Solar and power
+
+Real monthly solar generation exists:
+
+| Unit | APR | MAY | JUN |
+|---|---:|---:|---:|
+| UNIT-2 (Plumbing) | 60,380 | 58,140 | 45,566 kWh |
+| UNIT-3 (Garden/HDPE/Tank) | 84,780 | 95,200 | 80,700 kWh |
+
+There is also an empty **"2nd Solar Generation Unit (kWh)"** column, and two tariff scenarios — **"As per 7.08 Basic Rate"** and **"As per 11.5 Basic Rate"** — with per-kg power cost computed under each.
+
+Report: does `costing_power.py` read solar generation, and does it handle **both** tariff scenarios or only one? Which does it use, and is the choice visible to the reader?
+
+## Q4 — Source data-quality signals the app should surface (R-35)
+
+Confirm whether each is visible in the application today. **Report only.**
+
+1. **July is blank across every segment** — wages, power and production are all empty; only headcount and paid hours are entered. Does the app distinguish "not yet entered" from "zero"?
+2. **UNIT-3 summary copy error:** the GARDEN row shows paid hours **9,827**, which is HDPE's figure. Garden's own detail tab says **13,751**. If the app reads the summary rather than the detail tab, it inherits the wrong figure — check which it reads.
+3. **HDPE May = ₹285.18/kg** (₹424,919 wages ÷ 1,490 kg). Arithmetically correct, but it is a near-idle month carrying full labour. Does anything flag it?
+4. **Tank carries both Production (Pcs) and (Kgs)** — 2,825 pcs / 51,580.50 kg — while the daily Tank source is in **litres**. Report how the app reconciles Tank kg against Tank litres, or whether it keeps them separate (**R-09**).
+
+## Q5 — Provenance
+
+Each segment detail tab links to its source daily workbook per month. Report whether the app uses those links, or resolves sources independently through `sources.py` and discovery.
+
+---
+
+## Report back
+
+Q1 the basis per segment and whether it is labelled · Q2 whether the ideal-cost tabs are read and where they surface · Q3 solar and which tariff · Q4 the four signals and whether each is visible · Q5 provenance.
+
+Then confirm: **no files changed, no Sheets writes, no cache cleared, no restart or publish.**
+
+The two source errors above are for the data owner. Nothing in the application should be adjusted to accommodate either.
