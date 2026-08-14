@@ -134,6 +134,7 @@
     {% else %}
     {% if o.rejection_pct is none %}<div class="text-lg font-bold text-gray-400">n/a</div>{% else %}<div class="text-lg font-bold {% if o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ o.rejection_pct }}%</div>{% endif %}
     {% endif %}
+    {% if segment_filter %}<div class="text-xs text-gray-400 mt-0.5">{{ 'gross' if segment_filter == 'Pipe' else 'net' }} basis</div>{% endif %}
   </div>
   {% if o.oee_available %}
   <div class="kpi-card p-3 text-center">

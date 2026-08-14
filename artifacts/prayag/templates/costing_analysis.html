@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title_suffix %} — Costing Analysis{% endblock %}
 {% block content %}
+{% from "_macros.html" import info %}
 <style>
 .cost-tab{padding:.45rem .9rem;border-radius:.5rem;font-size:.82rem;font-weight:700;cursor:pointer;text-decoration:none;}
 .cost-tab.active{background:var(--terra);color:#fff;}
@@ -201,6 +202,7 @@ function loadPower(){
   {% if tot.combined_actual_kg is not none %}
   <div class="note">⚠ Combined = Labour (Plumbing denominator) + Power (all-plant denominator). These use different production bases and cannot be directly summed to a single-denominator figure.</div>
   {% endif %}
+  <div class="note">📐 Production basis: <strong>gross</strong> — figures include rejected output, matching the source workbook ("Production in KG has Rejection included"). Production pages use a different (net) denominator for Garden, Moulding, and PTMT; this is why rejection % may differ slightly between pages.{{ info('PROD_BASIS') }}</div>
 </div>
 {% endif %}
 
@@ -220,6 +222,12 @@ function loadPower(){
     </thead>
     <tbody>
     {% for r in view.stack %}
+    {% if r.awaiting %}
+    <tr style="opacity:.65;">
+      <td style="color:#6b7280;font-style:italic;">{{ r.month }}</td>
+      <td colspan="8" style="text-align:left;color:#9ca3af;font-size:.72rem;font-style:italic;">awaiting source data</td>
+    </tr>
+    {% else %}
     <tr>
       <td>{{ r.month }}</td>
       <td>{{ "{:,.0f}".format(r.total_kg) }}</td>
@@ -245,6 +253,7 @@ function loadPower(){
       </td>
       <td>{% if r.combined_actual_kg is not none %}Rs {{ "%.2f"|format(r.combined_actual_kg) }}{% else %}—{% endif %}</td>
     </tr>
+    {% endif %}
     {% endfor %}
     </tbody>
     {% if tot %}

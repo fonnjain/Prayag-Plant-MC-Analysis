@@ -94,8 +94,19 @@ def build_cost_stack(
         fitting_kg    = _flt(lr.get("fitting_prod_kg"))
         total_kg      = pipe_kg + fitting_kg
 
-        # Skip months with no real data
+        # Skip months with no real data; surface as "awaiting" if partial data exists
         if total_kg <= 0 and paid_wages <= 0:
+            has_partial = (
+                _flt(lr.get("paid_hours")) > 0
+                or _flt(lr.get("no_of_labour")) > 0
+                or _flt(lr.get("contractor_labour")) > 0
+            )
+            if has_partial:
+                stack.append({
+                    "month":      month,
+                    "month_num":  _MONTH_NUM.get(month, 0),
+                    "awaiting":   True,
+                })
             continue
 
         # Contractor wages: prefer UNIT-2 source
@@ -681,6 +692,11 @@ def get_analysis_view(
     # Build stacks
     stack = build_cost_stack(labour_rows, power_rows, incl_contractor=incl_contractor)
 
+    # Separate real-data months from "awaiting source data" placeholders.
+    # Computations (FY total, MoM, YoY, warnings) use only active months;
+    # the template receives the full stack so awaiting months are visible.
+    active_stack = [r for r in stack if not r.get("awaiting")]
+
     # FY total — use last power row's FY-aggregate ideal figures if available
     # (Ideal Power Cost tab TOTAL row is stored in all monthly rows identically)
     # Build from summed stack; power totals from UNIT-2 rows
@@ -722,13 +738,13 @@ def get_analysis_view(
             if all_plants_vol_est and total_actual_pwr:
                 fy_power_agg["actual_kg_power"] = round(total_actual_pwr / all_plants_vol_est, 2)
 
-    fy_total = build_fy_total(stack, fy_power_agg)
+    fy_total = build_fy_total(active_stack, fy_power_agg)
 
     # Hours analysis
     hours = build_hours_analysis(labour_rows)
 
     # MoM trends
-    mom = build_mom_trends(stack)
+    mom = build_mom_trends(active_stack)
 
     # Prev FY data for YoY + cost bridge
     prev_fy_label = None
@@ -745,12 +761,12 @@ def get_analysis_view(
         prev_labour_rows = cm.get_labour_monthly(segment, prev_fy)
         prev_power_rows  = cp.get_power_monthly(segment, prev_fy)
 
-    yoy          = build_yoy(stack, prev_labour_rows, prev_power_rows, incl_contractor=incl_contractor)
+    yoy          = build_yoy(active_stack, prev_labour_rows, prev_power_rows, incl_contractor=incl_contractor)
     cost_bridge  = build_cost_bridge(
         labour_rows, power_rows, prev_labour_rows, prev_power_rows, incl_contractor=incl_contractor
     )
-    vol_sensitivity = build_volume_sensitivity(stack)
-    warnings_list   = build_warnings(stack, fy_total, hours)
+    vol_sensitivity = build_volume_sensitivity(active_stack)
+    warnings_list   = build_warnings(active_stack, fy_total, hours)
 
     return {
         "segment":       segment,
@@ -760,7 +776,7 @@ def get_analysis_view(
         "prev_fy_label": prev_fy_label,
         "incl_contractor": incl_contractor,
         "power_loaded":  bool(power_rows),
-        "n_data_months": len(stack),
+        "n_data_months": len(active_stack),
         "pipe_labour_rate":    pipe_labour_rate,
         "fitting_labour_rate": fitting_labour_rate,
         "pipe_power_rate":     pipe_power_rate,

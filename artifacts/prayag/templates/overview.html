@@ -182,7 +182,7 @@
     {% if o.rejection_pct is none %}<div class="text-xl font-bold text-gray-400">n/a</div>{% else %}<div class="text-xl font-bold {% if o.rejection_pct < 2 %}text-green-600{% elif o.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
       {{ o.rejection_pct }}%
     </div>{% endif %}
-    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} {{ o.reject_unit or o.unit or 'rejected' }}</div>
+    <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.0f}".format(o.reject_count) }} {{ o.reject_unit or o.unit or 'rejected' }}{% if segment_filter == "Pipe" %} · <span title="PIPE: rejection measured from gross (total) production">gross</span>{% elif segment_filter %} · <span title="Rejection measured from net (good) production">net</span>{% endif %}</div>
     {% endif %}
   </div>
 

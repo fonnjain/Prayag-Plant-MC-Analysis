@@ -52,8 +52,20 @@ GLOSSARY = [
      "meaning": "Standard output per hour.",
      "formula": "", "unit": "units/hr", "where": "Performance"},
     {"key": "REJECT_PCT", "term": "Reject %",
-     "meaning": "Share of output rejected.",
-     "formula": "Reject ÷ Total", "unit": "%", "where": "All views"},
+     "meaning": "Share of output rejected. Denominator basis varies: "
+                "PIPE uses gross production (output includes rejected material — extrusion is measured before quality check); "
+                "Garden, Moulding, and PTMT use net production (good output only). "
+                "Costing analysis uses gross production for all segments, matching the source workbook "
+                "('Production in KG has Rejection included'). "
+                "This is why the rejection % on a production page may differ slightly from the costing workbook.",
+     "formula": "Reject ÷ Total output", "unit": "%", "where": "All views"},
+    {"key": "PROD_BASIS", "term": "Production basis — gross vs net",
+     "meaning": "Gross: production totals include rejected output (matches the source workbook — "
+                "'Production in KG has Rejection included'). "
+                "Net: good output only, rejection excluded. "
+                "On this page all production figures are on a gross basis. "
+                "Production pages (daily overview, report detail) use gross for PIPE and net for Garden, Moulding, PTMT.",
+     "formula": "", "unit": "—", "where": "Costing analysis"},
     {"key": "RUNNER_PCT", "term": "Runner %",
      "meaning": "Runner produce vs total produce.",
      "formula": "Runner ÷ Total", "unit": "kg / %", "where": "Moulding & PTMT"},

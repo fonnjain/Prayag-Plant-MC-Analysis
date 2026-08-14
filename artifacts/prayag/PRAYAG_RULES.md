@@ -101,7 +101,7 @@ Use these as validation targets. If a change moves one of these, it needs an exp
 | **MOULDING** | 89,152 | 75,771 | 97,007 | 104,086 | 366,015 kg / 35,972 h / rej ~1.0% |
 | **PTMT** (annual Nett) | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / rej 6.14% |
 | **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h / rej 3.81% *(KH only)* |
-| **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 67,718 | 232,209 kg *(KH only; Jul refreshed 2026-08-14 — data owner actively updating)* |
+| **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 67,718 | 232,209 kg *(KH only; Jul guardrail was 66,038 in Phase 1. Confirmed 2026-08-14: code path is byte-for-byte identical pre/post Phase 2 — same file ID, same layout. Live re-read of the July workbook gives 67,718.2 kg. **Data change by owner between Phase 1 capture and Phase 2; no code regression.**)* |
 | **GARDEN WB** (block PRODUCTION tab) | — | — | 22,152.8 | 6,457.4 | New plant FY26-27; Aug workbook exists but PRODUCTION tab blank at 2026-08-14 read |
 | **HDPE** | 0 | 1,370 | 0 | 0 | 21 h, M/C-1 only, rej 8.76% |
 | **TANK** (annual) | 636,250 | 1,582,500 | 2,596,600 | 1,995,500 | 6,810,850 Ltr / rej 86,500 |
