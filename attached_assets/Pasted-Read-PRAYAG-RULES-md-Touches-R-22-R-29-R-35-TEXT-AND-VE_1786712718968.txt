@@ -1,0 +1,76 @@
+Read PRAYAG_RULES.md. Touches R-22, R-29, R-35. TEXT AND VERIFICATION ONLY —
+no calculation, no denominator, no figure may change.
+
+=========================================================
+PART 1 — Correct the PIPE basis label (it says gross; the app computes net)
+=========================================================
+The last change recorded PIPE's rejection basis as "gross — extrusion is measured at the
+extruder before quality sorting." That may describe how Report-5 is captured, but it is not
+what the application divides by.
+
+PROOF 1 — the app's own output matches net, not gross:
+   Month   rej / R5 output (NET)   rej / annual (GROSS)   app displays
+   APR            8.44%                   7.78%              8.44%
+   MAY            9.72%                   8.86%              9.72%
+   JUN            8.93%                   8.20%              8.92%
+   JUL            8.59%                   7.91%              8.59%
+Three exact matches on net, one within 0.01pp. Gross matches nothing.
+
+PROOF 2 — Report-5's output column is itself net:
+   APR: 175,669 + 14,825 = 190,494 = annual   (exact)
+   MAY: 313,516 + 30,484 = 344,000 = annual   (exact)
+If R5 output were gross, annual = gross + rejection would double-count rejection.
+
+CHANGE:
+ (a) glossary.py REJECT_PCT — remove the PIPE-uses-gross claim. Corrected position is
+     simpler: ALL production pages use NET (Garden, Moulding, PTMT and PIPE). Only the
+     COSTING module uses gross, matching the workbook note "Production in KG has Rejection
+     included." That denominator difference is why a production-page rejection % will not
+     match the costing workbook.
+ (b) templates/overview.html — PIPE sublabel must read "net", not "gross".
+ (c) templates/report_detail.html — same correction.
+ (d) glossary.py PROD_BASIS — re-check wording against the corrected position. Describe
+     WHICH PAGES use which basis, not how the source is physically measured.
+
+ALSO VERIFY — HDPE came from the same table that got PIPE wrong. Compute and report both:
+   rej / output        = 120 / 1,370 = 8.76%
+   rej / (output+rej)  = 120 / 1,490 = 8.05%
+against the 8.76% the app displays for HDPE May. Correct its label if wrong; report either way.
+
+Then give ONE corrected table: the basis actually used by every segment, production pages
+and costing, so the rulebook can record it.
+
+=========================================================
+PART 2 — Close the KH Garden July verification properly
+=========================================================
+The July verdict (data change, not regression) rests on GARDEN's CONFIG being identical
+pre/post Phase 2. That was proven. What was not proven is that the SHARED PARSER CODE is
+identical — _emit_blocks, parse_daily_blocks, parse_daily_matrix and the Garden run-hours
+join are common code, and identical config would not save us if one of them changed.
+
+Run:
+   git diff 7648a51 9bc3512 -- artifacts/prayag/sheets.py artifacts/prayag/parsers.py
+
+Report whether the diff is ADDITIONS ONLY (new GARDEN_WB layout entry, new
+_PLANT_SEG_UNIT_OVERRIDES entry) or whether any EXISTING function was modified.
+
+ - If additions only: the inference holds. The rulebook note stands as written. Say so.
+ - If any shared function changed: check out 7648a51, re-run the KH Garden July figure, and
+   report it. 66,038.2 means a regression to find; 67,718.2 confirms the data change.
+
+Do not change the rulebook note in this pass — confirm or correct it based on the diff.
+
+=========================================================
+DO NOT TOUCH
+=========================================================
+pipe_reconcile.py (R-15) · baselines.json (R-16) · parse_mc_detail (R-17) · segments: [] on
+segment_cost/utilisation (R-18) · mp_*.py and machine_planning_*.html (R-20) · the Tank
+pcs × size fix (R-09) · the Garden rejection join and synthetic records · GARDEN_WB and the
+five pinned Tank months · the July "awaiting source data" work (correct — keep) · auth.py.
+parse_ideal_labour_rates() reading only the TOTAL row is correct and deliberate — leave it.
+
+No Sheets writes (R-21). No cache clearing (R-34).
+
+REPORT: corrected glossary text and both template labels · the HDPE test with both
+computations · the single corrected basis table · the git diff verdict for Part 2 · and
+confirmation that no figure moved anywhere, "/" still serves, Machine Planning untouched.

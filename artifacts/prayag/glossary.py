@@ -52,19 +52,22 @@ GLOSSARY = [
      "meaning": "Standard output per hour.",
      "formula": "", "unit": "units/hr", "where": "Performance"},
     {"key": "REJECT_PCT", "term": "Reject %",
-     "meaning": "Share of output rejected. Denominator basis varies: "
-                "PIPE uses gross production (output includes rejected material — extrusion is measured before quality check); "
-                "Garden, Moulding, and PTMT use net production (good output only). "
+     "meaning": "Share of output rejected. "
+                "All production pages (daily overview, report detail, machine cards) use net production as denominator — "
+                "good output only, rejection excluded. "
+                "This applies to every segment: PIPE, HDPE, Garden, Moulding, and PTMT. "
                 "Costing analysis uses gross production for all segments, matching the source workbook "
                 "('Production in KG has Rejection included'). "
-                "This is why the rejection % on a production page may differ slightly from the costing workbook.",
-     "formula": "Reject ÷ Total output", "unit": "%", "where": "All views"},
+                "This is why a rejection % on a production page may differ from the costing workbook.",
+     "formula": "Reject ÷ Net output", "unit": "%", "where": "All views"},
     {"key": "PROD_BASIS", "term": "Production basis — gross vs net",
      "meaning": "Gross: production totals include rejected output (matches the source workbook — "
                 "'Production in KG has Rejection included'). "
                 "Net: good output only, rejection excluded. "
-                "On this page all production figures are on a gross basis. "
-                "Production pages (daily overview, report detail) use gross for PIPE and net for Garden, Moulding, PTMT.",
+                "Costing analysis (this page) uses gross. "
+                "All other pages — daily overview, report detail, machine cards — use net for every segment "
+                "(PIPE, HDPE, Garden, Moulding, PTMT). "
+                "Verified: R5 net output + rejection = annual total exactly for PIPE (Apr, May).",
      "formula": "", "unit": "—", "where": "Costing analysis"},
     {"key": "RUNNER_PCT", "term": "Runner %",
      "meaning": "Runner produce vs total produce.",
