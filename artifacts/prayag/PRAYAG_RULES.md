@@ -51,7 +51,8 @@ Verified against the master pipeline doc ("Preeti - Working Sheet") and the publ
 | **PIPE** | `MAX(Report-5, Report-11)` per machine-date | Report-5 | same reconcile | R11 supplies pipe *type* + machine-days R5 misses |
 | **MOULDING** | Report-12 (`Wt in Kgs`) | Report-5 join (`r5_runhours`) | Report-12 | all three layers agree within 2 kg |
 | **PTMT** | Report-5 (machine chain) | Report-5 `IDEAL HOUR` | Report-5 | annual also fed by a **separate mould chain** — see R-24 |
-| **GARDEN** | **OPEN — see R-23** | `Daily Report` matrix | `Daily Report` matrix | block tabs have **no rejection column** |
+| **GARDEN (KH)** | **OPEN — see R-23** | `Daily Report` matrix | `Daily Report` matrix | block tabs have **no rejection column** |
+| **GARDEN_WB (WB)** | `PRODUCTION` tab · long layout · one row per machine×date×item | suppressed (Daily Report all zeros) | `REJECTION IN KG.` col | New FY26-27 plant. Labour: **unjoined** (Segment Cost has KH-only "Garden Pipe" tab — see R-35). Machine prefix `WB GARDEN M/C - `. |
 | **HDPE** | `Daily Report` matrix | `Daily Report` (`M/C RUN HOUR`) | `Daily Report` | self-supplies `IDEAL OUTPUT` → needs no baselines entry |
 | **TANK** (KH/VN/WB) | `PROD. REPORT` (daily) | see R-25 | `pcs × size` | annual cross-check = `SUMMARY (LTR)`, `kind: tank_annual_2526` for **both** FYs — see R-36 |
 | **LABOUR** (all) | Segment Cost workbook `1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw`, **dedicated per-segment tabs** | | | never read labour back from an annual SUMMARY |
@@ -63,8 +64,10 @@ Verified against the master pipeline doc ("Preeti - Working Sheet") and the publ
 
 **R-13 · Plant locations.** KH = Kharani (Plant 1 Pipe & Fittings; Plant 2 Tank & Garden Pipe) · Bhiwari Plant 1 = PTMT, CP, Sink, Hardware · VN = Varanasi · WB = West Bengal (Durgapur→Bankura from Feb). *Fixed in v2: `CP` retagged to Bhiwari; the comment's "Khandala / Vasna / Wambori" corrected to Kharani / Varanasi / West Bengal.*
 
-**R-14 · Drive discovery: folder enumeration is primary; title search is the fallback.** *(amended v2)*
-`_list_drive_folder` uses `supportsAllDrives=true&includeItemsFromAllDrives=true` and reaches shared drives — it is demonstrably finding files that narrower calls miss, and is the working mechanism. Use title-pattern search as the **fallback** when a file is expected but not found, since files are owned across accounts (preeti@, bhawna@, team-ai@). Tank file titles carry plant prefixes: `(PRV)` = VN, `(PWB)` = WB.
+**R-14 · Drive discovery: folder enumeration is primary; title search is the fallback.** *(amended v2; prefix corrected v2)*
+`_list_drive_folder` uses `supportsAllDrives=true&includeItemsFromAllDrives=true` and reaches shared drives — it is demonstrably finding files that narrower calls miss, and is the working mechanism. Use title-pattern search as the **fallback** when a file is expected but not found, since files are owned across accounts (preeti@, bhawna@, team-ai@). Tank file titles carry plant prefixes: `(PRV)` = VN, **`(PDWB)`** = WB. Garden WB titles use `(PDWB)` too (e.g. "Garden (PDWB) - June' 2026").
+
+**Discovery persistence gap (confirmed Phase 2):** `ensure_daily_discovery` mutates `DAILY_SOURCES` **in-process only** — each gunicorn worker restarts fresh from `sources.py`. Files found by one worker's scan are invisible to all other workers and lost on restart. Any month that is not pinned in `sources.py` is therefore **ephemerally available at best**. The five Tank months (VN Apr/May, WB Apr/May/Jun) proved this: they sat in scannable folders with parseable titles for months yet never persisted across restarts. **Pin new months in `sources.py` immediately** — do not rely on discovery to carry them.
 
 ---
 
@@ -97,12 +100,14 @@ Use these as validation targets. If a change moves one of these, it needs an exp
 | **PIPE** (gross) | 190,494 | 344,000 | 178,782 | 564,695 | 1,277,971 kg / 6,507 h |
 | **MOULDING** | 89,152 | 75,771 | 97,007 | 104,086 | 366,015 kg / 35,972 h / rej ~1.0% |
 | **PTMT** (annual Nett) | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / rej 6.14% |
-| **GARDEN** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h / rej 3.81% |
-| **GARDEN** (block tabs) | 42,736 | 53,235 | 70,520 | 68,390 | 232,528 kg |
+| **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h / rej 3.81% *(KH only)* |
+| **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 67,718 | 232,209 kg *(KH only; Jul refreshed 2026-08-14 — data owner actively updating)* |
+| **GARDEN WB** (block PRODUCTION tab) | — | — | 22,152.8 | 6,457.4 | New plant FY26-27; Aug workbook exists but PRODUCTION tab blank at 2026-08-14 read |
 | **HDPE** | 0 | 1,370 | 0 | 0 | 21 h, M/C-1 only, rej 8.76% |
 | **TANK** (annual) | 636,250 | 1,582,500 | 2,596,600 | 1,995,500 | 6,810,850 Ltr / rej 86,500 |
-| **GARDEN rejection** *(v2)* | 1,191 | 0 (n/a) | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** on DR basis 138,052 |
-| **TANK daily** *(v2)* | — | VN — · KH 846,600 | VN 533,500 · KH 1,419,500 | VN 565,500 · WB 1,702,000 | rej: VN Jun 8,500 · Jul 5,500 · WB Jul 33,500 · KH Jun 45,000 |
+| **GARDEN KH rejection** *(v2)* | 1,191 | 0 (n/a) | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** on DR basis 138,052 *(KH only)* |
+| **TANK daily** *(v2, expanded)* | VN 221,250 · WB 415,000 · KH 636,250 | VN 534,000 · WB 1,048,500 · KH 846,600 | VN 533,500 · WB 1,430,000 · KH 1,419,500 | VN 565,500 · WB 1,702,000 · KH (from annual) | VN 1,854,250 · WB 4,595,500 · KH 3,619,600 (Apr–Jul) |
+| **TANK daily rejection** | VN — · WB 6,750 | VN — · WB 27,750 | VN 8,500 · WB 9,750 · KH 45,000 | VN 5,500 · WB 33,500 | WB Jun daily 1,430,000 vs annual 1,429,600 (delta 400 Ltr, R-30: do not adjust) |
 
 **R-22 · PTMT output basis = Nett Output (537,109).** Not "Weight of Total Production" (541,258), not the per-machine block (454,867). Grinding/regrind is finishing throughput and is excluded from headline production.
 
@@ -112,7 +117,7 @@ Use these as validation targets. If a change moves one of these, it needs an exp
 
 No code may assume an answer to these. Flag and surface; never auto-reconcile.
 
-**R-23 · Garden output basis is undecided.** The documented management chain is `Daily Report → GARDEN M/C 26-27 → M/C 1-4 → SUMMARY → Annual`. The app instead sums the `MACHINE 1-4` item tabs, which are **not in that chain**. Difference: 232,528 vs 138,052 kg. Both are real; only one is management's basis. Until decided, show both and flag divergence >2%.
+**R-23 · Garden (KH) output basis is undecided.** The documented management chain is `Daily Report → GARDEN M/C 26-27 → M/C 1-4 → SUMMARY → Annual`. The app instead sums the `MACHINE 1-4` item tabs, which are **not in that chain**. Difference: 232,528 vs 138,052 kg (**KH only** — GARDEN_WB is a separate plant with its own daily files; do not roll WB output into the KH basis debate). Both KH figures are real; only one is management's basis. Until decided, show both and flag divergence >2%.
 
 **R-24 · PTMT annual is fed by two independent chains** — machine (`Report 5`) and mould (`MASTER PTMT Moulding Weight → MASTER → PTMT MOULDS → PTMT Mould Total`). This is why the annual can report more *net* output than Report-5 recorded *gross* (June +3,501 kg, July +11,783 kg). Not an error to fix.
 

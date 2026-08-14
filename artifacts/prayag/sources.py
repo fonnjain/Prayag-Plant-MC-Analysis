@@ -25,16 +25,17 @@ from __future__ import annotations
 # Used to route tank + segment-labour reports per location.
 # ---------------------------------------------------------------------------
 PLANT_LOCATIONS: dict[str, str] = {
-  "PIPE":     "KH",
-  "GARDEN":   "KH",
-  "HDPE":     "KH",
-  "MOULDING": "KH",
-  "PTMT":     "Bhiwari",
-  "CP":       "Bhiwari",
-  "TANK":     "KH",     # KH daily workbook — location tag for daily records
-  "TANK_VN":  "VN",
-  "TANK_WB":  "WB",
-  "GOM":      "KH",
+  "PIPE":      "KH",
+  "GARDEN":    "KH",
+  "GARDEN_WB": "WB",
+  "HDPE":      "KH",
+  "MOULDING":  "KH",
+  "PTMT":      "Bhiwari",
+  "CP":        "Bhiwari",
+  "TANK":      "KH",     # KH daily workbook — location tag for daily records
+  "TANK_VN":   "VN",
+  "TANK_WB":   "WB",
+  "GOM":       "KH",
 }
 
 # ---------------------------------------------------------------------------
@@ -308,15 +309,38 @@ DAILY_SOURCES: dict[str, dict] = {
   "TANK_VN": {
       "folder_ids": ["1kI-g46eR-GBEr0-8sUGPV_ZEngFlC_Tt"],
       "files": {
+          # Apr and May were not auto-discovered (ephemeral per-worker discovery
+          # state did not survive gunicorn restarts) — pinned explicitly here.
+          "2026-04": "1Rhj5wo6otYF59FJDV_tn_RnsmpNs7-blSGWqUDbz5Xw",
+          "2026-05": "19ePrvfsHIFoJuy1wvjL0DcukYh6-UkOFW3AueqToRNE",
           "2026-06": "1Vsba-WDcYwSstEZsX37ntm_N05yPn0T5DzSkls9zRUw",
           "2026-07": "1lUSTSM_m2yywxGeeE7oemRbBMNsyM37ICv1lKBClGtQ",
       },
   },
-  # Tank WB — Wambori stream (Tank (PDWB) workbooks, one per month).
+  # Tank WB — West Bengal / Durgapur stream (Tank (PDWB) workbooks, one per month).
   "TANK_WB": {
       "folder_ids": ["14Wp1OGomlm6FeOLs0AcCFeIMxQ_zmjLx"],
       "files": {
+          # Apr/May/Jun were not auto-discovered (ephemeral per-worker discovery
+          # state did not survive gunicorn restarts) — pinned explicitly here.
+          # WB Jun daily total = 1,430,000 Ltr; annual = 1,429,600 (delta 400 Ltr,
+          # R-30: do not adjust either figure).
+          "2026-04": "1okt9jsFmYGv7utTxYuDrfIoW-717KJ_HYmtv8g8-Cts",
+          "2026-05": "1BHc-RaGE4sICnXhBr7xR-pmwcfkVUE2ZfxicYZnNVOM",
+          "2026-06": "1wKR7bABQUuyfaOcqNuMIVt-CttxZx8Iiu9DCe6n0MmU",
           "2026-07": "1-JVeDFTnFfoMjDMhvkOV5BE1rKjjO00chRKtUpO5iqQ",
+      },
+  },
+  # Garden WB — West Bengal (PDWB) garden pipe plant. Layout: long / PRODUCTION tab.
+  # Labour: unjoined — the Segment Cost workbook has one "Garden Pipe" tab (KH wages only);
+  # attributing KH wages to WB output would violate R-07 and R-35. Utilisation: suppressed
+  # (Daily Report all zeros — no run hours tracked). New plant as of FY2026-27.
+  "GARDEN_WB": {
+      "folder_ids": ["19L5X6fnknSMyY-6qxB5mDaaGgbZPkSRD"],
+      "files": {
+          "2026-06": "18oWvrtgvvTqI176_h8y2eGywUKvWOue3BYIxINlIBiU",
+          "2026-07": "1RK2hF-h6dF9aaNzCwKkMraAcMDoDAS1HZ30pX2LFoo0",
+          "2026-08": "1oo636YJSoWJi5YUS7jhawuCEA2pcl73HqablemcX4n0",
       },
   },
   # CP runs on a different cycle; no Apr-26+ daily file yet (flagged at load).
@@ -336,17 +360,18 @@ EMPTY_SOURCES: set[tuple[str, str]] = {
 
 # Friendly names for plants/segments shown in the UI.
 PLANT_NAMES = {
-  "PIPE":     "Pipe & Fitting",
-  "GARDEN":   "Garden Pipe",
-  "HDPE":     "HDPE",
-  "MOULDING": "Injection Moulding",
-  "PTMT":     "PTMT",
-  "CP":       "CP Fittings",
-  "TANK":     "Tanks (KH)",
-  "TANK_VN":  "Tanks (VN)",
-  "TANK_WB":  "Tanks (WB)",
-  "GOM":      "Group-of-Moulding",
-  "ALL":      "All Plants",
+  "PIPE":      "Pipe & Fitting",
+  "GARDEN":    "Garden Pipe",
+  "GARDEN_WB": "Garden Pipe (WB)",
+  "HDPE":      "HDPE",
+  "MOULDING":  "Injection Moulding",
+  "PTMT":      "PTMT",
+  "CP":        "CP Fittings",
+  "TANK":      "Tanks (KH)",
+  "TANK_VN":   "Tanks (VN)",
+  "TANK_WB":   "Tanks (WB)",
+  "GOM":       "Group-of-Moulding",
+  "ALL":       "All Plants",
 }
 
 FY_MONTHS = [

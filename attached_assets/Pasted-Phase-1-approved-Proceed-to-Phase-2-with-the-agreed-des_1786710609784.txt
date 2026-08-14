@@ -1,0 +1,50 @@
+Phase 1 approved. Proceed to Phase 2 with the agreed design, plus three additions.
+
+=== APPROVED DESIGN (unchanged) ===
+GARDEN_WB · long layout · tab PRODUCTION · folder 19L5X6fnknSMyY… · machine prefix
+"WB GARDEN M/C - " · labour left UNJOINED (no WB Garden wage source exists — do not
+attribute KH wages to WB output, R-07/R-35) · utilisation suppressed (Daily Report all
+zeros, R-07).
+
+=== ADDITION 1 — pin FIVE Tank files, not four ===
+WB June also exists and is unregistered:
+  1wKR7bABQUuyfaOcqNuMIVt-CttxZx8Iiu9DCe6n0MmU — "3. Tank (PDWB) - June' 2026" — 1,430,000 Ltr
+Pin it alongside VN Apr, VN May, WB Apr, WB May.
+Note its daily total (1,430,000) differs from the annual (1,429,600) by 400 Ltr. Report the
+delta; do not adjust either (R-30).
+
+=== ADDITION 2 — verify our pcs × size rejection against WB's explicit column ===
+Phase 1 found VN and WB PROD. REPORT layouts DIFFER: WB has an explicit
+"REJECTION IN LTR." column; VN does not and must be computed as pcs × SIZE (LTR.).
+Our R-09 fix computes pcs × size for all plants. For WB Apr/May/Jun, print BOTH:
+  (a) the sheet's explicit REJECTION IN LTR. value  — Apr 6,750 · May 27,750 · Jun 9,750
+  (b) what our pcs × size computation produces
+If they disagree, STOP and report — do not pick one. If they agree, say so explicitly.
+
+=== ADDITION 3 — is discovery actually broken? (diagnostic, no fix) ===
+Phase 1 established parse_month_from_title resolves all five titles correctly, so the parser
+is NOT the cause. The offered explanation (in-process state / TTL timing) does not fully
+account for a PERSISTENT absence: the files sit in folders ensure_daily_discovery scans, with
+parseable titles, on a 10-minute TTL — they should have surfaced on some request.
+After pinning, run ONE forced discovery scan with the new pins temporarily disregarded, and
+report whether the five files are found by discovery alone. Report only — do not fix.
+If discovery does NOT find them, a real bug remains and August/September will need pinning too.
+
+=== VALIDATION ===
+WB Garden: June 22,152.8 kg · 3,374 rolls · 0 rejection · machines 1,2,3 (55 rows).
+            July 6,457.4 kg · 997 rolls · 0 rejection. August: report observed.
+            (July is 71% below June — report it, it is a new plant, not necessarily an error.)
+Tank after pinning — expected totals, report observed:
+  VN 1,854,250 Ltr (annual 1,852,250, ~2,000 apart) · WB 4,595,500 · KH unchanged 3,619,600
+  Combined ~10,069,350 Ltr. This is a 57% increase on the current 6,420,600 — EXPECTED, not
+  a regression. State it plainly so nobody reads it as one.
+GUARDRAILS — if any of these move, STOP:
+  KH Garden APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 66,038 parsed; rejection APR 1,191 ·
+  JUN 2,215 · JUL 1,853.50. KH Tank Jun 1,419,500 / rej 45,000. VN Jun 533,500 / rej 8,500.
+  VN Jun must still reconcile to its annual at ±0. KH must still show ~2.24× (R-26, open).
+  PIPE, MOULDING, PTMT, HDPE unchanged.
+SALE and RM & BOP tabs: leave unwired.
+
+=== AFTER LANDING ===
+Rulebook edits: R-14 prefix is PDWB not PWB · R-23 relabel 138,052 and 232,528 as KH-only ·
+new acceptance figures for GARDEN_WB and the five Tank months.

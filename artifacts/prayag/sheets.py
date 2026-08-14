@@ -1591,6 +1591,21 @@ _DAILY_LAYOUTS: dict = {
   "TANK":    [{"emit": "TANK",    "tab": "PROD. REPORT", "layout": "tank"}],
   "TANK_VN": [{"emit": "TANK_VN", "tab": "PROD. REPORT", "layout": "tank"}],
   "TANK_WB": [{"emit": "TANK_WB", "tab": "PROD. REPORT", "layout": "tank"}],
+  # GARDEN_WB — West Bengal garden pipe plant. One "PRODUCTION" tab per workbook,
+  # long layout (one row per machine × date × item), header at row 5. Columns:
+  # DATE / MACHINE NO. / ITEM CODE / SIZE (MM) / COLOR / PRODUCTION IN ROLL. PCS
+  # / ROLL WEIGHT / PRODUCTION IN KG. / REJECTION IN KG. / REMARK'S.
+  # No run hours → utilisation suppressed (R-07). Labour: unjoined (R-11 / R-35).
+  # machine_prefix="WB GARDEN M/C - " so emitted ids are "WB GARDEN M/C - 1" etc.
+  "GARDEN_WB": [{
+      "emit": "GARDEN_WB", "tab": "PRODUCTION", "layout": "long",
+      "long": dict(
+          machine_col=("eq", "MACHINE NO."),
+          out_col=("contains", "PRODUCTION IN KG"),
+          rej_col=("contains", "REJECTION IN KG"),
+          machine_prefix="WB GARDEN M/C - ",
+      ),
+  }],
 }
 
 # PTMT runs several distinct processes that should be compared within their own
@@ -1690,7 +1705,16 @@ def _daily_plants() -> List[str]:
           if p in _DAILY_LAYOUTS and sources.DAILY_SOURCES[p].get("files")]
 
 
+_PLANT_SEG_UNIT_OVERRIDES: dict = {
+  # Plants that have no ANNUAL_SOURCES entry (no annual summary workbook) but
+  # need a proper segment label and unit for their daily Records.
+  "GARDEN_WB": ("Garden Pipe (WB)", "kg"),
+}
+
+
 def _daily_seg_unit(plant: str) -> Tuple[str, str]:
+  if plant in _PLANT_SEG_UNIT_OVERRIDES:
+      return _PLANT_SEG_UNIT_OVERRIDES[plant]
   for s in sources.ANNUAL_SOURCES:
       if s["plant"] == plant:
           return s["segment"], s["unit"]

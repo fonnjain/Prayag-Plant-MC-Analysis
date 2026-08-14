@@ -1,0 +1,41 @@
+Read PRAYAG_RULES.md. Touches R-22, R-35. Small, low-risk. No calculation may change.
+
+=== FIX 1 — label the production basis (the only real gap) ===
+The costing module reports on a GROSS basis (production includes rejection — the workbook
+states "Production in KG has Rejection included"). The main production pages report NET for
+Garden, Moulding and PTMT, and GROSS for PIPE. Nothing on any page says which.
+
+Consequence: the workbook shows Garden rejection at 2.97% / 3.20%; the app shows 3.06% /
+3.31%. Both are correct — the denominators differ. Nothing explains this, so a reader
+comparing them concludes one is wrong.
+
+Add a short basis label wherever a production figure or rejection % is shown — e.g.
+"gross (rejection included)" or "net". Use the existing info()/tooltip mechanism; do not
+invent a new one. On the costing page state plainly that its figures are gross.
+
+DO NOT change any denominator, any calculation, or which basis any page uses. Label only.
+
+=== FIX 2 — July disappears silently (R-35) ===
+build_cost_stack() skips months where total_kg <= 0 AND paid_wages <= 0, so July vanishes
+from the monthly cost table with no indication. compute_fy_totals() has a partial_months
+tracker for production-without-labour but not the inverse — and July across every segment is
+exactly the inverse: headcount and paid hours entered, wages and production blank.
+
+Show July as a row marked "awaiting source data" rather than omitting it. A reader must be
+able to tell "not yet entered" from "zero". No fabricated figures.
+
+=== Q — one clarification, report only ===
+The last report described PIPE's rejection basis as "Net" while also saying
+"total_count = gross output". Those cannot both be true. State which it is.
+
+=== NOT IN SCOPE ===
+- parse_ideal_labour_rates() reading only the TOTAL row is CORRECT and deliberate — its own
+  comment records why (the month rows use piece counts for fittings). Do not "fix" it to read
+  month rows. Leave it exactly as is.
+- The Garden 3.00 / HDPE 1.25 / Tank 6.00 ideal rates being unread is fine — those segments
+  have no costing yet. Do not wire them.
+- The UNIT-3 copy error cannot reach the app (it reads the Employee Data D-tabs). No action.
+- Do not build Tank or HDPE costing. Do not touch the WB Garden / Tank registration work.
+
+Validate: no figure moves anywhere; PLUMBING costing totals unchanged; "/" serves; Machine
+Planning untouched. No Sheets writes (R-21). No cache clearing (R-34).
