@@ -1587,9 +1587,13 @@ _DAILY_LAYOUTS: dict = {
       "resolve": ["output", "hours"],
       "ideal_col": ("contains", "IDEAL HOUR"),
   }],
-  # TANK records per-ITEM production (no machine dimension) on "PROD. REPORT".
-  # All three streams share the same tab name and parser; columns differ per
-  # workbook but are resolved by header text, not by index.
+  # TANK records per-ITEM production on "PROD. REPORT".  Run hours are reconciled
+  # from two sources: the DAILY REPORT wide-matrix (TOTAL-row per-date triplets;
+  # machine labels in col 1) and the PROD. REPORT "PRODUCTION HOURS" column.
+  # Date-wise max over the union of both sources (R-39; tank_reconcile.py).
+  # VN carries real hours; KH PRODUCTION HOURS column is present but blank;
+  # WB has no hours column at all (DAILY REPORT April only).
+  # Columns differ per workbook but are resolved by header text (R-04).
   "TANK":    [{"emit": "TANK",    "tab": "PROD. REPORT", "layout": "tank"}],
   "TANK_VN": [{"emit": "TANK_VN", "tab": "PROD. REPORT", "layout": "tank"}],
   "TANK_WB": [{"emit": "TANK_WB", "tab": "PROD. REPORT", "layout": "tank"}],
@@ -2039,13 +2043,30 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
 
 def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
              seg: str, report: dict) -> Tuple[List[Record], dict]:
-  """Emit daily rows from the Tank per-item PROD. REPORT.
+  """Emit daily rows from the Tank per-item PROD. REPORT with run-hours reconciliation.
 
-  Tank output is recorded per item (no machine, no run hours). The sheet reports
-  the same run in litres, pieces and kg; litres is Tank's primary headline unit,
-  so rows carry ``machine=""`` and ``unit="Ltr"`` (pcs/kg kept as secondary on
-  each Record); utilisation/efficiency stay hidden. Distinguishes a genuine
-  no-production period from a parse failure."""
+  Tank output is recorded per item (no machine dimension) in ``PROD. REPORT``.
+  Run hours are reconciled across two independent sources via ``tank_reconcile``:
+
+  * **DAILY REPORT** — wide per-date matrix; TOTAL row only is reliable.
+    Carries machine dimension (machine labels in col 1, col 0 always blank).
+  * **PROD. REPORT** — the per-item journal; hours column is labelled
+    ``PRODUCTION HOURS`` or ``RUN HOURS`` (matched by header text, R-04).
+
+  Reconciliation rule (R-39): corrected hours per date = max(DR, PR) over the
+  union of all dates either source holds.  Output always comes from PROD. REPORT;
+  machine labels come from DAILY REPORT only when it carries date-wise hours data.
+
+  Where a plant-month has no second source (KH all months — PRODUCTION HOURS
+  column present but blank; WB May–Jul — no hours column at all; DAILY REPORT
+  all-zero) the hours come from whichever single source has them, or remain
+  unavailable (R-07).
+
+  Utilisation is suppressed (ideal_hours=0.0) until a real planned-hours baseline
+  is supplied — actual run hours ARE recorded on the Record and visible as run time.
+  """
+  import tank_reconcile  # local import keeps module load order safe
+
   tab = spec["tab"]
   tabs = list_tabs(file_id, token)
   actual = next((t for t in tabs if str(t).strip().upper() == tab.upper()), None)
@@ -2054,6 +2075,7 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
       return [], report
   report["tab"] = actual
 
+  # ── Read and parse PROD. REPORT ────────────────────────────────────────────
   values = read_values(file_id, actual, token)
   report["columns_seen"] = [
       str(c).strip() for c in (values[0] if values else []) if str(c).strip()
@@ -2066,19 +2088,117 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   except parsers.TankRejectionColumnError as exc:
       report["warning"] = str(exc)
       return [], report
-  # TANK is output-only (no run hours), so utilisation/efficiency stay suppressed.
-  # Mark runhours_tracked=False so that a manager OVERRIDE may set a planned-hours
-  # baseline without the metrics gate ever fabricating a 0% utilisation, while the
-  # plant still counts as "baseline set" (app-default) for honest UI messaging.
-  tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
+
+  # ── Parse PROD. REPORT hours (reuse already-loaded values) ─────────────────
+  pr_hrs_by_date = tank_reconcile.parse_tank_pr_hours(values, ym)
+
+  # ── Sanity guard: rejected pcs exceed produced pcs ─────────────────────────
+  rej_violations = tank_reconcile.check_rej_exceeds_pcs(values, ym, emit)
+
+  # ── Read and parse DAILY REPORT ────────────────────────────────────────────
+  dr_tab_name = next(
+      (t for t in tabs if str(t).strip().upper() == "DAILY REPORT"), None
+  )
+  if dr_tab_name:
+      dr_values = read_values(file_id, dr_tab_name, token)
+      dr_by_date, dr_machine_labels, dr_monthly = tank_reconcile.parse_tank_dr(
+          dr_values, ym
+      )
+  else:
+      dr_by_date, dr_machine_labels, dr_monthly = {}, [], {}
+
+  # ── Reconcile run hours (date-wise max over union) ─────────────────────────
+  union_hrs, recon_audit = tank_reconcile.reconcile(
+      dr_by_date, pr_hrs_by_date,
+      plant=emit, ym=ym,
+      dr_machine_labels=dr_machine_labels,
+      dr_monthly=dr_monthly,
+  )
+
+  # Machine label: use DR labels only when DR carried date-wise hours data.
+  # When DR is all-zero (KH all months, WB May–Jul) leave machine="" and note
+  # via the reconcile report that machine-level hours are not recorded (R-35).
+  if dr_by_date and dr_machine_labels:
+      machine_label = " + ".join(dr_machine_labels)
+  else:
+      machine_label = ""
+
+  # ── Apply hours and machine to each per-item Record ────────────────────────
+  # Hours are stored on the FIRST item record per date only, to prevent
+  # double-counting when compute_metrics sums actual_hours across all records.
+  # runhours_tracked is set True on all records of a date that carries hours,
+  # and False everywhere hours are genuinely unavailable.
+  dates_assigned: set = set()
   for r in raw:
-      r.runhours_tracked = tracks_hours
-      r.ideal_hours = 0.0
+      hrs = union_hrs.get(r.date, 0.0)
+      r.machine      = machine_label
+      r.ideal_hours  = 0.0     # utilisation suppressed until a baseline is set
       r.ideal_output = 0.0
       r.ideal_source = "none"
+      if hrs > 0:
+          r.runhours_tracked = True
+          if r.date not in dates_assigned:
+              r.actual_hours = hrs
+              dates_assigned.add(r.date)
+          # else: actual_hours stays 0.0 (avoid double-count)
+      else:
+          r.runhours_tracked = False
+          # actual_hours stays 0.0
 
+  # ── Synthetic run-time records for DR-only hours dates ─────────────────────
+  # Some dates appear only in the DAILY REPORT (e.g. VN Jul-19: 8h, 0 kg output).
+  # PROD. REPORT has no row for those dates, so `dates_assigned` never includes
+  # them and the hours are lost from the record sums shown in the UI.
+  # A synthetic Record with 0 production carries those hours honestly: the machine
+  # was running but made nothing on that date (documented and auditable).
+  for date_str, hrs in sorted(union_hrs.items()):
+      if hrs <= 0 or date_str in dates_assigned:
+          continue
+      phantom = Record(
+          grain="daily", period=ym, date=date_str,
+          plant=emit, segment=seg,
+          machine=machine_label,
+          mould="", product="", material="", unit="Ltr",
+          secondary_counts={},
+          total_count=0.0, reject_count=0.0,
+          reject_unit="", reject_denominator=0.0,
+          runner_lumps=0.0,
+          planned_output=0.0, ideal_output=0.0,
+          actual_hours=hrs, ideal_hours=0.0,
+          ideal_hours_sheet=0.0, ideal_source="none",
+          runhours_tracked=True,
+          ideal_month_hours=0.0,
+          location="", is_finishing=False, has_oee=False,
+          shift="", shift_len_min=0, planned_stops_min=0,
+          downtime_min=0, downtime_reason="",
+          ideal_rate=0.0,
+          labour_cost=0.0, power_cost=0.0, solar_cost=0.0,
+          compound_type="",
+          source_family=emit.lower(),
+          source_file=file_id, source_tab=dr_tab_name or actual,
+          tonnage_band="", rejection_tracked=False,
+      )
+      raw.append(phantom)
+      dates_assigned.add(date_str)
+
+  # ── Build report ───────────────────────────────────────────────────────────
   report["detail_tabs"] = sorted({r.mould for r in raw if r.mould})
   report["record_count"] = len(raw)
+  report["reconcile"] = recon_audit
+
+  # Rejection-exceeds-pcs violations surfaced in the reconcile payload.
+  if rej_violations:
+      recon_audit["rej_exceeds_pcs_violations"] = rej_violations
+      recon_audit["warnings"].append(
+          f"{emit} {ym}: {len(rej_violations)} row(s) where rejected pieces "
+          "exceed produced pieces — data owner should verify at source. "
+          "Dates/items: "
+          + "; ".join(
+              f"{v['date']} {v['item']} ({v['pcs_rejected']} rej / {v['pcs_produced']} prod)"
+              for v in rej_violations[:5]
+          )
+          + ("…" if len(rej_violations) > 5 else "")
+      )
 
   if not raw:
       report["warning"] = (
@@ -2089,10 +2209,23 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
           "(layout not recognised)."
       )
   else:
-      report["warning"] = (
-          f"{emit} {ym}: tank output is recorded per item (no machine or run "
-          "hours), so utilisation/efficiency are not available — output is shown."
-      )
+      union_total = recon_audit["union_hrs_total"]
+      if union_total > 0:
+          mc_note = f" Machine: {machine_label}." if machine_label else ""
+          report["warning"] = (
+              f"{emit} {ym}: tank output recorded per item; run hours reconciled "
+              f"from DAILY REPORT + PROD. REPORT (union {union_total:.0f} h).{mc_note} "
+              "Utilisation suppressed — no ideal-hours baseline set."
+          )
+      else:
+          hrs_note = (
+              " Run hours not available for this plant-period"
+              " (DAILY REPORT all-zero; PROD. REPORT hours column blank or absent)."
+          ) if not union_hrs else ""
+          report["warning"] = (
+              f"{emit} {ym}: tank output recorded per item (no machine or run "
+              f"hours tracked for this period).{hrs_note}"
+          )
   return raw, report
 
 

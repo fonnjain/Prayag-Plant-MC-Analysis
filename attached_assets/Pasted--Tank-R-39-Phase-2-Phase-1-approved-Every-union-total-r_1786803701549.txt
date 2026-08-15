@@ -1,0 +1,98 @@
+# Tank R-39 — Phase 2
+
+Phase 1 approved. Every union total reproduces exactly from your date-level evidence: April 56 shared + 8 + 12 = 76 · May 184 + 12 = 196 · June 184 + 24 = 208 · July 224 + 8 = 232.
+
+**R-39 is now proven more strongly than when it was written.** April is the decisive case: the Production Report misses the 28th *and* the Daily Report misses the 16th — both directions inside one month. May adds a fourth pattern the rule handles: same dates, different hours (12 vs 8), resolved by max.
+
+Read `PRAYAG_RULES.md`. Touches **R-04, R-05, R-06, R-07, R-09, R-22, R-25, R-27, R-35, R-39**.
+
+---
+
+## STEP 0 — Verify KH and WB hours columns first (do not assume)
+
+You asked whether the plants share VN's template. **They demonstrably do not:** the kilogram and litre columns sit at different positions in each (KH M/J · VN N/K · WB L/H), and VN carries two weight columns where KH carries one.
+
+Before writing anything, report for **KH and WB**: does `PROD. REPORT` contain a `PRODUCTION HOURS` column at all, and if so does it hold values in any month? Print the header band for one month of each.
+
+Expected from prior reads — confirm or correct:
+- **KH** — column present, **blank** in every month (June and July both verified at 0).
+- **WB** — **no hours column at all**; its April TOTAL row runs COLOR → PCS → LTR → REJ PCS → REJ LTR → MOUTH LID → KG with no hours or cycles field.
+
+If WB has no hours column, its only hours source is the Daily Report, which holds **April alone**. Say so plainly.
+
+---
+
+## STEP 1 — Implement the reconciliation
+
+Follow `pipe_reconcile.py`'s structure. **Do not modify `pipe_reconcile.py` itself (R-15).**
+
+**Hours — date-wise max over the union**, per machine, across `DAILY REPORT` per-date run hours and `PROD. REPORT` `PRODUCTION HOURS`. Match the hours column on **`PRODUCTION HOUR` OR `RUN HOUR`** (**R-04**) — the same field is named differently in the two tabs, which is why the earlier reader returned 0 hours everywhere. Machine labels are in **column 1, not column 0**.
+
+Where a plant-month has no second source (KH all months, WB May–July), there is no reconciliation: hours come from whichever source has them, or remain **unavailable**. Do not fabricate (**R-07**).
+
+**Machine dimension** — from `DAILY REPORT`. Tank records currently carry `machine=""`, which is why the machine view is empty. This will populate **VN April–July and WB April**. Everywhere else the view must state that machine-level data is not recorded for that plant-month rather than rendering blank (**R-35**).
+
+**Output** — from `PROD. REPORT` only. It carries the item, size and colour detail the Daily Report lacks.
+
+> **Add this guard.** Taking output from one source is safe *only because* Daily-Report-only dates carry zero output (19 July: 8 h, 0 kg). That must be checked, not assumed: **flag any DR-only date that carries non-zero output**, because output would otherwise go missing exactly as hours did.
+
+**Rejection — surface both bases, labelled (R-22).** Tank has two valid measures answering different questions:
+
+| Basis | Derivation | VN July | Rate |
+|---|---|---:|---:|
+| Litres | rejected pcs × tank size | 5,500 Ltr | **0.97%** of 565,500 Ltr |
+| Kilograms | `REJECTION IN KG` + `REJECTION MOUTH LID IN KG` | 449.3 kg | **3.09%** of 14,548.9 kg |
+
+The plant reports the **kilogram** basis and both tabs agree on it (PR 449.30, DR 446.40). Show both, name the basis, present neither as *the* rejection figure.
+
+**Sanity guard** — flag any row where rejected pieces exceed produced pieces.
+
+**Degenerate join** — if the union yields no matched dates while both sources hold rows, warn (**R-27**). Silence there disables the reconciliation invisibly.
+
+---
+
+## STEP 2 — Validation
+
+**VN, union hours:** APR **76** · MAY **196** · JUN **208** · JUL **232**. Report the driving dates for each — Apr 16 (PR-only, 12 h) and Apr 28 (DR-only, 8 h); May 8 (12 vs 8); Jun 27/29/30 (PR-only); Jul 19 (DR-only, 8 h, 0 kg).
+
+**VN output** (from PROD. REPORT): APR 5,395.80 · MAY 13,535.00 · JUN 13,526.00 · JUL 14,548.90 kg. Report the DR cross-check delta per month; June is ~10.75% apart and that is expected — 1,564.40 kg of it sits on the three PR-only dates, leaving 0.9% residual on shared dates. **Report it; do not reconcile it away (R-30).**
+
+**WB April:** union **100 h**, 2 machines, output 11,163.00 kg matching both sources exactly. Note the internal Daily Report discrepancy — per-date sum 100 h against a monthly summary cell of 98 h; **use the per-date sum** and flag the 2 h gap.
+
+**Must not move:**
+- Production — KH Jun 1,419,500 Ltr · WB Jul 1,702,000 Ltr · VN Jun 533,500 Ltr
+- **VN June must still reconcile to its annual at ±0** (533,500 = 533,500)
+- **KH's 2.24× annual gap must survive** (**R-26**, open) — if it closes, something was bent
+- PIPE, MOULDING, PTMT, GARDEN (KH and WB), HDPE all unchanged. If any moves, **stop**.
+
+---
+
+## Known bad data — do not code around it (R-35)
+
+Two **KH June** entries are wrong at source and are being raised with the plant. Do not adjust parsing for either:
+- **23 June**, `WCT-3LC-05`: 10 pieces produced, **90 recorded as rejected**; the app currently derives 45,000 Ltr from it, while the workbook's own dashboard reports 0.00%.
+- **30 June**, `WCT-3LL-10`: **243 pieces from 6 cycles**, where 6 cycles yield 24 everywhere else — inflating June by roughly 219,000 litres.
+
+The first is precisely what the rejected-exceeds-produced guard should catch.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden's block-tab path, rejection join and synthetic records · `GARDEN_WB` · HDPE's block-tab path and rejection fallback · vanished-file detection · R-27 warning · the basis labels · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Rulebook updates after this lands
+
+- **R-39** — add the four-month VN evidence, noting April carries a gap in **both** directions and May a same-date hours disagreement.
+- **R-25 — close it.** The 208-vs-184 and 224-vs-232 discrepancies are resolved: each sheet was missing days the other held. Tank hours are now derivable. Record that `PLANTS_WITHOUT_RUNHOURS` was factually wrong.
+- **R-09 — correct the wording.** Summing the two kilogram columns is legitimate; the Daily Report does exactly that (446.40 ≈ 449.3). The original defect was labelling that kilogram sum as litres, not the sum itself.
+- **Failure Mode #15** — assuming a two-source difference means one source is wrong. Add that a **sign flip between months is diagnostic of two incomplete sources**, not a contradiction.
+- **New** — the same field may be named differently in two tabs of one workbook (`PRODUCTION HOURS` / `RUN HOURS`), and a label column may not be column 0. Both silently returned zero for months.
+
+## Report back
+
+Step 0 answers with header bands · the union hours per VN month with driving dates · WB April · output cross-check deltas · both rejection bases as rendered · confirmation that KH/WB are honestly labelled where no data exists · confirmation that no other segment moved and VN June still reconciles at ±0.

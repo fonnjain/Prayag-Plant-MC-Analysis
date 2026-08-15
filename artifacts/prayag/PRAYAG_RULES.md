@@ -35,7 +35,7 @@ If the source has no basis for a metric, the metric is blank. A blank is a corre
 `api.py::_metrics_json` nulls a metric when its availability flag is false. Do not weaken it, do not route around it, do not "fix" a blank into a zero. Extend it when a *numerator column* is missing too — a `0.00%` rendered green because the denominator happened to exist is a silent lie (this was the Garden rejection bug).
 
 **R-09 · Units are part of the number.**
-Never sum two columns with different units. Never label a kg figure as Ltr. Tank rejection lives in three columns (`REJECTION IN PCS.`, `REJECTION IN KG.`, `REJECTION MOUTH LID IN KG.`) — litres come from `pcs × SIZE (LTR.)`, never from adding the kg columns.
+Never sum two columns with different units. Never label a kg figure as Ltr. Tank rejection lives in three columns (`REJECTION IN PCS.`, `REJECTION IN KG.`, `REJECTION MOUTH LID IN KG.`) — litres come from `pcs × SIZE (LTR.)`, never from adding the kg columns. *Correction (2026-08-15): summing `REJECTION IN KG` + `REJECTION MOUTH LID IN KG` is legitimate — the DAILY REPORT does exactly this and both tabs agree (PR 449.30 kg ≈ DR 446.40 kg, VN July). The original defect was labelling that kilogram sum as litres, not the sum itself.*
 
 **R-10 · AI writes narrative only, never numbers.**
 Every figure in any generated output traces to a recomputed source value.
@@ -54,7 +54,7 @@ Verified against the master pipeline doc ("Preeti - Working Sheet") and the publ
 | **GARDEN (KH)** | **OPEN — see R-23** | `Daily Report` matrix | `Daily Report` matrix | block tabs have **no rejection column** |
 | **GARDEN_WB (WB)** | `PRODUCTION` tab · long layout · one row per machine×date×item | suppressed (Daily Report all zeros) | `REJECTION IN KG.` col | New FY26-27 plant. Labour: **unjoined** (Segment Cost has KH-only "Garden Pipe" tab — see R-35). Machine prefix `WB GARDEN M/C - `. |
 | **HDPE** | Per-machine **block tabs** (`MACHINE 1`–`MACHINE 6`); `Daily Report` per-date triplets supply run-hours join + rejection fallback | `Daily Report` per-date triplets (joined via `runhours_tab`); ideal = 550 h/machine/month from `APP_DEFAULT_IDEAL_HOURS` | Block-tab authoritative; DR per-date fallback where block-tab column present-but-blank (May M/C-1: 120 kg) | Phase 2 (2026-08-15). Jul: 22,448.04 kg / 3,782 kg rej (M/C-2 rej col blank → n/a, not 0%). May: 1,369.20 kg / 120 kg rej / 21 h / 3.82% util. Apr/Jun/Aug: 0. |
-| **TANK** (KH/VN/WB) | `PROD. REPORT` (daily) | see R-25 | `pcs × size` | annual cross-check = `SUMMARY (LTR)`, `kind: tank_annual_2526` for **both** FYs — see R-36 |
+| **TANK** (KH/VN/WB) | `PROD. REPORT` (daily) | `MAX(DAILY REPORT TOTAL-row per-date hrs, PROD. REPORT PRODUCTION HOURS per-date hrs)` per date over union (R-39) — KH: column present but blank (0 h all months); WB: no hours column, DAILY REPORT has Apr only | Ltr (headline): `pcs × size`; Kg: `REJECTION IN KG` + `REJECTION MOUTH LID IN KG` (both labelled, neither is *the* rejection figure — R-22) | Machine dimension from DAILY REPORT labels (populated where DR has date-wise data: VN all months, WB Apr); annual cross-check = `SUMMARY (LTR)`, `kind: tank_annual_2526` for **both** FYs — see R-36 |
 | **LABOUR** (all) | Segment Cost workbook `1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw`, **dedicated per-segment tabs** | | | never read labour back from an annual SUMMARY |
 
 **R-11 · Labour lives in one place.** No production workbook contains labour. Segment tabs: `Plumbing`, `TANK`, `Garden Pipe`, `HDPE Pipe`, `HARDWARE SINK PTMT CP`. Unit map: **UNIT 1** = Hardware/Sink/PTMT/CP · **UNIT 2** = Plumbing + Tank · **UNIT 3** = Garden Pipe + HDPE. Never read a combined UNIT row as a single segment's wages — the UNIT-3 label is a concatenation, and its `TOTAL` column is **headcount**, not wages.
@@ -121,7 +121,8 @@ No code may assume an answer to these. Flag and surface; never auto-reconcile.
 
 **R-24 · PTMT annual is fed by two independent chains** — machine (`Report 5`) and mould (`MASTER PTMT Moulding Weight → MASTER → PTMT MOULDS → PTMT Mould Total`). This is why the annual can report more *net* output than Report-5 recorded *gross* (June +3,501 kg, July +11,783 kg). Not an error to fix.
 
-**R-25 · Tank is NOT output-only.** `PLANTS_WITHOUT_RUNHOURS = {TANK, TANK_VN, TANK_WB}` and the "no run hours or machine dimension" tooltip are **factually wrong**. Every Tank workbook has a `PRODUCTION HOURS` column, a `DAILY REPORT` tab and a `MACHINE` row. VN has real hours (Jun 208 vs 184, Jul 224 vs 232 — the two tabs disagree, and the sign flips). KH and WB leave them unfilled. Tooltip wording corrected in v2 to "not currently tracked". `PLANTS_WITHOUT_RUNHOURS` itself is still wrong and still unfixed — no basis has been chosen. VN July verified directly at source: MACHINE-1, 232 h, 14,546.80 kg, full per-date detail.
+**R-25 · Tank run hours are now derivable — CLOSED (2026-08-15).** `PLANTS_WITHOUT_RUNHOURS` was factually wrong. It has been corrected to the empty frozenset; `_emit_tank` now stamps `runhours_tracked` per record based on the reconciled union hours (R-39), not a plant-level constant.
+Every Tank workbook has a `DAILY REPORT` wide-matrix tab (machine labels in col 1; TOTAL-row per-date triplets) and a `PRODUCTION HOURS` column in `PROD. REPORT` (labelled `RUN HOURS` in some tabs — R-04 match is required). VN carries real hours in both sources; KH `PRODUCTION HOURS` column is present but every cell is blank; WB has no hours column at all. **VN four-month union evidence (R-39):** APR 76 h · MAY 196 h · JUN 208 h · JUL 232 h. Driving dates — Apr 16 (PR-only, 12 h) and Apr 28 (DR-only, 8 h); May 8 (DR 12 h vs PR 8 h, max wins); Jun 27/29/30 (PR-only, 8 h each); Jul 19 (DR-only, 8 h, 0 kg output). April is the decisive case: gaps in BOTH directions within one month. May demonstrates a same-date hours disagreement resolved by max.
 
 **R-26 · Tank KH daily is ~2.24× its annual** (June 1,419,500 vs 633,500). **Confirmed in v2 against a working reconciliation** — VN June now matches its annual exactly (533,500 = 533,500, ±0), VN July within 0.4%, WB July +18.9%. The KH gap is therefore real data divergence, not broken wiring. Still unexplained.
 
@@ -135,6 +136,23 @@ A product-type breakdown, then a size breakdown, separated by a blank row and a 
 
 **R-38 · MOULDING has no `DAILY_SOURCES` entry of its own.** *(new v2)*
 `_DAILY_LAYOUTS["PIPE"]` holds **two specs against one physical workbook**: `Report-5` → PIPE, `Report-12` → MOULDING, because Injection Moulding runs at KH Plant 1 alongside pipe extrusion. Moulding records are reachable only by loading the `PIPE` key and filtering `r.plant == "MOULDING"`. A naive per-segment probe on `"MOULDING"` returns `[]` and will wrongly appear empty. `rollup_by_plant` separates them correctly, so no double-count occurs.
+
+**R-39 · Tank run hours = date-wise MAX over the UNION of DAILY REPORT and PROD. REPORT hours.** *(confirmed 2026-08-15, VN four-month reconciliation)*
+Neither source is complete alone. The reconciliation applies across four directions:
+
+| Pattern | Example | Rule |
+|---|---|---|
+| PR-only date | VN Apr 16 (12 h, no DR entry) | Include from PR |
+| DR-only date | VN Apr 28 (8 h, no PR entry); VN Jul 19 (8 h, 0 kg output) | Include from DR |
+| Same date, same hours | Most VN dates | max = either |
+| Same date, different hours | VN May 8 (DR 12 h, PR 8 h) | max = DR wins |
+
+Union hours by month: VN APR 76 h · MAY 196 h · JUN 208 h · JUL 232 h.
+Sign flips between months (Jun PR > DR; Jul DR > PR) are diagnostic of two incomplete sources — not a contradiction (FM #15).
+
+Guard: any DAILY REPORT-only date that carries non-zero output must be flagged because output from that date would be lost entirely (output always comes from PROD. REPORT). VN Jul 19 is DR-only with 0 kg output — this is the expected safe case; a non-zero case requires data-owner review.
+
+Implementation: `tank_reconcile.py` — pure, network-free, following `pipe_reconcile.py` structure (R-15 not modified). Machine labels from DAILY REPORT col 1; set on Records only when DR carries date-wise hours data. `PLANTS_WITHOUT_RUNHOURS` corrected to the empty frozenset (R-25 closed).
 
 ---
 
@@ -156,6 +174,10 @@ Every one of these has happened. Check against this list before shipping.
 12. **Tests that mirror production code** — `test_garden_rejection.py` reimplemented `_emit_blocks` rather than calling it, so it validated a copy. A green test against a duplicate proves nothing about the shipped path.
 13. **Two repositories.** `prayag-analytics` is stale at `edf3348`; all live work is in `Prayag-Plant-MC-Analysis`. Publishing from the wrong tree is a live risk until the stale one is archived.
 14. **A rejection column that is present-but-blank is not the same as genuinely zero rejection.** `rejection_tracked = (rej_c >= 0)` was the old guard — it rendered a green `0.00%` whenever a rejection header was found, even if every data cell was empty. Fixed: `rejection_tracked = (rej_c >= 0 and any_rej_nonzero)`. A column that exists but carries no non-zero values produces `rejection_tracked=False` → n/a, not green zero. DR per-date join then supplies the fallback value where available (HDPE May M/C-1: 120 kg from Daily Report May,1 triplet). *(confirmed 2026-08-15)*
+
+15. **Assuming a two-source difference means one source is wrong.** When DAILY REPORT shows 184 h and PROD. REPORT shows 208 h (VN June), the instinct is "one must be wrong". In fact, a **sign flip between months is diagnostic of two incomplete sources, not a contradiction**: VN June PR > DR (PR has 3 extra dates); VN July DR > PR (DR has 1 extra date). Neither figure is wrong — each source is missing days the other holds. The correct answer is the date-wise max over the union. Never average, never pick the larger without evidence, never discard the smaller. *(confirmed 2026-08-15, VN four-month reconciliation)*
+
+16. **The same field may be named differently in two tabs of one workbook.** Tank run hours appear as `PRODUCTION HOURS` in `PROD. REPORT` and as `RUN HOURS` in `DAILY REPORT`. A reader that matched only `RUN HOUR` silently returned 0 hours for every PROD. REPORT month. Symptoms: all Tank hours showed as zero despite a populated column — a plausible-looking zero that nobody questioned (R-07). Fix: match BOTH names at header detection (R-04). Similarly, the machine-label column is NOT always col 0 — in the Tank DAILY REPORT it is col 1 (col 0 is always blank due to a merged-cell artefact). Hardcoded column positions lie; parse by header text. *(confirmed 2026-08-15)*
 
 ---
 

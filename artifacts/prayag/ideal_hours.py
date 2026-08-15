@@ -57,11 +57,23 @@ APP_DEFAULT_IDEAL_HOURS: dict = {
     "HDPE": 550.0,     # HDPE — app-logic default (not in sheet)
 }
 
-# Plants that record OUTPUT only and carry NO run hours. An app-default ideal
-# still supplies their utilisation denominator, but utilisation must stay
-# suppressed (not a fake 0%) until run hours are actually recorded — enforced via
-# ``Record.runhours_tracked=False`` and the gate in ``metrics.compute_metrics``.
-PLANTS_WITHOUT_RUNHOURS = frozenset({"TANK", "TANK_VN", "TANK_WB"})
+# Plants where run hours are genuinely unavailable for the current period.
+#
+# R-25 correction (2026-08-15): TANK/TANK_VN/TANK_WB are NOT output-only plants.
+# Every Tank workbook has a DAILY REPORT tab and a PRODUCTION HOURS column.  VN
+# carries real hours in both sources (DAILY REPORT per-date matrix and PROD. REPORT
+# PRODUCTION HOURS column); KH has the column but every cell is blank; WB has no
+# hours column at all and relies solely on its DAILY REPORT (April only).
+#
+# ``_emit_tank`` in sheets.py now reconciles the two sources per-date (date-wise
+# max, R-39) and stamps ``runhours_tracked`` PER RECORD based on whether union
+# hours > 0 for that date.  This set is therefore now EMPTY — all three Tank
+# variants manage their own ``runhours_tracked`` flag at record level.
+#
+# Kept for reference and to avoid a NameError in any caller that tests membership;
+# the frozenset is empty so membership is always False, which is the correct
+# post-R-25 behaviour.
+PLANTS_WITHOUT_RUNHOURS: frozenset = frozenset()
 
 # Source labels (also used as CSS/badge keys on the page).
 SRC_OVERRIDE = "override"
