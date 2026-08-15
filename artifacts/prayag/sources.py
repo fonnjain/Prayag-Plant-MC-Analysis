@@ -292,6 +292,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-05": "1-RCsS2gbtI3toyNG4uec29_coID42qCNsquaYdk-IIQ",
           "2026-06": "1_vKZGOctS_ADPxDD2OypxasHVQ5MgmHjTWcvWKEDyi8",
           "2026-07": "1M4oXFOmKelpCYpGDatjReTF5scJwcg8saFVPcRRORtA",
+          "2026-08": "1NVaDOcD9ha4mAfSMGgJAMU5ep5u4Y-vfOnbN3YJT9pU",
       },
   },
   "TANK": {

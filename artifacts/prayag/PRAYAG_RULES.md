@@ -53,7 +53,7 @@ Verified against the master pipeline doc ("Preeti - Working Sheet") and the publ
 | **PTMT** | Report-5 (machine chain) | Report-5 `IDEAL HOUR` | Report-5 | annual also fed by a **separate mould chain** — see R-24 |
 | **GARDEN (KH)** | **OPEN — see R-23** | `Daily Report` matrix | `Daily Report` matrix | block tabs have **no rejection column** |
 | **GARDEN_WB (WB)** | `PRODUCTION` tab · long layout · one row per machine×date×item | suppressed (Daily Report all zeros) | `REJECTION IN KG.` col | New FY26-27 plant. Labour: **unjoined** (Segment Cost has KH-only "Garden Pipe" tab — see R-35). Machine prefix `WB GARDEN M/C - `. |
-| **HDPE** | `Daily Report` matrix | `Daily Report` (`M/C RUN HOUR`) | `Daily Report` | self-supplies `IDEAL OUTPUT` → needs no baselines entry |
+| **HDPE** | Per-machine **block tabs** (`MACHINE 1`–`MACHINE 6`); `Daily Report` per-date triplets supply run-hours join + rejection fallback | `Daily Report` per-date triplets (joined via `runhours_tab`); ideal = 550 h/machine/month from `APP_DEFAULT_IDEAL_HOURS` | Block-tab authoritative; DR per-date fallback where block-tab column present-but-blank (May M/C-1: 120 kg) | Phase 2 (2026-08-15). Jul: 22,448.04 kg / 3,782 kg rej (M/C-2 rej col blank → n/a, not 0%). May: 1,369.20 kg / 120 kg rej / 21 h / 3.82% util. Apr/Jun/Aug: 0. |
 | **TANK** (KH/VN/WB) | `PROD. REPORT` (daily) | see R-25 | `pcs × size` | annual cross-check = `SUMMARY (LTR)`, `kind: tank_annual_2526` for **both** FYs — see R-36 |
 | **LABOUR** (all) | Segment Cost workbook `1ttlpHLrlTsimcdSmk3-HGnPu14PX7SGtk9Of2Q5pDvw`, **dedicated per-segment tabs** | | | never read labour back from an annual SUMMARY |
 
@@ -103,7 +103,7 @@ Use these as validation targets. If a change moves one of these, it needs an exp
 | **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h / rej 3.81% *(KH only)* |
 | **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 67,718 | 232,209 kg *(KH only; Jul guardrail was 66,038 in Phase 1. Confirmed 2026-08-14: code path is byte-for-byte identical pre/post Phase 2 — same file ID, same layout. Live re-read of the July workbook gives 67,718.2 kg. **Data change by owner between Phase 1 capture and Phase 2; no code regression.**)* |
 | **GARDEN WB** (block PRODUCTION tab) | — | — | 22,152.8 | 6,457.4 | New plant FY26-27; Aug workbook exists but PRODUCTION tab blank at 2026-08-14 read |
-| **HDPE** | 0 | 1,370 | 0 | 0 | 21 h, M/C-1 only, rej 8.76% |
+| **HDPE** (block tabs) | 0 | 1,369.20 | 0 | 22,448.04 | May: 120 kg rej (8.76% on DR basis 1,370) / 21 h M/C-1 / 3.82% util. Jul: 3,782 kg rej (16.85% on DR basis 22,448); M/C-1 21,931.28 kg / 3,782 kg; M/C-2 516.76 kg / 0 rej (col blank → n/a). Note: May block-tab output 1,369.20 vs DR 1,370.00 (delta 0.80 kg) — R-35, do not reconcile. *(Phase 2: 2026-08-15; prior rows read from `Daily Report` matrix and showed 0 for Apr/Jun/Jul)* |
 | **TANK** (annual) | 636,250 | 1,582,500 | 2,596,600 | 1,995,500 | 6,810,850 Ltr / rej 86,500 |
 | **GARDEN KH rejection** *(v2)* | 1,191 | 0 (n/a) | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** on DR basis 138,052 *(KH only)* |
 | **TANK daily** *(v2, expanded)* | VN 221,250 · WB 415,000 · KH 636,250 | VN 534,000 · WB 1,048,500 · KH 846,600 | VN 533,500 · WB 1,430,000 · KH 1,419,500 | VN 565,500 · WB 1,702,000 · KH (from annual) | VN 1,854,250 · WB 4,595,500 · KH 3,619,600 (Apr–Jul) |
@@ -155,7 +155,7 @@ Every one of these has happened. Check against this list before shipping.
 11. **Duplicate pivot sections in one tab** — the same figures appear twice under a repeated TOTAL (see R-37). Parsing past the second TOTAL doubles everything silently.
 12. **Tests that mirror production code** — `test_garden_rejection.py` reimplemented `_emit_blocks` rather than calling it, so it validated a copy. A green test against a duplicate proves nothing about the shipped path.
 13. **Two repositories.** `prayag-analytics` is stale at `edf3348`; all live work is in `Prayag-Plant-MC-Analysis`. Publishing from the wrong tree is a live risk until the stale one is archived.
-14. **A metric with a missing numerator column** — the no-fake-0% guard protects a missing *denominator*. Garden rejection rendered a green `0.00%` because `total_count` existed while the rejection column did not. Extend the guard, don't trust it blindly.
+14. **A rejection column that is present-but-blank is not the same as genuinely zero rejection.** `rejection_tracked = (rej_c >= 0)` was the old guard — it rendered a green `0.00%` whenever a rejection header was found, even if every data cell was empty. Fixed: `rejection_tracked = (rej_c >= 0 and any_rej_nonzero)`. A column that exists but carries no non-zero values produces `rejection_tracked=False` → n/a, not green zero. DR per-date join then supplies the fallback value where available (HDPE May M/C-1: 120 kg from Daily Report May,1 triplet). *(confirmed 2026-08-15)*
 
 ---
 

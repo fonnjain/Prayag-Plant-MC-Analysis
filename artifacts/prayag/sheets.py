@@ -1566,19 +1566,21 @@ _DAILY_LAYOUTS: dict = {
       "tab_re": r"^MACHINE\s*\d+$", "machine_prefix": "GARDEN M/C - ",
       "runhours_tab": "Daily Report",
   }],
-  # HDPE has a populated "Daily Report" matrix (one row per machine, per-date
-  # Run Hours / Output / Rejection) — the same family as PTMT Report-5 — so it is
-  # read there, NOT from the per-machine MACHINE 1-6 block tabs (the DANA M/C tab
-  # is a granulator/support and is excluded). HDPE supplies its OWN per-machine
-  # baselines in that matrix: "Ideal Output" (kg/hr) drives output-efficiency and
-  # "M/C Run Hour" (monthly available hours) drives utilisation — so HDPE needs no
-  # baselines.json entry. The machine id is the canonical column ("MACHINE" =
-  # M/C-1…6); the alias column to its left is ignored by the matrix parser.
+  # HDPE: real production is entered in per-machine block tabs ("MACHINE 1"–
+  # "MACHINE 6"); the "Daily Report" matrix is read as runhours_tab only.
+  # Per-date run hours and rejection fallback are joined from the Daily Report
+  # triplet sub-columns onto block-tab rows by machine number + date (same
+  # mechanism as GARDEN).  Where the DR per-date columns are all zero (Jul, Apr,
+  # Jun, Aug), the join adds nothing and block-tab values are preserved as-is.
+  # Where the block-tab rejection column is present-but-blank (May M/C-1), the
+  # DR May,1 triplet provides the fallback 120 kg (Failure Mode #14 fix).
+  # The DANA M/C tab is a granulator/support and is excluded by the tab_re.
+  # Ideal hours: 550 hr/machine/month from ideal_hours.APP_DEFAULT_IDEAL_HOURS.
   "HDPE": [{
-      "emit": "HDPE", "tab": "Daily Report", "layout": "matrix",
-      "ideal_output_col": ("contains", "IDEAL OUTPUT"),
-      "ideal_hours_col": ("contains", "M/C RUN HOUR"),
-      "summary_mc_header": ("eq", "MACHINE"),
+      "emit": "HDPE", "layout": "blocks",
+      "tab_re": r"^MACHINE\s*\d+$",      # matches "MACHINE 1"…"MACHINE 6"; excludes DANA M/C
+      "machine_prefix": "HDPE M/C - ",
+      "runhours_tab": "Daily Report",     # per-date run hours + rejection fallback join
   }],
   "PTMT": [{
       "emit": "PTMT", "tab": "Report-5", "layout": "matrix",
@@ -1845,7 +1847,18 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
                       # zero is not "not captured").  Leave rejection_tracked
                       # False only where the DR has no row at all for this
                       # machine-date (e.g. entire month empty → May → n/a).
-                      r.reject_count = rej_map.get(key, 0.0)
+                      _blk_rej = r.reject_count          # save block-tab value
+                      _dr_rej  = rej_map.get(key, 0.0)
+                      # (e) R-35: when BOTH sources carry non-zero, differing
+                      # values, surface a note rather than silently picking one.
+                      if _blk_rej > 0 and _dr_rej > 0 and abs(_blk_rej - _dr_rej) > 0.5:
+                          report.setdefault("notes", []).append(
+                              f"{emit} {ym}: M/C-{key[0]} {key[1]} rejection "
+                              f"differs between block-tab ({_blk_rej:.2f} kg) "
+                              f"and Daily Report ({_dr_rej:.2f} kg) — "
+                              "Daily Report value used as denominator basis (R-35)."
+                          )
+                      r.reject_count = _dr_rej
                       r.reject_denominator = dr_out_map[key]   # DR basis (Trap 2)
                       r.rejection_tracked = True
 

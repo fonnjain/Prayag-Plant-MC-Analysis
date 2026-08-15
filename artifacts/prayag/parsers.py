@@ -711,6 +711,12 @@ def parse_daily_blocks(
         a["out"] += num(row[out_c]) if out_c < len(row) else 0.0
         a["rej"] += num(row[rej_c]) if 0 <= rej_c < len(row) else 0.0
 
+    # A rejection column that exists but carries only blank/zero values for the
+    # entire month is NOT the same as genuinely zero rejection — the operator may
+    # have left the column empty.  Only mark rejection as tracked when at least
+    # one data row has a non-zero value (Failure Mode #14: present-but-empty ≠ zero).
+    _any_rej = any(a["rej"] > 0 for a in agg.values())
+
     recs: List[Record] = []
     for day, a in sorted(agg.items()):
         if a["out"] <= 0 and a["rej"] <= 0:
@@ -728,10 +734,11 @@ def parse_daily_blocks(
             source_family=segment,
             source_file=source_file,
             source_tab=source_tab,
-            # rej_c < 0 means no rejection column exists in this tab's header.
-            # Mark the records so compute_metrics can suppress rejection_pct
-            # rather than displaying a false 0% ("not captured" ≠ "no rejection").
-            rejection_tracked=(rej_c >= 0),
+            # rejection_tracked=True only when the column exists AND has at least
+            # one non-zero value.  rej_c < 0 (no column) or _any_rej=False
+            # (column present but entirely blank) both produce False so that
+            # downstream renders n/a rather than a false green 0.00%.
+            rejection_tracked=(rej_c >= 0 and _any_rej),
         ))
     return recs
 

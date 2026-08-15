@@ -1,0 +1,59 @@
+Phase 1 approved — the analysis is right and the July figures match an independent read
+exactly (22,448.04 kg, 3,782 kg rejection). Proceed to Phase 2 with ONE change to the design.
+
+=== THE CHANGE: rejection needs a JOIN, not a switch ===
+
+The proposal says May's 120 kg "will not appear in Phase 2 — this is the honest read."
+It is not honest, and here is why:
+
+  May's MACHINE 1 tab HAS a rejection column (TOTAL REJECTION) with every value blank.
+  parse_daily_blocks sets rejection_tracked = (rej_c >= 0), so rej_c >= 0 → tracked = True.
+  Result: May renders 0.00% rejection, in GREEN, while the Daily Report records 120 kg (8.76%).
+
+That is the Garden rejection bug in a new place. Garden was rescued because the column was
+ABSENT; here it is PRESENT BUT EMPTY, which the current guard does not catch (Failure Mode #14).
+
+Neither source is complete on its own:
+  JULY  block tab rejection 3,782 kg  |  Daily Report 0
+  MAY   block tab rejection BLANK     |  Daily Report 120 kg
+
+Required behaviour:
+ (a) Take rejection from the MACHINE block tabs where values exist (July: 3,782).
+ (b) Where a month's block-tab rejection column is entirely blank, fall back to the
+     Daily Report's rejection for that machine-month (May: 120).
+ (c) Where NEITHER source has a value, set rejection_tracked = False so it renders n/a —
+     never a green 0.00%.
+ (d) Extend the rejection_tracked guard: a column that exists but is empty for the whole
+     month must not count as "tracked". Present-but-empty is not the same as zero.
+ (e) Where both sources have values and they differ, surface a note (R-35). Do not pick one.
+
+=== EVERYTHING ELSE IN THE DESIGN IS APPROVED ===
+blocks layout · tab_re ^MACHINE\s*\d+$ (correctly excludes DANA M/C) · machine_prefix
+"HDPE M/C - " · runhours_tab "Daily Report" retained for hours AND ideal rates · no new
+column matchers (the existing is_per_mtr and is_consumption guards handle the decoys).
+
+=== VALIDATION ===
+JUL  M/C-1 21,931.28 · M/C-2 516.76 · total 22,448.04 kg · rejection 3,782 · 48 rows
+MAY  output 1,369.20 kg (block tab) · rejection 120 kg via fallback · NOT 0.00%
+APR / JUN  genuinely zero in BOTH tabs — confirmed, must stay zero
+AUG  2 template rows, no values — must render as no data, not zero production
+Utilisation: blank everywhere except May M/C-1 (21 hrs vs 550 ideal ≈ 3.8%).
+NO other segment moves — PIPE, MOULDING, PTMT, GARDEN (KH and WB), TANK. If any moves, STOP.
+
+=== TWO THINGS TO REPORT, NOT FIX ===
+1. July rejection is 16.85% overall, with individual rows at 650 kg rejected on 1,111 kg
+   output (58.5%) and 600 on 1,592 (37.7%). Large-diameter startup scrap may explain it,
+   but report the per-row figures so it can be sanity-checked before it becomes an
+   acceptance number. Do not adjust anything.
+2. May outputs differ by 0.80 kg between the two tabs (1,369.20 vs 1,370.00). Report it;
+   do not reconcile.
+
+Do not touch: pipe_reconcile.py (R-15) · baselines.json (R-16) · Garden block-tab path and
+its rejection join (R-17) · segments: [] on segment_cost/utilisation (R-18) · mp_*.py and
+machine_planning_*.html (R-20) · Tank pcs × size (R-09) or PLANTS_WITHOUT_RUNHOURS (R-25) ·
+GARDEN_WB · vanished-file detection · R-27 warning · auth.py.
+No Sheets writes (R-21). No cache clearing (R-34).
+
+After it lands: Part 2 of the rulebook changes HDPE's output source to MACHINE block tabs;
+Part 4 HDPE acceptance figures are replaced (July 22,448.04 kg is new, May 1,369.20 supersedes
+1,370); and Failure Mode #14 extends to cover present-but-empty columns, not just missing ones.
