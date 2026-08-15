@@ -1,0 +1,87 @@
+# HDPE — Output Is in the MACHINE Tabs, Not the Daily Report
+
+Read `PRAYAG_RULES.md`. Touches **R-02, R-04, R-05, R-06, R-07, R-19, R-28, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Two phases. STOP and report after Phase 1.** I have been wrong about this segment once already — see the correction below — so this diagnoses before it changes anything.
+
+---
+
+## The defect
+
+QA reports HDPE July missing from both Machine View and Plant View. **They are right, and the cause is structural.**
+
+Verified by direct read of the July daily workbook (`1M4oXFOmKelpCYpGDatjReTF5scJwcg8saFVPcRRORtA`, "4. HDPE Date Sheet & Monthly Report - July ' 2026"):
+
+| Tab | Rows | Output |
+|---|---:|---:|
+| `MACHINE NO : 001` | 41 | **21,931.28 kg** (the sheet's own summary cell reads 21,931; rejection 3,782) |
+| `MACHINE NO : 002` | 7 | **516.76 kg** |
+| `MACHINE NO : 003`–`006` | 0 | present but entirely empty |
+| **Total** | **48** | **22,448.04 kg** |
+
+The tab the application reads — **`Daily Report`** — is **entirely zero**: TOTAL row 0 run hours / 0.00 output / 0.00 rejection, every machine row blank, plus a `DANA MC` / `SHEADER` / `GRINDER` block also at zero.
+
+**This is the Garden pattern.** Real production is entered in per-machine block tabs; the app reads a Daily Report matrix that is not being maintained. `_DAILY_LAYOUTS["HDPE"]` points only at the matrix.
+
+### A correction that matters for scope
+
+An earlier analysis of mine concluded HDPE "barely ran all year — only May, M/C-1, 1,370 kg." **That was drawn from the annual summary**, which is itself fed from the same empty Daily Report. It is therefore unsafe. **April, May and June must be re-checked against their MACHINE tabs**, not assumed idle.
+
+---
+
+## PHASE 1 — Diagnose (READ-ONLY, change nothing)
+
+1. **For each month April–August 2026**, open the HDPE daily workbook and report, per `MACHINE NO : 00n` tab: row count, summed output kg, summed rejection kg, and the machine numbers present. Then report the same month's `Daily Report` tab TOTAL row. Put them side by side.
+
+   Known files: May `1-RCsS2gbtI3toyNG4uec29_coID42qCNsquaYdk-IIQ` · June `1_vKZGOctS_ADPxDD2OypxasHVQ5MgmHjTWcvWKEDyi8` · July `1M4oXFOmKelpCYpGDatjReTF5scJwcg8saFVPcRRORtA`. Find April and August by title search in folder `1YaS66Ef7wKOvTVtBHjMD5QFBquCX5r60`, and report whether they exist.
+
+2. **Print the header band** (first 6 rows, verbatim) of one HDPE `MACHINE` tab. Compare it with Garden's block-tab layout and state whether `parse_daily_blocks` can read it as-is or needs different column matchers. HDPE's observed columns are:
+   `DATE | SAP CODE | CODE | LENGTH (MTR) | NOS (PCS) | TOTAL (MTR) | KG (MTR) | TOTAL (REJECTION) | TOTAL (KG) | RP CONSUMPTION | Batch No. | Party | Remarks`
+   Note there are **two** `TOTAL` columns — one holding rejection, one holding output kg — and a per-metre `KG` column that must not be mistaken for output.
+
+3. **Report what `Daily Report` does carry.** It is empty of actuals but holds **ideal output per hour** per machine (M/C-1 500 · M/C-2 350 · M/C-3 450 · M/C-4 400 · M/C-5 250 · M/C-6 500) and **550 ideal run-hours/month**. Confirm this for each month and state whether the app currently reads those ideal values from it.
+
+4. **State the proposed change** before making it: which columns are matched by header text, how rejection is distinguished from output given the duplicate `TOTAL` headers, and whether hours remain suppressed (they must, unless a month's Daily Report actually carries them).
+
+**STOP. Report 1–4.**
+
+---
+
+## PHASE 2 — Wire it (only after Phase 1 is reviewed)
+
+Read HDPE output and rejection from the `MACHINE NO : 00n` block tabs, keeping the `Daily Report` matrix as the source for run hours and ideal rates where it carries them.
+
+Parse **by header text** (**R-04**), map months **by label** (**R-05**), assert headers and **raise a named error** if not found (**R-06**). Where a month's Daily Report has no hours, utilisation stays **blank** — do not fabricate (**R-07**).
+
+Follow the Garden precedent: output from block tabs, the matrix joined for what it actually holds. Do not copy Garden's synthetic-record logic unless Phase 1 shows HDPE has the same rejection-only-date situation.
+
+### Validation
+
+- **July: 22,448.04 kg total** — M/C-1 **21,931.28**, M/C-2 **516.76**, M/C-3–6 zero. 48 rows.
+- April, May, June, August: report observed against Phase 1 findings. **Do not assume May is 1,370 kg** — that figure came from the annual and is under review.
+- Machine view must show M/C-1 and M/C-2 for July; machines with no rows render **0**, not absent.
+- Utilisation stays blank wherever the Daily Report has no hours.
+- **No other segment moves**: PIPE, MOULDING, PTMT, GARDEN (KH and WB), TANK all unchanged. If any moves, **stop**.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` and the Garden block-tab path (**R-17**) · the Garden rejection join and synthetic records · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Tank sources, the `pcs × size` rejection fix (**R-09**), or `PLANTS_WITHOUT_RUNHOURS` (**R-25** open) · `GARDEN_WB` · vanished-file detection · R-27 join warning · the basis labels · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## For the rulebook, after this lands
+
+- **Part 2**: HDPE's output source changes from `Daily Report` matrix to `MACHINE` block tabs.
+- **Part 4**: HDPE acceptance figures are **wrong** and must be replaced — the current "May only, 1,370 kg, 8.76%" derives from the unmaintained Daily Report.
+- **Failure modes**: add that a *segment-level* conclusion drawn from an annual summary inherits whatever gap the annual was fed from. This is the second time (Garden, now HDPE) that an "idle month" turned out to be an unmaintained tab.
+
+## Report back
+
+Phase 1: the month-by-month table (MACHINE tabs vs Daily Report), the header band, the ideal-rate finding, and the proposed change.
+Phase 2: observed figures against the targets; confirmation that no other segment moved, `/` still serves, and Machine Planning is untouched.
