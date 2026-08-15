@@ -1,0 +1,104 @@
+# Tank Two-Source Reconciliation — and the Master Rule Behind It
+
+Read `PRAYAG_RULES.md`. This adds **R-39** and applies it to Tank.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+# PART A — ADD THIS TO `PRAYAG_RULES.md` FIRST
+
+Add as **R-39**, at the end of Part 1 (it is an invariant, not a segment detail), and cross-reference it from the PIPE and TANK rows of the Part 2 source table.
+
+> ## R-39 · Where a segment records the same production twice, neither source is authoritative
+>
+> Several segments record the same month in **two worksheets at different grains**: one **per machine × date** (carrying run hours), one **per item** (carrying product detail). They are not duplicates and they are not alternatives. **Each is systematically incomplete in a way the other is not.**
+>
+> **The rule: reconcile by taking the date-wise maximum over the union of every (machine, date) cell either source reports. Never choose one source. Never add them together.**
+>
+> **Why neither is complete:**
+> - The **item-level** sheet has no row for a day that produced nothing, because there is nothing to itemise — so it silently loses machine-days that ran with zero output.
+> - The **machine-level** sheet is a hand-maintained summary — so it silently loses days when nobody filled it in.
+>
+> **Proven twice, in opposite directions:**
+> - **PIPE** — Report-5 (per machine-date; run hours; no pipe type) against Report-11 (item journal; type; no hours). April 2026: six machine-days appear **only** in Report-11. Date-wise max reproduced the audited 157,883 kg.
+> - **TANK** — `DAILY REPORT` (per machine-date; run hours, output kg, rejection kg) against `PROD. REPORT` (per item; date, code, size, colour, pcs, Ltr, kg). VN July 2026: **19 July appears only in `DAILY REPORT`** — 8 hours run, zero output, so `PROD. REPORT` has no row. 232 hrs against 224 hrs, a difference of exactly that one day.
+>
+> **A difference between the two totals is not an error.** It is the measure of what one source is missing, and **its sign can reverse month to month** — VN June −24 hrs, VN July +8 hrs. A sign flip is diagnostic of two incomplete sources, not of a contradiction to be resolved by picking a favourite.
+>
+> **What is a genuine error:** the two sources disagreeing on a quantity they both fully record. VN July output agrees to **0.014%** (14,548.9 kg against 14,546.8 kg). A material divergence there means something is wrong and must be surfaced (**R-35**).
+>
+> **When a join produces zero matches, warn** (**R-27**) — a silent fallback to a single source disables the reconciliation without telling anyone.
+
+Also add, as a correction to the record:
+
+> **Failure Mode #15 — assuming a two-source difference means one source is wrong.** Tank's 208-vs-184 and 224-vs-232 hour discrepancies were treated for weeks as a contradiction blocking all Tank utilisation. They were never a contradiction: each sheet was missing days the other held. The same shape had already been solved for PIPE, and the solution was not carried across.
+
+---
+
+# PART B — APPLY IT TO TANK
+
+**Two phases. STOP and report after Phase 1.**
+
+## PHASE 1 — Verify the union logic before wiring (READ-ONLY)
+
+The hypothesis is proven for VN July. Confirm it holds for the other VN months, and confirm the position for KH and WB.
+
+1. **VN June** — the reverse case. `PROD. REPORT` reports **208** hrs, `DAILY REPORT` **184**. List the dates carrying hours in each, name the dates present in one and absent from the other, and confirm the difference is exactly those days. Report the union total.
+2. **VN April and May** — `PROD. REPORT` reports 116 and 192 hrs. Report whether `DAILY REPORT` carries hours for these months at all, and the union total if so.
+3. **KH and WB** — confirm `DAILY REPORT` is entirely empty for every month (KH May, June and July already verified). Where it is empty there is no second source, so **no reconciliation applies**: hours stay unavailable and the machine dimension stays absent. Do not fabricate either (**R-07**).
+4. **Output cross-check** — for every VN month, report `PROD. REPORT` `PRODUCTION IN KG` against `DAILY REPORT` `OUTPUT (KG)`. July agrees to 0.014%. Flag any month where they diverge by more than 0.5%.
+5. **Machine labels** — `DAILY REPORT` carries `MACHINE-1` at VN and KH, `MACHINE-1` and `MACHINE-2` at WB. Report the exact labels per plant so the machine dimension can be keyed consistently.
+
+**STOP. Report 1–5.**
+
+## PHASE 2 — Implement (only after Phase 1 is reviewed)
+
+Follow `pipe_reconcile.py`'s structure. **Do not modify `pipe_reconcile.py` itself (R-15).**
+
+**Hours** — date-wise max over the union of dates from both tabs, per machine. Where only one source has a date, that source's value stands. Where `DAILY REPORT` is empty for a plant-month, hours remain unavailable and utilisation stays suppressed (**R-07**).
+
+**Machine dimension** — take it from `DAILY REPORT`, which is the only tab that carries one. Tank records currently have `machine=""`, which is why the machine view is empty. Where `DAILY REPORT` is unfilled the machine view must state that machine-level data is not recorded for that plant, rather than rendering blank (**R-35**).
+
+**Output** — keep `PROD. REPORT` as the source. It carries item, size and colour detail that `DAILY REPORT` lacks, and the two agree on kg. Report the cross-check delta per month; do not reconcile it away.
+
+**Rejection — surface both bases, labelled.** Tank has two valid and different measures:
+
+| Basis | How it is derived | VN July | Rate |
+|---|---|---:|---:|
+| **Litres** | rejected pcs × tank size | 5,500 Ltr | **0.97%** of 565,500 Ltr |
+| **Kilograms** | `REJECTION IN KG` + `REJECTION MOUTH LID IN KG` | 449.3 kg | **3.09%** of 14,548.9 kg |
+
+Both are correct and they answer different questions — capacity lost versus material lost. **The plant reports the kilogram basis (3.09%), and both tabs agree on it.** Show both with the basis named (**R-22**). Do not present one as the rejection figure without saying which it is.
+
+**Note a correction:** summing the two kilogram columns is **legitimate** — `DAILY REPORT` does exactly that (446.40 ≈ 449.3). The original defect was labelling that kilogram sum as litres, not the sum itself. The rulebook's R-09 wording should be corrected accordingly.
+
+**Warn on a degenerate join** (**R-27**) — if the union produces no matched dates while both sources hold rows, that is a failure, not an empty month.
+
+### Validation
+
+- **VN July: 232 hours** by union (`DAILY REPORT` 232, `PROD. REPORT` 224, 19 July present only in the former). Output 565,500 Ltr / ~14,548 kg. Rejection **5,500 Ltr / 449.3 kg / 3.09% kg-basis**.
+- **VN June:** report the union total and the dates that drove it.
+- **KH and WB:** hours and machine view remain unavailable, with a stated reason. **Production figures must not move** — KH Jun 1,419,500 Ltr, WB Jul 1,702,000 Ltr, VN Jun 533,500 Ltr.
+- **VN June must still reconcile to its annual at ±0** (533,500 = 533,500).
+- **KH's 2.24× annual gap must survive** (**R-26**, open) — if it closes, something was bent.
+- **No other segment moves**: PIPE, MOULDING, PTMT, GARDEN (KH and WB), HDPE. If any moves, **stop**.
+
+### Known bad data — do not code around it (R-35)
+
+Two entries in **KH June** are wrong at source and are being raised with the plant. Do not adjust parsing to accommodate either:
+- **23 June**, `WCT-3LC-05`: 10 pieces produced, **90 recorded as rejected**. The app currently derives 45,000 Ltr from this. The workbook's own dashboard reports 0.00% rejection.
+- **30 June**, `WCT-3LL-10`: **243 pieces from 6 cycles**, where 6 cycles produce 24 everywhere else — inflating June by roughly 219,000 litres.
+
+Add the sanity guard the first case argues for: **flag any row where rejected pieces exceed produced pieces.**
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden's block-tab path, rejection join and synthetic records · `GARDEN_WB` · HDPE's block-tab path and its rejection fallback · vanished-file detection · R-27 warning · the basis labels · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Phase 1: answers 1–5 with the per-date evidence for VN June.
+Phase 2: VN July against the targets; VN June union; confirmation KH/WB are unchanged and honestly labelled; both rejection bases rendering; the R-39 and Failure Mode #15 additions to the rulebook; and confirmation that no other segment moved.
