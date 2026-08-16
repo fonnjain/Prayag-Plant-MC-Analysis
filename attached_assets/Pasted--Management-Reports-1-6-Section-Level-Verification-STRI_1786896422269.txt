@@ -1,0 +1,67 @@
+# Management Reports 1–6 — Section-Level Verification (STRICTLY READ-ONLY)
+
+Read `PRAYAG_RULES.md`. **Change nothing.** No Build mode, no restart, no publish, no Sheets writes (**R-21**), no cache clearing (**R-34**). Report observed values; if something is wrong, **report it — do not fix it** (**R-30**).
+
+---
+
+## Why this pass exists
+
+Report 3 was verified live and passed — the page returned 200 and its headline figures were correct. But Sections 2 and 3 were throwing `TypeError` on every load, because `_parse_summary_roster` had been changed to return `(roster, warnings)` while its caller still assigned the tuple to `roster`. That was only found days later, while building Report 6.
+
+**A 200 response with correct totals is not proof that every section rendered.** This pass checks each section individually.
+
+---
+
+## For every report, section by section
+
+Load each page and report, **per section**:
+
+1. **Does it render at all** — a populated table, not an empty shell, an error banner, or a silently omitted block?
+2. **Does the section count match** what was built? Report 1 = 8 · Report 2 = 7 · Report 3 = 6 · Report 4 = 1 · Report 5 = 1 · Report 6 = 2 blocks.
+3. **Any Python exception, `TypeError`, `Undefined`, or Jinja error** in the logs during the render — even where the page still returns 200.
+
+Then confirm the anchor figures:
+
+| Report | Anchors |
+|---|---|
+| 1 — Segment Labour | PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 (daily basis) · Garden wages ₹2,20,797 + ₹50,547 |
+| 2 — Pipe M/C | TOTAL 6,507 h / 1,277,971 kg · SUMMARY-1 FY26-27 36.15% / 65.71% · FY25-26 8,288 h / 1,679,904 |
+| 3 — Moulding | 366,015 kg / 35,972 h / rej ~1.0% · **Sections 2 and 3 must now render** |
+| 4 — Garden | block-tab 232,528 · DR basis 138,052 live-accumulated · rejection 5,259.50 |
+| 5 — HDPE | JUL 22,448.04 · MAY 1,369.20 · TOTAL 23,817.24 · APR/JUN idle |
+| 6 — Group of Moulding | FY26-27 35,972 h / 366,015 kg / 66.61% · Avg/Hr 10.18 with sheet 76.10 flagged |
+
+---
+
+## Flags and badges — confirm each still renders
+
+Several were added in different sessions and none has been re-checked since:
+
+- **R-23** Garden divergence badge and diff panel — now live-accumulated, not hardcoded
+- **R-42** Garden wages banner · **HDPE-R42** wages banner
+- **R-43** Fittings piece-count note on Ideal Power and Ideal Labour
+- **R-24** PTMT June note (daily 147,835 vs annual 160,478)
+- **GARDEN_WB** disclosure — separate, never merged into KH
+- **May DR–** badge on Garden · **IDLE** badges on HDPE April and June
+- **AWAITING** on every July wage-dependent column — and **never `0.00`** anywhere
+- **`n/a`** on HDPE July M/C-2 rejection — not a green 0.00%
+- **Unknown-band warning** on Moulding (the stray `'4'`)
+- **`Ideal Hrs (sheet)`** placeholder label on Reports 2, 3 and 6
+
+Report any that are missing, empty, or rendering the wrong text.
+
+---
+
+## Two specific checks
+
+**Shared state.** Report 6 imports `BAND_ORDER` from `mgmt_moulding_summary` by object identity. Confirm that Reports 3 and 6 render the same six bands and that neither has diverged. Report any **other** cross-module import between the six report builders, and whether a change in one could break another the way the roster unpacking did.
+
+**Stale literals.** Report 4's banner was de-literalled in `cb0db2a`. Check the remaining five for hardcoded figures in template text that should be interpolated from `data.*` — the failure mode is a summary paragraph going stale while the table beneath it updates. Report file and line for any found; do not change them.
+
+---
+
+## Report back
+
+A section-by-section table across all six reports: renders / populated / errors in log. Then the anchor figures observed against the targets, the flag checklist, the shared-state finding, and any stale literals.
+
+Finally confirm: `/` returns 200, `/management-reports` lists all six, Machine Planning is untouched, and **nothing was changed**.
