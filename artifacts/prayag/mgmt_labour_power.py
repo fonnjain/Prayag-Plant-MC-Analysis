@@ -353,11 +353,48 @@ def load_annual_tabs(fy: str, token: str) -> dict:
 
 # ── Production kg from our own sources ────────────────────────────────────────
 
+def accum_record_kg(r, seg: str) -> float:
+    """Return the nett production kg contribution of a single Record for `seg`.
+
+    For Tank the authoritative kg figure comes from secondary_counts['kg']
+    (a separate kg-specific measurement independent of the primary litre unit).
+    For all other plant-backed segments nett = total_count − reject_count
+    (gross output minus rejected material) following the canonical metrics model.
+    reject_count is in the same unit as total_count for PTMT / Garden / HDPE.
+    """
+    if seg == "Tank":
+        return float((r.secondary_counts or {}).get("kg") or 0.0)
+    gross  = float(r.total_count or 0.0)
+    reject = float(getattr(r, "reject_count", 0.0) or 0.0)
+    return max(0.0, gross - reject)
+
+
+def accumulate_monthly(records, seg_plants: dict) -> dict:
+    """Accumulate nett production kg per segment from a list of Records.
+
+    Parameters
+    ----------
+    records    : iterable of Record (from get_daily_records for one month)
+    seg_plants : mapping {segment_name: frozenset of plant codes}
+
+    Returns {segment_name: float} — 0.0 when no matching records exist.
+    This helper is a pure function of its inputs so it is easy to unit-test.
+    """
+    totals: dict[str, float] = {seg: 0.0 for seg in seg_plants}
+    for r in records:
+        for seg, plants in seg_plants.items():
+            if r.plant in plants:
+                totals[seg] += accum_record_kg(r, seg)
+    return totals
+
+
 def get_segment_prod_kg(fy: str = "2627") -> dict:
     """Return {segment_name: {ym: float|None}} for every segment.
 
     Plumbing comes from the costing module (gross: pipe + fitting from R-12).
-    Other segments come from daily production records.
+    PTMT / Garden Pipe / HDPE Pipe use nett kg = total_count − reject_count
+    from daily production records (canonical metrics definition; R-19).
+    Tank uses secondary_counts['kg'] which is already a direct kg measurement.
     Segments with no data source (CP / Hardware / Sink) always return None.
     Months with no records return None (never zero — R-07/R-08).
     """
@@ -374,14 +411,9 @@ def get_segment_prod_kg(fy: str = "2627") -> dict:
         except Exception as exc:
             logger.warning("get_segment_prod_kg(%s): get_daily_records failed: %s", ym, exc)
             month_recs = []
-        for r in month_recs:
-            for seg, plants in _SEG_PLANTS.items():
-                if r.plant not in plants:
-                    continue
-                if seg == "Tank":
-                    kg = float((r.secondary_counts or {}).get("kg") or 0.0)
-                else:
-                    kg = float(r.total_count or 0.0)
+        monthly = accumulate_monthly(month_recs, _SEG_PLANTS)
+        for seg, kg in monthly.items():
+            if kg > 0:
                 raw[seg][ym] = raw[seg].get(ym, 0.0) + kg
 
     # Convert to {seg: {ym: float|None}} — zero means no records → show blank
