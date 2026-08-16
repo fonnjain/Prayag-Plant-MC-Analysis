@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}Moulding M/C Summary — {{ data.fy_label }}{% endblock %}
+
+{% block content %}
+{# ── macros ── must appear BEFORE any call site (Jinja2 does not hoist macros) #}
+{% macro cell(v, fmt='', cls='') %}
+  {% if v is none or v == '' %}
+    <td class="px-3 py-2 text-center text-gray-400 {{ cls }}">—</td>
+  {% elif fmt == 'hrs' %}
+    <td class="px-3 py-2 text-right tabular-nums {{ cls }}">{{ '{:,.0f}'.format(v) }}</td>
+  {% elif fmt == 'kg' %}
+    <td class="px-3 py-2 text-right tabular-nums {{ cls }}">{{ '{:,.0f}'.format(v) }}</td>
+  {% elif fmt == 'avg' %}
+    <td class="px-3 py-2 text-right tabular-nums {{ cls }}">{{ '{:.2f}'.format(v) }}</td>
+  {% elif fmt == 'pct' %}
+    {% if v > 100 %}
+      <td class="px-3 py-2 text-right tabular-nums font-semibold text-orange-600 {{ cls }}">{{ '{:.2f}'.format(v) }}%</td>
+    {% elif v >= 80 %}
+      <td class="px-3 py-2 text-right tabular-nums text-green-700 {{ cls }}">{{ '{:.2f}'.format(v) }}%</td>
+    {% elif v >= 50 %}
+      <td class="px-3 py-2 text-right tabular-nums text-yellow-700 {{ cls }}">{{ '{:.2f}'.format(v) }}%</td>
+    {% else %}
+      <td class="px-3 py-2 text-right tabular-nums text-red-600 {{ cls }}">{{ '{:.2f}'.format(v) }}%</td>
+    {% endif %}
+  {% else %}
+    <td class="px-3 py-2 text-right tabular-nums {{ cls }}">{{ v }}</td>
+  {% endif %}
+{% endmacro %}
+
+{% macro render_s2_table(rows, label, source_tag) %}
+<div class="mb-1">
+  <div class="flex items-center gap-3 mb-2">
+    <h3 class="text-sm font-semibold text-gray-700">{{ label }}</h3>
+    <span class="text-xs px-2 py-0.5 rounded-full
+      {% if 'recomputed' in source_tag %}bg-blue-100 text-blue-700
+      {% else %}bg-gray-100 text-gray-600{% endif %}">
+      {{ source_tag }}
+    </span>
+  </div>
+  {% if rows %}
+  <div class="overflow-x-auto rounded border border-gray-200">
+    <table class="min-w-full text-xs border-collapse">
+      <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide">
+        <tr>
+          <th class="px-3 py-2 text-left">Band</th>
+          <th class="px-3 py-2 text-right">M/C</th>
+          <th class="px-3 py-2 text-right">Ideal Hrs</th>
+          <th class="px-3 py-2 text-right">Actual Hrs</th>
+          <th class="px-3 py-2 text-right">Output (KG)</th>
+          <th class="px-3 py-2 text-right">Rejection (KG)</th>
+          <th class="px-3 py-2 text-right">Runner (KG)</th>
+          <th class="px-3 py-2 text-right">Avg/Hr</th>
+          <th class="px-3 py-2 text-right">Utilisation</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for row in rows %}
+        {% set tr_cls = 'bg-gray-50 font-semibold border-t-2 border-gray-300' if row.is_total else 'hover:bg-gray-50' %}
+        <tr class="{{ tr_cls }}">
+          <td class="px-3 py-2 font-medium text-gray-800">
+            {% if row.is_total %}TOTAL{% else %}{{ row.band }} T{% endif %}
+          </td>
+          {{ cell(row.mc_count, '') }}
+          {{ cell(row.ideal_hrs, 'hrs') }}
+          {{ cell(row.actual_hrs, 'hrs') }}
+          {{ cell(row.output_kg, 'kg') }}
+          {{ cell(row.reject_kg, 'kg') }}
+          {{ cell(row.runner_kg, 'kg') }}
+          {{ cell(row.avg_hr, 'avg') }}
+          {{ cell(row.util_pct, 'pct') }}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-400 italic py-2">Data not available</p>
+  {% endif %}
+{% endmacro %}
+
+{# ── page header ── #}
+<div class="max-w-screen-2xl mx-auto px-4 py-6 space-y-8">
+
+  <div class="flex items-start justify-between flex-wrap gap-3">
+    <div>
+      <div class="text-xs text-gray-400 mb-1">
+        <a href="/management-reports" class="hover:underline">Management Reports</a>
+        <span class="mx-1">›</span>
+        <span>(B) Moulding M/C Summary</span>
+      </div>
+      <h1 class="text-2xl font-bold text-gray-900">(B) Moulding M/C Summary</h1>
+      <p class="text-sm text-gray-500 mt-1">{{ data.fy_label }}</p>
+    </div>
+    <div class="text-right text-xs text-gray-400">
+      Built in {{ data.build_time_s }}s
+    </div>
+  </div>
+
+  {% if data.error %}
+  <div class="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700">
+    <strong>Error:</strong> {{ data.error }}
+  </div>
+  {% else %}
+
+  {# ── SECTION 1: SUMMARY (per machine) ── #}
+  <section>
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">SUMMARY — Per Machine (FY26-27, Recomputed)</h2>
+      <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">recomputed from daily records</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">
+      Ideal Hours = {{ data.section1.n_months }} months × 500 h/machine (R-16 placeholder — not from baselines.json).
+      Utilisation is not capped (values above 100% are shown as-is).
+      Avg/Hr = Output ÷ Actual Hours per machine.
+    </p>
+
+    {% if data.section1.warnings %}
+    <div class="mb-3 space-y-1">
+      {% for w in data.section1.warnings %}
+      <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1">{{ w }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="overflow-x-auto rounded border border-gray-200">
+      <table class="min-w-full text-xs border-collapse">
+        <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide sticky top-0">
+          <tr>
+            <th class="px-3 py-2 text-left">Band</th>
+            <th class="px-3 py-2 text-left">Mould</th>
+            <th class="px-3 py-2 text-left">Machine</th>
+            <th class="px-3 py-2 text-right">Ideal Hrs</th>
+            <th class="px-3 py-2 text-right">Actual Hrs</th>
+            <th class="px-3 py-2 text-right">Output (KG)</th>
+            <th class="px-3 py-2 text-right">Rejection (KG)</th>
+            <th class="px-3 py-2 text-right">Runner (KG)</th>
+            <th class="px-3 py-2 text-right">Avg/Hr</th>
+            <th class="px-3 py-2 text-right">Utilisation</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {% set ns = namespace(last_band='') %}
+          {% for row in data.section1.rows %}
+          {% if row.is_total %}
+          <tr class="bg-gray-50 font-semibold border-t-2 border-gray-300">
+            <td class="px-3 py-2 text-gray-800" colspan="3">TOTAL</td>
+            {{ cell(row.ideal_hrs,  'hrs', 'font-semibold') }}
+            {{ cell(row.actual_hrs, 'hrs', 'font-semibold') }}
+            {{ cell(row.output_kg,  'kg',  'font-semibold') }}
+            {{ cell(row.reject_kg,  'kg',  'font-semibold') }}
+            {{ cell(row.runner_kg,  'kg',  'font-semibold') }}
+            {{ cell(row.avg_hr,     'avg', 'font-semibold') }}
+            {{ cell(row.util_pct,   'pct', 'font-semibold') }}
+          </tr>
+          {% else %}
+          {% set band_changed = (row.band != ns.last_band) %}
+          {% if band_changed %}{% set ns.last_band = row.band %}{% endif %}
+          <tr class="hover:bg-gray-50 {% if band_changed and not loop.first %}border-t border-gray-300{% endif %}">
+            <td class="px-3 py-2 font-medium text-gray-600">
+              {% if band_changed %}{{ row.band }} T{% endif %}
+            </td>
+            <td class="px-3 py-2 font-mono text-gray-700">{{ row.mould_id }}</td>
+            <td class="px-3 py-2 text-gray-800">{{ row.machine }}</td>
+            {{ cell(row.ideal_hrs,  'hrs') }}
+            {{ cell(row.actual_hrs, 'hrs') }}
+            {{ cell(row.output_kg,  'kg') }}
+            {{ cell(row.reject_kg,  'kg') }}
+            {{ cell(row.runner_kg,  'kg') }}
+            {{ cell(row.avg_hr,     'avg') }}
+            {{ cell(row.util_pct,   'pct') }}
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ── SECTION 2: SUMMARY-1 (by tonnage band, YoY) ── #}
+  <section>
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">SUMMARY-1 — By Tonnage Band (Year on Year)</h2>
+    </div>
+    <p class="text-xs text-gray-500 mb-1">
+      Ideal Hours = machine count × 500 h × months in period (R-16 placeholder).
+      <strong>TOTAL Avg/Hr = sum of per-band averages</strong> — not total output ÷ total hours
+      (sheet convention: 5.38 + 9.18 + 11.91 + 12.63 + 15.22 + 21.79 = 76.11 ≈ 76.10).
+    </p>
+    <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 mb-3 inline-block">
+      FY25-26 rows are read from the closed annual (R-03 exception) — not recomputed.
+    </p>
+
+    {% if data.section2.warnings %}
+    <div class="mb-3 space-y-1">
+      {% for w in data.section2.warnings %}
+      <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1">{{ w }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div>
+        {{ render_s2_table(data.section2.fy2627, data.section2.fy2627_label, 'recomputed') }}
+      </div>
+      <div>
+        {{ render_s2_table(data.section2.fy2526, data.section2.fy2526_label, 'closed annual') }}
+      </div>
+    </div>
+  </section>
+
+  {# ── data notes ── #}
+  <section class="text-xs text-gray-400 border-t border-gray-100 pt-4 space-y-1">
+    <p><strong>Sources (FY26-27):</strong>
+      Output and rejection — MOULDING Report-12 "Wt in Kgs" via PIPE key (R-38).
+      Run hours — Report-5 joined via r5_runhours (R-38).
+      Runner Produce — Record.runner_lumps (populated from Report-12 "RUNNER PRODUCE" column).
+    </p>
+    <p><strong>Sources (FY25-26):</strong>
+      Closed annual SUMMARY-1 tab — read as-is (R-03 exception for finalized prior-year data).
+    </p>
+    <p><strong>Tonnage band:</strong>
+      Derived from Record.mould field (e.g. C-150-A → 150 T).
+      Record.tonnage_band is not populated by the MOULDING daily parser — band is derived here.
+    </p>
+  </section>
+
+  {% endif %}{# /error #}
+
+</div>
+{% endblock %}

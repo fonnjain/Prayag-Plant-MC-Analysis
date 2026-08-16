@@ -1,0 +1,87 @@
+# Management Report 3 of 13 — (B) Moulding M/C Summary
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern from Reports 1 and 2.
+
+**Spreadsheet:** `(B). Annual 26-27 Moulding M/C Summary`
+**Two worksheets, two sections:** `SUMMARY` (per machine) and `SUMMARY-1` (grouped by tonnage).
+
+---
+
+## SECTION 1 — worksheet `SUMMARY` (per machine)
+
+```
+YEARS | MOULD MACHINE | (mould id) | Ideal Hours | Actual Hours | Output (Kgs) |
+Rejection (Kgs) | Runner Produce (Kgs) | Avg. Per Output on Hours | M/C Utilization in Hours (%)
+```
+
+The first column carries the **tonnage band** (150, 200, 250, 275, 350, 450), then the mould identifier (`A06(C-150)`, `B05(C-150)`, `B03(C-200)`…) and the machine (`M/C - 1` … `M/C - 27`). `TOTAL` row at the top.
+
+Sample rows to validate: M/C-1 `A06(C-150)` 1,778 h / 10,046.38 kg / 96.11 rej / 3,003.18 runner / 88.9% · M/C-4 `B02(C-200)` 2,071 h / 30,113.64 kg / **103.55% utilisation** (over 100%, must not be capped).
+
+## SECTION 2 — worksheet `SUMMARY-1` (grouped by tonnage, year on year)
+
+Same columns, but `MOULD MACHINE` becomes a **count of machines** in that band.
+
+**Apr,26 – Jul,26**
+
+| Band | M/C | Ideal Hrs | Actual Hrs | Output (KG) | Rejection | Runner | Avg/Hr | Utilisation |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 150 | 6 | 12,000 | 9,240 | 49,676 | 471 | 13,493 | 5.38 | 77.00% |
+| 200 | 7 | 14,000 | 7,551 | 69,306 | 643 | 20,992 | 9.18 | 53.94% |
+| 250 | 10 | 20,000 | 15,137 | 180,223 | 1,811 | 22,444 | 11.91 | 75.69% |
+| 275 | 1 | 2,000 | 1,457 | 18,401 | 204 | 1,438 | 12.63 | 72.85% |
+| 350 | 2 | 4,000 | 1,211 | 18,430 | 196 | 1,447 | 15.22 | 30.28% |
+| 450 | 1 | 2,000 | 1,376 | 29,979 | 325 | 2,241 | 21.79 | 68.80% |
+| **TOTAL** | **27** | **54,000** | **35,972** | **366,015** | **3,650** | **62,055** | **76.10** | **66.61%** |
+
+**Apr,25 – Jul,25** — TOTAL: 25 machines · 50,000 · 35,753 · 347,149 · 3,392 · 59,862 · 67.60 · 71.51%. Bands: 150 (6) 8,208 h / 41,574 · 200 (6) 7,919 / 69,378 · 250 (10) 16,335 / 190,902 · 275 (1) 678 / 8,742 · 350 (1) 1,668 / 20,665 · 450 (1) 945 / 15,888.
+
+**The FY26-27 TOTAL matches our verified Moulding figures exactly** — 366,015 kg output, 35,972 hours, 3,650 rejection (~1.0%). Our monthly figures are APR 89,152 · MAY 75,771 · JUN 97,007 · JUL 104,086.
+
+---
+
+## Three things to get right
+
+**Use the existing tonnage machinery.** `Record.tonnage_band` and `rollup_by_tonnage_band()` already exist and carry exactly these bands (`"150" | "200" | "250" | "275" | "350" | "450"`). Use them — do not build a parallel grouping.
+
+**`Avg. Per Output on Hours` is a sum of the band averages, not a weighted mean.** TOTAL reads **76.10**, and 5.38 + 9.18 + 11.91 + 12.63 + 15.22 + 21.79 = 76.11. It is *not* 366,015 ÷ 35,972 = 10.17. Reproduce the sheet's convention to match the layout, and **add a code comment saying so**, or someone will later "correct" it into a weighted average and break the match. (Report 2's 65.71% used the same convention.)
+
+**`Ideal Hours` is the flat placeholder again.** 54,000 across 27 machines over four months is **500 per machine per month** — forbidden as a real baseline (**R-16**). Reproduce the column as the sheet's own assumption, clearly labelled as such, and **do not populate `baselines.json` from it**.
+
+---
+
+## The FY25-26 block
+
+FY2025-26 is closed, so that block **may be read from the finalized annual as-is** (**R-03**) — the one exception to the Cardinal Rule. The FY2026-27 block must be **fully recomputed**. Label which is which, as Report 2 does.
+
+Note the machine count changes between years — **25 machines in FY25-26, 27 in FY26-27** (200-band went 6→7, 350-band 1→2). The report must handle a changing roster rather than assuming a fixed list.
+
+## Data sources for our recomputation
+
+- **Output and rejection** — MOULDING daily path: **Report-12** (`Wt in Kgs`), reachable only via the `PIPE` key (**R-38**).
+- **Hours** — Report-5 join (`r5_runhours`).
+- **Runner Produce** — confirm where this is read from and report it; if we have no source, leave blank, never zero (**R-07**).
+- **Tonnage band and mould id** — from the existing record fields.
+
+## Validate
+
+- Both sections render with the exact column order above.
+- Section 2 FY26-27 TOTAL: **27 machines / 35,972 h / 366,015 kg / 3,650 rejection / 62,055 runner / 66.61%**, and every band row matches the table.
+- Section 2 FY25-26 TOTAL: **25 / 35,753 / 347,149 / 3,392 / 59,862 / 71.51%**.
+- Section 1 per-machine rows reconcile to the band totals.
+- Utilisation over 100% is **not capped** (M/C-4 at 103.55%).
+- Idle machines render **0**, not absent.
+- Every FY26-27 figure recomputed; FY25-26 read from the closed annual and **labelled**.
+- **No existing figure moves.** If any segment page changes, **stop**.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` / R-39 · `baselines.json` (**R-16** — do not populate from this sheet) · `parse_mc_detail` (**R-17**) · `segments: []` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · Garden, HDPE and Tank source paths · the Report 1 and 2 builders · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Both sections against the figures above · where Runner Produce is sourced · confirmation that `rollup_by_tonnage_band` was reused rather than reimplemented · which block was recomputed and which read from the closed annual · confirmation that no cell was copied and no existing figure moved.

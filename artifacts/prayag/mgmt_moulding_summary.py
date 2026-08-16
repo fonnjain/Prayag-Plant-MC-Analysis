@@ -1,0 +1,552 @@
+"""
+Management Report (B) — Moulding M/C Summary
+Route: /management-reports/moulding-summary
+
+SECTION 1 (SUMMARY worksheet):  per-machine FY26-27 recomputed from daily records.
+SECTION 2 (SUMMARY-1 worksheet): grouped by tonnage band, YoY comparison.
+  FY26-27 — fully recomputed from daily records (Cardinal Rule).
+  FY25-26 — read from the closed annual SUMMARY-1 tab as-is (R-03 exception).
+
+Sources:
+  Output, rejection, runner_produce — Record.total_count, reject_count, runner_lumps
+    (MOULDING daily path: Report-12 "Wt in Kgs" via PIPE key, R-38).
+  Run hours — Record.actual_hours (joined from Report-5 via r5_runhours, R-38).
+  Tonnage band — derived from Record.mould via _mould_to_band(); Record.tonnage_band
+    is blank for MOULDING records (parser does not populate it from this source path).
+  Machine roster (27 machines incl. idle) — SUMMARY tab rows, cols 0/2/3.
+  FY25-26 by-band summary — SUMMARY-1 tab, closed-annual rows.
+
+Avg. Per Output on Hours in the TOTAL row is the SUM of the per-band averages,
+NOT a weighted mean of total_output ÷ total_hours.  The sheet convention:
+  5.38 + 9.18 + 11.91 + 12.63 + 15.22 + 21.79 = 76.11 ≈ 76.10 (rounding).
+Do NOT "correct" this to total_output / total_hours = ~10.17 — it would break the
+match and contradict the sheet.  Report 2 (Pipe) used the same convention (65.71%).
+
+Ideal Hours = 500 per machine per month (R-16 flat placeholder, NOT from
+baselines.json and must NOT be used to populate baselines.json).
+"""
+from __future__ import annotations
+
+import re
+import time
+import logging
+import dataclasses
+import threading
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# ── Source identifiers ────────────────────────────────────────────────────────
+MOULDING_WB_FILE_ID = "1ZCHZp5io1ctdvm92xlHI7x5FtBC-nLoAb2FRMkfXzBI"
+SUMMARY_TAB         = "SUMMARY"
+SUMMARY1_TAB        = "SUMMARY-1"
+IDEAL_HRS_PER_MC_PER_MONTH = 500   # R-16 flat placeholder — do not source elsewhere
+
+BAND_ORDER = ["150", "200", "250", "275", "350", "450"]
+
+# FY → sorted list of period strings
+_FY_YM = {
+    "2627": [
+        "2026-04", "2026-05", "2026-06", "2026-07",
+        "2026-08", "2026-09", "2026-10", "2026-11",
+        "2026-12", "2027-01", "2027-02", "2027-03",
+    ],
+}
+
+# ── In-process cache (10-minute TTL) ─────────────────────────────────────────
+_cache: dict = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 600   # seconds
+
+
+# ── Small helpers ─────────────────────────────────────────────────────────────
+
+_BAND_RE    = re.compile(r'\b(150|200|250|275|350|450)\b')
+_MC_NUM_RE  = re.compile(r'M/C\s*[-–]\s*(\d+)', re.I)
+
+
+def _mould_to_band(mould: str) -> str:
+    """Extract tonnage band (150|200|250|275|350|450) from a mould code.
+
+    Works for codes like 'C-150-A', 'U-250-B', 'NU-200', 'A-150-2' etc.
+    The three-digit band number is the only distinguishing component.
+    """
+    m = _BAND_RE.search(mould or "")
+    return m.group(1) if m else ""
+
+
+def _mc_key(raw: str) -> str:
+    """Canonical machine key from any label: 'MOULDING M/C - 1' → 'M/C - 1'."""
+    m = _MC_NUM_RE.search(raw or "")
+    return f"M/C - {m.group(1)}" if m else (raw or "").upper().strip()
+
+
+def _norm(s) -> str:
+    return re.sub(r"\s+", " ", str(s or "").upper().strip())
+
+
+def _num(v) -> Optional[float]:
+    try:
+        return float(re.sub(r"[,\s%]", "", str(v).strip()))
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_div(num: float, den: float) -> Optional[float]:
+    if den and den != 0.0:
+        return num / den
+    return None
+
+
+# ── SUMMARY tab: read the 27-machine roster ────────────────────────────────────
+
+def _parse_summary_roster(values: list) -> list[dict]:
+    """Parse SUMMARY tab and return ordered list of machine descriptors.
+
+    Each entry: {band, mould_id, mc_key}  (mc_key is canonical, e.g. 'M/C - 1').
+    Band is carried forward across merged-cell rows (col 0 blank until it changes).
+
+    The SUMMARY tab contains TWO machine blocks:
+      • FY26-27 rows (M/C-1 to M/C-27)  ← we want these
+      • FY25-26 rows starting after a second TOTAL row
+    We stop when we encounter a TOTAL row after already collecting some roster
+    entries — that second TOTAL marks the FY25-26 block boundary.
+    """
+    roster = []
+    current_band = ""
+    for row in values:
+        if not row:
+            continue
+        c0 = str(row[0]).strip() if len(row) > 0 else ""
+        c1 = str(row[1]).strip() if len(row) > 1 else ""
+        c2 = str(row[2]).strip() if len(row) > 2 else ""
+        c3 = str(row[3]).strip() if len(row) > 3 else ""
+
+        # The second TOTAL row (c1 == 'TOTAL' after we already have roster entries)
+        # signals the start of the FY25-26 block — stop here.
+        if c1 == "TOTAL" and roster:
+            break
+
+        if c0 in BAND_ORDER:
+            current_band = c0
+
+        if not current_band:
+            continue
+        if not _MC_NUM_RE.match(c3):
+            continue
+
+        roster.append({
+            "band":     current_band,
+            "mould_id": c2,
+            "mc_key":   c3,   # already in canonical form from the tab
+        })
+
+    return roster
+
+
+# ── SUMMARY-1 tab: parse FY25-26 closed-annual block ─────────────────────────
+
+def _parse_s1_tab(values: list) -> dict:
+    """Parse SUMMARY-1 tab into FY26-27 and FY25-26 blocks.
+
+    Returns: {
+        '2627': {'total_row': [...], 'band_rows': {'150': [...], ...}},
+        '2526': {'total_row': [...], 'band_rows': {'150': [...], ...}},
+    }
+    Tab layout:
+      Row  2: FY26-27 TOTAL (col 3 = '27')
+      Rows 3-8: FY26-27 band rows
+      Row 10: FY25-26 TOTAL (col 3 = '25')
+      Rows 11-16: FY25-26 band rows
+    """
+    result: dict = {}
+    current_fy: Optional[str] = None
+    current_block: dict = {}
+
+    for row in values:
+        if not row:
+            continue
+        c = [str(x).strip() for x in row] + [""] * 12   # safe padding
+
+        if c[1] == "TOTAL":
+            # Save previous block if any
+            if current_fy:
+                result[current_fy] = current_block
+            mc_count_raw = c[3].replace(",", "")
+            try:
+                mc = int(float(mc_count_raw))
+            except (ValueError, TypeError):
+                mc = 0
+            if mc == 27:
+                current_fy = "2627"
+            elif mc == 25:
+                current_fy = "2526"
+            else:
+                current_fy = None
+            current_block = {"total_row": row, "band_rows": {}}
+            continue
+
+        # Band data row: col 2 is the band code
+        band = c[2]
+        if current_fy and band in BAND_ORDER:
+            current_block["band_rows"][band] = row
+
+    if current_fy and current_fy not in result:
+        result[current_fy] = current_block
+
+    return result
+
+
+def _s1_row_to_dict(row: list, band: str, is_total: bool = False) -> dict:
+    """Extract one band/total row from SUMMARY-1 tab into a result dict.
+
+    Column layout (0-indexed):
+      0: (blank or FY label)
+      1: 'TOTAL' or FY date label
+      2: band (150/200/…) or blank for TOTAL
+      3: machine count
+      4: Ideal Hours
+      5: Actual Hours
+      6: Output (KG)
+      7: Rejection (Kgs)
+      8: Runner Produce (Kgs)
+      9: Avg. Per Output on Hours
+     10: M/C Utilization in Hours (%)
+    """
+    c = [str(x).strip() for x in row] + [""] * 12
+    return {
+        "band":       band,
+        "mc_count":   _num(c[3].replace(",", "")),
+        "ideal_hrs":  _num(c[4].replace(",", "")),
+        "actual_hrs": _num(c[5].replace(",", "")),
+        "output_kg":  _num(c[6].replace(",", "")),
+        "reject_kg":  _num(c[7].replace(",", "")),
+        "runner_kg":  _num(c[8].replace(",", "")),
+        "avg_hr":     _num(c[9].replace(",", "")),
+        "util_pct":   _num(c[10].replace(",", "").replace("%", "")),
+        "is_total":   is_total,
+    }
+
+
+# ── Section 1: per-machine FY26-27 recomputed ────────────────────────────────
+
+def _build_section1(records: list, n_months: int, roster: list[dict]) -> dict:
+    """Recompute per-machine figures from daily records.
+
+    Ideal Hours = 500 per machine per month (R-16 flat placeholder).
+    Avg. Per Output on Hours = output / actual_hours per machine.
+    Utilisation = actual_hours / ideal_hours × 100 — NOT capped (M/C-4 > 100%).
+    """
+    # Accumulate from records
+    mc_acc: dict = {}
+    for r in records:
+        if r.plant != "MOULDING":
+            continue
+        key = _mc_key(r.machine or "")
+        if key not in mc_acc:
+            mc_acc[key] = {"hrs": 0.0, "out": 0.0, "rej": 0.0, "runner": 0.0}
+        mc_acc[key]["hrs"]    += float(r.actual_hours  or 0.0)
+        mc_acc[key]["out"]    += float(r.total_count   or 0.0)
+        mc_acc[key]["rej"]    += float(r.reject_count  or 0.0)
+        mc_acc[key]["runner"] += float(r.runner_lumps  or 0.0)
+
+    ideal_per_mc = IDEAL_HRS_PER_MC_PER_MONTH * n_months
+
+    rows = []
+    sum_ideal = sum_actual = sum_out = sum_rej = sum_runner = 0.0
+
+    for entry in roster:
+        mc_key = entry["mc_key"]
+        acc    = mc_acc.get(mc_key, {"hrs": 0.0, "out": 0.0, "rej": 0.0, "runner": 0.0})
+        hrs    = acc["hrs"]
+        out    = acc["out"]
+        rej    = acc["rej"]
+        runner = acc["runner"]
+        avg_hr = _safe_div(out, hrs)
+        util   = _safe_div(hrs, ideal_per_mc)
+        if util is not None:
+            util *= 100.0
+
+        rows.append({
+            "band":       entry["band"],
+            "mould_id":   entry["mould_id"],
+            "machine":    mc_key,
+            "ideal_hrs":  ideal_per_mc,
+            "actual_hrs": hrs,
+            "output_kg":  out,
+            "reject_kg":  rej,
+            "runner_kg":  runner,
+            "avg_hr":     round(avg_hr, 2) if avg_hr is not None else None,
+            "util_pct":   round(util, 2)   if util is not None else None,
+            "is_total":   False,
+        })
+        sum_ideal  += ideal_per_mc
+        sum_actual += hrs
+        sum_out    += out
+        sum_rej    += rej
+        sum_runner += runner
+
+    total_avg   = _safe_div(sum_out, sum_actual)
+    total_util  = _safe_div(sum_actual, sum_ideal)
+    if total_util is not None:
+        total_util *= 100.0
+
+    rows.append({
+        "band":       "",
+        "mould_id":   "",
+        "machine":    "TOTAL",
+        "ideal_hrs":  sum_ideal,
+        "actual_hrs": sum_actual,
+        "output_kg":  sum_out,
+        "reject_kg":  sum_rej,
+        "runner_kg":  sum_runner,
+        "avg_hr":     round(total_avg, 2)  if total_avg  is not None else None,
+        "util_pct":   round(total_util, 2) if total_util is not None else None,
+        "is_total":   True,
+    })
+
+    return {"rows": rows, "warnings": [], "n_months": n_months}
+
+
+# ── Section 2: band rollup FY26-27 recomputed ────────────────────────────────
+
+def _build_section2_fy2627(
+    records: list, n_months: int, roster: list[dict]
+) -> list[dict]:
+    """Recompute Section 2 FY26-27 by tonnage band.
+
+    Uses rollup_by_tonnage_band() after populating Record.tonnage_band from the
+    mould field via _mould_to_band() — the field is blank as-stored because the
+    MOULDING daily parser does not set it from the Report-12 source path.
+
+    Avg. Per Output on Hours in the TOTAL row = SUM of per-band avg/hr values
+    (NOT total_output ÷ total_hours).  This is the sheet's own convention.
+    """
+    from metrics import rollup_by_tonnage_band
+
+    # Derive band from mould and stamp onto record copies
+    derived = []
+    for r in records:
+        if r.plant != "MOULDING":
+            continue
+        band = _mould_to_band(r.mould or "")
+        derived.append(dataclasses.replace(r, tonnage_band=band))
+
+    band_results = rollup_by_tonnage_band(derived)
+
+    # Machine count per band from roster (handles idle machines)
+    band_mc_count: dict[str, int] = {}
+    for entry in roster:
+        b = entry["band"]
+        band_mc_count[b] = band_mc_count.get(b, 0) + 1
+
+    rows      = []
+    sum_ideal = sum_actual = sum_out = sum_rej = sum_runner = 0.0
+    sum_avg   = 0.0   # accumulator for TOTAL avg/hr = Σ band avg/hr
+
+    for band in BAND_ORDER:
+        mr       = band_results.get(band)
+        mc_count = band_mc_count.get(band, 0)
+        ideal    = mc_count * IDEAL_HRS_PER_MC_PER_MONTH * n_months
+
+        actual = mr.actual_hours if mr else 0.0
+        out    = mr.total_count  if mr else 0.0
+        rej    = mr.reject_count if mr else 0.0
+        runner = mr.runner_lumps if mr else 0.0
+        avg_hr = _safe_div(out, actual)
+        util   = _safe_div(actual, ideal)
+        if util is not None:
+            util *= 100.0
+
+        rows.append({
+            "band":       band,
+            "mc_count":   mc_count,
+            "ideal_hrs":  ideal,
+            "actual_hrs": actual,
+            "output_kg":  out,
+            "reject_kg":  rej,
+            "runner_kg":  runner,
+            "avg_hr":     round(avg_hr, 2) if avg_hr is not None else 0.0,
+            "util_pct":   round(util, 2)   if util  is not None else 0.0,
+            "is_total":   False,
+        })
+        sum_ideal  += ideal
+        sum_actual += actual
+        sum_out    += out
+        sum_rej    += rej
+        sum_runner += runner
+        sum_avg    += round(avg_hr, 2) if avg_hr is not None else 0.0
+
+    total_util = _safe_div(sum_actual, sum_ideal)
+    if total_util is not None:
+        total_util *= 100.0
+
+    rows.append({
+        "band":       "TOTAL",
+        "mc_count":   sum(band_mc_count.values()),
+        "ideal_hrs":  sum_ideal,
+        "actual_hrs": sum_actual,
+        "output_kg":  sum_out,
+        "reject_kg":  sum_rej,
+        "runner_kg":  sum_runner,
+        # TOTAL avg/hr = SUM of band avg/hr values (sheet convention, not weighted mean)
+        "avg_hr":     round(sum_avg, 2),
+        "util_pct":   round(total_util, 2) if total_util is not None else 0.0,
+        "is_total":   True,
+    })
+
+    return rows
+
+
+def _parse_s1_block_to_rows(block: dict, fy_label: str, source_label: str) -> list[dict]:
+    """Convert a parsed SUMMARY-1 tab block into structured rows."""
+    rows = []
+    for band in BAND_ORDER:
+        row_raw = block.get("band_rows", {}).get(band)
+        if row_raw:
+            d = _s1_row_to_dict(row_raw, band, is_total=False)
+        else:
+            d = {
+                "band": band, "mc_count": None, "ideal_hrs": None,
+                "actual_hrs": None, "output_kg": None, "reject_kg": None,
+                "runner_kg": None, "avg_hr": None, "util_pct": None,
+                "is_total": False,
+            }
+        rows.append(d)
+
+    total_raw = block.get("total_row")
+    if total_raw:
+        rows.append(_s1_row_to_dict(total_raw, "TOTAL", is_total=True))
+    return rows
+
+
+# ── Top-level builder ─────────────────────────────────────────────────────────
+
+def build_moulding_summary(fy: str = "2627") -> dict:
+    """Build the full Moulding M/C Summary report data dict.
+
+    Cached in-process for CACHE_TTL seconds.  Returns:
+    {
+        'fy', 'fy_label', 'error',
+        'section1': {'rows': [...], 'warnings': [], 'n_months': int},
+        'section2': {
+            'fy2627': list[dict],  'fy2627_label': str,
+            'fy2526': list[dict],  'fy2526_label': str,
+            'warnings': [],
+        },
+        'build_time_s': float,
+    }
+    """
+    cache_key = f"moulding_summary_{fy}"
+    with _cache_lock:
+        entry = _cache.get(cache_key)
+        if entry and (time.time() - entry["ts"]) < _CACHE_TTL:
+            return entry["data"]
+
+    t0 = time.time()
+
+    import sheets as _sh
+    token = _sh._get_access_token()
+
+    fy_yms  = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_label = f"FY 20{fy[:2]}-{fy[2:]}"
+
+    try:
+        # ── 1. Fetch SUMMARY and SUMMARY-1 tabs ──────────────────────────────
+        matrices = _sh.batch_get(
+            MOULDING_WB_FILE_ID,
+            [SUMMARY_TAB, SUMMARY1_TAB],
+            token,
+        )
+        summary_vals  = matrices.get(SUMMARY_TAB, [])
+        summary1_vals = matrices.get(SUMMARY1_TAB, [])
+
+        if not summary_vals or not summary1_vals:
+            raise RuntimeError("Could not load SUMMARY or SUMMARY-1 tab")
+
+        # ── 2. Machine roster from SUMMARY tab ───────────────────────────────
+        roster = _parse_summary_roster(summary_vals)
+        if not roster:
+            raise RuntimeError(
+                "No machine rows found in SUMMARY tab — layout may have changed"
+            )
+
+        # ── 3. Live records for FY26-27 ──────────────────────────────────────
+        # Only fetch periods that actually exist in the FY; skip future months
+        records_raw, _, _ = _sh.get_records(fy_yms)
+        moulding_records = [r for r in records_raw if r.plant == "MOULDING"]
+
+        # n_months = distinct periods with any MOULDING data (excludes future)
+        active_periods = sorted({r.period for r in moulding_records if r.period})
+        n_months = max(len(active_periods), 1)
+
+        # ── 4. Section 1: per-machine recomputed ─────────────────────────────
+        section1 = _build_section1(moulding_records, n_months, roster)
+
+        # ── 5. Section 2 FY26-27: band rollup recomputed ─────────────────────
+        s2_fy2627 = _build_section2_fy2627(moulding_records, n_months, roster)
+
+        # ── 6. Section 2 FY25-26: closed annual from SUMMARY-1 tab (R-03) ───
+        s2_warnings: list[str] = []
+        s1_blocks = _parse_s1_tab(summary1_vals)
+
+        block_2526 = s1_blocks.get("2526")
+        if block_2526:
+            s2_fy2526 = _parse_s1_block_to_rows(
+                block_2526,
+                fy_label="FY 2025-26",
+                source_label="closed annual SUMMARY-1",
+            )
+        else:
+            s2_fy2526 = []
+            s2_warnings.append(
+                "FY25-26 block not found in SUMMARY-1 tab — "
+                "expected a TOTAL row with machine count 25"
+            )
+
+        # ── 7. FY26-27 period label ───────────────────────────────────────────
+        if active_periods:
+            first = active_periods[0]
+            last  = active_periods[-1]
+            def _ym_lbl(ym):
+                import datetime
+                dt = datetime.datetime.strptime(ym, "%Y-%m")
+                return dt.strftime("%b,%y")
+            s2_fy2627_label = f"{_ym_lbl(first)} – {_ym_lbl(last)} (FY 2026-27) — recomputed"
+        else:
+            s2_fy2627_label = f"{fy_label} — recomputed"
+
+        data = {
+            "fy":        fy,
+            "fy_label":  fy_label,
+            "error":     None,
+            "section1":  section1,
+            "section2": {
+                "fy2627":       s2_fy2627,
+                "fy2627_label": s2_fy2627_label,
+                "fy2526":       s2_fy2526,
+                "fy2526_label": "Apr,25 – Jul,25 (FY 2025-26) — closed annual",
+                "warnings":     s2_warnings,
+            },
+            "build_time_s": round(time.time() - t0, 2),
+        }
+
+    except Exception as exc:
+        logger.exception("build_moulding_summary failed: %s", exc)
+        data = {
+            "fy":       fy,
+            "fy_label": fy_label,
+            "error":    str(exc),
+            "section1": {"rows": [], "warnings": [], "n_months": 0},
+            "section2": {
+                "fy2627": [], "fy2627_label": "",
+                "fy2526": [], "fy2526_label": "",
+                "warnings": [],
+            },
+            "build_time_s": round(time.time() - t0, 2),
+        }
+
+    with _cache_lock:
+        _cache[cache_key] = {"ts": time.time(), "data": data}
+
+    return data

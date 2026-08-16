@@ -3457,6 +3457,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/segment-labour"
             if rpt["id"] == "pipe":
                 rpt["view_url"] = "/management-reports/pipe-summary"
+            if rpt["id"] == "moulding":
+                rpt["view_url"] = "/management-reports/moulding-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3599,6 +3601,32 @@ def mgmt_pipe_summary_view():
     data = _mps.build_pipe_summary(fy)
     return render_template(
         "report_mgmt_pipe_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/moulding-summary")
+def mgmt_moulding_summary_view():
+    """Moulding M/C Summary — Section 1: per-machine FY26-27 recomputed.
+    Section 2: grouped by tonnage band, YoY (FY26-27 recomputed / FY25-26 closed annual).
+
+    Sources:
+      output / rejection / runner — MOULDING Report-12 "Wt in Kgs" via PIPE key (R-38)
+      run hours                   — Report-5 join via r5_runhours (R-38)
+      tonnage band                — derived from Record.mould (_mould_to_band)
+      machine roster (27 incl. idle) — SUMMARY tab in Moulding M/C workbook
+      FY25-26 by-band             — closed annual SUMMARY-1 tab (R-03 exception)
+    """
+    import mgmt_moulding_summary as _mms
+
+    fy = request.args.get("fy", "2627")
+    if fy not in _mms._FY_YM:
+        fy = "2627"
+    data = _mms.build_moulding_summary(fy)
+    return render_template(
+        "report_mgmt_moulding_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
