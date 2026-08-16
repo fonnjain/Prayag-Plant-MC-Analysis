@@ -94,18 +94,23 @@
         <tbody>
           {% for item in item_list %}
           {% set row_total = namespace(v=0) %}
+          {% set row_kg_total = namespace(v=0) %}
           <tr class="border-b border-gray-50">
             <td class="py-1.5 pr-2 font-medium text-gray-700 leading-tight max-w-28 truncate" title="{{ item }}">{{ item }}</td>
             {% for m in months %}
             {% set cell = items[item].get(m, {}) %}
             {% set pv = cell.prod if cell else 0 %}
+            {% set kv = item_kg.get(item, {}).get(m, 0) if item_kg else 0 %}
             {% set row_total.v = row_total.v + pv %}
+            {% set row_kg_total.v = row_kg_total.v + kv %}
             <td class="py-1.5 px-1 text-right text-gray-600">
               {% if pv > 0 %}{{ "{:,.0f}".format(pv) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% if kv > 0 %}<div class="text-[10px] text-gray-400 leading-tight">{{ "{:,.2f}".format(kv) }} kg</div>{% endif %}
             </td>
             {% endfor %}
             <td class="py-1.5 pl-2 text-right font-semibold" style="color:var(--navy)">
               {{ "{:,.0f}".format(row_total.v) if row_total.v > 0 else "—" }}
+              {% if row_kg_total.v > 0 %}<div class="text-[10px] text-gray-400 leading-tight font-normal">{{ "{:,.2f}".format(row_kg_total.v) }} kg</div>{% endif %}
             </td>
           </tr>
           {% endfor %}

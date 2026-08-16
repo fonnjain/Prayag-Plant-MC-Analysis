@@ -4454,6 +4454,8 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
     _d_kg_m    : dict = defaultdict(float)
     _d_rltr_m  : dict = defaultdict(float)
     _d_rkg_m   : dict = defaultdict(float)
+    # Per-mould per-month kg — keyed (mould_label, period) → kg total
+    _item_kg_m : dict = defaultdict(lambda: defaultdict(float))
     for _r in _tank_daily:
         _d_ltr_m[_r.period]  += _r.total_count
         _d_kg_m[_r.period]   += _r.secondary_counts.get("kg", 0.0)
@@ -4462,6 +4464,10 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
             _r.secondary_counts.get("rej_mouth_kg", 0.0) +
             _r.secondary_counts.get("rej_base_kg", 0.0)
         )
+        _mkey = _r.mould or "—"
+        _rkg = _r.secondary_counts.get("kg", 0.0)
+        if _rkg:
+            _item_kg_m[_mkey][_r.period] += _rkg
 
     _tot_ltr  = sum(_d_ltr_m.values())
     _tot_kg   = sum(_d_kg_m.values())
@@ -4485,6 +4491,13 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
                 "when available.",
     }
 
+    # Serialise per-item kg: {mould: {month: rounded_kg}} — only include months
+    # where kg > 0 so the template can test presence rather than > 0.
+    _item_kg_out = {
+        mould: {m: round(kg, 2) for m, kg in months_d.items() if kg > 0}
+        for mould, months_d in _item_kg_m.items()
+    }
+
     return render_template("report_tank_location.html",
         plant=plant, location=location, title=title,
         items=dict(items), item_list=sorted(items.keys()),
@@ -4502,6 +4515,7 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         monthly_kg=monthly_kg,
         monthly_rej_ltr=monthly_rej_ltr,
         monthly_rej_kg=monthly_rej_kg,
+        item_kg=_item_kg_out,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
 
