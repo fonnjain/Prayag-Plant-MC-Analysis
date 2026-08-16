@@ -1,0 +1,46 @@
+Read PRAYAG_RULES.md. READ-ONLY — no code changes, no Build mode, no restart, no publish.
+No Sheets writes (R-21), no cache clearing (R-34). Report observed values only; if a figure
+looks wrong, report it — do not adjust it (R-30).
+
+Four checks on what was just delivered.
+
+=== 1. Report 2, Section 1 — is labour still blocked? ===
+The source was identified after that batch: the MONTHLY PAYROLL WORKBOOKS, linked from the
+far-right column of each month row in the SUMMARY tab —
+  APR'26  "1. Wages Apr-2026"  1lWOHcMsoWpTmiTyvSRys1xoMiAkeNdSmQGFySR0bBpw
+  MAY'26                       1jCU8KxjJzwsdhX0EcHuyYabvUp15Y1VAQzhloXnTHLQ
+  JUN'26                       1fxsmw7HQL7pockus_MI1SV3RhMakCFYv2-VE9iFMrh8
+  JUL'26  no link — which is why July wages are blank
+These are payroll registers: one row per employee with DEPARTMENT, SUB DEPARTMENT,
+DESIGNATION, TOTAL DAYS, HOURS, TOTAL PAYABLE.
+
+State plainly whether Section 1's Labour / Paid Hours / Paid Wages columns are populated or
+still empty. Do NOT wire them in this pass.
+
+=== 2. Ideal Labour Cost section — which way does the divergence run? ===
+Print our computed Ideal Labour Cost per segment per month, alongside the workbook's own
+figure. Expect a LARGE divergence on Fittings, because the workbook multiplies a PIECES count
+(APR 13,40,117) by the per-kg rate of 6.50, inflating its ideal labour roughly 15x. Ours uses
+the kilogram figure (APR 90,038.43).
+
+Print the R-43 flag text verbatim. It must make clear that OUR figure is the correct one and
+the workbook's is inflated — not that ours is uncertain. A reader comparing the two needs to
+know which side is wrong.
+
+=== 3. Ideal Hours in Report 2's per-machine sections ===
+Ideal Output per machine (M/C-1 120 ... M/C-9 400 kg/hr) are genuine business standards.
+Ideal Hours at 500/machine/month is the flat placeholder baselines.json explicitly forbids (R-16).
+
+Report: is Util% computed against that 500? If so, confirm the column is labelled as the
+SHEET'S assumption, not ours. We must not present a percentage built on a placeholder as our
+own figure (R-07). Report only — do not change the calculation.
+
+=== 4. Moulding tonnage bands ===
+Report the band boundaries used to group the 27 machines, and where they came from — a column
+in the source workbook, or inferred. If inferred, say so plainly: an invented grouping looks
+authoritative and is not (R-07).
+
+=== REPORT BACK ===
+(1) Section 1 populated or empty · (2) the Ideal Labour divergence table and the R-43 flag text
+verbatim · (3) whether Util% uses the 500 placeholder and how it is labelled · (4) the tonnage
+band source. Then confirm nothing was changed.
