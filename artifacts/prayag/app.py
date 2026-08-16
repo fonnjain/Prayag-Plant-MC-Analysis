@@ -3459,6 +3459,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/pipe-summary"
             if rpt["id"] == "moulding":
                 rpt["view_url"] = "/management-reports/moulding-summary"
+            if rpt["id"] == "gom":
+                rpt["view_url"] = "/management-reports/gom-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3601,6 +3603,32 @@ def mgmt_pipe_summary_view():
     data = _mps.build_pipe_summary(fy)
     return render_template(
         "report_mgmt_pipe_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/gom-summary")
+def mgmt_gom_summary_view():
+    """Group of Moulding M/C Summary.
+    Section 1 (SUMMARY): reuses build_moulding_summary — net basis, band YoY.
+    Section 2 (SUMMARY-1): band × month, GROSS basis (net + rejection).
+    Section 3 (band tabs): machine × month per band, GROSS basis.
+
+    Sources: same as (B) — Report-12 via PIPE key (R-38), Report-5 join for hours.
+    Tonnage band derived via _mould_to_band(); Record.tonnage_band is blank for
+    MOULDING daily records (not affected: existing /reports/gom_summary uses GOM
+    grid records which DO have tonnage_band set by the gom_grid parser).
+    """
+    import mgmt_gom_summary as _mgs
+
+    fy = request.args.get("fy", "2627")
+    if fy not in _mgs._FY_YM:
+        fy = "2627"
+    data = _mgs.build_gom_summary(fy)
+    return render_template(
+        "report_mgmt_gom_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),

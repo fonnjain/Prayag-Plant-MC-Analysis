@@ -1,0 +1,107 @@
+# Management Report 4 of 13 — (C) Group Of Moulding M/C Summary
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern from Reports 1–3.
+
+**Spreadsheet:** `(C). Annual 26-27 Group Of Moulding M/C Summary`
+
+**Scope note:** reproduce **all meaningful worksheets in the workbook**, not just the one visible in the QA screenshot — the tab shown there was incidental to taking the screenshot. This applies to every remaining report in the series.
+
+---
+
+## Section 1 — `SUMMARY` (already built: reuse, do not duplicate)
+
+This tab is **identical** to `SUMMARY-1` of the (B) Moulding workbook — same 27 machines, same bands, TOTAL 54,000 / 35,972 / 366,015 / 3,650 / 62,055 / 76.10 / 66.61%, and the same FY25-26 block.
+
+Report 3 already builds it. **Call that builder** rather than reimplementing. If the two ever diverge, that is a bug in one of them.
+
+---
+
+## Section 2 — `SUMMARY-1` (band × month) — **this is on the GROSS basis**
+
+```
+YEARS | MOULD MACHINE | (count) | TOTAL: HOURS · OUTPUT · Avg. Per Output |
+APR: HOURS · OUTPUT · Avg | MAY: … | JUNE: … | JULY: … | AUG … MAR
+```
+
+Twelve month blocks of three columns each, plus a TOTAL block — 13 × 3, with the label columns in front.
+
+**Critical: this tab's OUTPUT is gross (rejection included), while `SUMMARY` is net.** Verified across all four months against our own figures:
+
+| | our net | + rejection | = gross | sheet |
+|---|---:|---:|---:|---:|
+| APR | 89,152 | 886 | 90,038 | 90,038.14 |
+| MAY | 75,771 | 752 | 76,523 | 76,523.25 |
+| JUN | 97,007 | 974 | 97,981 | 97,980.53 |
+| JUL | 104,086 | 1,038 | 105,124 | 105,123.60 |
+| **TOTAL** | **366,015** | **3,650** | **369,665** | **369,665.6** |
+
+**Label the basis on both sections** (**R-22**) — the same workbook carrying net on one tab and gross on the next is exactly the confusion the labelling rule exists for.
+
+Band rows for the TOTAL block: 150 (6 m/c) 9,240 h / 50,146.92 · 200 (7) 7,551 / 69,949.39 · 250 (10) 15,137 / 182,034.1 · 275 (1) 1,457 / 18,605.11 · 350 (2) 1,211 / 18,625.95 · 450 (1) 1,376 / 30,304.07. TOTAL 27 / 35,972 / 369,665.6 / 10.28 avg.
+
+Monthly TOTAL row: APR 8,426 h / 90,038.14 · MAY 7,198 / 76,523.25 · JUNE 9,771 / 97,980.53 · JULY 10,577 / 105,123.6.
+
+---
+
+## Section 3 — the six band tabs (`150`, `200`, `250`, `275`, `350`, `450`)
+
+Each has the same month-block layout as `SUMMARY-1`, but rows are the **individual machines in that band**, with their mould identifier:
+
+```
+YEARS | MACHINE | (mould id) | TOTAL: HOURS · OUTPUT · Avg | APR … MAR
+```
+
+Sample from the `150` tab — TOTAL 6 machines / 9,240 h / 50,146.92 kg / 5.43 avg, then M/C-1 `A06(C-150)` 1,778 h / 10,142.49 · M/C-2 `B05(C-150)` 1,474 / 7,903.11 · M/C-3 `A05(U-150)` 1,515 / 7,207.78 · M/C-4 `A02(U-150)` 1,820 / 11,859.28 · M/C-5 `A03(U-150)` 1,764 / 11,652.47 · M/C-6 `A04(NU-150)` 889 / 1,381.79.
+
+Each band tab's TOTAL must reconcile to that band's row in `SUMMARY-1`. **Also gross.**
+
+Render these as six sub-tables or a band selector — whichever fits the existing report layout — but every band must be reachable.
+
+---
+
+## Carry forward from Report 3
+
+**`Record.tonnage_band` is blank for MOULDING** — the Report-12 parser does not populate it. Report 3 works around this with `_mould_to_band(r.mould)` on a `dataclasses.replace` copy. **Reuse that helper**; do not write a second one.
+
+Worth reporting (not fixing here): because the field is blank at source, `rollup_by_tonnage_band()` groups every MOULDING record under `"Other"` anywhere else it is used. Check whether the GOM page at `app.py:3583` relies on it, and say so.
+
+**`Avg. Per Output on Hours` convention** — on `SUMMARY` it is the sum of band averages (76.10). On `SUMMARY-1` the TOTAL block shows **10.28**, which *is* the weighted figure (369,665.6 ÷ 35,972 = 10.28). **The two tabs use different conventions.** Reproduce each as its own tab has it, and comment both so neither gets "corrected" into the other.
+
+---
+
+## A finding to record, not to act on
+
+The costing workbook's **"Fittings Production (Kgs)"** is the same series as Moulding gross output:
+
+```
+APR  costing 90,038.43   Moulding gross 90,038.14
+MAY  costing 76,523.39   Moulding gross 76,523.25
+JUN  costing 97,980.99   Moulding gross 97,980.53
+```
+
+**Fittings kg *is* Moulding gross output** — fittings are produced by moulding. This independently confirms **R-43** from a second direction: the 1,340,117 on `REJECTION & PRODUCTION` is a **piece count**, and the kilogram figure was never missing. Report it; change nothing in the costing module.
+
+## Data sources
+
+Output, rejection and runner from **Report-12** via the `PIPE` key (**R-38**); hours from the Report-5 join. FY25-26 blocks may be read from the closed annual (**R-03**) and must be **labelled**.
+
+## Validate
+
+- `SUMMARY` matches Report 3's Section 2 exactly (same builder).
+- `SUMMARY-1` TOTAL **369,665.6 gross**, monthly 90,038.14 / 76,523.25 / 97,980.53 / 105,123.6, and every band row per the table above.
+- Each band tab's TOTAL reconciles to its `SUMMARY-1` row; the six bands sum to 27 machines and 35,972 hours.
+- Both bases explicitly labelled; the two `Avg. Per Output` conventions each commented.
+- Idle machines render **0**; utilisation over 100% not capped.
+- **No existing figure moves** — including Report 3's. If any does, **stop**.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · the Report 1–3 builders (call them, do not edit) · Garden, HDPE, Tank paths · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+All three sections against the figures above · confirmation that Report 3's builder was reused for `SUMMARY` · whether the GOM page depends on the blank `tonnage_band` · the two averaging conventions as implemented · confirmation that no cell was copied and no existing figure moved.
