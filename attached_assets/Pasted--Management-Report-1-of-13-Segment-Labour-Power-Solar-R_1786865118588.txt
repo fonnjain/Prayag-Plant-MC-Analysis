@@ -1,0 +1,97 @@
+# Management Report 1 of 13 — Segment Labour / Power / Solar
+
+Read `PRAYAG_RULES.md` — **the Cardinal Rule governs this entire series.**
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+## THE RULE THAT GOVERNS ALL THIRTEEN REPORTS
+
+> **Layout is not data.** These reports must match their Excel counterparts exactly — same columns, same order, same headers, same TOTAL row, same month ordering. **But every number comes from the app's own recomputation.** Where our figure differs from the sheet's, **show ours and flag the difference**. Never copy a cell across to make them agree.
+
+The Google Sheets are **verification material only** while Prayag runs both in parallel. A mismatch means *investigate*, never *adjust*.
+
+---
+
+## Target
+
+**Spreadsheet:** `Annual 26-27 Segment Wise Labour Cost, Solar Cost & Power Cost`
+**Worksheets:** `UNIT-1`, `UNIT-2`, `UNIT-3` — the report is three sections, one per unit, all sharing an identical layout.
+
+| Unit | Segments |
+|---|---|
+| **UNIT-1** | CP · PTMT · Hardware · Sink |
+| **UNIT-2** | Plumbing · Tank |
+| **UNIT-3** | Garden Pipe · HDPE Pipe |
+
+## Layout to reproduce
+
+Column order, left to right, exactly as the sheet has it:
+
+```
+SEGMENT | MONTH | No. Of Labour | Contractor Labour | Total Labour |
+Paid Wages | Paid Wages for Contractor Labour | Total Paid Wages |
+Total Production (Kgs) | JVVL Power Amount | Electricity Generation Unit (kWh) |
+Unit Utilise per KG | As per 7.08 Basic Rate | Total Power |
+Per KG Power Cost | Per KG Labour Cost | Total Cost
+```
+
+**Rows:** `TOTAL` first, then `APR'26` through `MAR'27` in calendar order (13 rows). The SEGMENT cell spans all month rows for that unit.
+
+Match the visual conventions too: TOTAL row emphasised, months right-aligned in their own column, thousands separators, two decimals on per-kg and cost columns.
+
+---
+
+## The source sheet is partly broken — this matters
+
+The live `UNIT-1` worksheet currently shows:
+
+- **`#REF!` errors** in `No. Of Labour`, `Contractor Labour` and `Total Labour` — every month and the TOTAL row.
+- **`Total Production (Kgs)` = 0** for every month.
+- Consequently **`Per KG Power Cost` and `Per KG Labour Cost` are blank**, and `Total Cost` reads `0.00`.
+
+Wages and power *are* populated: TOTAL Paid Wages 21,447,758 · Contractor 4,241,875 · Total 25,689,633 · JVVL Power 9,164,267 · Electricity 1,075,470 kWh · Unit Utilise per KG 8.52 · As per 7.08 Basic Rate 7,614,328 · Total Power 16,778,595.
+
+**Do not reproduce the `#REF!` or the zeros.** Compute those columns from our own sources and show the real figures. Where the sheet is broken or blank and we have a value, that is a **flagged difference**, not an error on our side — surface it plainly (**R-35**). This is precisely why the Cardinal Rule exists.
+
+Equally: where **we** have no basis for a figure, leave it blank — never a zero (**R-07**, **R-08**).
+
+---
+
+## Data sources for our own computation
+
+- **Labour and wages** — Segment Cost workbook, dedicated per-segment tabs (**R-11**). Never from a UNIT roll-up row: UNIT-3's `TOTAL` column is **headcount**, not wages.
+- **Production (Kgs)** — each segment's own recomputed output. Note the costing module works on a **gross** basis (rejection included), matching the workbook's own note; production pages use net. **Label which basis the column shows** (**R-22**).
+- **Power and solar** — `costing_power.py` already reads JVVL amount, electricity kWh, solar generation and both tariff scenarios (7.08 and 11.5). The sheet's layout shows only the 7.08 column; keep 11.5 available but match the sheet's visible columns.
+
+**Tank production is in litres**, and the column asks for kilograms. Tank kg exists in `secondary_counts["kg"]` — use it, and never convert litres to kilograms (**R-09**).
+
+---
+
+## Known open questions — flag, do not resolve
+
+- **Garden Pipe wages (R-42):** the Garden annual says ₹4,26,164 (₹2.97/kg); the Segment Cost workbook says ₹2,20,797 + ₹50,547 contractor (₹2.02/kg). Paid hours are identical in both. **Use the Segment Cost workbook** (our current source) and flag the divergence in the report.
+- **Fittings units (R-43):** `REJECTION & PRODUCTION` col F is a **piece count** labelled "(Kgs)", ~15× the kilogram figure. Do not use it for any per-kilogram calculation.
+- **July wages are not entered** in any segment — headcount and hours present, wages blank. Show July as **awaiting source data**, never zero (this already works in the costing analysis; apply the same treatment here).
+
+---
+
+## Validate
+
+- The three unit sections render with the exact column order and 13-row month structure above.
+- **PTMT** production 537,109 kg (Nett) · **Plumbing** per the costing module · **Garden Pipe** wages ₹2,20,797 + ₹50,547 with ₹2.02/kg · **Tank** in kg, not litres.
+- Every figure traceable to our own recomputation — **no cell copied from the workbook**.
+- July renders as awaiting, not zero. Blanks where we have no basis, not zeros.
+- Differences against the sheet are flagged and readable.
+- **No existing figure moves anywhere** — this is a new report view. If any segment page changes, **stop**.
+
+## Do not touch
+
+`tank_reconcile.py` / R-39 · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` TOTAL-row-only reading (**R-40**) · Garden, HDPE and Tank source paths · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The rendered layout against the column list · the figures for each unit with their source · which differences against the workbook were flagged · confirmation that no cell was copied and no existing figure moved.
