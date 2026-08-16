@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Segment Labour / Power / Solar{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      Segment Labour / Power / Solar
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">{{ data.fy_label }} — recomputed from our sources · workbook differences flagged</div>
+  </div>
+</div>
+
+{% if data.error %}
+<div class="kpi-card p-4 flex items-start gap-3">
+  <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <div>
+    <div class="text-sm font-semibold" style="color:var(--terra)">Could not load annual workbook</div>
+    <div class="text-xs text-gray-500 mt-1">{{ data.error }}</div>
+  </div>
+</div>
+{% else %}
+
+{# ─── Explanation banner ────────────────────────────────────────────────────── #}
+<div class="mb-4 p-3.5 rounded-xl border text-xs leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <span class="font-semibold" style="color:var(--navy)">Cardinal Rule:</span>
+  every figure comes from our own recomputation. Where the workbook's figure
+  differs from ours, we show ours and flag the difference.
+  <span class="ml-1">
+    <span class="font-medium text-gray-600">*</span> workbook headcount broken (#REF!) ·
+    <span class="font-medium text-gray-600">†</span> workbook production = 0; our figure shown ·
+    <span class="font-medium text-gray-600">‡</span> per-KG computed from our production
+  </span>
+</div>
+
+{% for unit in data.units %}
+<div class="mb-8">
+  {# Unit header #}
+  <div class="flex items-center gap-2 mb-3">
+    <div class="w-1 h-6 rounded-full bg-terra flex-shrink-0"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">{{ unit.label }}</h3>
+    <div class="text-xs text-gray-400">
+      {{ unit.segments | map(attribute='name') | join(' · ') }}
+    </div>
+  </div>
+
+  {% for seg in unit.segments %}
+  <div class="mb-5">
+    {# Segment sub-header #}
+    <div class="flex items-center gap-2 mb-1.5 px-1">
+      <div class="text-xs font-semibold" style="color:var(--navy)">{{ seg.name }}</div>
+      {% if seg.prod_basis and 'No source' not in seg.prod_basis %}
+      <div class="text-[10px] text-gray-400">Production: {{ seg.prod_basis }}</div>
+      {% elif 'No source' in seg.prod_basis %}
+      <div class="text-[10px] italic text-gray-400">Production: no source available</div>
+      {% endif %}
+      {# R-42 flag for Garden Pipe #}
+      {% if seg.name == 'Garden Pipe' %}
+      <div class="text-[10px] font-medium px-1.5 py-0.5 rounded"
+           style="background:rgba(197,90,17,0.10);color:var(--terra)">
+        R-42: wages from Segment Cost workbook; diverges from Garden annual workbook
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="kpi-card" style="overflow:hidden">
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+          <thead>
+            <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.15)">
+              <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;min-width:90px">Month</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">No. of<br>Labour</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Contractor<br>Labour</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Labour</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Paid<br>Wages (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Contractor<br>Wages (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total Paid<br>Wages (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Production (Kgs)†</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">JVVL Power<br>Amount (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Electricity<br>Gen. (kWh)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Unit<br>Utilise/KG</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">7.08<br>Rate (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Power (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Power (₹)‡</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Labour (₹)‡</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Cost (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {# TOTAL row first #}
+            {% set tr = seg.total_row %}
+            <tr style="background:rgba(31,56,100,0.07);border-bottom:2px solid rgba(31,56,100,0.20);font-weight:600">
+              <td class="px-2 py-2 whitespace-nowrap" style="color:var(--navy);position:sticky;left:0;background:rgba(236,240,248,1);z-index:1">
+                TOTAL
+              </td>
+              {# headcount #}
+              {% if tr.headcount_broken %}
+              <td class="px-2 py-2 text-right whitespace-nowrap">
+                <span class="text-[10px] italic text-gray-400">—*</span>
+              </td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">
+                <span class="text-[10px] italic text-gray-400">—*</span>
+              </td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">
+                <span class="text-[10px] italic text-gray-400">—*</span>
+              </td>
+              {% else %}
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.n_labour) if tr.n_labour is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.n_contractor) if tr.n_contractor is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.n_total_lab) if tr.n_total_lab is not none else "—" }}</td>
+              {% endif %}
+              {# wages #}
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.paid_wages) if tr.paid_wages is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.contractor_wages) if tr.contractor_wages is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.total_wages) if tr.total_wages is not none else "—" }}</td>
+              {# production — our figure #}
+              <td class="px-2 py-2 text-right whitespace-nowrap" {% if tr.prod_overridden %}style="color:#0a7a3c"{% endif %}>
+                {% if tr.our_prod_kg is not none %}
+                  {{ "{:,.0f}".format(tr.our_prod_kg) }}{% if tr.prod_overridden %} †{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              {# power #}
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.jvvl) if tr.jvvl is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.kwh) if tr.kwh is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.unit_per_kg) if tr.unit_per_kg is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.rate_708) if tr.rate_708 is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.total_power) if tr.total_power is not none else "—" }}</td>
+              {# per-kg — our computation #}
+              <td class="px-2 py-2 text-right whitespace-nowrap" {% if tr.per_kg_computed %}style="color:#0a7a3c"{% endif %}>
+                {% if tr.per_kg_power is not none %}{{ "%.2f"|format(tr.per_kg_power) }}{% if tr.per_kg_computed %} ‡{% endif %}{% else %}—{% endif %}
+              </td>
+              <td class="px-2 py-2 text-right whitespace-nowrap" {% if tr.per_kg_computed %}style="color:#0a7a3c"{% endif %}>
+                {% if tr.per_kg_labour is not none %}{{ "%.2f"|format(tr.per_kg_labour) }}{% if tr.per_kg_computed %} ‡{% endif %}{% else %}—{% endif %}
+              </td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">
+                {% if tr.total_cost is not none %}{{ "{:,.0f}".format(tr.total_cost) }}{% else %}—{% endif %}
+              </td>
+            </tr>
+
+            {# Monthly rows APR through MAR #}
+            {% for row in seg.month_rows %}
+            <tr style="border-bottom:1px solid rgba(0,0,0,0.05){% if loop.index is divisibleby 3 %};border-bottom:1px solid rgba(0,0,0,0.09){% endif %}">
+              <td class="px-2 py-1.5 whitespace-nowrap font-medium" style="color:#444;position:sticky;left:0;background:{% if loop.index is odd %}#fff{% else %}rgba(249,250,252,1){% endif %};z-index:1">
+                {{ row.month_disp }}
+              </td>
+
+              {# headcount #}
+              {% if row.headcount_broken %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap"><span class="text-[10px] italic text-gray-300">—*</span></td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap"><span class="text-[10px] italic text-gray-300">—*</span></td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap"><span class="text-[10px] italic text-gray-300">—*</span></td>
+              {% else %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.n_labour) if row.n_labour is not none else "—" }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.n_contractor) if row.n_contractor is not none else "—" }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.n_total_lab) if row.n_total_lab is not none else "—" }}</td>
+              {% endif %}
+
+              {# wages / awaiting #}
+              {% if row.awaiting %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap" colspan="3">
+                <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING SOURCE DATA</span>
+              </td>
+              {% else %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.paid_wages) if row.paid_wages is not none else "—" }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.contractor_wages) if row.contractor_wages is not none else "—" }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.total_wages) if row.total_wages is not none else "—" }}</td>
+              {% endif %}
+
+              {# production — our figure #}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap" {% if row.prod_overridden %}style="color:#0a7a3c"{% endif %}>
+                {% if row.our_prod_kg is not none %}
+                  {{ "{:,.0f}".format(row.our_prod_kg) }}{% if row.prod_overridden %} †{% endif %}
+                {% else %}<span class="text-gray-300">—</span>{% endif %}
+              </td>
+
+              {# power / solar #}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.jvvl) if row.jvvl is not none else '<span class="text-gray-300">—</span>' }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.kwh) if row.kwh is not none else '<span class="text-gray-300">—</span>' }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "%.2f"|format(row.unit_per_kg) if row.unit_per_kg is not none else '<span class="text-gray-300">—</span>' }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.rate_708) if row.rate_708 is not none else '<span class="text-gray-300">—</span>' }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.total_power) if row.total_power is not none else '<span class="text-gray-300">—</span>' }}</td>
+
+              {# per-kg — our computation #}
+              {% if row.awaiting %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap" colspan="2">
+                <span class="text-[10px] italic" style="color:#c57a00">AWAITING</span>
+              </td>
+              {% else %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap" {% if row.per_kg_computed %}style="color:#0a7a3c"{% endif %}>
+                {% if row.per_kg_power is not none %}{{ "%.2f"|format(row.per_kg_power) }}{% if row.per_kg_computed %} ‡{% endif %}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              </td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap" {% if row.per_kg_computed %}style="color:#0a7a3c"{% endif %}>
+                {% if row.per_kg_labour is not none %}{{ "%.2f"|format(row.per_kg_labour) }}{% if row.per_kg_computed %} ‡{% endif %}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              </td>
+              {% endif %}
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+                {% if row.total_cost is not none %}{{ "{:,.0f}".format(row.total_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {# Flag legend for this segment #}
+      {% if seg.has_headcount_broken or seg.has_prod_overridden or seg.has_per_kg_computed %}
+      <div class="px-3 py-2 border-t text-[10px] text-gray-500 leading-snug"
+           style="border-color:rgba(0,0,0,0.06);background:rgba(249,250,252,1)">
+        <span class="font-semibold" style="color:var(--terra)">⚠ Differences vs workbook</span>
+        {% if seg.has_headcount_broken %}
+        · <span class="font-medium text-gray-600">*</span> workbook shows #REF! for headcount — we show blank pending a workbook fix
+        {% endif %}
+        {% if seg.has_prod_overridden %}
+        · <span class="font-medium" style="color:#0a7a3c">†</span> workbook production = 0 (formula broken) — our recomputed figure shown in green
+        {% endif %}
+        {% if seg.has_per_kg_computed %}
+        · <span class="font-medium" style="color:#0a7a3c">‡</span> per-KG costs computed from our production — workbook left them blank
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{# Production basis footnote #}
+<div class="mt-2 mb-6 p-3 rounded-xl border text-[10px] text-gray-500 leading-relaxed"
+     style="border-color:rgba(31,56,100,0.12);background:rgba(31,56,100,0.025)">
+  <div class="font-semibold text-gray-600 mb-1">Production kg basis by segment</div>
+  {% for unit in data.units %}
+  {% for seg in unit.segments %}
+  {% if 'No source' not in seg.prod_basis %}
+  <div><span class="font-medium text-gray-700">{{ seg.name }}</span> — {{ seg.prod_basis }}</div>
+  {% else %}
+  <div><span class="font-medium text-gray-400">{{ seg.name }}</span> — <span class="italic">{{ seg.prod_basis }}</span></div>
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+  <div class="mt-1.5 text-gray-400">
+    Sources: annual workbook for wages / power / headcount ·
+    daily production records + costing module for production kg ·
+    per-KG metrics computed by us (never copied from workbook).
+  </div>
+</div>
+
+{% endif %} {# end data.error check #}
+{% endblock %}

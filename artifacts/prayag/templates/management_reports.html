@@ -80,6 +80,17 @@
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
           </svg>
         </a>
+        {% if rpt.view_url %}
+        <a href="{{ rpt.view_url }}"
+           class="mt-2.5 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold"
+           style="background:rgba(197,90,17,0.07);color:var(--terra)">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M3 14h18M10 3v18M14 3v18"/>
+          </svg>
+          View full table
+          <span class="text-[10px] font-normal text-gray-400">17-column FY detail · recomputed figures</span>
+        </a>
+        {% endif %}
         {% if rpt.ai_url %}
         <a href="{{ rpt.ai_url }}"
            class="mt-2.5 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold"

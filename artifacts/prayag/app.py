@@ -3452,6 +3452,9 @@ def management_reports_index():
             if ai_id and ai_id in _AI_REPORT_IDS:
                 rpt["ai_id"] = ai_id
                 rpt["ai_url"] = f"/reports/{ai_id}?period={ym}"
+            # Management Report 1 has a full web view — surface it as a button
+            if rpt["id"] == "segment_labour":
+                rpt["view_url"] = "/management-reports/segment-labour"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3546,6 +3549,31 @@ def management_reports_zip():
     else:  # a clean bundle clears any stale warning from a prior partial download
         resp.set_cookie("mr_zip_skipped", "", max_age=0, samesite="Lax")
     return resp
+
+
+@app.route("/management-reports/segment-labour")
+def mgmt_segment_labour_view():
+    """Management Report 1 — Segment Labour / Power / Solar.
+
+    Full FY view: three unit sections (UNIT-1/2/3), one block per segment,
+    TOTAL + APR'26 through MAR'27 in calendar order (13 rows per segment),
+    17 columns matching the annual workbook layout.
+
+    Data sources (Cardinal Rule — every figure from our own recomputation):
+      * wages / power / headcount — annual "Segment Wise Labour Cost …" workbook
+      * production (kg)           — daily records + costing module
+      * per-kg metrics            — computed: wages ÷ our production
+    """
+    import mgmt_labour_power as _mlp
+
+    fy = request.args.get("fy", "2627")
+    data = _mlp.build_mgmt_report_data(fy)
+    return render_template(
+        "report_mgmt_segment_labour.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
 
 
 @app.route("/reports")
