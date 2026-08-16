@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Garden Pipe M/C Summary{% endblock %}
+
+{% block content %}
+
+{# ─── Page header ────────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      Garden Pipe M/C Summary — KH Plant
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">{{ data.fy_label }} · recomputed from block tabs and Segment Cost workbook · {{ today_disp }}</div>
+  </div>
+</div>
+
+{% if data.error %}
+<div class="kpi-card p-4 flex items-start gap-3">
+  <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <div>
+    <div class="text-sm font-semibold" style="color:var(--terra)">Could not load data</div>
+    <div class="text-xs text-gray-500 mt-1">{{ data.error }}</div>
+  </div>
+</div>
+{% else %}
+
+{# ─── R-23 banner ────────────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1">R-23 — Two output bases, both real (open)</div>
+  <div class="text-gray-600">
+    This report uses <span class="font-semibold">block tabs</span> (MACHINE n tabs) as the authoritative output source per the Cardinal Rule.
+    The Annual Garden Pipe workbook SUMMARY tab uses the <span class="font-semibold">Daily Report</span> basis.
+    Both come from the same workbook; they differ by 68% in the months compared.
+    Neither is wrong — the divergence is open with the data owner (Anuj).
+  </div>
+  <div class="mt-1.5 grid grid-cols-2 gap-x-6 gap-y-0.5 text-[10px]" style="color:#1f3864">
+    <div><span class="font-medium">Block tabs (our basis):</span> APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 66,038 · total 232,529 kg</div>
+    <div><span class="font-medium">Daily Report (sheet basis):</span> APR 38,950 · MAY 0 · JUN 66,911 · JUL 32,191 · total 138,052 kg</div>
+  </div>
+  <div class="mt-1 text-[10px] text-gray-500">
+    May: the Daily Report was not filled for May 2026 while the block tabs record 53,235 kg.
+    Twenty workers and ₹1,49,442 wages exist — these are shown. Output is from block tabs.
+  </div>
+</div>
+
+{# ─── R-42 wages banner ──────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.30)">
+  <div class="font-semibold mb-0.5" style="color:#92400e">R-42 — Two annuals disagree on Garden wages (open)</div>
+  <div class="text-gray-700">
+    <span class="font-semibold">Our source</span> (Segment Cost workbook, Garden Pipe tab, R-11):
+    Paid Wages <span class="font-semibold">₹2,20,797</span> + Contractor <span class="font-semibold">₹50,547</span>
+    = ₹2,71,344 total · ₹2.02/kg on DR-gross basis.
+    <br>
+    <span class="font-semibold">Annual Garden workbook SUMMARY tab</span> (comparison only):
+    Paid Wages <span class="font-semibold">₹4,26,164</span> · ₹2.97/kg on DR-gross basis.
+    Paid hours are identical in both (1,389.5 / 3,853.5 / 3,895.5), so they describe the same labour — but the ratio varies by month (1.37 / 1.92 / 2.59), ruling out a simple scaling.
+    Divergence is open. We use the Segment Cost workbook.
+  </div>
+</div>
+
+{# ─── GARDEN_WB disclosure ───────────────────────────────────────────────────── #}
+{% set tr = data.section.total_row %}
+{% if tr.wb_net_kg %}
+<div class="mb-4 px-3 py-2 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(13,122,62,0.04);border-color:rgba(13,122,62,0.20)">
+  <div class="font-semibold text-gray-700 mb-0.5">GARDEN_WB (West Bengal plant) — excluded from KH figures above</div>
+  <div class="text-gray-600">
+    A second Garden Pipe plant in West Bengal is tracked separately and is NOT merged into KH totals.
+    WB figures below are shown for completeness only.
+    <span class="font-medium text-gray-700">WB net output (FY to date):
+    {% for row in data.section.month_rows %}{% if row.wb_net_kg %}{{ row.month_disp }} {{ "{:,.1f}".format(row.wb_net_kg) }} kg{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}
+    · total {{ "{:,.1f}".format(tr.wb_net_kg) }} kg.</span>
+  </div>
+</div>
+{% else %}
+<div class="mb-4 px-3 py-2 rounded-xl border text-[11px] text-gray-500"
+     style="border-color:rgba(0,0,0,0.10)">
+  GARDEN_WB (West Bengal plant): no records yet for this FY — excluded from this report.
+</div>
+{% endif %}
+
+{# ─── SUMMARY table ──────────────────────────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:#0d7a3e"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">SUMMARY — Monthly M/C Output &amp; Labour</h3>
+    <div class="text-xs text-gray-400">Block tabs · Segment Cost workbook · KH only · rows: latest first</div>
+  </div>
+
+  <div class="mb-1.5 text-[10px] text-gray-500 px-1 flex flex-wrap gap-2">
+    <span class="px-1.5 py-0.5 rounded font-medium"
+          style="background:rgba(31,56,100,0.07);color:var(--navy)">
+      Actual Output = net (block tabs, KH). Gross = net + rejection. Rej% shown on both bases: gross / net.
+    </span>
+    <span class="px-1.5 py-0.5 rounded font-medium"
+          style="background:rgba(245,158,11,0.12);color:#92400e">
+      Wages = Segment Cost workbook (R-42). Per-KG cost = wages ÷ gross KG.
+    </span>
+  </div>
+
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(13,122,62,0.06);border-bottom:1px solid rgba(13,122,62,0.18)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(240,250,244,1);z-index:2;min-width:68px">Month</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">M/C Run<br>Hours</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Output<br><span class="font-normal text-[9px] text-gray-400">(KG, net, block tabs)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Rejection<br><span class="font-normal text-[9px] text-gray-400">(KG)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Rej%<br><span class="font-normal text-[9px] text-gray-400">gross / net</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total Output<br>with Rejection<br><span class="font-normal text-[9px] text-gray-400">(KG, gross)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Labour<br><span class="font-normal text-[9px] text-gray-400">(headcount)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Paid<br>Hours</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Paid Wages<br><span class="font-normal text-[9px] text-gray-400">(₹, Seg. Cost)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Paid Hrs<br>per Person</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per Hour<br>Cost (₹)</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Labour Cost (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {# ── Monthly rows: latest-first (MAR → APR) ── #}
+          {% for row in data.section.month_rows_display %}
+          {% set odd = loop.index is odd %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05){% if row.may_dr_unfilled %};background:rgba(245,158,11,0.06){% endif %}">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600"
+                style="position:sticky;left:0;background:{% if row.may_dr_unfilled %}rgba(255,248,235,1){% elif odd %}#fff{% else %}rgba(249,252,250,1){% endif %};z-index:1">
+              {{ row.month_disp }}
+              {% if row.may_dr_unfilled %}
+              <span class="ml-1 px-1 rounded text-[8px] font-bold" style="background:rgba(245,158,11,0.20);color:#92400e" title="Daily Report not filled for May; block tabs record production normally">DR–</span>
+              {% endif %}
+            </td>
+            {# Run Hours #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.run_hrs %}{{ "{:,.1f}".format(row.run_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% if row.may_dr_unfilled and not row.run_hrs %}<span class="text-[9px] text-amber-600">DR unfilled</span>{% endif %}
+            </td>
+            {# Net KG (block tabs) with R-23 flag #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.net_kg %}{{ "{:,.0f}".format(row.net_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {%- if row.r23_differs %}
+              <span class="ml-1 px-1 rounded text-[8px] font-bold cursor-default align-middle"
+                    style="background:rgba(31,56,100,0.12);color:var(--navy)"
+                    title="R-23: our block-tab figure {{ '{:,.0f}'.format(row.net_kg or 0) }} vs Daily Report {{ '{:,.0f}'.format(row.dr_net_kg or 0) }} — divergence open with data owner">R-23</span>
+              {% endif %}
+            </td>
+            {# Rejection KG #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.reject_kg %}{{ "{:,.2f}".format(row.reject_kg) if row.reject_kg != row.reject_kg|int else "{:,.0f}".format(row.reject_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% if row.may_dr_unfilled and not row.reject_kg %}<span class="text-[9px] text-amber-600">no DR data</span>{% endif %}
+            </td>
+            {# Rej% (gross / net) #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap">
+              {% if row.rej_pct_gross is not none %}
+              <span class="text-gray-700">{{ "%.2f"|format(row.rej_pct_gross) }}%</span>
+              {% if row.rej_pct_net is not none %}
+              <br><span class="text-[9px] text-gray-400">{{ "%.2f"|format(row.rej_pct_net) }}% net</span>
+              {% endif %}
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Gross KG #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.gross_kg %}{{ "{:,.1f}".format(row.gross_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Labour headcount #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.labour is not none %}{{ row.labour|int }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Paid hours #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.paid_hrs is not none %}{{ "{:,.1f}".format(row.paid_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Paid wages — AWAITING if None #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap">
+              {% if row.awaiting_wages %}
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold"
+                    style="background:rgba(197,90,17,0.12);color:var(--terra)">AWAITING SOURCE DATA</span>
+              {% elif row.wages is not none %}
+              <span class="text-gray-700">{{ "{:,.0f}".format(row.wages) }}</span>
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Paid hours per person #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">
+              {% if row.devoted_per_person is not none %}{{ "{:,.1f}".format(row.devoted_per_person) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Per hour cost #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">
+              {% if row.per_hour_cost is not none %}{{ "{:,.2f}".format(row.per_hour_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {# Per KG labour cost #}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap font-medium text-gray-700">
+              {% if row.per_kg_cost is not none %}{{ "{:,.2f}".format(row.per_kg_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+
+          {# ── TOTAL row ── #}
+          {% set tr = data.section.total_row %}
+          <tr style="background:rgba(13,122,62,0.07);border-top:2px solid rgba(13,122,62,0.22);font-weight:600">
+            <td class="px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(226,244,232,1);z-index:1">TOTAL</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.1f}".format(tr.run_hrs) if tr.run_hrs else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.net_kg) if tr.net_kg else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">
+              {% if tr.reject_kg %}{{ "{:,.2f}".format(tr.reject_kg) if tr.reject_kg != tr.reject_kg|int else "{:,.0f}".format(tr.reject_kg) }}{% else %}—{% endif %}
+            </td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">
+              {% if tr.rej_pct_gross is not none %}
+              {{ "%.2f"|format(tr.rej_pct_gross) }}%
+              {% if tr.rej_pct_net is not none %}<br><span class="text-[9px] font-normal text-green-800">{{ "%.2f"|format(tr.rej_pct_net) }}% net</span>{% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.1f}".format(tr.gross_kg) if tr.gross_kg else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ tr.labour|int if tr.labour is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.1f}".format(tr.paid_hrs) if tr.paid_hrs is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">
+              {% if tr.awaiting_wages %}
+              <span style="color:var(--terra)">PARTIAL — months AWAITING</span>
+              {% elif tr.wages is not none %}{{ "{:,.0f}".format(tr.wages) }}{% else %}—{% endif %}
+            </td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.1f}".format(tr.devoted_per_person) if tr.devoted_per_person is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.2f}".format(tr.per_hour_cost) if tr.per_hour_cost is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.2f}".format(tr.per_kg_cost) if tr.per_kg_cost is not none else "—" }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    {# ── Contractor wages note ── #}
+    {% if tr.contractor_wages is not none %}
+    <div class="mt-2 px-2 pb-2 text-[10px] text-gray-500">
+      Contractor wages (Segment Cost workbook): <span class="font-medium text-gray-700">₹{{ "{:,.0f}".format(tr.contractor_wages) }}</span>
+      · Total incl. contractor: <span class="font-medium text-gray-700">
+        ₹{{ "{:,.0f}".format((tr.wages or 0) + tr.contractor_wages) }}</span>
+      (not included in the Paid Wages column above; both figures from the same tab).
+      Annual Garden workbook shows ₹{{ "{:,}".format(data.annual_wages_ref) }} — see R-42 banner.
+    </div>
+    {% endif %}
+
+    {# ── R-23 divergence detail ── #}
+    {% set ns = namespace(has_r23=false) %}
+    {% for row in data.section.month_rows %}{% if row.r23_differs %}{% set ns.has_r23 = true %}{% endif %}{% endfor %}
+    {% if ns.has_r23 %}
+    <div class="mt-1 mx-2 mb-2 px-2 py-1.5 rounded-lg text-[10px] leading-snug"
+         style="background:rgba(31,56,100,0.05);border:1px solid rgba(31,56,100,0.15)">
+      <span class="font-semibold" style="color:var(--navy)">R-23 month-level divergences (our block tabs vs Daily Report):</span>
+      {% for row in data.section.month_rows %}{% if row.r23_differs %}
+      <div class="mt-0.5 text-gray-600">
+        <span class="font-medium">{{ row.month_disp }}:</span>
+        block tabs <span class="font-semibold">{{ "{:,.0f}".format(row.net_kg or 0) }} kg</span>
+        · Daily Report <span class="font-semibold">{{ "{:,.0f}".format(row.dr_net_kg or 0) }} kg</span>
+        · difference {{ "{:+,.0f}".format((row.net_kg or 0) - (row.dr_net_kg or 0)) }} kg.
+      </div>
+      {% endif %}{% endfor %}
+      <div class="mt-1 text-gray-400">Showing block-tab figures (Cardinal Rule). Divergence open with data owner (Anuj).</div>
+    </div>
+    {% endif %}
+  </div>{# end kpi-card #}
+</div>
+
+{# ─── Production basis note ──────────────────────────────────────────────────── #}
+<div class="mt-2 mb-6 p-3 rounded-xl border text-[10px] text-gray-500 leading-relaxed"
+     style="border-color:rgba(31,56,100,0.12);background:rgba(31,56,100,0.025)">
+  <div class="font-semibold text-gray-600 mb-1">Source notes</div>
+  <div><span class="font-medium text-gray-700">Output (Actual + Gross)</span> — MACHINE n block tabs, plant=GARDEN, KH only. Undated rows correctly skipped.</div>
+  <div><span class="font-medium text-gray-700">Rejection</span> — Daily Report matrix, joined per machine-date. Includes synthetic zero-output records for rejection-only dates (July M/C-2 70 kg + M/C-3 85 kg on 31st).</div>
+  <div><span class="font-medium text-gray-700">Run Hours</span> — Daily Report matrix (r.actual_hours after join).</div>
+  <div><span class="font-medium text-gray-700">Labour, Paid Hours, Wages</span> — Segment Cost workbook, dedicated Garden Pipe tab (R-11). NOT the UNIT-3 roll-up tab.</div>
+  <div><span class="font-medium text-gray-700">Per-KG Labour Cost</span> — Paid Wages ÷ Gross KG (production including rejection). Contractor wages excluded from this denominator.</div>
+  <div class="mt-1 text-gray-400">Last synced: {{ last_synced }}</div>
+</div>
+
+{% endif %}{# end not data.error #}
+
+{% endblock %}

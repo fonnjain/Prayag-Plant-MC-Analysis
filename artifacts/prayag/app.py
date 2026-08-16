@@ -3461,6 +3461,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/moulding-summary"
             if rpt["id"] == "gom":
                 rpt["view_url"] = "/management-reports/gom-summary"
+            if rpt["id"] == "garden_summary":
+                rpt["view_url"] = "/management-reports/garden-pipe-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3629,6 +3631,33 @@ def mgmt_gom_summary_view():
     data = _mgs.build_gom_summary(fy)
     return render_template(
         "report_mgmt_gom_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/garden-pipe-summary")
+def mgmt_garden_pipe_summary_view():
+    """Garden Pipe M/C Summary — monthly run hours / output / rejection / labour / wages.
+
+    Sources:
+      output + run hours + rejection — daily records (plant=GARDEN, block tabs + DR matrix)
+      labour + paid hours + wages    — Segment Cost workbook, Garden Pipe tab (R-11)
+
+    Flags:
+      R-23 — block-tab output vs Daily Report output (open divergence)
+      R-42 — Segment Cost wages vs Annual Garden workbook wages (open)
+      GARDEN_WB — West Bengal plant disclosed separately, never merged into KH
+    """
+    import mgmt_garden_summary as _mgs
+
+    fy = request.args.get("fy", "2627")
+    if fy not in _mgs._FY_YM:
+        fy = "2627"
+    data = _mgs.build_garden_summary(fy)
+    return render_template(
+        "report_mgmt_garden_pipe.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
