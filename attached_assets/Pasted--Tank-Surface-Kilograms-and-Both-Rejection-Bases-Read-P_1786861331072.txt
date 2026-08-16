@@ -1,0 +1,68 @@
+# Tank — Surface Kilograms and Both Rejection Bases
+
+Read `PRAYAG_RULES.md`. Touches **R-09, R-22, R-35**.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Template and display only. No parser, no calculation, no figure may change.** Every value below is already on the Tank records — this pass renders what is there.
+
+---
+
+## FIX 1 — Kilogram output is captured but never shown
+
+The QA review asked for Tank in kilograms as well as litres, and pointed at the exact columns — **KH M · VN N · WB L**. The data is already on every Tank record in `secondary_counts["kg"]`:
+
+| Plant | Apr | May | Jun | Jul |
+|---|---:|---:|---:|---:|
+| VN | 5,395.80 | 13,535.00 | 13,526.00 | 14,548.90 |
+| WB | 11,163.00 | — | — | — |
+| KH | — | 21,090.00 | 30,490.50 | — |
+
+Render kilograms alongside litres on the Tank pages, with **both units labelled**. Litres remains the headline; kilograms is the figure that makes Tank comparable with every other segment and costable per kilogram.
+
+Do not convert between them — the kilogram figure is a tank's own weight, not a conversion from its capacity. They are independent measures of the same production (**R-09**).
+
+## FIX 2 — Rejection: two bases, only one shown
+
+Tank records carry two valid rejection measures, and the page currently shows only the first:
+
+| Basis | Source | VN July | Rate |
+|---|---|---:|---:|
+| **Litres** | `reject_count` (rejected pcs × tank size) | 5,500 Ltr | **0.97%** of 565,500 Ltr |
+| **Kilograms** | `rej_base_kg` + `rej_mouth_kg` | 449.30 kg | **3.09%** of 14,548.90 kg |
+
+**The plant's own dashboard reports 3.09%**, and both source worksheets agree on it (`PROD. REPORT` 449.30, `DAILY REPORT` 446.40). An unlabelled **0.97%** on our page will read as an error to anyone comparing against the plant's figure.
+
+Show both, each with its basis named (**R-22**). Neither is *the* rejection figure: litres measures capacity scrapped, kilograms measures material scrapped including mouth lids. They answer different questions.
+
+Where a plant records only one basis, show that one and leave the other blank — never a zero (**R-08**).
+
+---
+
+## Validate
+
+- VN July renders **5,500 Ltr / 0.97%** and **449.30 kg / 3.09%**, both labelled.
+- Kilogram output renders for every plant-month in the table above.
+- **No figure changes.** Production stays VN Jun 533,500 Ltr · WB Jul 1,702,000 · KH Jun 1,419,500. Reconciled hours stay 76 / 196 / 208 / 232 and WB Apr 100.
+- **Utilisation stays `n/a` on every Tank plant-month** — ideal hours must still resolve to `not_set` (**R-16**). If any utilisation percentage appears, **stop**.
+- No other segment's display changes.
+
+## Do not touch
+
+`tank_reconcile.py` and the R-39 logic · the synthetic zero-output records · the rejected-exceeds-produced guard · `APP_DEFAULT_IDEAL_HOURS` (**TANK must stay absent**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden and HDPE paths · `GARDEN_WB` · vanished-file detection · R-27 warning · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Next pass, not this one — WB April per-machine
+
+The investigation found the label `MACHINE-1 + MACHINE-2` is not merely vague, it is **misleading**: MACHINE-1 ran **zero hours** in April and MACHINE-2 did all 100 hours and 11,163 kg. The combined label implies a split that did not happen and hides a machine being idle for a full month.
+
+The data supports fixing it properly rather than relabelling: **MACHINE-2's row carries the full per-date grid**, identical to the TOTAL row, so attribution is provable rather than inferred. Parsing that row directly would give a real per-machine view with MACHINE-1 correctly showing 0.
+
+That is a parser change and belongs in its own pass. Also carry forward the WB April internal discrepancy — TOTAL row **98 h** against a per-date sum of **100 h**; the per-date sum is used and the 2-hour gap stays flagged (**R-35**).
+
+## Report back
+
+The rendered kilogram figures per plant-month · the VN July rejection cell verbatim, both bases with labels · confirmation that no production figure, no hours figure and no utilisation changed · confirmation that no other segment moved.

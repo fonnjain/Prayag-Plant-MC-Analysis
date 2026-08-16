@@ -133,14 +133,41 @@
       <div>
         <div class="text-sm font-bold text-gray-800">{{ "{:,.0f}".format(m.total_count) }}</div>
         <div class="text-xs text-gray-400">Output ({{ m.unit or 'units' }}){{ info('UNITS') }}</div>
+        {# Tank: show kg alongside Ltr — independent measure, not a conversion (R-09) #}
+        {% if item.plant in ('TANK', 'TANK_VN', 'TANK_WB') and m.secondary_counts.get('kg', 0) > 0 %}
+        <div class="text-xs text-gray-500 mt-0.5">{{ "{:,.2f}".format(m.secondary_counts['kg']) }} kg</div>
+        {% endif %}
       </div>
       <div>
         <div class="text-sm font-bold {% if m.attainment >= 90 %}text-green-600{% elif m.attainment >= 75 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.attainment }}%</div>
         <div class="text-xs text-gray-400">Attainment{{ info('ATT') }}</div>
       </div>
       <div>
+        {# Tank: show both rejection bases with labels (R-22). #}
+        {% if item.plant in ('TANK', 'TANK_VN', 'TANK_WB') %}
+          {% set rej_kg = m.secondary_counts.get('rej_mouth_kg', 0) + m.secondary_counts.get('rej_base_kg', 0) %}
+          {% set prod_kg = m.secondary_counts.get('kg', 0) %}
+          {% set rej_ltr_pct = (m.reject_count / m.total_count * 100) | round(2) if m.total_count > 0 and m.reject_count > 0 else none %}
+          {% set rej_kg_pct  = (rej_kg / prod_kg * 100) | round(2) if prod_kg > 0 and rej_kg > 0 else none %}
+          {% if m.reject_count > 0 %}
+          <div class="text-sm font-bold {% if rej_ltr_pct and rej_ltr_pct < 2 %}text-green-600{% elif rej_ltr_pct and rej_ltr_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
+            {% if rej_ltr_pct %}{{ rej_ltr_pct }}%{% else %}—{% endif %}
+          </div>
+          <div class="text-xs text-gray-400">Rej (Ltr){{ info('REJECT_PCT') }}</div>
+          {% if rej_kg > 0 %}
+          <div class="text-xs font-semibold mt-0.5 {% if rej_kg_pct and rej_kg_pct < 2 %}text-green-600{% elif rej_kg_pct and rej_kg_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
+            {% if rej_kg_pct %}{{ rej_kg_pct }}%{% else %}—{% endif %}
+          </div>
+          <div class="text-xs text-gray-400">Rej (kg)</div>
+          {% endif %}
+          {% else %}
+          {% if m.rejection_pct is none %}<div class="text-sm font-bold text-gray-400">n/a</div>{% else %}<div class="text-sm font-bold {% if m.rejection_pct < 2 %}text-green-600{% elif m.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>{% endif %}
+          <div class="text-xs text-gray-400">Reject{{ info('REJECT_PCT') }}</div>
+          {% endif %}
+        {% else %}
         {% if m.rejection_pct is none %}<div class="text-sm font-bold text-gray-400">n/a</div>{% else %}<div class="text-sm font-bold {% if m.rejection_pct < 2 %}text-green-600{% elif m.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">{{ m.rejection_pct }}%</div>{% endif %}
         <div class="text-xs text-gray-400">Reject{{ info('REJECT_PCT') }}</div>
+        {% endif %}
       </div>
     </div>
 

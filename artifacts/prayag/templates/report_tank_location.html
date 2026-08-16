@@ -36,30 +36,43 @@
   <!-- Overall KPI strip -->
   {% if overall.total_count > 0 %}
   <div class="kpi-card p-3 mb-4 grid grid-cols-3 gap-2 text-center">
+
+    <!-- Production — litres (headline) + kg (secondary) -->
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Total Production{% if overall.unit %} ({{ overall.unit }}){% endif %}</div>
+      <div class="text-xs text-gray-500 mb-0.5">Production (Ltr)</div>
       <div class="font-bold text-base" style="color:var(--navy)">{{ "{:,.0f}".format(overall.total_count) }}</div>
-    </div>
-    <div>
-      <div class="text-xs text-gray-500 mb-0.5">Total Rejection ({{ overall.reject_unit or overall.unit or 'kg' }})</div>
-      <div class="font-bold text-base text-red-500">{{ "{:,.1f}".format(overall.reject_count) }}</div>
-      {% set sc = overall.secondary_counts %}
-      {% if sc.get('rej_pcs', 0) > 0 or sc.get('rej_ltr', 0) > 0 %}
-      <div class="text-xs text-gray-400 mt-0.5">
-        {% if sc.get('rej_pcs', 0) > 0 %}{{ "{:,.0f}".format(sc.get('rej_pcs', 0)) }} pcs{% endif %}
-        {% if sc.get('rej_ltr', 0) > 0 %}{% if sc.get('rej_pcs', 0) > 0 %} · {% endif %}{{ "{:,.0f}".format(sc.get('rej_ltr', 0)) }} Ltr{% endif %}
-      </div>
+      {% if total_kg and total_kg > 0 %}
+      <div class="text-xs text-gray-400 mt-0.5">{{ "{:,.2f}".format(total_kg) }} kg</div>
       {% endif %}
     </div>
+
+    <!-- Rejection — Ltr basis -->
     <div>
-      <div class="text-xs text-gray-500 mb-0.5">Rejection %
-        <span class="text-gray-400" title="Rejection % is always on a kilogram basis: kg rejected ÷ kg produced">ⓘ</span>
+      <div class="text-xs text-gray-500 mb-0.5">Rejection (Ltr basis)</div>
+      {% if total_rej_ltr and total_rej_ltr > 0 %}
+      <div class="font-bold text-base text-red-500">{{ "{:,.0f}".format(total_rej_ltr) }} Ltr</div>
+      <div class="text-xs {% if rej_ltr_pct and rej_ltr_pct < 2 %}text-green-600{% elif rej_ltr_pct and rej_ltr_pct < 5 %}text-amber-600{% elif rej_ltr_pct %}text-red-600{% else %}text-gray-400{% endif %} mt-0.5 font-semibold">
+        {% if rej_ltr_pct %}{{ rej_ltr_pct }}%{% else %}—{% endif %}
       </div>
-      {% if overall.rejection_pct is none %}<div class="font-bold text-base text-gray-400">n/a</div>{% else %}<div class="font-bold text-base {% if overall.rejection_pct < 2 %}text-green-600{% elif overall.rejection_pct < 5 %}text-amber-600{% else %}text-red-600{% endif %}">
-        {{ overall.rejection_pct }}%
-      </div>{% endif %}
-      <div class="text-xs text-gray-400 mt-0.5">kg basis</div>
+      {% else %}
+      <div class="font-bold text-base text-gray-400">—</div>
+      {% endif %}
     </div>
+
+    <!-- Rejection — kg basis (R-22: both bases, each labelled) -->
+    <div>
+      <div class="text-xs text-gray-500 mb-0.5">Rejection (kg basis)</div>
+      {% if total_rej_kg and total_rej_kg > 0 %}
+      <div class="font-bold text-base text-red-500">{{ "{:,.2f}".format(total_rej_kg) }} kg</div>
+      <div class="text-xs {% if rej_kg_pct and rej_kg_pct < 2 %}text-green-600{% elif rej_kg_pct and rej_kg_pct < 5 %}text-amber-600{% elif rej_kg_pct %}text-red-600{% else %}text-gray-400{% endif %} mt-0.5 font-semibold">
+        {% if rej_kg_pct %}{{ rej_kg_pct }}%{% else %}—{% endif %}
+      </div>
+      {% else %}
+      <div class="font-bold text-base text-gray-400">—</div>
+      <div class="text-xs text-gray-400 mt-0.5">not recorded</div>
+      {% endif %}
+    </div>
+
   </div>
   {% endif %}
 

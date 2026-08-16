@@ -4436,15 +4436,53 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         all_months.add(r.period)
     months = sorted(all_months)
 
-    # Advisory validation (never blocks): this location has only an annual summary
-    # sheet (no daily workbook), so figures are read straight from that sheet and
-    # there is no independent daily figure to reconcile against.
+    # ── Daily records: surface kg output and both rejection bases ──────────────
+    # Annual summary records carry Ltr only (secondary_counts is always empty for
+    # annual-source records).  Daily records produced by _emit_tank carry:
+    #   secondary_counts["kg"]            — production in kg  (per item, per date)
+    #   secondary_counts["rej_mouth_kg"]  — mouth-lid rejection in kg
+    #   secondary_counts["rej_base_kg"]   — base-body  rejection in kg
+    # These are already-computed figures; this block only aggregates them for
+    # display.  No new numbers are produced (R-07).
+    try:
+        _daily_all, _, _ = get_daily_records(list(wanted))
+    except Exception:
+        _daily_all = []
+    _tank_daily = [r for r in _daily_all if r.plant == plant and r.period in wanted]
+
+    _d_ltr_m   : dict = defaultdict(float)
+    _d_kg_m    : dict = defaultdict(float)
+    _d_rltr_m  : dict = defaultdict(float)
+    _d_rkg_m   : dict = defaultdict(float)
+    for _r in _tank_daily:
+        _d_ltr_m[_r.period]  += _r.total_count
+        _d_kg_m[_r.period]   += _r.secondary_counts.get("kg", 0.0)
+        _d_rltr_m[_r.period] += _r.reject_count
+        _d_rkg_m[_r.period]  += (
+            _r.secondary_counts.get("rej_mouth_kg", 0.0) +
+            _r.secondary_counts.get("rej_base_kg", 0.0)
+        )
+
+    _tot_ltr  = sum(_d_ltr_m.values())
+    _tot_kg   = sum(_d_kg_m.values())
+    _tot_rltr = sum(_d_rltr_m.values())
+    _tot_rkg  = sum(_d_rkg_m.values())
+
+    def _pct(n, d): return round(n / d * 100, 2) if d > 0 and n > 0 else None
+
+    # Per-month aggregates keyed by ym — used for monthly kg column in template
+    monthly_kg      = {m: round(_d_kg_m[m],  2) for m in months}
+    monthly_rej_ltr = {m: round(_d_rltr_m[m], 0) for m in months}
+    monthly_rej_kg  = {m: round(_d_rkg_m[m],  2) for m in months}
+
+    # Advisory validation (never blocks).
     validation = {
         "available": True,
         "status": "info",
         "label": "Annual summary source",
-        "note": "Figures come directly from the annual summary sheet for this "
-                "location — there is no daily workbook to cross-check against.",
+        "note": "Production by item comes from the annual summary sheet. "
+                "Kilogram output and rejection figures come from the daily workbooks "
+                "when available.",
     }
 
     return render_template("report_tank_location.html",
@@ -4455,6 +4493,15 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         validation=validation,
         period_label=pinfo["label"], period=period_arg,
         summary_only=True,
+        # daily-derived kg and rejection figures
+        total_kg=round(_tot_kg, 2),
+        total_rej_ltr=round(_tot_rltr, 0),
+        total_rej_kg=round(_tot_rkg, 2),
+        rej_ltr_pct=_pct(_tot_rltr, _tot_ltr),
+        rej_kg_pct=_pct(_tot_rkg, _tot_kg),
+        monthly_kg=monthly_kg,
+        monthly_rej_ltr=monthly_rej_ltr,
+        monthly_rej_kg=monthly_rej_kg,
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
 
