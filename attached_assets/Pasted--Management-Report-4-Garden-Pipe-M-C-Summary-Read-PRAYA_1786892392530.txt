@@ -1,0 +1,89 @@
+# Management Report 4 — Garden Pipe M/C Summary
+
+Read `PRAYAG_RULES.md`. **The Cardinal Rule governs this series:** match the layout exactly, compute every number ourselves, flag any difference, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern from Reports 1–3.
+
+**Spreadsheet:** `Annual 26-27 GARDEN PIPE M/C Summary` · **Worksheet:** `SUMMARY`
+
+---
+
+## Layout to reproduce
+
+```
+MONTHS | M/C Run Hours | Actual Output (KG) | Rejection (KG) | Rejection %age |
+Total Output with Rejection (KG) | Labour | Actual Paid Hours | Paid Wages |
+Paid Hours Devoted by Per Person | Per Hour Cost on Paid Hours | Per KG Labour Cost
+```
+
+**Rows run latest-first** — `MAR'27` at the top down to `APR'26`, then `TOTAL`. This is the opposite of the Pipe SUMMARY (**R-05**) — map months by label, never by position.
+
+Note the sheet carries **both** bases side by side: `Actual Output (KG)` is **net**, `Total Output with Rejection (KG)` is **gross**, and `Rejection %age` is computed on **gross** (1,191 ÷ 40,141 = 2.97%, not ÷ 38,950 = 3.06%). Label each column's basis (**R-22**).
+
+---
+
+## This report is the Cardinal Rule's hardest test so far — read this before building
+
+The sheet's figures are the **Daily Report basis**. Our app's Garden output comes from the **block tabs**. Both are real, from the same workbook, and they differ by 68%:
+
+| | APR | MAY | JUN | JUL | Total |
+|---|---:|---:|---:|---:|---:|
+| Daily Report (this sheet) | 38,950 | 0 | 66,911 | 32,191 | **138,052** |
+| Block tabs (our app) | 42,736 | 53,235 | 70,520 | 66,038 parsed | **232,528** |
+
+**Show our recomputed figure, name the basis, and flag the divergence. Do not resolve it** — **R-23** is open and this is precisely the situation the Cardinal Rule exists for.
+
+Two further things this sheet does not cover, which must be flagged:
+
+- **These figures are KH only.** A second Garden Pipe plant exists in West Bengal (`GARDEN_WB`) producing 22,152.8 kg in June and 6,457.4 kg in July, which this workbook does not include. State that the report covers KH, and whether WB is shown separately or excluded.
+- **May shows 0 output with 20 workers and ₹1,49,442 in wages.** That is not an error to fix — the Daily Report was never filled for May while the block tabs record 53,235 kg. Flag it.
+
+---
+
+## Target figures (the sheet's own, for comparison — not to be copied)
+
+| Month | Run Hrs | Net KG | Rejection | Rej% | Gross KG | Labour | Paid Hrs | Wages | ₹/kg |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| APR'26 | 549 | 38,950 | 1,191 | 3.06% | 40,141 | 19 | 1,389.5 | 1,04,845 | 2.61 |
+| MAY'26 | 0 | 0 | 0 | — | 0.00 | 20 | 3,853.5 | 1,49,442 | — |
+| JUN'26 | 1,004 | 66,911 | 2,215 | 3.31% | 69,126 | 17 | 3,895.5 | 1,71,877 | 2.49 |
+| JUL'26 | 0 | 32,191 | 1,854 | 5.76% | 34,044.80 | 15 | 4,612.5 | **blank** | 0.00 |
+| **TOTAL** | **1,553** | **138,052** | **5,260** | **3.81%** | **143,312** | **71** | **13,751** | **4,26,164** | **2.97** |
+
+**July's `0.00` per-kg must not be reproduced** — wages are blank, so render **AWAITING SOURCE DATA** (**R-07**, **R-08**), as in Reports 1–3.
+
+---
+
+## R-42 — the wages divergence, flagged not resolved
+
+This sheet's `Paid Wages` column (**₹4,26,164**, ₹2.97/kg) disagrees with the Segment Cost workbook's Garden Pipe tab (**₹2,20,797** + ₹50,547 contractor, ₹2.02/kg). The **paid hours are identical in both** (1,389.5 / 3,853.5 / 3,895.5), so they describe the same labour — but the ratio varies by month (1.37 / 1.92 / 2.59), so it is not a scaling.
+
+**Use the Segment Cost workbook** (our source, **R-11**, dedicated per-segment tab — not a UNIT roll-up) and carry a permanent R-42 banner naming both figures. Follow the `_PTMT_R24_NOTES` pattern from Report 1 if a per-month structure helps.
+
+---
+
+## Data sources for our recomputation
+
+- **Output** — Garden block tabs (`MACHINE n`), our current basis. Undated rows are correctly skipped; July in-sheet is 68,390 against 66,038 parsed, and that 2,352 kg gap is a source data-entry issue, not ours to close.
+- **Rejection and run hours** — `Daily Report` matrix, joined per machine-date, **including the synthetic zero-output records** for rejection-only dates (July: M/C-2 70 kg and M/C-3 85 kg on the 31st). Total 5,259.50 kg.
+- **Labour, paid hours, wages** — Segment Cost workbook, dedicated `Garden Pipe` tab: C4=71 labour · D4=29 contractor · E4=13,751 paid hours · I4=₹2,20,797 · J5=₹50,547.
+
+## Validate
+
+- Layout matches, **months latest-first**, TOTAL at the bottom.
+- Our output renders on the block-tab basis with the basis named, and the divergence against 138,052 flagged.
+- Rejection **5,259.50 kg / 3.81%** with both bases distinguished (gross 2.97/3.20% vs net 3.06/3.31%).
+- Wages **₹2,20,797 + ₹50,547** with the R-42 banner.
+- **July renders AWAITING**, never 0.00. **May's wages-without-output is flagged**, not hidden.
+- GARDEN_WB stated as separate or excluded — never silently merged into KH.
+- **No existing figure moves anywhere** — Reports 1–3 totals unchanged (PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 daily basis). If any moves, **stop**.
+
+## Do not touch
+
+Garden's block-tab path, rejection join or synthetic records (**R-17**) · `tank_reconcile.py` / R-39 · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · HDPE, Tank and PTMT paths · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The rendered layout against the column list · our figures with their basis named · the R-23 and R-42 flags as they render · confirmation that July is AWAITING and May is flagged · how GARDEN_WB is presented · confirmation that no cell was copied and no existing figure moved.
