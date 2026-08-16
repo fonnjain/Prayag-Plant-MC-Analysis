@@ -1,0 +1,91 @@
+# Management Report 5 — HDPE M/C Summary
+
+Read `PRAYAG_RULES.md`. **The Cardinal Rule governs this series:** match the layout exactly, compute every number ourselves, flag any difference, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern from Report 4 (Garden), `cb0db2a`.
+
+**Spreadsheet:** `Annual 26-27 HDPE M/C Summary` · **Worksheet:** `SUMMARY`
+
+---
+
+## Layout — identical shape to Garden
+
+```
+MONTHS | M/C Run Hours | Actual Output (KG) | Rejection (KG) | Rejection %age |
+Total Output with Rejection (KG) | Labour | Actual Paid Hours | Paid Wages |
+Paid Hours Devoted by Per Person | Per Hour Cost on Paid Hours | Per KG Labour Cost
+```
+
+**Rows latest-first** — `MAR'27` at top down to `APR'26`, then `TOTAL` (**R-05**).
+
+---
+
+## This is the sharpest Cardinal Rule case in the series — read before building
+
+**The workbook reports HDPE July as zero. It was 22,448.04 kg.**
+
+| Month | Sheet says | We compute | Source |
+|---|---:|---:|---|
+| APR'26 | 0 | 0 | genuinely idle, both tabs |
+| MAY'26 | 1,370.00 | **1,369.20** | block tabs (0.80 kg apart) |
+| JUN'26 | 0 | 0 | genuinely idle, both tabs |
+| **JUL'26** | **0.00** | **22,448.04** | M/C-1 21,931.28 + M/C-2 516.76, 48 rows |
+| **TOTAL** | **1,370.00** | **23,817.24** | |
+
+The sheet's `SUMMARY` is fed from the **`Daily Report` matrix**, which for HDPE is **entirely unmaintained** — it has carried actuals for exactly one machine in one month all year. Real production is entered in the `MACHINE 1–6` block tabs, which the workbook's summary never reads.
+
+**The consequence is visible in the sheet's own bottom line:** `Per KG Labour Cost TOTAL = 547.78`, because it divides ₹8,16,185 of wages by 1,490 kg. On our figures the denominator is ~27,719 kg gross and the cost is roughly **₹29/kg** — a plausible number instead of an impossible one.
+
+Show ours, name the basis, flag the divergence prominently. **This is the clearest demonstration so far that the app is not reproducing these reports but correcting them.**
+
+---
+
+## Our figures
+
+**Output** — `MACHINE 1–6` block tabs (**R-19**; switched from the matrix in the HDPE block-tab fix).
+`APR 0 · MAY 1,369.20 · JUN 0 · JUL 22,448.04 · AUG 0` → **23,817.24 kg**
+
+**Rejection** — block tabs where values exist, `Daily Report` fallback where the block column is present but blank:
+- **JUL 3,782.00** from block tabs (M/C-1). **M/C-2's rejection column is present but empty** → `rejection_tracked = False` → renders **n/a**, never a green 0.00% (**R-08**, Failure Mode #14).
+- **MAY 120.00** via the Daily Report fallback — the block tab has no rejection values for May.
+- Total **3,902.00 kg**.
+
+**Run hours** — `Daily Report` (`M/C RUN HOUR`). Only MAY M/C-1 has actuals: **21 h**. Everywhere else utilisation stays blank (**R-07**).
+
+**Ideal rates** — the `Daily Report` carries genuine per-machine standards: M/C-1 500 · M/C-2 350 · M/C-3 450 · M/C-4 400 · M/C-5 250 · M/C-6 500 kg/hr, at 550 ideal hrs/month. **Report them; do not wire them into `baselines.json`** (**R-16**) — 550/month is the same class of placeholder as PIPE's 500.
+
+**Labour, paid hours, wages** — Segment Cost workbook, dedicated `HDPE Pipe` tab (**R-11**), not a UNIT roll-up.
+
+---
+
+## Verify before wiring — a possible second wages divergence
+
+The sheet's `SUMMARY` shows HDPE labour **44**, paid hours **9,827**, wages **₹8,16,185** (APR 3,26,121 + MAY 2,68,928 + JUN 2,21,136; July blank).
+
+The Segment Cost workbook's Combined Wages tab appears to show HDPE at **44 labour / 9,827 hours / ₹13,78,857** — the **same headcount and hours, different money**. That is the R-42 pattern again, on a different segment.
+
+**Confirm this from the `HDPE Pipe` tab before building.** Print labour, paid hours, paid wages and contractor wages per month. If the wages genuinely diverge while hours match, flag it as a new open question alongside R-42 and use the Segment Cost figure (our source). If they reconcile, say so — do not assume.
+
+---
+
+## Validate
+
+- Layout matches, months latest-first, TOTAL at the bottom.
+- **JUL renders 22,448.04 kg** with the divergence against the sheet's 0.00 flagged prominently.
+- MAY 1,369.20 with the 0.80 kg difference against the sheet noted.
+- APR and JUN render **0** — genuinely idle in both tabs, not missing data. Distinguish "idle" from "not recorded" (**R-06**).
+- **JUL M/C-2 rejection renders n/a**, not 0.00%.
+- Utilisation blank except MAY M/C-1; no percentage computed against the 550 placeholder without labelling it as the sheet's assumption.
+- **JUL wages render AWAITING**, never 0.00.
+- The wages question above is answered explicitly.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 (daily) · Garden 232,528 block / 138,052 DR · Moulding 35,972 h. If any moves, **stop**.
+
+## Do not touch
+
+HDPE's block-tab path or its rejection fallback (**R-19**) · Garden's paths and Report 4's live-DR accumulation · `tank_reconcile.py` / R-39 · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The rendered layout · our figures with basis named · the July divergence flag verbatim · the wages verification answer · confirmation that APR/JUN read as idle rather than missing, JUL M/C-2 rejection is n/a, and no existing figure moved.
