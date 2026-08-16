@@ -1,0 +1,97 @@
+# Management Report 2 of 13 — (A) Pipe M/C Summary
+
+Read `PRAYAG_RULES.md`. **The Cardinal Rule governs this series:** match the layout exactly, compute every number ourselves, flag any difference, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern established in the Segment Labour report (`fa576e6`).
+
+**Spreadsheet:** `(A). Annual 26-27 Pipe M/C Summary`
+**Two worksheets, two sections:** `SUMMARY` and `SUMMARY-1`.
+
+---
+
+## SECTION 1 — worksheet `SUMMARY` (monthly)
+
+```
+MONTHS | M/C Run Hours | Actual Output with Rejection (KG) | Labour |
+Actual Paid Hours | Paid Wages | Paid Hours Devoted by Per Person |
+Per Hour Cost on Paid Hours | Per KG Labour Cost
+```
+
+Rows `APR'26` → `MAR'27` in calendar order, then `TOTAL`.
+
+**Note the output column is explicitly "with Rejection" — this is the GROSS basis.** Our verified gross figures:
+
+| | Run Hours | Output (gross) | Labour | Paid Hours | Paid Wages |
+|---|---:|---:|---:|---:|---:|
+| APR'26 | 833 | 190,494 | 25 | 7,502.5 | 4,73,293 |
+| MAY'26 | 1,832 | 344,000 | 30 | 9,056.0 | 3,58,685 |
+| JUN'26 | 1,008 | 178,782 | 35 | 10,328.5 | 4,67,549 |
+| JUL'26 | 2,834 | 564,695 | 38 | 10,732.0 | **blank** |
+| **TOTAL** | **6,507** | **1,277,971** | **128** | **37,619.0** | **12,99,527** |
+
+`Per KG Labour Cost` = wages ÷ gross output (TOTAL 12,99,527 ÷ 12,77,971 = **1.02**). Label the basis as gross (**R-22**).
+
+**July:** the workbook shows `0.00` for Per Hour Cost and Per KG Labour Cost because wages are blank. **We must not.** Render July's wage-dependent cells as **AWAITING SOURCE DATA**, exactly as the Segment Labour report does. A zero per-kg cost reads as "labour was free" (**R-07**, **R-08**).
+
+---
+
+## SECTION 2 — worksheet `SUMMARY-1` (per machine, year on year)
+
+```
+YEARS | PIPE MACHINE | Ideal Hours | Actual Hours | Actual Output (KG) |
+Ideal Output | Avg. Per Output on Hours | M/C Utilization in Hours (%) |
+Output Efficiency (%)
+```
+
+**Two blocks**, each M/C-1 … M/C-9 with a TOTAL row:
+
+| Block | Ideal Hrs | Actual Hrs | Output (KG) | Ideal Output | Avg/Hr | Utilisation | Output Eff. |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Apr,26 – July,26** | 18,000 | 6,507 | 1,277,971 | 2,550 | 1,675 | **36.15%** | **65.71%** |
+| **Apr,25 – July,25** | 18,000 | 8,288 | 1,679,904 | 2,550 | 1,356 | **46.04%** | **53.17%** |
+
+Sample rows to validate against — FY26-27: M/C-3 855 h / 168,025.0 / 42.75% / 61.41% · M/C-9 561 h / 221,053 / 28.05% / 98.51% · M/C-8 zero throughout (must render **0**, not vanish). FY25-26: M/C-1 18 h / 3,228.0 / 0.88% / **153.71%** · M/C-2 2,126 h / 319,582.0 / **106.28%** / 53.70%.
+
+**Percentages above 100% are valid** and must not be capped — a machine running beyond plan legitimately exceeds it.
+
+### The FY25-26 block is the one R-03 exception
+
+FY2025-26 is closed. That block **may be read from the finalized annual as-is**, because no live source remains to recompute from. The FY2026-27 block must be **fully recomputed**. Label which is which so a reader knows.
+
+---
+
+## Two findings in `SUMMARY-1` worth acting on separately
+
+**`Ideal Output` is a real per-machine standard.** The sheet carries kg/hr per machine: M/C-1 **120** · M/C-2 **280** · M/C-3 **320** · M/C-4 **380** · M/C-5 **350** · M/C-6 **350** · M/C-7 **200** · M/C-8 **150** · M/C-9 **400**. These are business-supplied rates — exactly what `baselines.json` has been missing for PIPE.
+
+**`Ideal Hours` is not.** 18,000 across nine machines over four months is **500 per machine per month** — the flat placeholder `baselines.json` explicitly forbids (**R-16**).
+
+**Report both; wire neither in this pass.** Populating `baselines.json` is a separate decision, and mixing a real rate with a placeholder denominator would produce exactly the fabricated figure R-16 exists to prevent. For this report, reproduce the columns as the sheet shows them and label `Ideal Hours` as the sheet's own assumption, not ours.
+
+---
+
+## Data sources for our recomputation
+
+- **Output and hours** — PIPE daily path: `MAX(Report-5, Report-11)` per machine-date (**R-15**, **R-39**). Report-5 supplies hours.
+- **Labour, paid hours, wages** — Segment Cost workbook, **dedicated per-segment tab** (**R-11**). Not a UNIT roll-up row — that was the fix in `fa576e6`.
+- **Rejection** — from the same reconciliation, so gross = net + rejection.
+
+## Validate
+
+- Both sections render with the exact column order and row structure above.
+- SUMMARY TOTAL: **6,507 h / 1,277,971 kg / 128 labour / 37,619.0 paid hours / ₹12,99,527 / ₹1.02 per kg**.
+- SUMMARY-1 FY26-27 TOTAL: **6,507 h / 1,277,971 kg / 36.15% / 65.71%**; FY25-26 TOTAL: **8,288 h / 1,679,904 kg / 46.04% / 53.17%**.
+- M/C-8 renders **0**, not absent. Percentages over 100% are not capped.
+- July wage-dependent cells read **AWAITING**, never 0.00.
+- Every FY26-27 figure traceable to our own recomputation; **no cell copied**. FY25-26 read from the closed annual and **labelled as such**.
+- **No existing figure moves anywhere.** If any segment page changes, **stop**.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` / R-39 · `baselines.json` (**R-16** — do not populate it from this sheet) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · Garden, HDPE and Tank source paths · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Both sections against the figures above · which block was recomputed and which read from the closed annual · confirmation that the per-machine ideal output rates were reported but **not** wired into `baselines.json` · confirmation that no cell was copied and no existing figure moved.
