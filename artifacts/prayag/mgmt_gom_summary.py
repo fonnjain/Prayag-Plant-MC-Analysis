@@ -353,7 +353,23 @@ def build_gom_summary(fy: str = "2627") -> dict:
                 f"(B) builder error (section1 unavailable): {moulding_data['error']}"
             )
 
-        section1 = moulding_data["section2"]   # net basis, as in (B) SUMMARY-1 tab
+        # Enrich FY26-27 TOTAL row with the correct weighted avg/hr (Report 6 / Cardinal Rule).
+        # The (B) builder computes avg_hr as sum-of-band-averages = 76.10 (matching the SUMMARY
+        # tab convention).  Report 6 must show the weighted mean (output ÷ actual_hrs = ~10.17)
+        # and flag the divergence.  We add avg_hr_weighted without modifying avg_hr so that the
+        # (B) page continues to match the sheet.
+        raw_section2 = moulding_data["section2"]
+        enriched_fy2627 = []
+        for row in raw_section2.get("fy2627", []):
+            r = dict(row)
+            if r.get("is_total"):
+                out = float(r.get("output_kg") or 0.0)
+                hrs = float(r.get("actual_hrs") or 0.0)
+                r["avg_hr_weighted"] = round(out / hrs, 2) if hrs > 0 else None
+                r["avg_hr_sheet"]    = r.get("avg_hr")   # the 76.10 sum-of-averages
+            enriched_fy2627.append(r)
+        section1 = dict(raw_section2)
+        section1["fy2627"] = enriched_fy2627
 
         # ── 2. Load roster (needed for machine counts and mould IDs) ─────────
         matrices = _sh.batch_get(MOULDING_WB_FILE_ID, [SUMMARY_TAB], token)
@@ -361,7 +377,8 @@ def build_gom_summary(fy: str = "2627") -> dict:
         if not summary_vals:
             raise RuntimeError("Could not load SUMMARY tab from (B) Moulding workbook")
 
-        roster = _parse_summary_roster(summary_vals)
+        # _parse_summary_roster returns (roster, warnings) — unpack both.
+        roster, _roster_warnings = _parse_summary_roster(summary_vals)
         if not roster:
             raise RuntimeError("No machine rows found in SUMMARY tab — layout may have changed")
 

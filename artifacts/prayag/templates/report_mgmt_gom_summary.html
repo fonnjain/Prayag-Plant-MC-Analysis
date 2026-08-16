@@ -130,7 +130,10 @@
   </div>
 
   {# ════════════════════════════════════════════════════════════════════════ #}
-  {# SECTION 1 — SUMMARY tab (net basis, YoY, reused from (B) builder) #}
+  {# SECTION 1 — SUMMARY tab (net basis, YoY, reused from (B) builder)    #}
+  {#   Layout: TOTAL row first, then six tonnage bands (spec order).       #}
+  {#   FY26-27: fully recomputed (Cardinal Rule).                          #}
+  {#   FY25-26: closed annual as-is (R-03 exception).                      #}
   {# ════════════════════════════════════════════════════════════════════════ #}
   <section>
     <div class="flex items-center gap-3 mb-3">
@@ -138,25 +141,46 @@
       <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Same as (B) Moulding Summary</span>
       <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">Net output</span>
     </div>
+
+    {# ── Avg/Hr divergence notice ─────────────────────────────────────────── #}
+    <div class="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 text-xs text-orange-800 mb-4 space-y-1">
+      <p class="font-semibold">Avg. Per Output on Hours — TOTAL row (Cardinal Rule)</p>
+      <p>The sheet's TOTAL in the SUMMARY tab is <strong>76.10</strong>, computed as the
+        <em>sum</em> of the six band averages (5.38 + 9.18 + 11.91 + 12.63 + 15.22 + 21.79).
+        That is not a meaningful overall rate.</p>
+      <p>We show the correct weighted mean: <strong>Output ÷ Actual Hours</strong>.
+        The per-band values (output ÷ hours for that band) are correct — the divergence
+        is only in the TOTAL row.</p>
+      <p class="text-orange-600">M/C Utilization in the same TOTAL row <em>is</em> computed
+        correctly as a ratio (66.61%) — the sheet is internally inconsistent between these
+        two adjacent columns.</p>
+    </div>
+
     <p class="text-xs text-gray-500 mb-3">Built by the (B) Moulding builder — any divergence between this and the (B) page is a data bug, not a rounding difference.</p>
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      {# FY26-27 block #}
+
+      {# ── FY26-27 block (recomputed) ─────────────────────────────────────── #}
       <div>
         <div class="flex items-center gap-2 mb-2">
           <h3 class="text-xs font-semibold text-gray-700">{{ data.section1.fy2627_label }}</h3>
           <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">recomputed</span>
         </div>
         {% if data.section1.fy2627 %}
+        {# Reorder: TOTAL first, then bands (spec order) #}
+        {% set s1_total = data.section1.fy2627 | selectattr('is_total') | list %}
+        {% set s1_bands  = data.section1.fy2627 | rejectattr('is_total') | list %}
         <div class="overflow-x-auto rounded border border-gray-200">
           <table class="min-w-full text-xs border-collapse">
             <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide">
               <tr>
                 <th class="px-3 py-2 text-left">Band</th>
                 <th class="px-3 py-2 text-right">M/C</th>
-                <th class="px-3 py-2 text-right">Ideal Hrs</th>
+                <th class="px-3 py-2 text-right" title="500 per machine per month — sheet placeholder (R-16), not from baselines.json">
+                  Ideal Hrs <span class="text-gray-400 normal-case">(sheet)</span>
+                </th>
                 <th class="px-3 py-2 text-right">Actual Hrs</th>
-                <th class="px-3 py-2 text-right">Net Output (KG)</th>
+                <th class="px-3 py-2 text-right">Output (KG)</th>
                 <th class="px-3 py-2 text-right">Rejection</th>
                 <th class="px-3 py-2 text-right">Runner</th>
                 <th class="px-3 py-2 text-right">Avg/Hr</th>
@@ -164,12 +188,36 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {% for row in data.section1.fy2627 %}
-              {% set tr_cls = 'bg-gray-50 font-semibold border-t-2 border-gray-300' if row.is_total else 'hover:bg-gray-50' %}
-              <tr class="{{ tr_cls }}">
-                <td class="px-3 py-2 font-medium text-gray-800">
-                  {% if row.is_total %}TOTAL{% else %}{{ row.band }} T{% endif %}
+              {# TOTAL first #}
+              {% for row in s1_total %}
+              <tr class="bg-indigo-50 font-semibold border-b-2 border-indigo-200">
+                <td class="px-3 py-2 font-bold text-gray-900">TOTAL</td>
+                <td class="px-3 py-2 text-right text-gray-700">{{ row.mc_count }}</td>
+                {{ cell(row.ideal_hrs, fmt='hrs') }}
+                {{ cell(row.actual_hrs, fmt='hrs') }}
+                {{ cell(row.output_kg, fmt='kg') }}
+                {{ cell(row.reject_kg, fmt='kg') }}
+                {{ cell(row.runner_kg, fmt='kg') }}
+                {# Avg/Hr TOTAL: show our correct weighted mean; flag sheet's sum-of-averages #}
+                <td class="px-3 py-2 text-right tabular-nums">
+                  {% if row.avg_hr_weighted is not none %}
+                    <span class="font-semibold">{{ '{:.2f}'.format(row.avg_hr_weighted) }}</span>
+                    <br>
+                    <span class="text-[10px] text-orange-600 font-normal whitespace-nowrap"
+                          title="Sheet shows 76.10 (sum of band averages — not a weighted mean)">
+                      sheet: {{ '{:.2f}'.format(row.avg_hr_sheet) }} ⚠
+                    </span>
+                  {% else %}
+                    <span class="text-gray-400">—</span>
+                  {% endif %}
                 </td>
+                {{ cell(row.util_pct, fmt='pct') }}
+              </tr>
+              {% endfor %}
+              {# Six bands #}
+              {% for row in s1_bands %}
+              <tr class="hover:bg-gray-50">
+                <td class="px-3 py-2 font-medium text-gray-800">{{ row.band }} T</td>
                 <td class="px-3 py-2 text-right text-gray-600">{{ row.mc_count }}</td>
                 {{ cell(row.ideal_hrs, fmt='hrs') }}
                 {{ cell(row.actual_hrs, fmt='hrs') }}
@@ -183,27 +231,34 @@
             </tbody>
           </table>
         </div>
-        <p class="text-[10px] text-gray-400 mt-1">
-          Avg/Hr TOTAL = sum of band averages (sheet convention — not a weighted mean).
+        <p class="text-[10px] text-gray-400 mt-1 space-x-2">
+          <span>Ideal Hrs = 500/machine/month (sheet's flat placeholder — R-16, not from baselines.json).</span>
+          <span>Runner Produce sourced from <code>Record.runner_lumps</code> (Report-12 RUNNER PRODUCE column).</span>
         </p>
         {% endif %}
       </div>
 
-      {# FY25-26 block #}
+      {# ── FY25-26 block (closed annual — R-03 exception) ─────────────────── #}
       <div>
         <div class="flex items-center gap-2 mb-2">
           <h3 class="text-xs font-semibold text-gray-700">{{ data.section1.fy2526_label }}</h3>
-          <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">closed annual</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">closed annual · R-03</span>
         </div>
         {% if data.section1.fy2526 %}
+        {# Reorder: TOTAL first, then bands #}
+        {% set s1_total26 = data.section1.fy2526 | selectattr('is_total') | list %}
+        {% set s1_bands26 = data.section1.fy2526 | rejectattr('is_total') | list %}
         <div class="overflow-x-auto rounded border border-gray-200">
           <table class="min-w-full text-xs border-collapse">
             <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide">
               <tr>
                 <th class="px-3 py-2 text-left">Band</th>
                 <th class="px-3 py-2 text-right">M/C</th>
+                <th class="px-3 py-2 text-right" title="500/machine/month sheet placeholder">
+                  Ideal Hrs <span class="text-gray-400 normal-case">(sheet)</span>
+                </th>
                 <th class="px-3 py-2 text-right">Actual Hrs</th>
-                <th class="px-3 py-2 text-right">Net Output (KG)</th>
+                <th class="px-3 py-2 text-right">Output (KG)</th>
                 <th class="px-3 py-2 text-right">Rejection</th>
                 <th class="px-3 py-2 text-right">Runner</th>
                 <th class="px-3 py-2 text-right">Avg/Hr</th>
@@ -211,13 +266,24 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {% for row in data.section1.fy2526 %}
-              {% set tr_cls = 'bg-gray-50 font-semibold border-t-2 border-gray-300' if row.is_total else 'hover:bg-gray-50' %}
-              <tr class="{{ tr_cls }}">
-                <td class="px-3 py-2 font-medium text-gray-800">
-                  {% if row.is_total %}TOTAL{% else %}{{ row.band }} T{% endif %}
-                </td>
+              {% for row in s1_total26 %}
+              <tr class="bg-gray-100 font-semibold border-b-2 border-gray-300">
+                <td class="px-3 py-2 font-bold text-gray-900">TOTAL</td>
+                <td class="px-3 py-2 text-right text-gray-700">{{ row.mc_count }}</td>
+                {{ cell(row.ideal_hrs, fmt='hrs') }}
+                {{ cell(row.actual_hrs, fmt='hrs') }}
+                {{ cell(row.output_kg, fmt='kg') }}
+                {{ cell(row.reject_kg, fmt='kg') }}
+                {{ cell(row.runner_kg, fmt='kg') }}
+                {{ cell(row.avg_hr, fmt='avg') }}
+                {{ cell(row.util_pct, fmt='pct') }}
+              </tr>
+              {% endfor %}
+              {% for row in s1_bands26 %}
+              <tr class="hover:bg-gray-50">
+                <td class="px-3 py-2 font-medium text-gray-800">{{ row.band }} T</td>
                 <td class="px-3 py-2 text-right text-gray-600">{{ row.mc_count }}</td>
+                {{ cell(row.ideal_hrs, fmt='hrs') }}
                 {{ cell(row.actual_hrs, fmt='hrs') }}
                 {{ cell(row.output_kg, fmt='kg') }}
                 {{ cell(row.reject_kg, fmt='kg') }}
@@ -229,6 +295,7 @@
             </tbody>
           </table>
         </div>
+        <p class="text-[10px] text-gray-400 mt-1">Read as-is from the closed FY25-26 annual (SUMMARY-1 tab, R-03 exception). Not recomputed.</p>
         {% elif data.section1.warnings %}
           {% for w in data.section1.warnings %}
           <div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{{ w }}</div>
@@ -236,6 +303,12 @@
         {% endif %}
       </div>
     </div>
+
+    {# Machine count note: two machines added in FY26-27 #}
+    <p class="text-[10px] text-gray-400 mt-2">
+      FY26-27 TOTAL: 27 machines · FY25-26 TOTAL: 25 machines.
+      Two machines added in FY26-27 (band 200 gained one; band 350 gained one).
+    </p>
   </section>
 
   {# ════════════════════════════════════════════════════════════════════════ #}
