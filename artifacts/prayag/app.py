@@ -3463,6 +3463,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/gom-summary"
             if rpt["id"] == "garden_summary":
                 rpt["view_url"] = "/management-reports/garden-pipe-summary"
+            if rpt["id"] == "hdpe_summary":
+                rpt["view_url"] = "/management-reports/hdpe-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3658,6 +3660,36 @@ def mgmt_garden_pipe_summary_view():
     data = _mgs.build_garden_summary(fy)
     return render_template(
         "report_mgmt_garden_pipe.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/hdpe-summary")
+def mgmt_hdpe_summary_view():
+    """HDPE M/C Summary — monthly run hours / output / rejection / labour / wages.
+
+    Sources:
+      output + rejection — daily records (plant=HDPE, MACHINE 1–6 block tabs + DR join)
+      run hours          — Daily Report matrix (only MAY M/C-1 has actuals)
+      labour + wages     — Segment Cost workbook, HDPE Pipe tab (R-11)
+
+    Flags:
+      HDPE-JUL   — sheet reports 0 kg; we compute 22,448.04 kg from block tabs
+      HDPE-R42   — Segment Cost wages vs sheet SUMMARY wages (same headcount/hours; open)
+      n/a-rej    — JUL M/C-2 rejection column blank; Rej% suppressed (R-08/#14)
+      IDLE       — APR and JUN genuinely idle in both block tabs and Daily Report
+      AWAITING   — JUL wages not yet in Segment Cost workbook
+    """
+    import mgmt_hdpe_summary as _mhs
+
+    fy = request.args.get("fy", "2627")
+    if fy not in _mhs._FY_YM:
+        fy = "2627"
+    data = _mhs.build_hdpe_summary(fy)
+    return render_template(
+        "report_mgmt_hdpe_pipe.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
