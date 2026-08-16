@@ -961,7 +961,15 @@ def _do_build(fy: str) -> dict:
         # prevents Pipe / Fittings / Garden / HDPE from being double-counted.
         try:
             daily_all, _, _ = _sh_recs.get_daily_records(all_yms)
-            daily_supp = [r for r in daily_all if r.plant in _DAILY_ONLY_PLANTS]
+            # R-22: exclude grinding/regrind lines (is_finishing=True) — these are
+            # finishing throughput, not new production, and must never inflate the
+            # plant headline.  is_finishing is set by the PTMT daily parser for all
+            # GRINDER-* machines (sources.PTMT_FINISHING_GROUP).
+            daily_supp = [
+                r for r in daily_all
+                if r.plant in _DAILY_ONLY_PLANTS
+                and not getattr(r, "is_finishing", False)
+            ]
             all_recs = list(all_recs) + daily_supp
             logger.debug(
                 "_do_build: supplemented %d daily records for PTMT/Tank",
