@@ -1,0 +1,82 @@
+# Management Report 6 — (C) Group Of Moulding M/C Summary
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Follow the pattern from Reports 3–5.
+
+**Spreadsheet:** `(C). Annual 26-27 Group Of Moulding M/C Summary` · **Worksheet:** `SUMMARY`
+
+---
+
+## Layout
+
+```
+YEARS | MOULD MACHINE (band | count) | Ideal Hours | Actual Hours | Output (KG) |
+Rejection (Kgs) | Runner Produce (Kgs) | Avg. Per Output on Hours |
+M/C Utilization in Hours (%)
+```
+
+**Two blocks**, each a TOTAL row followed by six tonnage bands:
+
+**Apr,26 – Jul,26** — TOTAL **27** machines · 54,000 · **35,972** · **366,015** · **3,650.38** · 62,055 · 76.10 · **66.61%**
+
+| Band | M/C | Ideal Hrs | Actual Hrs | Output KG | Rejection | Runner | Avg/Hr | Util% |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 150 | 6 | 12,000 | 9,240 | 49,676.12 | 470.80 | 13,493.06 | 5.38 | 77.00% |
+| 200 | 7 | 14,000 | 7,551 | 69,306.22 | 643.16 | 20,992.11 | 9.18 | 53.94% |
+| 250 | 10 | 20,000 | 15,137 | 180,223.16 | 1,810.94 | 22,443.84 | 11.91 | 75.69% |
+| 275 | 1 | 2,000 | 1,457 | 18,400.95 | 204.16 | 1,437.58 | 12.63 | 72.85% |
+| 350 | 2 | 4,000 | 1,211 | 18,429.76 | 196.19 | 1,447.28 | 15.22 | 30.28% |
+| 450 | 1 | 2,000 | 1,376 | 29,978.95 | 325.12 | 2,240.68 | 21.79 | 68.80% |
+
+**Apr,25 – Jul,25** — TOTAL **25** machines · 50,000 · 35,753 · 347,149 · 3,391.61 · 59,862 · 67.60 · 71.51%. Bands: 150→6 · 200→6 · 250→10 · 275→1 · 350→1 · 450→1. *Two machines were added in FY26-27 (band 200 gained one, band 350 gained one).*
+
+---
+
+## This one should reconcile — unlike Garden and HDPE
+
+Moulding's FY26-27 block matches our verified figures exactly: **366,015 kg · 35,972 h · 3,650 rejection (~1.0%)**. All three source layers agree within 2 kg, because Moulding reads **Report-12** and is well maintained.
+
+So expect a clean report. If our figures *don't* land on these, **stop and report** — that would mean something changed upstream (**R-30**).
+
+**The FY25-26 block is the R-03 exception:** that year is closed, so it may be read from the finalized annual as-is. The FY26-27 block must be fully recomputed. **Label which is which.**
+
+Reuse Report 3's `BAND_ORDER` `[150, 200, 250, 275, 350, 450]` and its unknown-band warning — same bands, same source workbook family. Do not create a second copy of that list.
+
+---
+
+## Three things to handle carefully
+
+**1. `Ideal Hours` is the placeholder again.** 2,000 per machine over four months = **500/month** — the flat figure `baselines.json` forbids (**R-16**). `M/C Utilization` is computed against it (35,972 ÷ 54,000 = 66.61%). Label the column as the **sheet's assumption**, exactly as done in Reports 2 and 3. Do not populate `baselines.json` from it.
+
+**2. `Avg. Per Output on Hours` — the TOTAL is a sum of averages, not an average.** The sheet's 76.10 is `5.38 + 9.18 + 11.91 + 12.63 + 15.22 + 21.79`. The per-band values are correct (output ÷ actual hours), but summing them is not a meaningful total — the true overall figure is `366,015 ÷ 35,972 = 10.17`.
+
+Note that `M/C Utilization` in the same TOTAL row **is** computed correctly as a ratio (66.61%), so the sheet is internally inconsistent between two adjacent columns.
+
+**Compute ours correctly (10.17) and flag the divergence** against the sheet's 76.10 with a brief note explaining why. This is the Cardinal Rule: show ours, name the difference, never copy.
+
+**3. `Runner Produce (Kgs)` is a new metric** — 62,055 total, not carried in any report so far. **Verify before building** whether Report-12 (or the Moulding daily source) supplies a runner figure per machine. Print what you find per band. If it is not available, render the column blank with a note — **never zero** (**R-07**, **R-08**).
+
+---
+
+## Validate
+
+- Both blocks render with the exact column order, TOTAL row first, six bands beneath.
+- FY26-27 totals: **35,972 h · 366,015 kg · 3,650.38 rejection · 66.61% utilisation**, matching our verified figures.
+- Band counts **27** (FY26-27) and **25** (FY25-26); band machine counts as tabled above.
+- `Avg. Per Output on Hours` TOTAL renders **10.17** (ours) with the sheet's 76.10 flagged.
+- `Ideal Hours` labelled as the sheet's assumption; `baselines.json` untouched.
+- `Runner Produce` either populated from a real source or blank with a note — never 0.
+- FY25-26 block labelled as read from the closed annual (**R-03**).
+- Unknown-band warning reused from Report 3, not duplicated.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 · Garden 232,528/138,052 · HDPE 23,817.24. If any moves, **stop**.
+
+## Do not touch
+
+Report 3's `BAND_ORDER` or its warning mechanism · Garden's paths and live-DR accumulation · HDPE's block-tab path · `tank_reconcile.py` / R-39 · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `segments: []` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Both blocks against the figures above · the Runner Produce finding · the Avg-per-hour divergence as it renders · confirmation that the FY25-26 block is labelled, `BAND_ORDER` is reused not copied, and no existing figure moved.
