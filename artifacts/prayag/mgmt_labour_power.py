@@ -111,6 +111,7 @@ _IDEAL_POWER_RATE: dict[str, float] = {
     "Garden":   3.0,
     "HDPE":     4.0,
     "Tank":     5.0,
+    "PTMT":     5.0,
 }
 _IDEAL_LABOUR_RATE: dict[str, float] = {
     "Pipe":     2.5,
@@ -118,8 +119,14 @@ _IDEAL_LABOUR_RATE: dict[str, float] = {
     "Garden":   3.0,
     "HDPE":     1.25,
     "Tank":     6.0,
+    "PTMT":     6.0,
 }
-_IDEAL_COST_SEGS = ["Pipe", "Fittings", "Garden", "HDPE", "Tank"]
+_IDEAL_COST_SEGS = ["Pipe", "Fittings", "Garden", "HDPE", "Tank", "PTMT"]
+
+# Plants whose records come entirely from daily workbooks (no ANNUAL_SOURCES entry).
+# Used in _do_build to supplement get_records() output so that segments with no
+# annual family workbook (PTMT, Tank) are not silently zero in the Part-B sections.
+_DAILY_ONLY_PLANTS: frozenset = frozenset({"PTMT", "TANK", "TANK_VN", "TANK_WB"})
 
 
 # ── Cell value helpers ─────────────────────────────────────────────────────────
@@ -942,8 +949,31 @@ def _do_build(fy: str) -> dict:
         import sheets as _sh_recs
         fy_ym_map = _FY_YM.get(fy, _FY_YM["2627"])
         all_yms   = list(fy_ym_map.values())
+
+        # Annual-source records: Pipe / Fittings / Garden / HDPE come from the
+        # monthly-grain live payload (ANNUAL_SOURCES workbooks).  These four
+        # segments reconcile against the summary grid; do not replace them.
         all_recs, _, _ = _sh_recs.get_records(all_yms)
+
+        # Supplement: PTMT and Tank have no annual workbook so they are absent
+        # from the payload above.  Pull from the per-month daily workbooks and
+        # keep only the plants not already covered by ANNUAL_SOURCES — this
+        # prevents Pipe / Fittings / Garden / HDPE from being double-counted.
+        try:
+            daily_all, _, _ = _sh_recs.get_daily_records(all_yms)
+            daily_supp = [r for r in daily_all if r.plant in _DAILY_ONLY_PLANTS]
+            all_recs = list(all_recs) + daily_supp
+            logger.debug(
+                "_do_build: supplemented %d daily records for PTMT/Tank",
+                len(daily_supp),
+            )
+        except Exception as exc_d:
+            logger.warning(
+                "_do_build: daily supplement for PTMT/Tank failed: %s", exc_d
+            )
+
         sgr = _accumulate_seg_gross_reject(all_recs, fy)
+        _warn_zero_segments(sgr, all_yms)
     except Exception as exc:
         logger.warning("_do_build: could not accumulate seg_gross_reject: %s", exc)
         sgr = {}
@@ -1018,6 +1048,11 @@ def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
         "PTMT":       "PTMT",
     }
 
+    # PTMT daily records have total_count = GROSS (including rejection), unlike
+    # ANNUAL_SOURCES records (PIPE/MOULDING/GARDEN/HDPE) where total_count = NET.
+    # Use the same gross→net conversion as accum_record_kg / get_segment_prod_kg.
+    _gross_plants = frozenset({"PTMT"})
+
     for r in records:
         seg = _plant_map.get(r.plant)
         if not seg:
@@ -1028,12 +1063,42 @@ def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
         if seg == "Tank":
             kg = float((r.secondary_counts or {}).get("kg") or 0.0)
             data[seg][ym]["net"] += kg
+        elif r.plant in _gross_plants:
+            # Daily matrix records: total_count = gross; net = gross − reject
+            gross = float(r.total_count or 0.0)
+            rej   = float(r.reject_count or 0.0)
+            data[seg][ym]["net"]    += max(0.0, gross - rej)
+            data[seg][ym]["reject"] += rej
         else:
             net = float(r.total_count or 0.0)
             rej = float(r.reject_count or 0.0)
             data[seg][ym]["net"]    += net
             data[seg][ym]["reject"] += rej
     return data
+
+
+def _warn_zero_segments(sgr: dict, all_yms: list) -> None:
+    """R-06 guard: log a warning for every configured segment that contributed zero
+    records for every month in the FY.
+
+    A segment that is named in ``_accumulate_seg_gross_reject._plant_map`` but whose
+    source workbooks are not reachable (missing from ANNUAL_SOURCES *and* not
+    supplemented via daily records) silently renders '—' in all three Part-B
+    sections (R&P, Ideal Power, Ideal Labour).  This guard surfaces that gap at
+    INFO/WARNING level so it cannot hide across multiple report builds.
+    """
+    for seg, by_ym in sgr.items():
+        if all(
+            by_ym.get(ym, {}).get("net", 0.0) == 0.0
+            and by_ym.get(ym, {}).get("reject", 0.0) == 0.0
+            for ym in all_yms
+        ):
+            logger.warning(
+                "R-06 | mgmt report: segment %r received ZERO records for all %d "
+                "months — verify its source workbooks are pinned in DAILY_SOURCES "
+                "or ANNUAL_SOURCES.",
+                seg, len(all_yms),
+            )
 
 
 def _build_combined_wages(units: list) -> dict:

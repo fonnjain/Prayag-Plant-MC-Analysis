@@ -55,3 +55,4 @@
 - [Tank R-39 run-hours reconciliation](prayag-tank-r39.md) — two-source union (DAILY REPORT TOTAL-row + PROD. REPORT PRODUCTION HOURS); date-wise max; machine label col 1 not col 0; DR-only hours dates need a synthetic 0-output Record or hours are lost from record sums.
 - [Ideal Cost production basis](prayag-ideal-cost-basis.md) — use GROSS (net+reject) in _build_ideal_cost_section; workbook col E = gross; REJECTION & PRODUCTION col F = piece counts (R-43 is about col F, not col E).
 - [Moulding BAND_ORDER hardcoded list](prayag-moulding-band-order.md) — _parse_summary_roster now returns (roster, warnings) tuple; callers must unpack; unknown numeric bands surfaced as warnings not silently dropped (R-06).
+- [Report-1 PTMT/Tank Part-B sourcing](prayag-mgmt-report1-ptmt-fix.md) — get_records() (annual) + get_daily_records() filtered to _DAILY_ONLY_PLANTS; PTMT total_count=GROSS so net=gross-reject; Tank excluded from R&P by design, appears in Ideal sections.
