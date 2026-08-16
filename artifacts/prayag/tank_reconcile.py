@@ -2,10 +2,11 @@
 
 Tank run hours are recorded in TWO independent tabs inside each plant workbook:
 
-  * **DAILY REPORT** — a wide per-date matrix.  Only the TOTAL row is reliable for
-    per-date data; per-machine rows use a compressed layout that is NOT aligned with
-    the date headers and cannot be parsed safely per-date.  The machine label
-    dimension lives here (machine labels in col 1).
+  * **DAILY REPORT** — a wide per-date matrix.  The TOTAL row supplies the
+    per-date data used by the R-39 reconciliation.  Per-machine rows (MACHINE-1,
+    MACHINE-2, …) share the same wide-matrix column layout and are also parsed to
+    attribute production records to the specific machine that ran on each date.
+    Machine labels live in col 1 (col 0 is always blank — merged-cell artefact).
 
   * **PROD. REPORT** — the per-item production journal.  Carries a
     ``PRODUCTION HOURS`` column (the same field is labelled ``RUN HOURS`` in some
@@ -93,28 +94,32 @@ _DR_COL_MONTHLY_REJ = 5
 def parse_tank_dr(
     values: List[list],
     year_month: str,
-) -> Tuple[Dict[str, dict], List[str], dict]:
+) -> Tuple[Dict[str, dict], List[str], dict, Dict[str, Dict[str, float]]]:
     """Parse the Tank ``DAILY REPORT`` wide-matrix (pure, network-free).
 
-    Reads per-date run hours / output kg / rejection kg from the **TOTAL row only**
-    (per-machine rows use a compressed layout that cannot be aligned to the date
-    headers safely).  Also reads the monthly summary totals and machine label strings.
+    Reads per-date run hours / output kg / rejection kg from the **TOTAL row** for
+    the R-39 reconciliation, and also reads per-machine per-date run hours from each
+    MACHINE-n row so callers can attribute production records to specific machines.
 
-    Returns ``(by_date, machine_labels, monthly)`` where:
+    Returns ``(by_date, machine_labels, monthly, per_machine_by_date)`` where:
 
-    * ``by_date``        — ``{date_str: {"hrs", "out", "rej"}}`` for every date where
-                           at least one value is non-zero.  Date strings are
-                           ``"YYYY-MM-DD"``.
-    * ``machine_labels`` — list of machine label strings from MACHINE-n data rows
-                           (e.g. ``["MACHINE-1", "MACHINE-2"]``).
-    * ``monthly``        — ``{"hrs", "out", "rej"}`` from the TOTAL-row summary cols
-                           (cross-check only; per-date sum is authoritative).
+    * ``by_date``              — ``{date_str: {"hrs", "out", "rej"}}`` for every date
+                                 where at least one TOTAL-row value is non-zero.
+                                 Date strings are ``"YYYY-MM-DD"``.
+    * ``machine_labels``       — list of machine label strings from MACHINE-n data rows
+                                 (e.g. ``["MACHINE-1", "MACHINE-2"]``).
+    * ``monthly``              — ``{"hrs", "out", "rej"}`` from the TOTAL-row summary
+                                 cols (cross-check only; per-date sum is authoritative).
+    * ``per_machine_by_date``  — ``{machine_label: {date_str: run_hours}}`` for every
+                                 per-machine row where at least one date had non-zero
+                                 run hours.  Used to attribute production records to
+                                 the specific machine that ran on each date.
 
-    Returns ``({}, [], {})`` if the header row cannot be found (absent tab or
+    Returns ``({}, [], {}, {})`` if the header row cannot be found (absent tab or
     unrecognised layout).
     """
     if not values:
-        return {}, [], {}
+        return {}, [], {}, {}
 
     # Header row: col 0 = '' (blank), col 1 = 'MACHINE'.
     hdr_row: Optional[int] = None
@@ -123,7 +128,7 @@ def parse_tank_dr(
             hdr_row = i
             break
     if hdr_row is None:
-        return {}, [], {}
+        return {}, [], {}, {}
 
     hdr = values[hdr_row]
     data_start = hdr_row + 2  # header row + sub-header row
@@ -139,6 +144,7 @@ def parse_tank_dr(
     by_date: Dict[str, dict] = {}
     machine_labels: List[str] = []
     monthly: dict = {"hrs": 0.0, "out": 0.0, "rej": 0.0}
+    per_machine_by_date: Dict[str, Dict[str, float]] = {}
 
     for row in values[data_start:]:
         if not row or len(row) < 2:
@@ -152,6 +158,15 @@ def parse_tank_dr(
 
         if is_machine and not is_total:
             machine_labels.append(label)
+            # Parse per-date run hours for this machine row (first col of each
+            # date triplet = Run Hours; same column alignment as TOTAL row).
+            mc_hrs: Dict[str, float] = {}
+            for dc, date_str in date_cols:
+                h = parsers.num(row[dc]) if dc < len(row) else 0.0
+                if h > 0:
+                    mc_hrs[date_str] = h
+            if mc_hrs:
+                per_machine_by_date[label] = mc_hrs
 
         if is_total:
             def _c(col: int) -> float:
@@ -168,7 +183,7 @@ def parse_tank_dr(
                 if h > 0 or o > 0 or r > 0:
                     by_date[date_str] = {"hrs": h, "out": o, "rej": r}
 
-    return by_date, machine_labels, monthly
+    return by_date, machine_labels, monthly, per_machine_by_date
 
 
 def parse_tank_pr_hours(

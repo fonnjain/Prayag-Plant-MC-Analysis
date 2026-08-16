@@ -2101,11 +2101,11 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   )
   if dr_tab_name:
       dr_values = read_values(file_id, dr_tab_name, token)
-      dr_by_date, dr_machine_labels, dr_monthly = tank_reconcile.parse_tank_dr(
+      dr_by_date, dr_machine_labels, dr_monthly, dr_per_machine = tank_reconcile.parse_tank_dr(
           dr_values, ym
       )
   else:
-      dr_by_date, dr_machine_labels, dr_monthly = {}, [], {}
+      dr_by_date, dr_machine_labels, dr_monthly, dr_per_machine = {}, [], {}, {}
 
   # ── Reconcile run hours (date-wise max over union) ─────────────────────────
   union_hrs, recon_audit = tank_reconcile.reconcile(
@@ -2123,6 +2123,32 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   else:
       machine_label = ""
 
+  # ── Per-machine date attribution ───────────────────────────────────────────
+  # When the DR holds per-machine per-date hours (e.g. TANK_WB April with
+  # MACHINE-1 and MACHINE-2 rows), we can tell which specific machine ran on
+  # each date and label production records accordingly.
+  #
+  # Rule: if exactly one machine had non-zero hours on a date → that machine's
+  # label.  If two or more machines ran → combined label (cannot split output
+  # without fabricating numbers — R-07).  Dates not in dr_per_machine at all
+  # (e.g. months where DR is all-zero) fall back to the combined machine_label.
+  date_to_machine: dict = {}
+  if dr_per_machine:
+      all_mc_dates: set = set()
+      for mc_hrs in dr_per_machine.values():
+          all_mc_dates.update(mc_hrs.keys())
+      for date_str in all_mc_dates:
+          running = [
+              lbl for lbl, mc_hrs in dr_per_machine.items()
+              if mc_hrs.get(date_str, 0.0) > 0
+          ]
+          if len(running) == 1:
+              date_to_machine[date_str] = running[0]
+          elif len(running) > 1:
+              date_to_machine[date_str] = " + ".join(running)
+          # if running is empty for a date we somehow reached, leave it out
+          # so the fallback machine_label applies
+
   # ── Apply hours and machine to each per-item Record ────────────────────────
   # Hours are stored on the FIRST item record per date only, to prevent
   # double-counting when compute_metrics sums actual_hours across all records.
@@ -2131,7 +2157,8 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   dates_assigned: set = set()
   for r in raw:
       hrs = union_hrs.get(r.date, 0.0)
-      r.machine      = machine_label
+      # Use per-machine attribution when available; fall back to combined label.
+      r.machine      = date_to_machine.get(r.date, machine_label)
       r.ideal_hours  = 0.0     # utilisation suppressed until a baseline is set
       r.ideal_output = 0.0
       r.ideal_source = ideal_hours.SRC_NOT_SET  # no business-supplied planned hours yet
@@ -2154,10 +2181,12 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
   for date_str, hrs in sorted(union_hrs.items()):
       if hrs <= 0 or date_str in dates_assigned:
           continue
+      # Use per-machine attribution for phantom records too.
+      mc = date_to_machine.get(date_str, machine_label)
       phantom = Record(
           grain="daily", period=ym, date=date_str,
           plant=emit, segment=seg,
-          machine=machine_label,
+          machine=mc,
           mould="", product="", material="", unit="Ltr",
           secondary_counts={},
           total_count=0.0, reject_count=0.0,
