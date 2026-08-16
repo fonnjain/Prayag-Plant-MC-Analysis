@@ -7,12 +7,19 @@ comes from our own recomputed sources. The annual workbook is verification
 material only. Where our figure differs from the sheet's we show ours and flag.
 
 Sources:
-  wages / power / headcount — Annual "Segment Wise Labour Cost …" workbook
-    (LABOUR_SOURCES["PLUMBING"][fy] file ID), tabs UNIT-1 / UNIT-2 / UNIT-3.
-    Wages and power columns ARE populated. Headcount is #REF! for UNIT-1.
-    Production is 0 for UNIT-1 (formula broken in the source workbook).
+  wages / headcount / power — Annual "Segment Wise Labour Cost …" workbook
+    (LABOUR_SOURCES["PLUMBING"][fy] file ID), dedicated per-segment tabs
+    (CP, PTMT, HARDWARE, SINK, Plumbing, TANK, Garden Pipe, HDPE Pipe).
+    These tabs are authoritative for headcount and wages.  The UNIT-1/2/3
+    roll-up tabs are NOT read for any figures — headcount is #REF! there for
+    UNIT-1 and wages are combined totals that cannot be split per-segment.
+    JVVL Power Amount is present for CP / PTMT / Sink / Hardware; the other
+    segments carry no per-segment power breakdown (kwh / solar / rate columns
+    are UNIT-level only and show — in this view).
   production (kg) — our own recomputed daily records + costing module.
-  per-kg metrics — computed: wages ÷ our_prod_kg, power ÷ our_prod_kg.
+  per-kg metrics — computed: wages ÷ our_prod_kg, JVVL ÷ our_prod_kg.
+    production basis is nett (total − reject) for PTMT / Garden / HDPE,
+    secondary_counts['kg'] for Tank, gross pipe+fitting for Plumbing.
 
 Do-not-touch list (PRAYAG_RULES): costing_labour.py · costing_power.py ·
 parsers.parse_segment_labour · tank_reconcile.py · pipe_reconcile.py ·
@@ -66,6 +73,20 @@ _SEG_PLANTS: dict[str, frozenset] = {
     "Tank":        frozenset(["TANK", "TANK_VN", "TANK_WB"]),
     "Garden Pipe": frozenset(["GARDEN", "GARDEN_WB"]),
     "HDPE Pipe":   frozenset(["HDPE"]),
+}
+
+# Dedicated per-segment tab names inside the annual segment-cost workbook.
+# These are the authoritative source for headcount and wages.
+# The UNIT-1/2/3 roll-up tabs are NOT used for per-segment figures.
+SEGMENT_TAB_MAP: dict[str, str] = {
+    "CP":          "CP",
+    "PTMT":        "PTMT",
+    "Hardware":    "HARDWARE",
+    "Sink":        "SINK",
+    "Plumbing":    "Plumbing",
+    "Tank":        "TANK",
+    "Garden Pipe": "Garden Pipe",
+    "HDPE Pipe":   "HDPE Pipe",
 }
 
 # Production basis note shown in the report footer per segment
@@ -180,6 +201,67 @@ def _find_cols(header_rows: list) -> dict:
                 cols["seg"] = i
             elif "MONTH" in s and cols["month"] < 0:
                 cols["month"] = i
+    return cols
+
+
+# ── Per-segment tab column finder ─────────────────────────────────────────────
+
+def _find_seg_tab_cols(header: list) -> dict:
+    """Map logical column keys to 0-based indices from a per-segment tab header.
+
+    Per-segment tabs share the same column structure but differ slightly:
+    • CP / PTMT / Sink / Hardware: one hours-devoted col → Paid Wages at col 7
+    • Garden Pipe / Tank / Plumbing / HDPE: two hours-devoted cols → Paid Wages at col 8
+    Header-based matching handles both without branch logic.
+
+    Returned keys:
+      month, n_labour, n_contractor, paid_hours,
+      paid_wages, contractor_wages,
+      jvvl, per_kg_power_src, per_kg_labour_src, total_cost_src, src_prod_kg
+    All values are -1 if not found.
+    """
+    cols: dict[str, int] = {k: -1 for k in [
+        "month", "n_labour", "n_contractor", "paid_hours",
+        "paid_wages", "contractor_wages",
+        "jvvl", "per_kg_power_src", "per_kg_labour_src", "total_cost_src",
+        "src_prod_kg",
+    ]}
+    for c, h in enumerate(header):
+        if not h:
+            continue
+        # most-specific first
+        if "JVVL" in h and cols["jvvl"] < 0:
+            cols["jvvl"] = c
+        elif "PER KG POWER" in h and cols["per_kg_power_src"] < 0:
+            cols["per_kg_power_src"] = c
+        elif "PER KG LABOUR" in h and cols["per_kg_labour_src"] < 0:
+            cols["per_kg_labour_src"] = c
+        elif ("TOTAL COST" in h and "POWER" not in h
+              and "PAID" not in h and cols["total_cost_src"] < 0):
+            cols["total_cost_src"] = c
+        # contractor wages before plain wages (both contain "PAID WAGES")
+        elif ("PAID WAGES" in h and "CONTRACTOR" in h) or "WAGES FOR CONTRACTOR" in h:
+            if cols["contractor_wages"] < 0:
+                cols["contractor_wages"] = c
+        elif "PAID WAGES" in h and cols["paid_wages"] < 0:
+            cols["paid_wages"] = c
+        # contractor headcount before general labour headcount
+        elif "CONTRACTOR LABOUR" in h and cols["n_contractor"] < 0:
+            cols["n_contractor"] = c
+        elif ("NO. OF LABOUR" in h or "NO. OF MANPOWER" in h) and cols["n_labour"] < 0:
+            cols["n_labour"] = c
+        # paid hours — skip "Devoted" variant rows
+        elif ("PAID HOURS" in h and "DEVOTED" not in h
+              and "PER" not in h and cols["paid_hours"] < 0):
+            cols["paid_hours"] = c
+        # production — prefer "TOTAL PRODUCTION (KGS)" (Plumbing) over individual cols
+        elif "TOTAL PRODUCTION" in h and "KG" in h and "PER" not in h:
+            cols["src_prod_kg"] = c   # override; total wins over component
+        elif ("PRODUCTION" in h and "KG" in h
+              and "PER" not in h and cols["src_prod_kg"] < 0):
+            cols["src_prod_kg"] = c
+        elif "MONTH" in h and cols["month"] < 0:
+            cols["month"] = c
     return cols
 
 
@@ -309,7 +391,129 @@ def parse_unit_tab(values: list, *, unit_label: str, fy: str = "2627") -> list:
     return rows_out
 
 
-# ── Annual workbook loader ─────────────────────────────────────────────────────
+# ── Per-segment tab parser ─────────────────────────────────────────────────────
+
+def parse_seg_tab(values: list, *, segment_name: str = "", fy: str = "2627") -> dict:
+    """Parse one dedicated per-segment tab from the annual workbook.
+
+    Returns {month_label: row_dict} where month_label is 'TOTAL' or a 3-letter
+    abbreviation e.g. 'APR', 'MAY', …
+
+    Row dict keys:
+      n_labour, n_contractor, n_total_lab (computed = C + D),
+      paid_hours, paid_wages, contractor_wages, total_wages (computed),
+      src_prod_kg (workbook's own figure; 0 treated as broken → None),
+      jvvl (None for segments without a power column),
+      per_kg_power_src, per_kg_labour_src, total_cost_src.
+    """
+    if not values:
+        return {}
+
+    # Locate header row: first row that contains MONTH and (LABOUR or WAGES)
+    header_idx = -1
+    for i, row in enumerate(values[:5]):
+        joined = " ".join(_norm(c) for c in row)
+        if "MONTH" in joined and ("LABOUR" in joined or "WAGES" in joined):
+            header_idx = i
+            break
+    if header_idx < 0:
+        logger.warning("parse_seg_tab(%s): no header row found", segment_name)
+        return {}
+
+    header = [_norm(c) for c in values[header_idx]]
+    cols   = _find_seg_tab_cols(header)
+    month_c = cols["month"]
+    if month_c < 0:
+        logger.warning("parse_seg_tab(%s): MONTH column not found", segment_name)
+        return {}
+
+    result: dict[str, dict] = {}
+    for row in values[header_idx + 1:]:
+        if not any(str(c).strip() for c in row):
+            continue  # skip fully-blank rows
+
+        def g(c: int) -> object:
+            return row[c] if 0 <= c < len(row) else ""
+
+        month_raw = _norm(g(month_c))
+        if not month_raw:
+            continue
+        month_lbl = _parse_month_lbl(month_raw)
+        is_total  = "TOTAL" in month_raw and not month_lbl
+        if not month_lbl and not is_total:
+            continue
+
+        key = month_lbl or "TOTAL"
+
+        nl = _num_allow_zero(g(cols["n_labour"]))
+        nc = _num_allow_zero(g(cols["n_contractor"]))
+        pw = _num(g(cols["paid_wages"]))
+        cw = _num(g(cols["contractor_wages"]))
+
+        raw_prod = (_num_allow_zero(g(cols["src_prod_kg"]))
+                    if cols["src_prod_kg"] >= 0 else None)
+
+        result[key] = {
+            # headcount — sourced directly from this tab; no #REF! here
+            "n_labour":     nl,
+            "n_contractor": nc,
+            "n_total_lab":  (int((nl or 0) + (nc or 0))
+                             if (nl is not None or nc is not None) else None),
+            # paid hours
+            "paid_hours":   (_num_allow_zero(g(cols["paid_hours"]))
+                             if cols["paid_hours"] >= 0 else None),
+            # wages — sourced from this dedicated tab, not the UNIT roll-up
+            "paid_wages":       pw,
+            "contractor_wages": cw,
+            "total_wages":      (((pw or 0.0) + (cw or 0.0))
+                                 if (pw is not None or cw is not None) else None),
+            # workbook's own production (0 = broken formula → None)
+            "src_prod_kg":  (raw_prod if (raw_prod is not None and raw_prod > 0)
+                             else None),
+            # power (present for CP / PTMT / Sink / Hardware; None for others)
+            "jvvl":              (_num(g(cols["jvvl"]))
+                                  if cols["jvvl"] >= 0 else None),
+            "per_kg_power_src":  (_num(g(cols["per_kg_power_src"]))
+                                  if cols["per_kg_power_src"] >= 0 else None),
+            "per_kg_labour_src": (_num(g(cols["per_kg_labour_src"]))
+                                  if cols["per_kg_labour_src"] >= 0 else None),
+            "total_cost_src":    (_num(g(cols["total_cost_src"]))
+                                  if cols["total_cost_src"] >= 0 else None),
+        }
+    return result
+
+
+# ── Per-segment tab loader ─────────────────────────────────────────────────────
+
+def load_segment_tabs(fy: str, token: str) -> dict:
+    """Read all dedicated per-segment tabs from the annual workbook in one batch.
+
+    Returns {segment_name: {month_label: row_dict}} for every entry in
+    SEGMENT_TAB_MAP.  An empty inner dict is returned for any tab that cannot
+    be parsed (e.g. tab not yet created for a new FY) — callers must not raise.
+    """
+    import costing_model
+    import sheets as _sheets
+
+    file_id = costing_model.labour_file_id("PLUMBING", fy)
+    if not file_id:
+        raise ValueError(f"No labour source file registered for FY{fy}")
+
+    tab_names = list(SEGMENT_TAB_MAP.values())
+    try:
+        matrices = _sheets.batch_get(file_id, tab_names, token)
+    except Exception as exc:
+        logger.exception("load_segment_tabs: batch_get failed")
+        raise RuntimeError(f"Could not read per-segment tabs: {exc}") from exc
+
+    result: dict[str, dict] = {}
+    for seg_name, tab_name in SEGMENT_TAB_MAP.items():
+        vals = matrices.get(tab_name, [])
+        result[seg_name] = parse_seg_tab(vals, segment_name=seg_name, fy=fy)
+    return result
+
+
+# ── Annual workbook loader (UNIT tabs — kept for reference / future use) ───────
 
 def load_annual_tabs(fy: str, token: str) -> dict:
     """Read UNIT-1 / UNIT-2 / UNIT-3 tabs from the annual segment-cost workbook.
@@ -455,58 +659,60 @@ def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
     return a / b
 
 
-def _enrich_rows(raw_rows: list, seg_kg: dict,
+def _enrich_rows(seg_tabs: dict, seg_kg: dict,
                  unit_label: str, fy: str = "2627") -> dict:
-    """Merge workbook rows with our production kg and compute per-kg metrics.
+    """Merge per-segment tab data with our production kg and compute per-kg metrics.
+
+    Parameters
+    ----------
+    seg_tabs   : {segment_name: {month_label: row_dict}} from load_segment_tabs.
+                 Headcount, wages, paid hours, and JVVL power all come from here.
+                 Keys present: n_labour, n_contractor, n_total_lab (computed),
+                 paid_hours, paid_wages, contractor_wages, total_wages,
+                 src_prod_kg, jvvl, per_kg_power_src, per_kg_labour_src,
+                 total_cost_src.
+    seg_kg     : {segment_name: {ym: float|None}} from get_segment_prod_kg.
+    unit_label : "UNIT-1" | "UNIT-2" | "UNIT-3"
+    fy         : fiscal year string, default "2627"
 
     Returns {segment_name: {"total_row": row, "month_rows": [row, ...]}}
-    where every row has extra keys:
-      our_prod_kg, per_kg_power, per_kg_labour, total_cost,
-      awaiting, headcount_broken, prod_overridden, per_kg_computed.
+    where every row carries:
+      our_prod_kg, total_power (= jvvl), per_kg_power, per_kg_labour,
+      total_cost, awaiting, headcount_broken (always False — per-seg tabs
+      have no #REF!), prod_overridden, per_kg_computed.
     """
     fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
     fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
 
-    # Index workbook rows by segment → month_label
-    by_seg: dict[str, dict[str, dict]] = {}
-    for row in raw_rows:
-        seg = row.get("segment") or ""
-        by_seg.setdefault(seg, {})[row["month_label"]] = row
-
     result = {}
     for seg in UNIT_SEGMENTS[unit_label]:
-        seg_key   = _resolve_seg_key(by_seg, seg)
-        seg_rows  = by_seg.get(seg_key, {})
-        prod_map  = seg_kg.get(seg, {})
+        seg_tab_rows = seg_tabs.get(seg, {})   # {month_label: row_dict}
+        prod_map     = seg_kg.get(seg, {})     # {ym: float|None}
 
         # ── Monthly rows (APR through MAR) ─────────────────────────────────────
         month_rows = []
         for lbl in MONTH_LABELS:
-            wb   = seg_rows.get(lbl) or {}
-            ym   = fy_ym[lbl]
+            wb     = seg_tab_rows.get(lbl) or {}
+            ym     = fy_ym[lbl]
             our_kg = prod_map.get(ym)
 
             total_wages = wb.get("total_wages")
             paid_wages  = wb.get("paid_wages")
-            total_power = wb.get("total_power")
+            jvvl        = wb.get("jvvl")   # per-seg JVVL; None for non-power segs
 
             # July with blank wages = awaiting source data (R-07)
             awaiting = (lbl == "JUL"
                         and total_wages is None
                         and (paid_wages is None or paid_wages == 0))
 
-            headcount_broken = (wb.get("n_labour") is None
-                                and wb.get("n_contractor") is None
-                                and bool(wb))
-
-            src_prod = wb.get("src_prod_kg")
+            src_prod        = wb.get("src_prod_kg")
             prod_overridden = our_kg is not None and (src_prod is None or src_prod <= 0)
 
-            per_kg_power  = _safe_div(total_power, our_kg)
+            per_kg_power  = _safe_div(jvvl, our_kg)
             per_kg_labour = _safe_div(total_wages, our_kg)
             total_cost    = (
-                total_power + total_wages
-                if total_power is not None and total_wages is not None
+                jvvl + total_wages
+                if jvvl is not None and total_wages is not None
                 else None
             )
             per_kg_computed = (
@@ -524,39 +730,39 @@ def _enrich_rows(raw_rows: list, seg_kg: dict,
                 "month_disp":   fy_disp[lbl],
                 "ym":           ym,
                 "is_total_row": False,
-                "our_prod_kg":    our_kg,
-                "per_kg_power":   per_kg_power,
-                "per_kg_labour":  per_kg_labour,
-                "total_cost":     total_cost,
-                "awaiting":           awaiting,
-                "headcount_broken":   headcount_broken,
-                "prod_overridden":    prod_overridden,
-                "per_kg_computed":    per_kg_computed,
+                # power: JVVL is the per-segment power source
+                "total_power":       jvvl,
+                # computed metrics
+                "our_prod_kg":       our_kg,
+                "per_kg_power":      per_kg_power,
+                "per_kg_labour":     per_kg_labour,
+                "total_cost":        total_cost,
+                "awaiting":          awaiting,
+                "headcount_broken":  False,   # per-seg tabs have no #REF!
+                "prod_overridden":   prod_overridden,
+                "per_kg_computed":   per_kg_computed,
             })
 
         # ── TOTAL row ──────────────────────────────────────────────────────────
-        # Prefer workbook TOTAL for wages/power (formula aggregation is correct);
-        # compute our own production total and per-kg metrics.
-        wb_tot  = seg_rows.get("TOTAL") or {}
-        our_kg_vals = [r["our_prod_kg"] for r in month_rows
-                       if r["our_prod_kg"] is not None]
+        # Use workbook TOTAL row for wages/JVVL (formula aggregation is correct);
+        # compute our own FY production total and per-kg metrics from monthly sums.
+        wb_tot       = seg_tab_rows.get("TOTAL") or {}
+        our_kg_vals  = [r["our_prod_kg"] for r in month_rows
+                        if r["our_prod_kg"] is not None]
         our_kg_total = sum(our_kg_vals) if our_kg_vals else None
 
-        tw_t  = wb_tot.get("total_wages")
-        tp_t  = wb_tot.get("total_power")
-        per_kg_power_t  = _safe_div(tp_t, our_kg_total)
+        jvvl_t  = wb_tot.get("jvvl")
+        tw_t    = wb_tot.get("total_wages")
+        per_kg_power_t  = _safe_div(jvvl_t, our_kg_total)
         per_kg_labour_t = _safe_div(tw_t, our_kg_total)
         total_cost_t    = (
-            tp_t + tw_t
-            if tp_t is not None and tw_t is not None
+            jvvl_t + tw_t
+            if jvvl_t is not None and tw_t is not None
             else None
         )
-        src_prod_t      = wb_tot.get("src_prod_kg")
-        prod_ov_t       = our_kg_total is not None and (src_prod_t is None or src_prod_t <= 0)
-        hc_broken_t     = (wb_tot.get("n_labour") is None
-                           and wb_tot.get("n_contractor") is None
-                           and bool(wb_tot))
-        per_kg_comp_t   = (
+        src_prod_t    = wb_tot.get("src_prod_kg")
+        prod_ov_t     = our_kg_total is not None and (src_prod_t is None or src_prod_t <= 0)
+        per_kg_comp_t = (
             (per_kg_power_t is not None or per_kg_labour_t is not None)
             and (wb_tot.get("per_kg_power_src") is None
                  or wb_tot.get("per_kg_labour_src") is None)
@@ -571,50 +777,41 @@ def _enrich_rows(raw_rows: list, seg_kg: dict,
             "month_disp":   "TOTAL",
             "ym":           None,
             "is_total_row": True,
-            "our_prod_kg":    our_kg_total,
-            "per_kg_power":   per_kg_power_t,
-            "per_kg_labour":  per_kg_labour_t,
-            "total_cost":     total_cost_t,
-            "awaiting":           False,
-            "headcount_broken":   hc_broken_t,
-            "prod_overridden":    prod_ov_t,
-            "per_kg_computed":    per_kg_comp_t,
+            "total_power":       jvvl_t,
+            "our_prod_kg":       our_kg_total,
+            "per_kg_power":      per_kg_power_t,
+            "per_kg_labour":     per_kg_labour_t,
+            "total_cost":        total_cost_t,
+            "awaiting":          False,
+            "headcount_broken":  False,   # per-seg tabs have no #REF!
+            "prod_overridden":   prod_ov_t,
+            "per_kg_computed":   per_kg_comp_t,
         }
 
         result[seg] = {
             "total_row":  total_row,
             "month_rows": month_rows,
-            "has_headcount_broken": hc_broken_t or any(
-                r["headcount_broken"] for r in month_rows),
-            "has_prod_overridden": prod_ov_t or any(
-                r["prod_overridden"] for r in month_rows),
-            "has_per_kg_computed": per_kg_comp_t or any(
-                r["per_kg_computed"] for r in month_rows),
+            "has_headcount_broken": False,   # per-seg tabs don't have #REF!
+            "has_prod_overridden":  (prod_ov_t
+                                     or any(r["prod_overridden"] for r in month_rows)),
+            "has_per_kg_computed":  (per_kg_comp_t
+                                     or any(r["per_kg_computed"] for r in month_rows)),
         }
     return result
 
 
-# Keys added during enrichment (pre-seeded to None in case wb row is missing)
+# Keys pre-seeded to None before spreading the per-segment tab row dict.
+# Ensures every row dict has a complete, consistent set of keys even when a
+# per-segment tab is empty or a segment has no power columns.
+# kwh / unit_per_kg / rate_708 / solar are UNIT-level only (not per-segment);
+# they remain None in this view.
 _EXTRA_KEYS = [
     "n_labour", "n_contractor", "n_total_lab",
+    "paid_hours",
     "paid_wages", "contractor_wages", "total_wages",
     "src_prod_kg", "jvvl", "kwh", "unit_per_kg", "rate_708",
     "total_power", "solar", "per_kg_power_src", "per_kg_labour_src", "total_cost_src",
 ]
-
-
-def _resolve_seg_key(by_seg: dict, want: str) -> str:
-    """Case-insensitive key lookup with first-word fallback."""
-    want_n = want.upper().replace(" ", "")
-    for k in by_seg:
-        if k.upper().replace(" ", "") == want_n:
-            return k
-    # fuzzy: first word
-    first = want.upper().split()[0] if want.split() else want.upper()
-    for k in by_seg:
-        if k.upper().startswith(first):
-            return k
-    return want
 
 
 # ── In-process cache ───────────────────────────────────────────────────────────
@@ -685,14 +882,14 @@ def _do_build(fy: str) -> dict:
             ),
         }
 
-    # 1. Load annual workbook tabs
+    # 1. Load per-segment tabs (headcount + wages + JVVL where present)
     try:
-        annual = load_annual_tabs(fy, token)
+        seg_tabs = load_segment_tabs(fy, token)
     except Exception as exc:
-        logger.exception("build_mgmt_report_data: load_annual_tabs failed")
+        logger.exception("build_mgmt_report_data: load_segment_tabs failed")
         return {
             "units": [], "fy": fy, "fy_label": fy_label,
-            "error": f"Could not read annual workbook: {exc}",
+            "error": f"Could not read per-segment tabs: {exc}",
         }
 
     # 2. Load production kg from our own sources
@@ -705,7 +902,7 @@ def _do_build(fy: str) -> dict:
     # 3. Enrich and assemble per unit
     units = []
     for unit_label in UNIT_LABELS:
-        enriched = _enrich_rows(annual.get(unit_label, []), seg_kg, unit_label, fy)
+        enriched = _enrich_rows(seg_tabs, seg_kg, unit_label, fy)
         segments = []
         for seg in UNIT_SEGMENTS[unit_label]:
             seg_data = enriched.get(seg)
