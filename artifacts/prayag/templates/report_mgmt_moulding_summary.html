@@ -113,7 +113,6 @@
       Utilisation is not capped (values above 100% are shown as-is).
       Avg/Hr = Output ÷ Actual Hours per machine.
     </p>
-
     {% if data.section1.warnings %}
     <div class="mb-3 space-y-1">
       {% for w in data.section1.warnings %}
@@ -121,7 +120,6 @@
       {% endfor %}
     </div>
     {% endif %}
-
     <div class="overflow-x-auto rounded border border-gray-200">
       <table class="min-w-full text-xs border-collapse">
         <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide sticky top-0">
@@ -189,7 +187,6 @@
     <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 mb-3 inline-block">
       FY25-26 rows are read from the closed annual (R-03 exception) — not recomputed.
     </p>
-
     {% if data.section2.warnings %}
     <div class="mb-3 space-y-1">
       {% for w in data.section2.warnings %}
@@ -197,30 +194,203 @@
       {% endfor %}
     </div>
     {% endif %}
-
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      <div>
-        {{ render_s2_table(data.section2.fy2627, data.section2.fy2627_label, 'recomputed') }}
-      </div>
-      <div>
-        {{ render_s2_table(data.section2.fy2526, data.section2.fy2526_label, 'closed annual') }}
-      </div>
+      <div>{{ render_s2_table(data.section2.fy2627, data.section2.fy2627_label, 'recomputed') }}</div>
+      <div>{{ render_s2_table(data.section2.fy2526, data.section2.fy2526_label, 'closed annual') }}</div>
     </div>
   </section>
+
+  {# ── SECTION 3: Per-machine monthly detail ── #}
+  {% if data.section3 and data.section3.machines %}
+  <section>
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">M/C - 1 … M/C - 27 — Individual Machine Monthly Detail</h2>
+      <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">recomputed from daily records</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">
+      Idle machines show 0, not blank · Util% = Actual ÷ 500 ideal hrs/month · not capped
+    </p>
+
+    {# Machine selector #}
+    <div class="flex flex-wrap gap-1.5 mb-4" id="mould-tab-bar">
+      {% for mc_item in data.section3.machines %}
+      <button onclick="showMouldDetail('{{ mc_item.mc_key | replace(' ', '_') | replace('/', '_') | replace('-', '_') }}')"
+              id="mould-tab-{{ mc_item.mc_key | replace(' ', '_') | replace('/', '_') | replace('-', '_') }}"
+              class="mould-tab px-2.5 py-1 rounded-full text-xs font-medium border transition-colors"
+              style="border-color:rgba(31,56,100,0.20);color:#555;background:#f9fafb">
+        {{ mc_item.mc_key }}
+        {% if mc_item.band %}<span class="text-[9px] text-gray-400 ml-0.5">{{ mc_item.band }}T</span>{% endif %}
+      </button>
+      {% endfor %}
+    </div>
+
+    {% for mc_item in data.section3.machines %}
+    {% set mk = mc_item.mc_key | replace(' ', '_') | replace('/', '_') | replace('-', '_') %}
+    <div id="mould-detail-{{ mk }}" class="mould-detail-panel" style="display:none">
+      <div class="overflow-x-auto rounded border border-gray-200 mb-4">
+        <div class="px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-700">
+          {{ mc_item.mc_key }}
+          {% if mc_item.mould_id %}<span class="font-mono font-normal text-gray-500 ml-2">{{ mc_item.mould_id }}</span>{% endif %}
+          {% if mc_item.band %}<span class="text-gray-400 ml-2">{{ mc_item.band }} T</span>{% endif %}
+        </div>
+        <table class="min-w-full text-xs border-collapse">
+          <thead class="bg-gray-50 text-gray-600 uppercase text-[10px] tracking-wide">
+            <tr>
+              <th class="px-3 py-2 text-left">Month</th>
+              <th class="px-3 py-2 text-right">Ideal Hrs</th>
+              <th class="px-3 py-2 text-right">Actual Hrs</th>
+              <th class="px-3 py-2 text-right">Output (KG)</th>
+              <th class="px-3 py-2 text-right">Rejection (KG)</th>
+              <th class="px-3 py-2 text-right">Runner (KG)</th>
+              <th class="px-3 py-2 text-right">Avg/Hr</th>
+              <th class="px-3 py-2 text-right">Util%</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            {# TOTAL #}
+            {% set tr = mc_item.total_row %}
+            <tr class="bg-gray-50 font-semibold border-t-2 border-gray-300">
+              <td class="px-3 py-2 text-gray-800">TOTAL</td>
+              {{ cell(tr.ideal_hrs,  'hrs', 'font-semibold') }}
+              {{ cell(tr.actual_hrs, 'hrs', 'font-semibold') }}
+              {{ cell(tr.output_kg,  'kg',  'font-semibold') }}
+              {{ cell(tr.reject_kg,  'kg',  'font-semibold') }}
+              {{ cell(tr.runner_kg,  'kg',  'font-semibold') }}
+              {{ cell(tr.avg_hr,     'avg', 'font-semibold') }}
+              {{ cell(tr.util_pct,   'pct', 'font-semibold') }}
+            </tr>
+            {# Monthly rows #}
+            {% for row in mc_item.month_rows %}
+            <tr class="hover:bg-gray-50">
+              <td class="px-3 py-1.5 text-gray-700 font-medium">{{ row.month_disp }}</td>
+              <td class="px-3 py-1.5 text-right text-gray-500">{{ row.ideal_hrs }}</td>
+              <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ '{:,.0f}'.format(row.actual_hrs) }}</td>
+              <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ '{:,.0f}'.format(row.output_kg) }}</td>
+              <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ '{:,.0f}'.format(row.reject_kg) }}</td>
+              <td class="px-3 py-1.5 text-right tabular-nums text-gray-600">{{ '{:,.0f}'.format(row.runner_kg) }}</td>
+              {% if row.avg_hr is not none %}
+              <td class="px-3 py-1.5 text-right tabular-nums text-gray-700">{{ '{:.2f}'.format(row.avg_hr) }}</td>
+              {% else %}
+              <td class="px-3 py-1.5 text-center text-gray-300">—</td>
+              {% endif %}
+              {{ cell(row.util_pct, 'pct') }}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+
+    <script>
+    (function() {
+      function showMouldDetail(mk) {
+        document.querySelectorAll('.mould-detail-panel').forEach(function(p) { p.style.display = 'none'; });
+        document.querySelectorAll('.mould-tab').forEach(function(b) {
+          b.style.background = '#f9fafb'; b.style.color = '#555';
+          b.style.borderColor = 'rgba(31,56,100,0.20)';
+        });
+        var panel = document.getElementById('mould-detail-' + mk);
+        var tab   = document.getElementById('mould-tab-' + mk);
+        if (panel) panel.style.display = '';
+        if (tab) { tab.style.background = 'var(--navy)'; tab.style.color = '#fff'; tab.style.borderColor = 'var(--navy)'; }
+      }
+      window.showMouldDetail = showMouldDetail;
+      var first = document.querySelector('.mould-tab');
+      if (first) first.click();
+    })();
+    </script>
+  </section>
+  {% endif %}
+
+  {# ── SECTION 4: Moulding M/C 26-27 pivot ── #}
+  {% if data.section4 and data.section4.machines %}
+  {% set s4 = data.section4 %}
+  <section>
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">Moulding M/C 26-27 — Monthly Pivot</h2>
+      <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">recomputed from daily records</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">
+      Months as rows · Machines (grouped by band) as column-pairs (Hours | Output KG)
+    </p>
+    <div class="overflow-x-auto rounded border border-gray-200">
+      <table class="text-xs border-collapse" style="width:max-content;min-width:100%">
+        <thead class="bg-gray-50 text-gray-600 text-[10px] tracking-wide">
+          {# Band header row #}
+          <tr class="border-b border-gray-300">
+            <th class="px-3 py-1.5 text-left sticky left-0 bg-gray-50 z-10 min-w-[72px]">Month</th>
+            {% set ns2 = namespace(last_band='') %}
+            {% for mc in s4.machines %}
+            {% set b = s4.mc_bands[mc] %}
+            {% if b != ns2.last_band %}
+            {% set ns2.last_band = b %}
+            <th class="px-1 py-1 text-center font-semibold text-gray-800 border-l border-gray-300"
+                colspan="{{ s4.machines | selectattr('0', 'equalto', mc) | list | length * 2 }}">
+              {% if b %}{{ b }} T{% else %}—{% endif %}
+            </th>
+            {% endif %}
+            {% endfor %}
+          </tr>
+          {# Machine + Hrs/Output header row #}
+          <tr class="border-b border-gray-200">
+            <th class="px-3 py-1.5 text-left sticky left-0 bg-gray-50 z-10">Month</th>
+            {% for mc in s4.machines %}
+            <th class="px-1 py-1.5 text-right border-l border-gray-200">{{ mc }}<br><span class="font-normal text-gray-400">Hrs</span></th>
+            <th class="px-1 py-1.5 text-right">Out</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {# TOTAL row #}
+          <tr class="bg-gray-50 font-semibold border-b-2 border-gray-300">
+            <td class="px-3 py-2 sticky left-0 bg-gray-100 z-10 text-gray-800">TOTAL</td>
+            {% for mc in s4.machines %}
+            {% set c = s4.total_cols[mc] %}
+            <td class="px-1 py-2 text-right tabular-nums border-l border-gray-200">
+              {% if c.hrs %}{{ '{:,.0f}'.format(c.hrs) }}{% else %}0{% endif %}
+            </td>
+            <td class="px-1 py-2 text-right tabular-nums">
+              {% if c.out %}{{ '{:,.0f}'.format(c.out) }}{% else %}0{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {# Month rows #}
+          {% for row in s4.month_rows %}
+          <tr class="hover:bg-gray-50">
+            <td class="px-3 py-1.5 font-medium text-gray-700 sticky left-0 bg-white z-10">{{ row.month_disp }}</td>
+            {% for mc in s4.machines %}
+            {% set c = row.cols[mc] %}
+            <td class="px-1 py-1.5 text-right tabular-nums text-gray-600 border-l border-gray-100">
+              {% if c.hrs %}{{ '{:,.0f}'.format(c.hrs) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+            </td>
+            <td class="px-1 py-1.5 text-right tabular-nums text-gray-700">
+              {% if c.out %}{{ '{:,.0f}'.format(c.out) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">
+      Source: MOULDING daily records (Report-12, R-38). Band grouping by mould code.
+    </p>
+  </section>
+  {% endif %}
 
   {# ── data notes ── #}
   <section class="text-xs text-gray-400 border-t border-gray-100 pt-4 space-y-1">
     <p><strong>Sources (FY26-27):</strong>
       Output and rejection — MOULDING Report-12 "Wt in Kgs" via PIPE key (R-38).
       Run hours — Report-5 joined via r5_runhours (R-38).
-      Runner Produce — Record.runner_lumps (populated from Report-12 "RUNNER PRODUCE" column).
+      Runner Produce — Record.runner_lumps.
     </p>
     <p><strong>Sources (FY25-26):</strong>
       Closed annual SUMMARY-1 tab — read as-is (R-03 exception for finalized prior-year data).
     </p>
     <p><strong>Tonnage band:</strong>
       Derived from Record.mould field (e.g. C-150-A → 150 T).
-      Record.tonnage_band is not populated by the MOULDING daily parser — band is derived here.
     </p>
   </section>
 

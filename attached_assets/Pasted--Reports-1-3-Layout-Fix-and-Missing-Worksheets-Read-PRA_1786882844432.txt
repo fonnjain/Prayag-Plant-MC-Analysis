@@ -1,0 +1,111 @@
+# Reports 1–3 — Layout Fix and Missing Worksheets
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. Your audit is accepted — this is the revision it calls for.
+
+**Order matters: Part A is a correction and comes first. Parts B–D are additions.**
+
+---
+
+# PART A — Report 1 is rendering the wrong layout (fix first)
+
+Your audit states it plainly:
+
+> *"`load_annual_tabs` exists in the module and reads UNIT-1/2/3, but it is not called in the live builder path."*
+
+The report's target layout is the **`UNIT-1` / `UNIT-2` / `UNIT-3` roll-up**, in three sections:
+
+```
+SEGMENT | MONTH | No. Of Labour | Contractor Labour | Total Labour |
+Paid Wages | Paid Wages for Contractor Labour | Total Paid Wages |
+Total Production (Kgs) | JVVL Power Amount | Electricity Generation Unit (kWh) |
+Unit Utilise per KG | As per 7.08 Basic Rate | Total Power |
+Per KG Power Cost | Per KG Labour Cost | Total Cost
+```
+
+Rows: `TOTAL` first, then `APR'26` → `MAR'27`. Unit membership: **UNIT-1** = CP · PTMT · Hardware · Sink · **UNIT-2** = Plumbing · Tank · **UNIT-3** = Garden Pipe · HDPE Pipe.
+
+**The eight per-segment tabs remain the data source** — that fix (`fa576e6`) was correct and must not be reverted. What changes is the *presentation*: aggregate those per-segment figures into the three UNIT sections. Source and shape are different questions.
+
+**Do not read headcount or wages from the UNIT tabs themselves** — UNIT-1's headcount columns are `#REF!` and its wages are combined totals that cannot be split per segment (**R-11**). Compute the roll-up from the per-segment tabs we already read.
+
+---
+
+# PART B — Report 1, missing worksheets
+
+Your audit classes these as "Data · not reproduced". They are **report content**, not feeds — reproduce them.
+
+| Worksheet | What it is |
+|---|---|
+| `Combined Wages` | Top-level UNIT × SEGMENT summary: Payroll / Contractor / Total, each with headcount, paid hours, wages. GRAND TOTAL 2,287 · ₹2,87,40,083 payroll · ₹42,41,875 contractor · ₹3,29,81,958 |
+| `Ideal Power Cost` | The business's own power benchmarks — Pipe 4 · Fittings 8 · Garden 3 · HDPE 4 · Tank 5 ₹/kg, ideal against actual |
+| `Ideal Labour Cost` | Labour benchmarks — Pipe 2.5 · Fittings 6.5 · Garden 3 · HDPE 1.25 · Tank 6 ₹/kg. **See the R-43 flag below** |
+| `REJECTION & PRODUCTION` | Production and rejection per segment. **See the R-43 flag below** |
+
+**Accepted as FEED — do not reproduce:** `D` (37,334-row daily production log, read by `costing_labour.py`) · `ADMIN (U-1)` · `ADMIN (U-2)` (overhead, not production segments — your classification stands).
+
+### R-43 flag — mandatory on both tabs
+
+`REJECTION & PRODUCTION` column F reports Fittings as **13,40,117 "(Kgs)"**. That is a **piece count**. `Ideal Labour Cost` then multiplies it by ₹6.50/kg, giving ₹87,24,884.56 and inflating ideal labour roughly fifteen-fold — which is why that tab currently shows actual labour running *below* ideal.
+
+**Newly confirmed:** the costing workbook's "Fittings Production (Kgs)" is the *same series* as Moulding gross output — APR 90,038.43 vs 90,038.14 · MAY 76,523.39 vs 76,523.25 · JUN 97,980.99 vs 97,980.53. **Fittings kg is Moulding gross output.** The kilogram figure was never missing.
+
+Reproduce the layout, compute our figures from the **kilogram** series, flag the divergence prominently. **Do not reproduce their inflated totals.**
+
+---
+
+# PART C — Report 2, missing worksheets
+
+**REPRODUCE:**
+
+| Worksheet | Content |
+|---|---|
+| `SUMMARY-1` | Per-machine FY comparison. FY26-27 TOTAL 18,000 / 6,507 / 1,277,971 / 36.15% / 65.71%; FY25-26 TOTAL 18,000 / 8,288 / 1,679,904 / 46.04% / 53.17% |
+| `MATERIAL` | By pipe type: CPVC (2) 1,982 h / 233,416 · UPVC (2) 1,970 / 381,592 · AGRI/SWR (3) 2,533 / 658,109 · OPVC (1) 22 / 4,853 · COLUMN (1) 0 · TOTAL 9 / 6,507 / 1,277,971 / 36.15% / 62.52% |
+| `M/C WISE` | Cross-machine pivot, hours and output side by side |
+| `MONTHWISE` | One row per machine-month with ideal/actual hours, output, avg per hour |
+| `M/C-1` … `M/C-9` | Per-machine detail, nine tabs. Sample: M/C-1 APR 140 h / 16,123 kg / 28.00% / 95.97%; M/C-9 APR 105 / 45,257 / 21.00% / **215.51%** (do not cap) |
+
+**Accepted as FEED:** `HOURS` · `OUTPUT` (machine × month matrices feeding SUMMARY) · `Pipe M/C 26-27`.
+`Pipe M/C 25-26` stays as the FY25-26 closed-annual source (**R-03**).
+
+**Employee Data Details** — your FEED classification is accepted for `D-1`…`D-5`, `DC-3`, `DB`, `MARCH`, `DUTY HOURS`, `Break-Up`, `Main Sheet`, `INFORMATION`, and the four monthly tabs. `DASHBOARD` stays as built.
+**Report only:** `MARCH` is full of `#REF!` — a broken template, to be raised with Preeti alongside the UNIT-1 `#REF!` issue. No action.
+
+**Monthly wages workbooks** — `KH-1` stays as built. **Report only:** `BH` (Bhiwadi) and `KH-2` (second Kaharani section) are separate payrolls in the same file. Correct to ignore for Pipe; record that they exist, because other segments will need machine-level labour and this is where it lives.
+
+---
+
+# PART D — Report 3, missing worksheets
+
+**REPRODUCE:**
+
+| Worksheet | Content |
+|---|---|
+| `M/C - 1` … `M/C - 27` | Per-machine detail, 27 tabs including idle machines. Render as a machine selector or 27 sub-tables — all must be reachable, and idle machines must show **0**, not vanish |
+| `Moulding M/C 26-27` | FY26-27 per-machine running summary in mould-column format — **recompute from daily records**, do not read it |
+
+**Accepted as FEED:** `HOURS` · `Copy of Moulding M/C 25-26` · `Copy of Moulding M/C 26-27` (duplicates).
+`Moulding M/C 25-26` stays as the FY25-26 closed-annual source (**R-03**).
+
+---
+
+## Rules throughout
+
+- Every FY2026-27 figure **recomputed**; FY2025-26 read from the closed annual (**R-03**) and **labelled**.
+- **Ideal Hours of 500/machine/month is the placeholder** — reproduce as the sheet's own assumption, labelled; do **not** populate `baselines.json` (**R-16**).
+- **Ideal Output rates are real standards** (Pipe M/C-1 120 … M/C-9 400 kg/hr). Report; wire nothing.
+- Percentages over 100% **not capped**. Idle machines render **0**. July wage cells read **AWAITING**, never 0.00.
+- **Label every basis**, net or gross (**R-22**).
+- **Reuse existing builders.** Do not reimplement what Reports 1–3 already compute.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · the `fa576e6` per-segment-tab fix · Garden, HDPE, Tank source paths · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+**Part A first**, separately: the three UNIT sections rendering, with confirmation that the per-segment tabs remain the data source and no headcount or wages were read from the UNIT tabs. Then Parts B–D: which tabs were added, which stayed FEED, the R-43 flag as it renders, and confirmation that no existing figure moved and no cell was copied.

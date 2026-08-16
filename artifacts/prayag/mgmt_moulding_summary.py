@@ -420,6 +420,144 @@ def _parse_s1_block_to_rows(block: dict, fy_label: str, source_label: str) -> li
     return rows
 
 
+# ── Month label helpers ───────────────────────────────────────────────────────
+
+MONTH_LABELS = ["APR", "MAY", "JUN", "JUL", "AUG", "SEP",
+                "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"]
+
+_FY_DISP = {
+    "2627": {
+        "APR": "APR'26", "MAY": "MAY'26", "JUN": "JUN'26", "JUL": "JUL'26",
+        "AUG": "AUG'26", "SEP": "SEP'26", "OCT": "OCT'26", "NOV": "NOV'26",
+        "DEC": "DEC'26", "JAN": "JAN'27", "FEB": "FEB'27", "MAR": "MAR'27",
+    },
+}
+
+_FY_YM_DICT = {
+    "2627": {
+        "APR": "2026-04", "MAY": "2026-05", "JUN": "2026-06", "JUL": "2026-07",
+        "AUG": "2026-08", "SEP": "2026-09", "OCT": "2026-10", "NOV": "2026-11",
+        "DEC": "2026-12", "JAN": "2027-01", "FEB": "2027-02", "MAR": "2027-03",
+    },
+}
+
+
+def _mc_monthly_moulding(records, fy: str, roster: list) -> dict:
+    """Accumulate {mc_key: {ym: {hrs, output_kg, reject_kg, runner_kg}}} from MOULDING records."""
+    fy_ym_d = _FY_YM_DICT.get(fy, _FY_YM_DICT["2627"])
+    all_yms = set(fy_ym_d.values())
+    mc_keys = {item["mc_key"] for item in roster}
+
+    result: dict = {}
+    for mc_key in mc_keys:
+        result[mc_key] = {ym: {"hrs": 0.0, "output_kg": 0.0, "reject_kg": 0.0, "runner_kg": 0.0}
+                          for ym in all_yms}
+
+    for r in records:
+        if r.plant != "MOULDING":
+            continue
+        ym = getattr(r, "period", None)
+        if not ym or ym not in all_yms:
+            continue
+        mk = _mc_key(r.machine or "")
+        if mk not in result:
+            continue
+        result[mk][ym]["hrs"]       += float(r.actual_hours or 0.0)
+        result[mk][ym]["output_kg"] += float(r.total_count or 0.0)
+        result[mk][ym]["reject_kg"] += float(r.reject_count or 0.0)
+        result[mk][ym]["runner_kg"] += float(r.runner_lumps or 0.0) if hasattr(r, "runner_lumps") else 0.0
+    return result
+
+
+def _build_section3_per_machine(moulding_records, n_months: int, roster: list, fy: str = "2627") -> dict:
+    """Per-machine monthly detail (27 machines, including idle ones as zero rows).
+
+    Columns per row: Month | Ideal Hrs | Actual Hrs | Output (KG) | Rejection (KG) |
+                     Runner (KG) | Avg/Hr | Util%
+
+    Idle machines always render 0, not blank.
+    """
+    fy_ym_d = _FY_YM_DICT.get(fy, _FY_YM_DICT["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    monthly = _mc_monthly_moulding(moulding_records, fy, roster)
+
+    machines: list = []
+    for item in roster:
+        mc  = item["mc_key"]
+        band = item.get("band", "")
+        mould_id = item.get("mould_id", "")
+
+        t_h = t_out = t_rej = t_run = 0.0
+        month_rows: list = []
+
+        for lbl in MONTH_LABELS:
+            ym = fy_ym_d[lbl]
+            d  = monthly.get(mc, {}).get(ym, {"hrs": 0.0, "output_kg": 0.0,
+                                              "reject_kg": 0.0, "runner_kg": 0.0})
+            h    = d["hrs"]
+            out  = d["output_kg"]
+            rej  = d["reject_kg"]
+            run  = d["runner_kg"]
+            avg  = _safe_div(out, h) if h else None
+            util = _safe_div(h, IDEAL_HRS_PER_MC_PER_MONTH) * 100 if h else None
+
+            month_rows.append({
+                "month_lbl": lbl, "month_disp": fy_disp[lbl],
+                "ideal_hrs": IDEAL_HRS_PER_MC_PER_MONTH,
+                "actual_hrs": h, "output_kg": out,
+                "reject_kg": rej, "runner_kg": run,
+                "avg_hr": avg, "util_pct": util,
+            })
+            t_h += h; t_out += out; t_rej += rej; t_run += run
+
+        ideal_tot = n_months * IDEAL_HRS_PER_MC_PER_MONTH
+        machines.append({
+            "mc_key": mc, "band": band, "mould_id": mould_id,
+            "month_rows": month_rows,
+            "total_row": {
+                "ideal_hrs": ideal_tot,
+                "actual_hrs": t_h, "output_kg": t_out,
+                "reject_kg": t_rej, "runner_kg": t_run,
+                "avg_hr": _safe_div(t_out, t_h) if t_h else None,
+                "util_pct": _safe_div(t_h, ideal_tot) * 100 if ideal_tot else None,
+            },
+        })
+    return {"machines": machines}
+
+
+def _build_section4_mould_pivot(moulding_records, n_months: int, roster: list, fy: str = "2627") -> dict:
+    """Moulding M/C 26-27 pivot: months as rows, machines grouped by band as column-pairs (HOURS|OUTPUT)."""
+    fy_ym_d = _FY_YM_DICT.get(fy, _FY_YM_DICT["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    monthly = _mc_monthly_moulding(moulding_records, fy, roster)
+
+    # Ordered unique machines from roster (preserves band grouping)
+    mc_list = [item["mc_key"] for item in roster]
+    mc_bands = {item["mc_key"]: item.get("band", "") for item in roster}
+
+    month_rows: list = []
+    t_mc: dict[str, dict] = {mc: {"hrs": 0.0, "out": 0.0} for mc in mc_list}
+
+    for lbl in MONTH_LABELS:
+        ym   = fy_ym_d[lbl]
+        cols = {}
+        for mc in mc_list:
+            d = monthly.get(mc, {}).get(ym, {"hrs": 0.0, "output_kg": 0.0})
+            h = d["hrs"]; o = d["output_kg"]
+            cols[mc] = {"hrs": h, "out": o}
+            t_mc[mc]["hrs"] += h
+            t_mc[mc]["out"] += o
+        month_rows.append({"month_lbl": lbl, "month_disp": fy_disp[lbl], "cols": cols})
+
+    total_cols = {mc: t_mc[mc] for mc in mc_list}
+    return {
+        "machines": mc_list,
+        "mc_bands": mc_bands,
+        "month_rows": month_rows,
+        "total_cols": total_cols,
+    }
+
+
 # ── Top-level builder ─────────────────────────────────────────────────────────
 
 def build_moulding_summary(fy: str = "2627") -> dict:
@@ -516,6 +654,10 @@ def build_moulding_summary(fy: str = "2627") -> dict:
         else:
             s2_fy2627_label = f"{fy_label} — recomputed"
 
+        # ── 8. Sections 3 and 4 ───────────────────────────────────────────────
+        section3 = _build_section3_per_machine(moulding_records, n_months, roster, fy)
+        section4 = _build_section4_mould_pivot(moulding_records, n_months, roster, fy)
+
         data = {
             "fy":        fy,
             "fy_label":  fy_label,
@@ -528,6 +670,8 @@ def build_moulding_summary(fy: str = "2627") -> dict:
                 "fy2526_label": "Apr,25 – Jul,25 (FY 2025-26) — closed annual",
                 "warnings":     s2_warnings,
             },
+            "section3":  section3,
+            "section4":  section4,
             "build_time_s": round(time.time() - t0, 2),
         }
 
@@ -543,6 +687,8 @@ def build_moulding_summary(fy: str = "2627") -> dict:
                 "fy2526": [], "fy2526_label": "",
                 "warnings": [],
             },
+            "section3": {"machines": []},
+            "section4": {"machines": [], "mc_bands": {}, "month_rows": [], "total_cols": {}},
             "build_time_s": round(time.time() - t0, 2),
         }
 

@@ -679,6 +679,232 @@ def _parse_pipe_mc_2526(values: list, n_months_2627: int) -> list:
     return rows
 
 
+# ── Sections 3–6 : MATERIAL / M/C WISE / MONTHWISE / per-machine ──────────────
+
+# Pipe-type groups (spec: CPVC(2) / UPVC(2) / AGRI/SWR(3) / OPVC(1) / COLUMN(1))
+PIPE_TYPE_GROUPS: list[tuple[str, list[str]]] = [
+    ("CPVC",     ["M/C-1", "M/C-2"]),
+    ("UPVC",     ["M/C-5", "M/C-6"]),
+    ("AGRI/SWR", ["M/C-3", "M/C-4", "M/C-9"]),
+    ("OPVC",     ["M/C-7"]),
+    ("COLUMN",   ["M/C-8"]),
+]
+
+
+def _mc_monthly(records, fy: str) -> dict[str, dict[str, dict]]:
+    """Accumulate {mc: {ym: {hrs, output_kg}}} from PIPE records.
+
+    Only machines in MACHINE_ORDER are kept; unrecognised labels are dropped.
+    """
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    all_yms = set(fy_ym.values())
+    result: dict = {mc: {ym: {"hrs": 0.0, "output_kg": 0.0}
+                          for ym in fy_ym.values()}
+                    for mc in MACHINE_ORDER}
+
+    mc_set = {_norm_machine(mc): mc for mc in MACHINE_ORDER}
+
+    for r in records:
+        if r.plant != "PIPE":
+            continue
+        ym = getattr(r, "period", None)
+        if not ym or ym not in all_yms:
+            continue
+        raw_mc  = r.machine or ""
+        canon   = _norm_machine(raw_mc)
+        mc_orig = mc_set.get(canon)
+        if not mc_orig:
+            continue
+        result[mc_orig][ym]["hrs"]       += float(r.actual_hours or 0.0)
+        result[mc_orig][ym]["output_kg"] += (
+            float(r.total_count or 0.0) + float(r.reject_count or 0.0)
+        )
+    return result
+
+
+def _build_section3_material(pipe_records, n_months: int) -> dict:
+    """MATERIAL section: per pipe-type group totals.
+
+    Columns: Qty | Run Hours | Actual Output (KG) | Ideal Output |
+             Avg/Hr | Util% | Output Eff%
+
+    Ideal Output for a group = sum over machines of (actual_hrs_m × ideal_rate_m).
+    This gives "how much these machines could produce at ideal rates given the hours
+    they actually ran" — the formula that reconciles with the workbook numbers.
+    Output Eff% = actual_output / ideal_from_actual_hrs × 100.
+    """
+    mc_data: dict[str, dict] = {}    # {mc: {hrs, output}}
+    for r in pipe_records:
+        mc = _norm_machine(r.machine or "")
+        if mc not in {_norm_machine(m) for m in MACHINE_ORDER}:
+            continue
+        mc_key = next((m for m in MACHINE_ORDER if _norm_machine(m) == mc), mc)
+        d = mc_data.setdefault(mc_key, {"hrs": 0.0, "output": 0.0})
+        d["hrs"]    += float(r.actual_hours or 0.0)
+        d["output"] += float(r.total_count or 0.0) + float(r.reject_count or 0.0)
+
+    group_rows: list = []
+    t_qty = t_hrs = t_out = t_ideal_out = 0.0
+
+    for type_name, machines in PIPE_TYPE_GROUPS:
+        qty = len(machines)
+        g_hrs = g_out = g_ideal_out = 0.0
+        for mc in machines:
+            d        = mc_data.get(mc, {"hrs": 0.0, "output": 0.0})
+            ideal_hr = MACHINE_IDEAL_RATES.get(mc, 0)
+            g_hrs    += d["hrs"]
+            g_out    += d["output"]
+            g_ideal_out += d["hrs"] * ideal_hr
+
+        ideal_hrs = n_months * IDEAL_HOURS_PER_MONTH * qty
+        avg_hr    = _safe_div(g_out, g_hrs)
+        util_pct  = _safe_div(g_hrs, ideal_hrs) * 100 if ideal_hrs else None
+        out_eff   = (_safe_div(g_out, g_ideal_out) * 100
+                     if g_ideal_out else None)
+
+        group_rows.append({
+            "type":      type_name,
+            "machines":  machines,
+            "qty":       qty,
+            "hrs":       g_hrs or None,
+            "output_kg": g_out or None,
+            "ideal_out": g_ideal_out or None,
+            "ideal_hrs": ideal_hrs,
+            "avg_hr":    avg_hr,
+            "util_pct":  util_pct,
+            "out_eff":   out_eff,
+        })
+        t_qty += qty; t_hrs += g_hrs; t_out += g_out; t_ideal_out += g_ideal_out
+
+    t_ideal_hrs = n_months * IDEAL_HOURS_PER_MONTH * int(t_qty)
+    total_row = {
+        "type": "TOTAL", "qty": int(t_qty),
+        "hrs": t_hrs or None, "output_kg": t_out or None,
+        "ideal_out": t_ideal_out or None, "ideal_hrs": t_ideal_hrs,
+        "avg_hr": _safe_div(t_out, t_hrs),
+        "util_pct": (_safe_div(t_hrs, t_ideal_hrs) * 100 if t_ideal_hrs else None),
+        "out_eff": (_safe_div(t_out, t_ideal_out) * 100 if t_ideal_out else None),
+    }
+    return {"groups": group_rows, "total_row": total_row}
+
+
+def _build_section4_mc_wise(pipe_records, fy: str) -> dict:
+    """M/C WISE pivot: months as rows, machines as column-pairs (HOURS | OUTPUT)."""
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    monthly = _mc_monthly(pipe_records, fy)
+
+    month_rows: list = []
+    t_mc: dict[str, dict] = {mc: {"hrs": 0.0, "out": 0.0} for mc in MACHINE_ORDER}
+
+    for lbl in MONTH_LABELS:
+        ym   = fy_ym[lbl]
+        cols = {}
+        for mc in MACHINE_ORDER:
+            d = monthly.get(mc, {}).get(ym, {"hrs": 0.0, "output_kg": 0.0})
+            h = d["hrs"] or None; o = d["output_kg"] or None
+            cols[mc] = {"hrs": h, "out": o}
+            if h: t_mc[mc]["hrs"] += h
+            if o: t_mc[mc]["out"] += o
+        month_rows.append({"month_lbl": lbl, "month_disp": fy_disp[lbl], "cols": cols})
+
+    total_cols = {mc: {"hrs": t_mc[mc]["hrs"] or None,
+                       "out": t_mc[mc]["out"] or None}
+                  for mc in MACHINE_ORDER}
+    return {"month_rows": month_rows, "total_cols": total_cols,
+            "machines": MACHINE_ORDER}
+
+
+def _build_section5_monthwise(pipe_records, fy: str, n_months: int) -> dict:
+    """MONTHWISE: one row per machine–month with Ideal/Actual/Output/Ideal Output/Avg/Hr."""
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    monthly = _mc_monthly(pipe_records, fy)
+
+    rows: list = []
+    for mc in MACHINE_ORDER:
+        ideal_rate = MACHINE_IDEAL_RATES.get(mc, 0)
+        mc_rows: list = []
+        for lbl in MONTH_LABELS:
+            ym   = fy_ym[lbl]
+            d    = monthly.get(mc, {}).get(ym, {"hrs": 0.0, "output_kg": 0.0})
+            h    = d["hrs"] or None
+            out  = d["output_kg"] or None
+            avg  = _safe_div(out, h)
+            i_out = (h * ideal_rate) if h and ideal_rate else None
+            mc_rows.append({
+                "month_lbl": lbl, "month_disp": fy_disp[lbl],
+                "ideal_hrs": IDEAL_HOURS_PER_MONTH,
+                "actual_hrs": h,
+                "output_kg": out,
+                "ideal_output": i_out,
+                "avg_hr": avg,
+            })
+        rows.append({"machine": mc, "pipe_type": MACHINE_TYPES.get(mc, ""),
+                     "ideal_rate": ideal_rate, "rows": mc_rows})
+    return {"machines": rows}
+
+
+def _build_section6_per_machine(pipe_records, fy: str, n_months: int) -> dict:
+    """Per-machine detail: one table per M/C-1..M/C-9, monthly rows + TOTAL.
+
+    Columns: Month | Ideal Hrs | Actual Hrs | Output (KG) | Ideal Output |
+             Avg/Hr | Util% | Output Eff%
+
+    Util%  = actual_hrs / ideal_hrs × 100
+    Output Eff% = avg_hr / ideal_rate × 100
+    """
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    monthly = _mc_monthly(pipe_records, fy)
+
+    machines: list = []
+    for mc in MACHINE_ORDER:
+        ideal_rate = MACHINE_IDEAL_RATES.get(mc, 0)
+        t_h = t_out = 0.0
+        month_rows: list = []
+
+        for lbl in MONTH_LABELS:
+            ym   = fy_ym[lbl]
+            d    = monthly.get(mc, {}).get(ym, {"hrs": 0.0, "output_kg": 0.0})
+            h    = d["hrs"] or None
+            out  = d["output_kg"] or None
+            avg  = _safe_div(out, h)
+            i_out = (h * ideal_rate) if h and ideal_rate else None
+            util_pct = (_safe_div(h, IDEAL_HOURS_PER_MONTH) * 100 if h else None)
+            eff_pct  = (_safe_div(avg, ideal_rate) * 100
+                        if avg is not None and ideal_rate else None)
+            month_rows.append({
+                "month_lbl": lbl, "month_disp": fy_disp[lbl],
+                "ideal_hrs": IDEAL_HOURS_PER_MONTH,
+                "actual_hrs": h, "output_kg": out, "ideal_output": i_out,
+                "avg_hr": avg, "util_pct": util_pct, "eff_pct": eff_pct,
+            })
+            if h:   t_h   += h
+            if out: t_out += out
+
+        ideal_hrs_total = n_months * IDEAL_HOURS_PER_MONTH
+        ideal_out_total = t_h * ideal_rate if (t_h and ideal_rate) else None
+        t_avg = _safe_div(t_out, t_h)
+        machines.append({
+            "machine": mc, "pipe_type": MACHINE_TYPES.get(mc, ""),
+            "ideal_rate": ideal_rate,
+            "month_rows": month_rows,
+            "total_row": {
+                "ideal_hrs": ideal_hrs_total,
+                "actual_hrs": t_h or None,
+                "output_kg": t_out or None,
+                "ideal_output": ideal_out_total,
+                "avg_hr": t_avg,
+                "util_pct": (_safe_div(t_h, ideal_hrs_total) * 100
+                             if t_h else None),
+                "eff_pct": (_safe_div(t_avg, ideal_rate) * 100
+                            if t_avg is not None and ideal_rate else None),
+            },
+        })
+    return {"machines": machines}
+
+
 # ── Top-level builder ──────────────────────────────────────────────────────────
 
 def build_pipe_summary(fy: str = "2627") -> dict:
@@ -783,6 +1009,12 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         if mc2526_warning:
             s2_warnings.append(mc2526_warning)
 
+        # ── Sections 3–6 ──────────────────────────────────────────────────────
+        s3 = _build_section3_material(pipe_records, n_months)
+        s4 = _build_section4_mc_wise(pipe_records, fy)
+        s5 = _build_section5_monthwise(pipe_records, fy, n_months)
+        s6 = _build_section6_per_machine(pipe_records, fy, n_months)
+
         data = {
             "fy":        fy,
             "fy_label":  _FY_LABEL.get(fy, f"FY {fy[:2]}-{fy[2:]}"),
@@ -796,6 +1028,10 @@ def build_pipe_summary(fy: str = "2627") -> dict:
                 "n_months":     n_months,
                 "warnings":     s2_warnings,
             },
+            "section3":  s3,
+            "section4":  s4,
+            "section5":  s5,
+            "section6":  s6,
             "build_time_s": round(time.monotonic() - t0, 2),
         }
 

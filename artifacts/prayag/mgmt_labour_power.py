@@ -101,6 +101,26 @@ PROD_BASIS: dict[str, str] = {
     "Sink":        "No source available",
 }
 
+# ── Ideal cost benchmark rates (₹ per kg of production) ───────────────────────
+# From "Ideal Power Cost" and "Ideal Labour Cost" workbook tabs.
+# R-43: the workbook's "Fittings Production (Kgs)" column in both tabs contains
+# PIECE COUNTS (APR 13,40,117 pcs), not kg.  We use Moulding gross output kg.
+_IDEAL_POWER_RATE: dict[str, float] = {
+    "Pipe":     4.0,
+    "Fittings": 8.0,
+    "Garden":   3.0,
+    "HDPE":     4.0,
+    "Tank":     5.0,
+}
+_IDEAL_LABOUR_RATE: dict[str, float] = {
+    "Pipe":     2.5,
+    "Fittings": 6.5,
+    "Garden":   3.0,
+    "HDPE":     1.25,
+    "Tank":     6.0,
+}
+_IDEAL_COST_SEGS = ["Pipe", "Fittings", "Garden", "HDPE", "Tank"]
+
 
 # ── Cell value helpers ─────────────────────────────────────────────────────────
 
@@ -914,7 +934,31 @@ def _do_build(fy: str) -> dict:
             segments.append(seg_data)
         units.append({"label": unit_label, "segments": segments})
 
-    return {"units": units, "fy": fy, "fy_label": fy_label, "error": None}
+    # 4. Build the four Part-B additional sections
+    combined_wages = _build_combined_wages(units)
+
+    # Fetch records once (cached in sheets module)
+    try:
+        import sheets as _sh_recs
+        fy_ym_map = _FY_YM.get(fy, _FY_YM["2627"])
+        all_yms   = list(fy_ym_map.values())
+        all_recs, _, _ = _sh_recs.get_records(all_yms)
+        sgr = _accumulate_seg_gross_reject(all_recs, fy)
+    except Exception as exc:
+        logger.warning("_do_build: could not accumulate seg_gross_reject: %s", exc)
+        sgr = {}
+
+    ideal_power_sec  = _build_ideal_cost_section(sgr, fy, "power")
+    ideal_labour_sec = _build_ideal_cost_section(sgr, fy, "labour")
+    reject_prod_sec  = _build_reject_prod_section(sgr, fy)
+
+    return {
+        "units": units, "fy": fy, "fy_label": fy_label, "error": None,
+        "combined_wages":    combined_wages,
+        "ideal_power_sec":   ideal_power_sec,
+        "ideal_labour_sec":  ideal_labour_sec,
+        "reject_prod_sec":   reject_prod_sec,
+    }
 
 
 def _blank_seg(unit: str, seg: str, fy: str) -> dict:
@@ -943,6 +987,182 @@ def _blank_seg(unit: str, seg: str, fy: str) -> dict:
         "has_prod_overridden":  False,
         "has_per_kg_computed":  False,
     }
+
+
+# ── Additional section builders (Parts B) ─────────────────────────────────────
+
+def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
+    """Accumulate net production and reject kg per segment per ym from records.
+
+    Returns {seg_key: {ym: {"net": float, "reject": float}}}
+    seg keys: "Pipe", "Fittings", "Garden", "HDPE", "Tank", "PTMT"
+
+    "net" = total_count (production before adding rejection back — matches workbook
+    "Production (Kgs)" column in the REJECTION & PRODUCTION tab).
+    "reject" = reject_count.
+    """
+    all_yms = list(_FY_YM.get(fy, _FY_YM["2627"]).values())
+    zero = lambda: {"net": 0.0, "reject": 0.0}
+
+    data: dict = {
+        seg: {ym: zero() for ym in all_yms}
+        for seg in ("Pipe", "Fittings", "Garden", "HDPE", "Tank", "PTMT")
+    }
+
+    _plant_map = {
+        "PIPE":       "Pipe",
+        "MOULDING":   "Fittings",
+        "GARDEN":     "Garden", "GARDEN_WB": "Garden",
+        "HDPE":       "HDPE",
+        "TANK":       "Tank", "TANK_VN": "Tank", "TANK_WB": "Tank",
+        "PTMT":       "PTMT",
+    }
+
+    for r in records:
+        seg = _plant_map.get(r.plant)
+        if not seg:
+            continue
+        ym = getattr(r, "period", None)
+        if not ym or ym not in data.get(seg, {}):
+            continue
+        if seg == "Tank":
+            kg = float((r.secondary_counts or {}).get("kg") or 0.0)
+            data[seg][ym]["net"] += kg
+        else:
+            net = float(r.total_count or 0.0)
+            rej = float(r.reject_count or 0.0)
+            data[seg][ym]["net"]    += net
+            data[seg][ym]["reject"] += rej
+    return data
+
+
+def _build_combined_wages(units: list) -> dict:
+    """Aggregate headcount and wages from the already-built units structure.
+
+    Reads n_labour / n_contractor / n_total_lab / paid_wages / contractor_wages /
+    total_wages from each segment's TOTAL row (always available; per-seg tabs have
+    no #REF! issues).  Sums per UNIT and GRAND TOTAL.
+    """
+    unit_rows = []
+    for unit in units:
+        u_n_pay = u_n_con = u_n_tot = u_pw = u_cw = u_tw = 0.0
+        seg_rows = []
+        for seg in unit["segments"]:
+            tr = seg["total_row"]
+            n_pay = float(tr.get("n_labour") or 0.0)
+            n_con = float(tr.get("n_contractor") or 0.0)
+            n_tot = float(tr.get("n_total_lab") or 0.0)
+            pw    = float(tr.get("paid_wages") or 0.0)
+            cw    = float(tr.get("contractor_wages") or 0.0)
+            tw    = float(tr.get("total_wages") or 0.0)
+            seg_rows.append({
+                "name": seg["name"],
+                "n_payroll": n_pay, "n_contractor": n_con, "n_total": n_tot,
+                "paid_wages": pw, "contractor_wages": cw, "total_wages": tw,
+            })
+            u_n_pay += n_pay; u_n_con += n_con; u_n_tot += n_tot
+            u_pw += pw; u_cw += cw; u_tw += tw
+        unit_rows.append({
+            "label": unit["label"], "segments": seg_rows,
+            "n_payroll": u_n_pay, "n_contractor": u_n_con, "n_total": u_n_tot,
+            "paid_wages": u_pw, "contractor_wages": u_cw, "total_wages": u_tw,
+        })
+
+    gt = {k: sum(u[k] for u in unit_rows)
+          for k in ("n_payroll", "n_contractor", "n_total",
+                    "paid_wages", "contractor_wages", "total_wages")}
+    return {"units": unit_rows, "grand_total": gt}
+
+
+def _build_ideal_cost_section(
+    seg_gross_reject: dict,
+    fy: str = "2627",
+    kind: str = "power",
+) -> dict:
+    """Build Ideal Power Cost or Ideal Labour Cost section.
+
+    kind: "power" | "labour"
+    Returns monthly rows + total_row, each with per-segment {net, ideal_cost}.
+    R-43 applies to Fittings: we use Moulding net kg not piece count.
+    """
+    rates   = _IDEAL_POWER_RATE if kind == "power" else _IDEAL_LABOUR_RATE
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+
+    month_rows: list = []
+    seg_net_tot:   dict[str, float] = {s: 0.0 for s in _IDEAL_COST_SEGS}
+    seg_ideal_tot: dict[str, float] = {s: 0.0 for s in _IDEAL_COST_SEGS}
+
+    for lbl in MONTH_LABELS:
+        ym = fy_ym[lbl]
+        segs_data: dict = {}
+        row_total = 0.0
+        for seg in _IDEAL_COST_SEGS:
+            gr   = seg_gross_reject.get(seg, {}).get(ym, {"net": 0.0, "reject": 0.0})
+            net  = gr["net"]
+            cost = net * rates.get(seg, 0.0)
+            segs_data[seg] = {"net": net, "ideal_cost": cost}
+            row_total              += cost
+            seg_net_tot[seg]       += net
+            seg_ideal_tot[seg]     += cost
+        month_rows.append({
+            "month_lbl": lbl, "month_disp": fy_disp[lbl],
+            "segs": segs_data, "total_ideal": row_total,
+        })
+
+    total_row_segs = {
+        seg: {"net": seg_net_tot[seg], "ideal_cost": seg_ideal_tot[seg]}
+        for seg in _IDEAL_COST_SEGS
+    }
+    return {
+        "kind": kind, "rates": rates,
+        "months": month_rows,
+        "total_row": {"segs": total_row_segs,
+                      "total_ideal": sum(seg_ideal_tot.values())},
+    }
+
+
+def _build_reject_prod_section(
+    seg_gross_reject: dict,
+    fy: str = "2627",
+) -> dict:
+    """Build Rejection & Production section (matches workbook tab layout).
+
+    Workbook covers Pipe and Fittings.  We extend to Garden / HDPE / PTMT from
+    daily records; Tank shows net kg only (no reject column in records).
+    R-43 flag: workbook Fittings column is piece count (APR 13,40,117 pcs);
+    we use Moulding net kg.
+    """
+    fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
+    fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
+    segs    = ["Pipe", "Fittings", "Garden", "HDPE", "PTMT"]  # Tank: net only, no reject
+
+    month_rows: list = []
+    totals: dict = {s: {"net": 0.0, "reject": 0.0} for s in segs}
+
+    for lbl in MONTH_LABELS:
+        ym = fy_ym[lbl]
+        segs_data: dict = {}
+        for seg in segs:
+            gr     = seg_gross_reject.get(seg, {}).get(ym, {"net": 0.0, "reject": 0.0})
+            net    = gr["net"]
+            reject = gr["reject"]
+            gross  = net + reject
+            rej_pct = _safe_div(reject, gross) * 100 if gross else None
+            segs_data[seg] = {"net": net, "reject": reject, "rej_pct": rej_pct}
+            totals[seg]["net"]    += net
+            totals[seg]["reject"] += reject
+        month_rows.append({
+            "month_lbl": lbl, "month_disp": fy_disp[lbl], "segs": segs_data,
+        })
+
+    total_segs: dict = {}
+    for seg in segs:
+        n = totals[seg]["net"]; r = totals[seg]["reject"]; g = n + r
+        total_segs[seg] = {"net": n, "reject": r,
+                           "rej_pct": _safe_div(r, g) * 100 if g else None}
+
+    return {"segs": segs, "months": month_rows, "total_row": {"segs": total_segs}}
 
 
 def invalidate_cache(fy: str = "2627") -> None:
