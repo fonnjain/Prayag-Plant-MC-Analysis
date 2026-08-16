@@ -50,3 +50,12 @@ Corrected to the **empty frozenset** (R-25 closed 2026-08-15). `_emit_tank` stam
 Per-date sum = 100h; monthly summary cell = 98h. Use per-date sum; flag the 2h discrepancy in `recon_audit["dr_internal_gap_hrs"]`.
 
 **Why:** DR monthly summary cell can lag or differ from per-date triplet sum. Per-date triplets are primary; the cell is a check.
+
+## Secondary_counts / ideal_source cache staleness
+
+When `ideal_source` is changed in `_emit_tank`, cached records (L1 pickle / L2 Postgres) still carry the old string. This is harmless — utilisation suppression depends only on `ideal_hours > 0`, not `ideal_source`. Fresh Sheets reads (or after cache TTL) produce the correct value. Do not clear cache (R-34).
+
+## Template surfaces for Tank kg + rejection
+
+- **`/reports/tank_vn`, `/reports/tank_wb`** (`report_tank_location.html`): route loads annual summary records + daily records; daily records supply `secondary_counts["kg"]`, `rej_mouth_kg`, `rej_base_kg` for display. Annual records have empty `secondary_counts`.
+- **`/?plant=TANK`** (`plant.html`): daily records flow through `compute_metrics.to_dict()` → `m.secondary_counts`; kg and rejection kg displayed conditionally for Tank plants.
