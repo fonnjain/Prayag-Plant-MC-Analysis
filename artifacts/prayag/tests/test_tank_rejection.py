@@ -125,14 +125,43 @@ def _close(actual, expected, tol=0.001):
 
 
 # ---------------------------------------------------------------------------
-# A2 guard — PLANTS_WITHOUT_RUNHOURS still covers all three tank plants
+# A2 guard — PLANTS_WITHOUT_RUNHOURS is empty (R-25); Tank utilisation is
+# suppressed via ideal_source=SRC_NOT_SET, not via set membership.
 # ---------------------------------------------------------------------------
-def test_plants_without_runhours_covers_all_tank_locations():
+def test_plants_without_runhours_is_empty():
+    """R-25 closed PLANTS_WITHOUT_RUNHOURS to frozenset().
+
+    All three Tank variants now manage ``runhours_tracked`` at record level
+    (date-wise max of DAILY REPORT + PROD. REPORT hours, R-39).  The old
+    set-membership gate must stay empty — if any plant sneaks back in it would
+    suppress run-hour tracking that is now happening correctly.
+    """
+    import ideal_hours
+    assert ideal_hours.PLANTS_WITHOUT_RUNHOURS == frozenset(), (
+        "PLANTS_WITHOUT_RUNHOURS must be empty (R-25); "
+        "Tank run-hour suppression is now done at record level via "
+        "runhours_tracked, not via set membership")
+
+
+def test_tank_utilisation_suppressed_via_src_not_set():
+    """Tank plants have no APP_DEFAULT_IDEAL_HOURS entry.
+
+    When no override and no sheet value are provided, resolve() must return
+    (None, SRC_NOT_SET) for every Tank location — utilisation stays suppressed
+    without needing PLANTS_WITHOUT_RUNHOURS membership.
+    """
     import ideal_hours
     for plant in ("TANK", "TANK_VN", "TANK_WB"):
-        assert plant in ideal_hours.PLANTS_WITHOUT_RUNHOURS, (
-            f"{plant} missing from PLANTS_WITHOUT_RUNHOURS — "
-            "utilisation will be fabricated 0% instead of suppressed")
+        hours, src = ideal_hours.resolve(
+            override=None, sheet_value=None, plant=plant
+        )
+        assert hours is None, (
+            f"{plant}: expected ideal_hours=None, got {hours!r} — "
+            "a default was added to APP_DEFAULT_IDEAL_HOURS without a "
+            "corresponding utilisation denominator check (FM #14)")
+        assert src == ideal_hours.SRC_NOT_SET, (
+            f"{plant}: expected src=SRC_NOT_SET, got {src!r} — "
+            "utilisation may be fabricated instead of suppressed")
 
 
 # ---------------------------------------------------------------------------
