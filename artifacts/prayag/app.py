@@ -3455,6 +3455,8 @@ def management_reports_index():
             # Management Report 1 has a full web view — surface it as a button
             if rpt["id"] == "segment_labour":
                 rpt["view_url"] = "/management-reports/segment-labour"
+            if rpt["id"] == "pipe":
+                rpt["view_url"] = "/management-reports/pipe-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3572,6 +3574,31 @@ def mgmt_segment_labour_view():
     data = _mlp.build_mgmt_report_data(fy)
     return render_template(
         "report_mgmt_segment_labour.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/pipe-summary")
+def mgmt_pipe_summary_view():
+    """Pipe M/C Summary — Section 1: monthly run hours / output / labour / wages.
+    Section 2: per-machine YoY comparison (FY26-27 vs FY25-26).
+
+    Sources:
+      run hours + output — daily records (plant=PIPE)
+      labour / paid hours — Employee Data Details DASHBOARD tab, PIPELINE row
+      wages              — monthly KH-1 workbooks, PIPELINE filter
+      FY25-26 per-machine — Pipe M/C 25-26 tab in Pipe M/C workbook
+    """
+    import mgmt_pipe_summary as _mps
+
+    fy = request.args.get("fy", "2627")
+    if fy not in _mps._FY_YM:
+        fy = "2627"
+    data = _mps.build_pipe_summary(fy)
+    return render_template(
+        "report_mgmt_pipe_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),

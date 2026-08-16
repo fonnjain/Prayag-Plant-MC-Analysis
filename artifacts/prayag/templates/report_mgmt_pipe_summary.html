@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Pipe M/C Summary{% endblock %}
+
+{% block content %}
+
+{# ─── Macro MUST be defined before first use (Jinja2 does not hoist macros) ─── #}
+{% macro render_mc_table(rows) %}
+<table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+  <thead>
+    <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.15)">
+      <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
+          style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;min-width:70px">Machine</th>
+      <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Pipe Type</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Ideal<br>Hours</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual<br>Hours</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Output<br>(KG)</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Ideal Rate<br>(KG/Hr)</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Avg/Hr<br>(KG)</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Utilisation<br>%</th>
+      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Output<br>Eff. %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    {% set is_total = row.is_total is defined and row.is_total %}
+    <tr style="{% if is_total %}background:rgba(31,56,100,0.07);border-top:2px solid rgba(31,56,100,0.20);font-weight:600{% else %}border-bottom:1px solid rgba(0,0,0,0.05){% endif %}">
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} whitespace-nowrap"
+          style="{% if is_total %}color:var(--navy);{% else %}color:#444;{% endif %}position:sticky;left:0;background:{% if is_total %}rgba(236,240,248,1){% elif loop.index is odd %}#fff{% else %}rgba(249,250,252,1){% endif %};z-index:1">
+        {{ row.machine }}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} whitespace-nowrap {% if not is_total %}text-gray-600{% endif %}">
+        {{ row.pipe_type if row.pipe_type else "" }}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap {% if not is_total %}text-gray-700{% endif %}">
+        {{ "{:,}".format(row.ideal_hrs|int) if row.ideal_hrs else "—" }}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap {% if not is_total %}text-gray-700{% endif %}">
+        {% if row.actual_hrs is not none %}{{ "{:,.0f}".format(row.actual_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap {% if not is_total %}text-gray-700{% endif %}">
+        {% if row.actual_out_kg is not none %}{{ "{:,.0f}".format(row.actual_out_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap {% if not is_total %}text-gray-600{% endif %}">
+        {{ "{:,}".format(row.ideal_rate|int) if row.ideal_rate else "—" }}
+      </td>
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap {% if not is_total %}text-gray-700{% endif %}">
+        {% if row.avg_hr is not none %}{{ "%.1f"|format(row.avg_hr) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      {# Utilisation — green ≥ 85%, amber 60–85%, red < 60% #}
+      {% if row.util_pct is not none %}
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap font-medium"
+          style="color:{% if row.util_pct >= 85 %}#0a7a3c{% elif row.util_pct >= 60 %}#c57a00{% else %}var(--terra){% endif %}">
+        {{ "%.1f"|format(row.util_pct) }}%
+      </td>
+      {% else %}
+      <td class="px-2 py-1.5 text-right whitespace-nowrap"><span class="text-gray-300">—</span></td>
+      {% endif %}
+      {# Output Efficiency — green ≥ 70%, amber 50–70%, red < 50% #}
+      {% if row.out_eff_pct is not none %}
+      <td class="px-2 {% if is_total %}py-2{% else %}py-1.5{% endif %} text-right whitespace-nowrap font-medium"
+          style="color:{% if row.out_eff_pct >= 70 %}#0a7a3c{% elif row.out_eff_pct >= 50 %}#c57a00{% else %}var(--terra){% endif %}">
+        {{ "%.1f"|format(row.out_eff_pct) }}%
+      </td>
+      {% else %}
+      <td class="px-2 py-1.5 text-right whitespace-nowrap"><span class="text-gray-300">—</span></td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{# ─── Page header ────────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      Pipe M/C Summary
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">{{ data.fy_label }} · recomputed from daily records and source workbooks</div>
+  </div>
+</div>
+
+{% if data.error %}
+<div class="kpi-card p-4 flex items-start gap-3">
+  <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <div>
+    <div class="text-sm font-semibold" style="color:var(--terra)">Could not load data</div>
+    <div class="text-xs text-gray-500 mt-1">{{ data.error }}</div>
+  </div>
+</div>
+{% else %}
+
+{# ─── Section 1: SUMMARY ────────────────────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-3">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:var(--terra)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">SUMMARY — Monthly Labour &amp; Output</h3>
+    <div class="text-xs text-gray-400">Run Hours · Output · Labour · Wages · Cost/KG</div>
+  </div>
+
+  {% if data.section1.warnings %}
+  <div class="mb-2 px-3 py-2 rounded-lg border text-xs leading-snug"
+       style="background:rgba(197,90,17,0.05);border-color:rgba(197,90,17,0.25)">
+    {% for w in data.section1.warnings %}
+    <div style="color:#a05000">⚠ {{ w }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.15)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;min-width:80px">Month</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">M/C Run<br>Hours</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Output<br>with Rej. (KG)</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Labour<br>(Persons)</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Paid<br>Hours</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Paid Wages<br>(₹)</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Paid Hrs<br>/ Person</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per Hour<br>Cost (₹)</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Labour Cost (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {# TOTAL row first #}
+          {% set tr = data.section1.total_row %}
+          <tr style="background:rgba(31,56,100,0.07);border-bottom:2px solid rgba(31,56,100,0.20);font-weight:600">
+            <td class="px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(236,240,248,1);z-index:1">
+              TOTAL
+            </td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.run_hrs) if tr.run_hrs is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.gross_output_kg) if tr.gross_output_kg is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.labour) if tr.labour is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.paid_hrs) if tr.paid_hrs is not none else "—" }}</td>
+            {% if tr.awaiting %}
+            <td class="px-2 py-2 text-right whitespace-nowrap" colspan="4">
+              <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING SOURCE DATA</span>
+            </td>
+            {% else %}
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.wages) if tr.wages is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.1f"|format(tr.devoted_per_person) if tr.devoted_per_person is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.per_hour_cost) if tr.per_hour_cost is not none else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.per_kg_cost) if tr.per_kg_cost is not none else "—" }}</td>
+            {% endif %}
+          </tr>
+
+          {# Monthly rows APR → MAR #}
+          {% for row in data.section1.month_rows %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05){% if loop.index is divisibleby 3 %};border-bottom:1px solid rgba(0,0,0,0.09){% endif %}">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium"
+                style="color:#444;position:sticky;left:0;background:{% if loop.index is odd %}#fff{% else %}rgba(249,250,252,1){% endif %};z-index:1">
+              {{ row.month_disp }}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.run_hrs is not none %}{{ "{:,.0f}".format(row.run_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.gross_output_kg is not none %}{{ "{:,.0f}".format(row.gross_output_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.labour is not none %}{{ "{:,.0f}".format(row.labour) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.paid_hrs is not none %}{{ "{:,.0f}".format(row.paid_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% if row.awaiting %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap" colspan="4">
+              <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING</span>
+            </td>
+            {% else %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.wages is not none %}{{ "{:,.0f}".format(row.wages) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.devoted_per_person is not none %}{{ "%.1f"|format(row.devoted_per_person) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.per_hour_cost is not none %}{{ "%.2f"|format(row.per_hour_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.per_kg_cost is not none %}{{ "%.2f"|format(row.per_kg_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="px-3 py-2 border-t text-[10px] text-gray-400 leading-snug"
+         style="border-color:rgba(0,0,0,0.06);background:rgba(249,250,252,1)">
+      Run Hours + Output from daily records (plant=PIPE, gross = good + rejected) ·
+      Labour &amp; Paid Hours from Employee Data Details DASHBOARD tab (PIPELINE row) ·
+      Wages from monthly KH-1 workbooks (PIPELINE filter) ·
+      <span style="color:#c57a00">AWAITING</span> = wages workbook not yet registered for this month
+    </div>
+  </div>
+</div>
+
+{# ─── Section 2: SUMMARY-1 — per-machine YoY ────────────────────────────────── #}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-3">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:var(--navy)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">SUMMARY-1 — Per-Machine Year-on-Year</h3>
+    <div class="text-xs text-gray-400">
+      {{ data.section2.n_months }} month(s) in scope ·
+      Ideal = {{ data.section2.n_months }} × 500 hrs/machine
+    </div>
+  </div>
+
+  {% if data.section2.warnings %}
+  <div class="mb-2 px-3 py-2 rounded-lg border text-xs leading-snug"
+       style="background:rgba(197,90,17,0.05);border-color:rgba(197,90,17,0.25)">
+    {% for w in data.section2.warnings %}
+    <div style="color:#a05000">⚠ {{ w }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+
+    {# FY26-27 block #}
+    {% if data.section2.fy2627 %}
+    <div>
+      <div class="text-xs font-semibold mb-1.5 px-1" style="color:var(--navy)">
+        {{ data.section2.fy2627_label }}
+        <span class="font-normal text-gray-400 ml-1">(from daily records)</span>
+      </div>
+      <div class="kpi-card" style="overflow:hidden">
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          {{ render_mc_table(data.section2.fy2627) }}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# FY25-26 block #}
+    {% if data.section2.fy2526 %}
+    <div>
+      <div class="text-xs font-semibold mb-1.5 px-1" style="color:var(--navy)">
+        {{ data.section2.fy2526_label }}
+        <span class="font-normal text-gray-400 ml-1">(Pipe M/C 25-26 tab, period-equivalent)</span>
+      </div>
+      <div class="kpi-card" style="overflow:hidden">
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          {{ render_mc_table(data.section2.fy2526) }}
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="kpi-card p-4 flex items-center gap-2 text-xs text-gray-400">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z"/>
+      </svg>
+      FY25-26 comparison data not available — check Pipe M/C 25-26 tab
+    </div>
+    {% endif %}
+
+  </div>
+
+  <div class="mt-2 px-3 py-2 rounded-lg border text-[10px] text-gray-400 leading-snug"
+       style="border-color:rgba(31,56,100,0.12);background:rgba(31,56,100,0.025)">
+    <span class="font-medium text-gray-600">Ideal Rate (KG/Hr)</span>
+    = machine-specific ideal: M/C-1=120 · M/C-2=280 · M/C-3=320 · M/C-4=380 · M/C-5=350 · M/C-6=350 · M/C-7=200 · M/C-8=150 · M/C-9=400 ·
+    <span class="font-medium text-gray-600">Avg/Hr</span> = Actual Output ÷ Actual Hours ·
+    <span class="font-medium text-gray-600">Utilisation%</span> = Actual Hrs ÷ Ideal Hrs ·
+    <span class="font-medium text-gray-600">Output Eff%</span> = Avg/Hr ÷ Ideal Rate
+    (TOTAL row: Σ Avg/Hr ÷ Σ Ideal Rate)
+  </div>
+</div>
+
+<div class="mt-1 mb-4 text-[10px] text-gray-400 text-right">
+  Built in {{ "%.1f"|format(data.build_time_s) }}s · {{ today_disp }} · {{ last_synced }}
+</div>
+
+{% endif %} {# end data.error check #}
+{% endblock %}
