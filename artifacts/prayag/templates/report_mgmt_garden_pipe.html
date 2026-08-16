@@ -41,14 +41,32 @@
     Both come from the same workbook; they differ by 68% in the months compared.
     Neither is wrong — the divergence is open with the data owner (Anuj).
   </div>
+  {# Active months = those where we have block-tab records (net_kg not None). #}
+  {# month_rows is APR→MAR order — chronological, correct for the banner summary. #}
+  {% set active = data.section.month_rows | selectattr('net_kg') | list %}
   <div class="mt-1.5 grid grid-cols-2 gap-x-6 gap-y-0.5 text-[10px]" style="color:#1f3864">
-    <div><span class="font-medium">Block tabs (our basis):</span> APR 42,736 · MAY 53,235 · JUN 70,520 · JUL 66,038 · total 232,529 kg</div>
-    <div><span class="font-medium">Daily Report (sheet basis):</span> APR 38,950 · MAY 0 · JUN 66,911 · JUL 32,191 · total 138,052 kg</div>
+    <div>
+      <span class="font-medium">Block tabs (our basis):</span>
+      {% for row in active %}{{ row.month_disp }} {{ "{:,.0f}".format(row.net_kg) }}{% if not loop.last %} · {% endif %}{% endfor %}
+      {%- if data.section.total_row.net_kg %} · total {{ "{:,.0f}".format(data.section.total_row.net_kg) }} kg{% endif %}
+    </div>
+    <div>
+      <span class="font-medium">Daily Report (sheet basis):</span>
+      {% for row in active %}{{ row.month_disp }} {{ "{:,.0f}".format(row.dr_net_kg if row.dr_net_kg is not none else 0) }}{% if not loop.last %} · {% endif %}{% endfor %}
+      {%- if data.section.total_row.dr_net_kg is not none %} · total {{ "{:,.0f}".format(data.section.total_row.dr_net_kg) }} kg{% endif %}
+    </div>
   </div>
+  {# May note — live values from the MAY month row. #}
+  {% set may_row = data.section.month_rows | selectattr('month_lbl', 'equalto', 'MAY') | first | default(none) %}
+  {% if may_row and may_row.may_dr_unfilled %}
   <div class="mt-1 text-[10px] text-gray-500">
-    May: the Daily Report was not filled for May 2026 while the block tabs record 53,235 kg.
-    Twenty workers and ₹1,49,442 wages exist — these are shown. Output is from block tabs.
+    May: the Daily Report was not filled for May 2026 while the block tabs record
+    <span class="font-medium text-gray-700">{{ "{:,.0f}".format(may_row.net_kg or 0) }} kg</span>.
+    {% if may_row.labour is not none %}{{ may_row.labour|int }} workers{% else %}workers count unavailable{% endif %}
+    and {% if may_row.wages is not none %}₹{{ "{:,.0f}".format(may_row.wages) }} wages{% else %}<span style="color:var(--terra)">wages AWAITING</span>{% endif %}
+    exist — these are shown. Output is from block tabs.
   </div>
+  {% endif %}
 </div>
 
 {# ─── R-42 wages banner ──────────────────────────────────────────────────────── #}

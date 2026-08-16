@@ -57,30 +57,6 @@ _FY_LABEL: dict[str, str] = {
     "2627": "FY 2026–27",
 }
 
-# ── R-23: Daily Report basis reference figures ─────────────────────────────────
-# From the Annual Garden Pipe M/C Summary workbook SUMMARY tab.
-# These are COMPARISON figures only — never the source (Cardinal Rule).
-# Our figures come from block tabs (plant=GARDEN, r.total_count).
-# Add new months as they close and the sheet is finalised.
-_GARDEN_DR_NET_KG: dict[str, dict[str, float]] = {
-    "2627": {
-        "2026-04": 38_950.0,
-        "2026-05": 0.0,        # Daily Report unfilled for May (not a zero-production month)
-        "2026-06": 66_911.0,
-        "2026-07": 32_191.0,
-    }
-}
-
-# Corresponding DR gross (net + rejection as the sheet records them).
-_GARDEN_DR_GROSS_KG: dict[str, dict[str, float]] = {
-    "2627": {
-        "2026-04": 40_141.0,   # 38,950 + 1,191
-        "2026-05": 0.0,
-        "2026-06": 69_126.0,   # 66,911 + 2,215
-        "2026-07": 34_044.8,   # 32,191 + 1,853.8
-    }
-}
-
 # R-42: Annual Garden workbook wages total (for comparison only).
 # Source: "Annual 26-27 GARDEN PIPE M/C Summary" SUMMARY tab.
 # NOT used as source — our wages come from Segment Cost workbook (R-11).
@@ -115,7 +91,7 @@ def _fsum(rows: list, key: str) -> Optional[float]:
 
 # ── Core data accumulator ──────────────────────────────────────────────────────
 
-def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict]:
+def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict, dict]:
     """Accumulate per-ym totals from daily Garden records.
 
     Returns:
@@ -124,12 +100,15 @@ def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict]:
       kh_run_hrs {ym: float}  — run hours from Daily Report
       wb_net     {ym: float}  — West Bengal net output (plant=GARDEN_WB)
       wb_reject  {ym: float}  — WB rejection
+      kh_dr_net  {ym: float}  — Daily Report basis net output (sum of r.reject_denominator)
+                                 0.0 for months where DR was not filled (e.g. May)
     """
-    kh_net: dict[str, float]     = {}
-    kh_reject: dict[str, float]  = {}
+    kh_net: dict[str, float]    = {}
+    kh_reject: dict[str, float] = {}
     kh_run_hrs: dict[str, float] = {}
-    wb_net: dict[str, float]     = {}
-    wb_reject: dict[str, float]  = {}
+    wb_net: dict[str, float]    = {}
+    wb_reject: dict[str, float] = {}
+    kh_dr_net: dict[str, float] = {}   # live DR-basis net — replaces hardcoded constants
 
     for r in records:
         ym = getattr(r, "period", None)
@@ -137,15 +116,20 @@ def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict]:
             continue
 
         if r.plant == "GARDEN":
-            kh_net[ym]     = kh_net.get(ym, 0.0)     + float(r.total_count  or 0.0)
-            kh_reject[ym]  = kh_reject.get(ym, 0.0)  + float(r.reject_count or 0.0)
-            kh_run_hrs[ym] = kh_run_hrs.get(ym, 0.0) + float(r.actual_hours or 0.0)
+            kh_net[ym]    = kh_net.get(ym, 0.0)    + float(r.total_count      or 0.0)
+            kh_reject[ym] = kh_reject.get(ym, 0.0) + float(r.reject_count     or 0.0)
+            kh_run_hrs[ym] = kh_run_hrs.get(ym, 0.0) + float(r.actual_hours   or 0.0)
+            # r.reject_denominator = DR output per machine-date (sheets.py L1866/L1908).
+            # Summing this over all GARDEN records for a month gives DR-basis net output.
+            # For months where the DR was not filled (May), all records default to 0.0,
+            # so kh_dr_net[ym] = 0.0 — correct: the DR genuinely shows zero for that month.
+            kh_dr_net[ym] = kh_dr_net.get(ym, 0.0) + float(r.reject_denominator or 0.0)
 
         elif r.plant == "GARDEN_WB":
             wb_net[ym]    = wb_net.get(ym, 0.0)    + float(r.total_count  or 0.0)
             wb_reject[ym] = wb_reject.get(ym, 0.0) + float(r.reject_count or 0.0)
 
-    return kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject
+    return kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net
 
 
 # ── Section builder ────────────────────────────────────────────────────────────
@@ -158,6 +142,7 @@ def _build_section(
     wb_net: dict,
     wb_reject: dict,
     garden_labour: dict,
+    kh_dr_net: dict,
 ) -> dict:
     """Build monthly rows (APR-MAR order) + TOTAL row.
 
@@ -165,8 +150,6 @@ def _build_section(
     """
     fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
     fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
-    dr_net  = _GARDEN_DR_NET_KG.get(fy, {})
-    dr_gross = _GARDEN_DR_GROSS_KG.get(fy, {})
     dr_unfilled = _DR_UNFILLED_MONTHS.get(fy, frozenset())
 
     month_rows: list = []
@@ -199,14 +182,16 @@ def _build_section(
         per_hour_cost      = _safe_div(wages, paid_hrs)
         per_kg_cost        = _safe_div(wages, gross)   # wages per gross kg
 
-        # R-23: compare our block-tab net vs Daily Report net
-        dr_net_ym   = dr_net.get(ym)
-        dr_gross_ym = dr_gross.get(ym)
-        r23_has_data = dr_net_ym is not None   # we have a DR reference for this month
+        # R-23: compare our block-tab net vs Daily Report net (live from reject_denominator).
+        # r23_has_data fires whenever we have block-tab records for this month —
+        # the DR figure (even if 0 because the DR was unfilled) is meaningful to compare.
+        r23_has_data = net is not None
+        dr_net_ym   = kh_dr_net.get(ym, 0.0) if r23_has_data else None
+        # DR gross = DR net + rejection (both from the Daily Report source)
+        dr_gross_ym = (dr_net_ym + (rej or 0.0)) if r23_has_data else None
         r23_differs  = (
             r23_has_data
-            and net is not None
-            and abs((net or 0.0) - dr_net_ym) > 1.0
+            and abs((net or 0.0) - (dr_net_ym or 0.0)) > 1.0
         )
 
         # May: Daily Report unfilled flag
@@ -265,6 +250,13 @@ def _build_section(
     t_wb_net = _fsum(month_rows, "wb_net_kg")
     t_wb_rej = _fsum(month_rows, "wb_reject_kg")
 
+    # DR-basis totals (live accumulation — for the banner and R-23 comparison)
+    t_dr_net = sum(
+        kh_dr_net.get(ym, 0.0)
+        for ym in [fy_ym.get(lbl) for lbl in MONTH_LABELS]
+        if ym and kh_net.get(ym) is not None   # only months with block-tab records
+    )
+
     total_row = {
         "run_hrs":            t_rh,
         "net_kg":             t_net,
@@ -283,6 +275,7 @@ def _build_section(
         "per_kg_cost":        _safe_div(t_wages, t_gross),
         "wb_net_kg":          t_wb_net,
         "wb_reject_kg":       t_wb_rej,
+        "dr_net_kg":          t_dr_net,   # for banner: total DR-basis net across active months
     }
 
     return {
@@ -308,7 +301,7 @@ def _do_build(fy: str) -> dict:
     except Exception as exc:
         raise RuntimeError(f"Could not load daily Garden records: {exc}") from exc
 
-    kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject = _accumulate_garden(daily_all)
+    kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net = _accumulate_garden(daily_all)
 
     # Segment Cost workbook — "Garden Pipe" tab (R-11)
     try:
@@ -318,7 +311,9 @@ def _do_build(fy: str) -> dict:
         logger.warning("build_garden_summary: load_segment_tabs failed: %s", exc)
         garden_labour = {}
 
-    section = _build_section(fy, kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, garden_labour)
+    section = _build_section(
+        fy, kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, garden_labour, kh_dr_net
+    )
 
     return {
         "fy":       fy,
