@@ -3465,6 +3465,12 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/garden-pipe-summary"
             if rpt["id"] == "hdpe_summary":
                 rpt["view_url"] = "/management-reports/hdpe-summary"
+            if rpt["id"] == "tank_kh":
+                rpt["view_url"] = "/management-reports/tank-kh-summary"
+            if rpt["id"] == "tank_vn":
+                rpt["view_url"] = "/management-reports/tank-vn-summary"
+            if rpt["id"] == "tank_wb":
+                rpt["view_url"] = "/management-reports/tank-wb-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3716,6 +3722,70 @@ def mgmt_moulding_summary_view():
     data = _mms.build_moulding_summary(fy)
     return render_template(
         "report_mgmt_moulding_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/tank-kh-summary")
+def mgmt_tank_kh_summary_view():
+    """Tank KH (Kaharani) — Ltr production summary, Management Report 7.
+
+    Two pivot sections (by product type + by tank size), months as columns,
+    latest-first.  Figures recomputed from daily PROD. REPORT tabs.
+    Annual SUMMARY (LTR) workbook shown as comparison (R-26 divergence open).
+    Data errors 23-Jun WCT-3LC-05 and 30-Jun WCT-3LL-10 flagged (R-35).
+    """
+    import mgmt_tank_summary as _mts
+    fy = request.args.get("fy", "2627")
+    if fy not in _mts._FY_YM:
+        fy = "2627"
+    data = _mts.build_tank_summary("TANK", fy)
+    return render_template(
+        "report_mgmt_tank_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/tank-vn-summary")
+def mgmt_tank_vn_summary_view():
+    """Tank VN (Varanasi) — Ltr production summary, Management Report 8.
+
+    Two pivot sections (by product type + by tank size), months as columns,
+    latest-first.  VN shows 2/3/4-Layer Light only and sizes 500/750/1000/2000.
+    July divergence +2,000 Ltr vs annual sheet flagged.
+    """
+    import mgmt_tank_summary as _mts
+    fy = request.args.get("fy", "2627")
+    if fy not in _mts._FY_YM:
+        fy = "2627"
+    data = _mts.build_tank_summary("TANK_VN", fy)
+    return render_template(
+        "report_mgmt_tank_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/tank-wb-summary")
+def mgmt_tank_wb_summary_view():
+    """Tank WB (West Bengal) — Ltr production summary, Management Report 9.
+
+    Two pivot sections (by product type + by tank size), months as columns,
+    latest-first.  July divergence +270,000 Ltr and June divergence +400 Ltr
+    vs annual sheet flagged.
+    """
+    import mgmt_tank_summary as _mts
+    fy = request.args.get("fy", "2627")
+    if fy not in _mts._FY_YM:
+        fy = "2627"
+    data = _mts.build_tank_summary("TANK_WB", fy)
+    return render_template(
+        "report_mgmt_tank_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),

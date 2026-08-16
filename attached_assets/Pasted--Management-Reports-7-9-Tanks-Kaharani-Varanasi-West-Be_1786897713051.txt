@@ -1,0 +1,89 @@
+# Management Reports 7–9 — Tanks (Kaharani, Varanasi, West Bengal)
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Three reports, one shared layout.** Build the structure once and instantiate per plant.
+
+| Report | Spreadsheet | Worksheet |
+|---|---|---|
+| 7 | `Annual 26-27 TANK (KH) Ltr. Summary` | `SUMMARY (LTR)` |
+| 8 | `Annual 26-27 TANK (VN) Ltr. Summary` | `SUMMARY (LTR)` |
+| 9 | `Annual 26-27 TANK (WB) Ltr. Summary` | `SUMMARY (LTR)` |
+
+---
+
+## The layout is transposed — months run across columns
+
+Unlike every report so far, **months are columns, not rows**, and they run **latest-first**: `JUL'26 · JUN'26 · MAY'26 · APR'26`. Each month spans **two** columns — `Production (in Ltr)` and `Rejection (in Ltr)`.
+
+**There are TWO stacked pivot sections, each with its own TOTAL row (R-37):**
+
+1. **By product type** — rows such as `2 Layer Light`, `3 Layer Light`, `4 Layer Light`, `2 Layer ISI`, `3 Layer Colour`, `3 Layer Heavy`, `4 Layer Colour`, `4 Layer Heavy`
+2. **By tank size** — rows `500 · 750 · 1000 · 1500 · 2000 · 3000 · 5000`
+
+Both sections cover the **same production**, split two ways, so **both TOTAL rows carry the same figure**. Parsing past the second TOTAL double-counts — that is R-37, already guarded in the Tank annual parser. Reproduce the structure, do not merge the sections.
+
+**The row sets differ per plant.** VN shows only `2/3/4 Layer Light` and sizes `500/750/1000/2000`; KH carries the full eight product types and seven sizes. **Derive each plant's row set from its own data — do not hardcode one plant's list for another.**
+
+---
+
+## Where our figures come from
+
+**Size** — the `SIZE (LTR.)` column in `PROD. REPORT`, read directly. Do **not** derive it from the item code: `-05` is 500 but `-07` is 750, so it is a code, not arithmetic.
+
+**Product type** — must be derived from the item code, and **this mapping must be verified before building**. The pattern appears to be `[2|3|4]L[L|C|H]` for layers plus Light/Colour/Heavy, with `ISI` as its own grade:
+
+```
+WCT-3LC-05  ->  3 Layer Colour, 500 L
+WCT-3LL-05  ->  3 Layer Light,  500 L
+WT-4LL-20   ->  4 Layer Light,  2000 L
+WT-ISI-10   ->  ISI,            1000 L
+```
+
+**Print the distinct item codes per plant and the product type each maps to, and confirm the totals reconcile, before wiring.** A wrong mapping silently misallocates production across rows while the TOTAL still balances — which is exactly the failure this project keeps hitting. If a code does not map cleanly, **raise a named error** (**R-06**); never assign it to a default bucket.
+
+**Production (in Ltr)** — `PROD. REPORT`, our existing Tank path.
+
+**Rejection (in Ltr)** — `rejected pcs × SIZE (LTR.)` (**R-09**). Do **not** sum the kilogram columns here; this section is litres. The kg basis exists separately and is already reported on the plant pages.
+
+---
+
+## Verified figures
+
+**VN** — sheet: JUL 563,500 / 5,500 · JUN 533,500 / 8,500 · MAY 534,000 / — · APR 221,250 / 1,750.
+Our daily: APR 221,250 · MAY 534,000 · JUN 533,500 · **JUL 565,500**. Rejection reconciles exactly on all four months (Apr 1,750 · Jun 8,500 · Jul 5,500).
+**Flag JUL: ours 565,500 against the sheet's 563,500 — a 2,000 Ltr difference (+0.4%).**
+
+**WB** — our daily: APR 415,000 · MAY 1,048,500 · JUN 1,430,000 · JUL 1,702,000. **Flag JUL: annual 1,432,000, ours 1,702,000 (+18.9%).** WB June daily 1,430,000 against annual 1,429,600 — a 400 Ltr difference; report it, do not close it.
+
+**KH — the largest divergence in the project.** Sheet June 633,500; our daily **1,419,500** (**2.24×**, R-26, open). The sheet shows June only — April, May and July are all zero in it while daily workbooks exist for May, June and July.
+
+**KH also carries two source data errors** now with the plant — **do not code around them** (**R-35**):
+- **23 June**, `WCT-3LC-05`: 10 pieces produced, **90 recorded as rejected**. Our rejection rule derives 45,000 Ltr from it; the workbook's own dashboard reads 0.00%.
+- **30 June**, `WCT-3LL-10`: **243 pieces from 6 cycles**, where 6 cycles yield 24 elsewhere — inflating June by roughly 219,000 Ltr.
+
+Both must be **flagged on the KH report**, since they materially affect the figures shown.
+
+---
+
+## Validate
+
+- All three reports render the transposed layout, months latest-first, **both** pivot sections with their own TOTAL, and the two TOTALs equal within each plant.
+- Each plant's row set derived from its own data — VN shows three product types and four sizes; KH shows its full set.
+- The item-code → product-type mapping is **printed and reconciled** before wiring; unmapped codes raise a named error.
+- Rejection is **litres via pcs × size**, never a kg sum.
+- Divergences flagged: **KH 2.24×** (R-26) plus the two June data errors · **VN July 2,000** · **WB July 270,000** and **June 400**.
+- Months with no data render blank, **never 0** (**R-07**, **R-08**) — KH April, May and July are absent from the annual but present in the daily.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 · Garden 232,528/138,052 · HDPE 23,817.24 · Moulding 35,972 h · Tank plant-page litres and both rejection bases. If any moves, **stop**.
+
+## Do not touch
+
+`tank_reconcile.py` and the R-39 union logic (**R-41**) · the Tank annual parser and its double-TOTAL guard (**R-36**, **R-37**) · the `pcs × size` rejection fix (**R-09**) · `PLANTS_WITHOUT_RUNHOURS` (must stay empty) or `APP_DEFAULT_IDEAL_HOURS` (**TANK must stay absent**, **R-16**) · Garden, HDPE, Moulding and GOM builders · `mgmt_moulding_summary`'s eleven exported symbols, which GOM depends on · `pipe_reconcile.py` (**R-15**) · `mp_*.py` (**R-20**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The item-code → product-type mapping per plant with reconciliation · all three reports' figures against the targets · the flags as they render · confirmation that both TOTAL rows agree within each plant, blanks are not zeros, and no existing figure moved.

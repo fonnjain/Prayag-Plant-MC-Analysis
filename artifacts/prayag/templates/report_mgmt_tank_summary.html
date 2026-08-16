@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title_suffix %} — {{ data.plant_label }} Summary{% endblock %}
+
+{% block content %}
+
+{# ─── Page header ──────────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      {{ data.plant_label }} — Ltr Summary
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">
+      {{ data.fy_label }} · recomputed from daily PROD. REPORT tabs · {{ today_disp }}
+    </div>
+  </div>
+  <div class="text-[10px] text-gray-400 shrink-0 mt-1">synced {{ last_synced }}</div>
+</div>
+
+{% if data.error %}
+{# ── Hard error ── #}
+<div class="kpi-card p-4 flex items-start gap-3">
+  <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <div>
+    <div class="text-sm font-semibold" style="color:var(--terra)">Could not load data</div>
+    <div class="text-xs text-gray-500 mt-1">{{ data.error }}</div>
+  </div>
+</div>
+
+{% else %}
+
+{# ─── Cardinal Rule banner ────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1">Source basis</div>
+  <div class="text-gray-600">
+    Every figure in this report is recomputed from the <span class="font-semibold">daily PROD. REPORT</span>
+    tabs (one workbook per month). Production (Ltr) = <code class="text-xs">r.total_count</code>;
+    Rejection (Ltr) = <code class="text-xs">r.reject_count</code> (already pcs × SIZE (LTR.) per R-09,
+    computed by the parser — never re-derived here). Sheet figures from the Annual SUMMARY (LTR)
+    workbook appear below as comparison only (R-03). Differences are flagged; neither figure is adjusted.
+  </div>
+</div>
+
+{# ─── R-06 unmapped codes warning ────────────────────────────────────────────── #}
+{% if data.unmapped_codes %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(180,30,30,0.05);border-color:rgba(180,30,30,0.3)">
+  <div class="font-semibold mb-1" style="color:var(--terra)">R-06 — Unmapped item codes (production excluded)</div>
+  <div class="text-gray-700">
+    The following item codes could not be parsed to a product type or size.
+    Their production is excluded from all rows — the total will undercount by this amount.
+    Fix the mapping in <code class="text-xs">mgmt_tank_summary.parse_item_code()</code> to include them.
+  </div>
+  <div class="mt-1.5 font-mono text-xs text-red-700">{{ data.unmapped_codes | join(", ") }}</div>
+</div>
+{% endif %}
+
+{# ─── KH data-error flags (R-35) ─────────────────────────────────────────────── #}
+{% if data.data_errors %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(200,80,0,0.05);border-color:rgba(200,80,0,0.3)">
+  <div class="font-semibold mb-1.5" style="color:#b84800">R-35 — Source data anomalies (JUN'26 · figures shown as-is)</div>
+  {% for err in data.data_errors %}
+  <div class="mb-1.5 pb-1.5 {% if not loop.last %}border-b border-orange-100{% endif %}">
+    <span class="font-semibold text-gray-800">{{ err.date }} · {{ err.item }}</span>
+    <div class="text-gray-700 mt-0.5">{{ err.description }}</div>
+    <div class="mt-0.5 font-medium" style="color:#b84800">Impact: {{ err.impact_note }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ─── Per-month divergence flags ──────────────────────────────────────────────── #}
+{% if data.divergences %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1.5">Production divergences vs Annual SUMMARY (LTR) workbook</div>
+  <div class="space-y-1">
+    {% for div in data.divergences %}
+    {% set is_r26 = data.plant == 'TANK' and div.ym == '2026-06' %}
+    <div class="flex items-start gap-2">
+      <span class="shrink-0 mt-0.5 font-medium text-gray-600 w-12">{{ div.month_disp }}</span>
+      <span>
+        Ours <span class="font-semibold">{{ "{:,.0f}".format(div.ours) if div.ours else "—" }}</span> Ltr
+        vs sheet <span class="font-semibold">{{ "{:,.0f}".format(div.sheet) if div.sheet else "absent" }}</span> Ltr
+        {% if div.delta %}
+        <span class="{% if div.delta > 0 %}text-blue-700{% else %}text-red-700{% endif %} font-medium ml-1">
+          ({{ "+" if div.delta > 0 else "" }}{{ "{:,.0f}".format(div.delta) }} Ltr
+          {%- if div.pct is not none -%}, {{ "+" if div.pct > 0 else "" }}{{ "{:.1f}".format(div.pct) }}%{%- endif -%})
+        </span>
+        {% endif %}
+        {% if is_r26 %}
+        <span class="ml-1 px-1 py-0.5 rounded text-[9px] font-bold tracking-wide"
+              style="background:rgba(180,30,30,0.12);color:var(--terra)">R-26 OPEN</span>
+        <span class="ml-1 text-gray-500">— KH annual significantly undercounts daily; open with data owner. Do not adjust.</span>
+        {% elif div.sheet is none or div.sheet == 0 %}
+        <span class="ml-1 text-gray-500">— month absent from annual sheet; daily data shown (R-07/R-08)</span>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ─── No data ────────────────────────────────────────────────────────────────── #}
+{% if not data.months %}
+<div class="kpi-card p-5 text-center text-sm text-gray-500">
+  No production records found for {{ data.plant_label }} in {{ data.fy_label }}.
+</div>
+
+{% else %}
+
+{# Jinja zip helper #}
+{% set ns = namespace(col_count = data.n_months * 2 + 1) %}
+
+{# ─── SECTION 1: By Product Type ─────────────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Section 1 — By Product Type</div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        {# Row 1: month group headers #}
+        <tr style="background:rgba(31,56,100,0.07)">
+          <th class="px-3 py-2 text-left text-gray-600 font-semibold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12); min-width:140px"
+              rowspan="2">Product Type</th>
+          {% for m_disp in data.months_disp %}
+          <th class="px-2 py-2 text-center text-gray-700 font-bold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)"
+              colspan="2">{{ m_disp }}</th>
+          {% endfor %}
+        </tr>
+        {# Row 2: Prod / Rej sub-headers #}
+        <tr style="background:rgba(31,56,100,0.04)">
+          {% for m in data.months %}
+          <th class="px-2 py-1 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10); min-width:88px">
+            Production<br><span class="text-gray-400 font-normal">(Ltr)</span>
+          </th>
+          <th class="px-2 py-1 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10); min-width:72px">
+            Rejection<br><span class="text-gray-400 font-normal">(Ltr)</span>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.section_type.rows %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/50{% endif %}
+                   hover:bg-blue-50/40 transition-colors">
+          <td class="px-3 py-1.5 text-gray-700 font-medium border-r border-b"
+              style="border-color:rgba(31,56,100,0.08)">{{ row.label }}</td>
+          {% for ym in data.months %}
+          {% set cell = row.months.get(ym) %}
+          <td class="px-2 py-1.5 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.08)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-1.5 text-right tabular-nums border-r border-b text-red-700/70"
+              style="border-color:rgba(31,56,100,0.08)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+
+        {# TOTAL row 1 #}
+        <tr style="background:rgba(31,56,100,0.08)">
+          <td class="px-3 py-2 font-bold text-gray-800 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">TOTAL</td>
+          {% for ym in data.months %}
+          {% set cell = data.section_type.total.months.get(ym) %}
+          <td class="px-2 py-2 text-right tabular-nums font-bold text-gray-800 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-2 text-right tabular-nums font-bold text-red-700 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ─── SECTION 2: By Tank Size ─────────────────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Section 2 — By Tank Size (Ltr capacity)</div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.07)">
+          <th class="px-3 py-2 text-left text-gray-600 font-semibold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12); min-width:90px"
+              rowspan="2">Size (Ltr)</th>
+          {% for m_disp in data.months_disp %}
+          <th class="px-2 py-2 text-center text-gray-700 font-bold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)"
+              colspan="2">{{ m_disp }}</th>
+          {% endfor %}
+        </tr>
+        <tr style="background:rgba(31,56,100,0.04)">
+          {% for m in data.months %}
+          <th class="px-2 py-1 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10); min-width:88px">
+            Production<br><span class="text-gray-400 font-normal">(Ltr)</span>
+          </th>
+          <th class="px-2 py-1 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10); min-width:72px">
+            Rejection<br><span class="text-gray-400 font-normal">(Ltr)</span>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.section_size.rows %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/50{% endif %}
+                   hover:bg-blue-50/40 transition-colors">
+          <td class="px-3 py-1.5 text-gray-700 font-medium border-r border-b"
+              style="border-color:rgba(31,56,100,0.08)">{{ row.label }}</td>
+          {% for ym in data.months %}
+          {% set cell = row.months.get(ym) %}
+          <td class="px-2 py-1.5 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.08)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-1.5 text-right tabular-nums border-r border-b text-red-700/70"
+              style="border-color:rgba(31,56,100,0.08)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+
+        {# TOTAL row 2 — same figures as TOTAL row 1 (same daily source) #}
+        <tr style="background:rgba(31,56,100,0.08)">
+          <td class="px-3 py-2 font-bold text-gray-800 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">TOTAL</td>
+          {% for ym in data.months %}
+          {# Use section_size total (mirrors section_type total; both from same daily data) #}
+          {% set cell = data.section_size.total.months.get(ym) %}
+          <td class="px-2 py-2 text-right tabular-nums font-bold text-gray-800 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-2 text-right tabular-nums font-bold text-red-700 border-r border-t-2"
+              style="border-color:rgba(31,56,100,0.2)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ─── Sheet comparison (Annual SUMMARY (LTR)) ─────────────────────────────────── #}
+{% if data.sheet_section %}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+    Annual Workbook — SUMMARY (LTR) first section
+    <span class="normal-case font-normal text-gray-400 ml-1">(comparison only — sheet figures, not our basis)</span>
+  </div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.04)">
+          <th class="px-3 py-2 text-left text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10); min-width:140px"
+              rowspan="2">Product Type (sheet)</th>
+          {% for m_disp in data.months_disp %}
+          <th class="px-2 py-2 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10)"
+              colspan="2">{{ m_disp }}</th>
+          {% endfor %}
+        </tr>
+        <tr style="background:rgba(31,56,100,0.02)">
+          {% for m in data.months %}
+          <th class="px-2 py-1 text-center text-gray-400 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.08); min-width:88px">
+            Production<br><span class="font-normal">(Ltr)</span>
+          </th>
+          <th class="px-2 py-1 text-center text-gray-400 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.08); min-width:72px">
+            Rejection<br><span class="font-normal">(Ltr)</span>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.sheet_section.rows %}
+        <tr class="bg-white hover:bg-gray-50/50 transition-colors">
+          <td class="px-3 py-1.5 text-gray-500 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">{{ row.label }}</td>
+          {% for ym in data.months %}
+          {% set cell = row.months.get(ym) %}
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-500 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-400 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+
+        {# Sheet TOTAL #}
+        <tr style="background:rgba(31,56,100,0.04)">
+          <td class="px-3 py-2 font-semibold text-gray-600 border-r border-t"
+              style="border-color:rgba(31,56,100,0.14)">TOTAL</td>
+          {% for ym in data.months %}
+          {% set cell = data.sheet_section.total.months.get(ym) %}
+          <td class="px-2 py-2 text-right tabular-nums font-semibold text-gray-600 border-r border-t"
+              style="border-color:rgba(31,56,100,0.14)">
+            {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
+          </td>
+          <td class="px-2 py-2 text-right tabular-nums text-gray-500 border-r border-t"
+              style="border-color:rgba(31,56,100,0.14)">
+            {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="mb-4 px-3 py-2 rounded-xl border text-[11px] text-gray-500"
+     style="border-color:rgba(31,56,100,0.14)">
+  Annual SUMMARY (LTR) workbook not loaded — sheet comparison unavailable.
+  Daily figures above are authoritative (Cardinal Rule).
+</div>
+{% endif %}
+
+{# ─── Code map (transparency) ─────────────────────────────────────────────────── #}
+{% if data.code_map %}
+<details class="mb-4">
+  <summary class="text-[11px] text-gray-400 cursor-pointer hover:text-gray-600 select-none">
+    Item code mapping ({{ data.code_map | length }} code{{ 's' if data.code_map | length != 1 else '' }})
+    — expand to verify product type and size assignments
+  </summary>
+  <div class="mt-2 kpi-card overflow-x-auto">
+    <table class="min-w-full text-[11px] border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.05)">
+          <th class="px-3 py-1.5 text-left text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10)">Item Code</th>
+          <th class="px-3 py-1.5 text-left text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.10)">Product Type</th>
+          <th class="px-3 py-1.5 text-right text-gray-500 font-medium border-b"
+              style="border-color:rgba(31,56,100,0.10)">Size (Ltr)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for code, m in data.code_map | dictsort %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/30{% endif %}">
+          <td class="px-3 py-1 font-mono text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">{{ code }}</td>
+          <td class="px-3 py-1 text-gray-600 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">{{ m.product_type }}</td>
+          <td class="px-3 py-1 text-right tabular-nums text-gray-600 border-b"
+              style="border-color:rgba(31,56,100,0.06)">{{ m.size_ltr }}</td>
+        </tr>
+        {% endfor %}
+        {% if data.unmapped_codes %}
+        {% for code in data.unmapped_codes %}
+        <tr class="bg-red-50">
+          <td class="px-3 py-1 font-mono text-red-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">{{ code }}</td>
+          <td class="px-3 py-1 text-red-600 italic border-r border-b"
+              style="border-color:rgba(31,56,100,0.06)">R-06 — unmapped (excluded)</td>
+          <td class="px-3 py-1 border-b"
+              style="border-color:rgba(31,56,100,0.06)">—</td>
+        </tr>
+        {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+
+{% endif %} {# end not data.months #}
+{% endif %} {# end not data.error #}
+
+{% endblock %}
