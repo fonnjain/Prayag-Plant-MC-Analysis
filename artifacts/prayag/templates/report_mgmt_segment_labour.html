@@ -481,7 +481,10 @@
             </td>
             {% for seg in rp.segs %}
             {% set sv = row.segs[seg] %}
-            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(sv.net) if sv.net else '<span class="text-gray-300">—</span>' }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {{ "{:,.0f}".format(sv.net) if sv.net else '<span class="text-gray-300">—</span>' }}
+              {%- if sv.r24_note %}<span class="ml-1 px-1 rounded text-[8px] font-bold cursor-default align-middle" style="background:rgba(245,158,11,0.18);color:#92400e" title="{{ sv.r24_note }}">R-24</span>{% endif %}
+            </td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(sv.reject) if sv.reject else '<span class="text-gray-300">—</span>' }}</td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">{{ "%.2f"|format(sv.rej_pct) ~ "%" if sv.rej_pct is not none else '<span class="text-gray-300">—</span>' }}</td>
             {% endfor %}
@@ -491,6 +494,30 @@
       </table>
     </div>
   </div>
+  {# R-24 footnotes — list any PTMT months where daily and annual sources diverge #}
+  {% set ns = namespace(r24_rows=[]) %}
+  {% for row in rp.months %}
+    {% for seg in rp.segs %}
+      {% if row.segs[seg].r24_note %}
+        {% set ns.r24_rows = ns.r24_rows + [{"month": row.month_disp, "seg": seg, "sv": row.segs[seg]}] %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% if ns.r24_rows %}
+  <div class="mt-2 px-2 py-2 rounded-lg text-[10px] leading-snug" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25)">
+    <span class="font-semibold" style="color:#92400e">R-24 source divergence (PTMT)</span>
+    {% for item in ns.r24_rows %}
+    <div class="mt-1 text-amber-900">
+      <span class="font-medium">{{ item.seg }} {{ item.month }}:</span>
+      our figure (daily/Report-5) <span class="font-semibold">{{ "{:,.0f}".format(item.sv.net) }} kg</span>
+      · annual (mould chain) <span class="font-semibold">{{ "{:,.0f}".format(item.sv.r24_annual) }} kg</span>
+      · difference {{ "{:+,.0f}".format(item.sv.net - item.sv.r24_annual) }} kg —
+      PTMT annual fed by a separate mould chain; divergence open with data owner (Alok Roy).
+      Showing our figure (Cardinal Rule).
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 

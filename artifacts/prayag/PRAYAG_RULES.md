@@ -118,7 +118,8 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 |---|---|---|---|---|---|
 | **PIPE** (gross) | 190,494 | 344,000 | 178,782 | 564,695 | 1,277,971 kg / 6,507 h |
 | **MOULDING** | 89,152 | 75,771 | 97,007 | 104,086 | 366,015 kg / rej ~1.0% |
-| **PTMT** (Nett) | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / 6.14% |
+| **PTMT** Nett — *annual basis* | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / 6.14% |
+| **PTMT** Nett — *daily/Report-5 basis* | 99,262 | 104,729 | **147,835** | 172,639 | **524,465** kg |
 | **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 68,390 in-sheet | 232,528 kg — **KH only** |
 | **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h — **KH only** |
 | **GARDEN KH rejection** | 1,191 | n/a | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** |
@@ -128,7 +129,11 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 | **TANK daily** | | KH 846,600 | VN 533,500 · KH 1,419,500 | VN 565,500 · WB 1,702,000 | VN 1,854,250 · WB 4,595,500 · KH 3,619,600 |
 | **TANK VN hours** (R-39 union) | 76 | 196 | 208 | 232 | WB Apr 100 |
 
-**R-22 · PTMT output basis = Nett Output (537,109).** Not 541,258, not 454,867. Grinding/regrind excluded from headline production.
+**R-22 · PTMT output basis = Nett Output; grinding/regrind excluded.** Two accepted bases exist — they are different sources, not a discrepancy to be resolved:
+- **Annual basis** (mould chain): APR 99,262 · MAY 104,729 · JUN 160,478 · JUL 172,639 · total **537,109 kg**
+- **Daily/Report-5 basis**: APR 99,262 · MAY 104,729 · JUN **147,835** · JUL 172,639 · total **524,465 kg**
+
+June diverges between the two chains (R-24). Label which basis is in use whenever quoting a PTMT headline figure.
 
 **Tank rejection, both bases (VN July):** litres **5,500 Ltr / 0.97%** (capacity) · kilograms **449.30 kg / 3.09%** (material). The plant reports the kilogram basis. Show both, labelled.
 

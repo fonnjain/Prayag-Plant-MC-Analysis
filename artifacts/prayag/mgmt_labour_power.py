@@ -56,6 +56,22 @@ _FY_DISP: dict[str, dict[str, str]] = {
     },
 }
 
+# R-24: PTMT months where daily/Report-5 and the annual mould chain diverge.
+# Key = (fy, ym).  Both figures are accepted; divergences are open with the
+# data owner (Alok Roy).  Do not remove entries — they document confirmed
+# source disagreements.  Add new entries as months diverge or reconcile.
+_PTMT_R24_NOTES: dict[tuple, dict] = {
+    ("2627", "2026-06"): {
+        "daily":  147_835,
+        "annual": 160_478,
+        "note": (
+            "R-24: daily/Report-5 147,835 kg vs annual (mould chain) 160,478 kg — "
+            "PTMT annual is fed by a separate mould chain; "
+            "divergence is open with the data owner (Alok Roy)."
+        ),
+    },
+}
+
 # ── Unit / segment definitions ─────────────────────────────────────────────────
 
 UNIT_LABELS = ["UNIT-1", "UNIT-2", "UNIT-3"]
@@ -1226,7 +1242,15 @@ def _build_reject_prod_section(
             reject = gr["reject"]
             gross  = net + reject
             rej_pct = _safe_div(reject, gross) * 100 if gross else None
-            segs_data[seg] = {"net": net, "reject": reject, "rej_pct": rej_pct}
+            cell: dict = {"net": net, "reject": reject, "rej_pct": rej_pct}
+            # R-24: attach divergence note for any PTMT month where daily and
+            # annual (mould chain) sources differ.  Show ours; flag theirs.
+            if seg == "PTMT":
+                r24 = _PTMT_R24_NOTES.get((fy, ym))
+                if r24:
+                    cell["r24_note"]   = r24["note"]
+                    cell["r24_annual"] = r24["annual"]
+            segs_data[seg] = cell
             totals[seg]["net"]    += net
             totals[seg]["reject"] += reject
         month_rows.append({
