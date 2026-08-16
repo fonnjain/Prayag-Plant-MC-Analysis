@@ -100,11 +100,20 @@ def _safe_div(num: float, den: float) -> Optional[float]:
 
 # ── SUMMARY tab: read the 27-machine roster ────────────────────────────────────
 
-def _parse_summary_roster(values: list) -> list[dict]:
-    """Parse SUMMARY tab and return ordered list of machine descriptors.
+def _parse_summary_roster(values: list) -> tuple[list[dict], list[str]]:
+    """Parse SUMMARY tab and return (roster, warnings).
 
-    Each entry: {band, mould_id, mc_key}  (mc_key is canonical, e.g. 'M/C - 1').
-    Band is carried forward across merged-cell rows (col 0 blank until it changes).
+    roster  — ordered list of machine descriptors:
+               {band, mould_id, mc_key}  (mc_key canonical, e.g. 'M/C - 1').
+               Band is carried forward across merged-cell rows.
+    warnings — non-empty when a numeric band value in col 0 is not in BAND_ORDER;
+               those machines are silently dropped and each unknown band is reported
+               once (R-06: fail loudly rather than drop without notice).
+
+    BAND_ORDER = ["150","200","250","275","350","450"] is a fixed list copied from
+    the source SUMMARY tab by inspection, NOT read live.  If the workbook adds a
+    new tonnage, it will be caught here and surfaced as a warning instead of being
+    silently ignored.
 
     The SUMMARY tab contains TWO machine blocks:
       • FY26-27 rows (M/C-1 to M/C-27)  ← we want these
@@ -112,8 +121,11 @@ def _parse_summary_roster(values: list) -> list[dict]:
     We stop when we encounter a TOTAL row after already collecting some roster
     entries — that second TOTAL marks the FY25-26 block boundary.
     """
-    roster = []
+    roster: list[dict] = []
+    warnings: list[str] = []
     current_band = ""
+    unknown_bands_seen: set[str] = set()
+
     for row in values:
         if not row:
             continue
@@ -129,6 +141,20 @@ def _parse_summary_roster(values: list) -> list[dict]:
 
         if c0 in BAND_ORDER:
             current_band = c0
+        elif c0 and re.match(r"^\d+$", c0) and c0 not in unknown_bands_seen:
+            # Numeric value in the band column that is not in BAND_ORDER —
+            # machines in this group will be dropped (R-06: warn loudly).
+            unknown_bands_seen.add(c0)
+            warnings.append(
+                f"Unknown tonnage band '{c0}' in SUMMARY tab col 0 — not in "
+                f"BAND_ORDER {BAND_ORDER}. Machines in this band are excluded. "
+                f"Add '{c0}' to BAND_ORDER in mgmt_moulding_summary.py to include them."
+            )
+            logger.warning(
+                "_parse_summary_roster: unknown band '%s' not in BAND_ORDER %s — "
+                "those machines are dropped",
+                c0, BAND_ORDER,
+            )
 
         if not current_band:
             continue
@@ -141,7 +167,7 @@ def _parse_summary_roster(values: list) -> list[dict]:
             "mc_key":   c3,   # already in canonical form from the tab
         })
 
-    return roster
+    return roster, warnings
 
 
 # ── SUMMARY-1 tab: parse FY25-26 closed-annual block ─────────────────────────
@@ -603,7 +629,7 @@ def build_moulding_summary(fy: str = "2627") -> dict:
             raise RuntimeError("Could not load SUMMARY or SUMMARY-1 tab")
 
         # ── 2. Machine roster from SUMMARY tab ───────────────────────────────
-        roster = _parse_summary_roster(summary_vals)
+        roster, roster_warnings = _parse_summary_roster(summary_vals)
         if not roster:
             raise RuntimeError(
                 "No machine rows found in SUMMARY tab — layout may have changed"
@@ -662,6 +688,7 @@ def build_moulding_summary(fy: str = "2627") -> dict:
             "fy":        fy,
             "fy_label":  fy_label,
             "error":     None,
+            "roster_warnings": roster_warnings,   # unknown-band alerts (R-06)
             "section1":  section1,
             "section2": {
                 "fy2627":       s2_fy2627,
@@ -681,6 +708,7 @@ def build_moulding_summary(fy: str = "2627") -> dict:
             "fy":       fy,
             "fy_label": fy_label,
             "error":    str(exc),
+            "roster_warnings": [],
             "section1": {"rows": [], "warnings": [], "n_months": 0},
             "section2": {
                 "fy2627": [], "fy2627_label": "",

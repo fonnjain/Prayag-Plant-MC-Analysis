@@ -50,7 +50,7 @@
           <th class="px-3 py-2 text-right">Rejection (KG)</th>
           <th class="px-3 py-2 text-right">Runner (KG)</th>
           <th class="px-3 py-2 text-right">Avg/Hr</th>
-          <th class="px-3 py-2 text-right">Utilisation</th>
+          <th class="px-3 py-2 text-right">Util %<br><span class="font-normal text-[9px] text-gray-400">(vs 500 hrs/mo — sheet assumption)</span></th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
@@ -102,6 +102,18 @@
   </div>
   {% else %}
 
+  {# ── BAND_ORDER roster warnings (R-06: unknown bands surfaced, not silently dropped) ── #}
+  {% if data.roster_warnings %}
+  <div class="mb-4 space-y-1">
+    {% for w in data.roster_warnings %}
+    <div class="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 flex gap-2">
+      <span class="font-bold flex-shrink-0">⚠ BAND WARNING</span>
+      <span>{{ w }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# ── SECTION 1: SUMMARY (per machine) ── #}
   <section>
     <div class="flex items-center justify-between mb-3">
@@ -112,6 +124,10 @@
       Ideal Hours = {{ data.section1.n_months }} months × 500 h/machine (R-16 placeholder — not from baselines.json).
       Utilisation is not capped (values above 100% are shown as-is).
       Avg/Hr = Output ÷ Actual Hours per machine.
+    </p>
+    <p class="text-xs text-gray-400 mb-3">
+      Tonnage bands [150, 200, 250, 275, 350, 450] are a fixed list copied from the SUMMARY tab by inspection — not read live.
+      If the workbook adds a new band, a warning will appear above (R-06).
     </p>
     {% if data.section1.warnings %}
     <div class="mb-3 space-y-1">
@@ -133,7 +149,7 @@
             <th class="px-3 py-2 text-right">Rejection (KG)</th>
             <th class="px-3 py-2 text-right">Runner (KG)</th>
             <th class="px-3 py-2 text-right">Avg/Hr</th>
-            <th class="px-3 py-2 text-right">Utilisation</th>
+            <th class="px-3 py-2 text-right">Util %<br><span class="font-normal text-[9px] text-gray-400">(vs 500 hrs/mo — sheet assumption)</span></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-100">
@@ -243,7 +259,7 @@
               <th class="px-3 py-2 text-right">Rejection (KG)</th>
               <th class="px-3 py-2 text-right">Runner (KG)</th>
               <th class="px-3 py-2 text-right">Avg/Hr</th>
-              <th class="px-3 py-2 text-right">Util%</th>
+              <th class="px-3 py-2 text-right">Util %<br><span class="font-normal text-[9px] text-gray-400">(vs 500 hrs/mo — sheet assumption)</span></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">

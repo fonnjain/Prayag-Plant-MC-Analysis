@@ -1099,7 +1099,11 @@ def _build_ideal_cost_section(
         row_total = 0.0
         for seg in _IDEAL_COST_SEGS:
             gr   = seg_gross_reject.get(seg, {}).get(ym, {"net": 0.0, "reject": 0.0})
-            net  = gr["net"]
+            # Costing basis = GROSS (production incl. rejection).
+            # PRAYAG_RULES: "Production in KG has Rejection included."
+            # Workbook Ideal Power/Labour Cost col uses gross (~90,038 APR for
+            # Fittings vs 89,152 net) — the difference is the ~1% rejection kg.
+            net  = gr["net"] + gr["reject"]
             cost = net * rates.get(seg, 0.0)
             segs_data[seg] = {"net": net, "ideal_cost": cost}
             row_total              += cost
