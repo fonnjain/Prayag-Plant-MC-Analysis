@@ -149,7 +149,10 @@ def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
 
 
 _MONTH_RE = re.compile(
-    r"\b(APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JAN|FEB|MAR)\b",
+    # No trailing \b — "MARCH'27", "JUNE'26" etc. only share the first 3 chars
+    # with our month abbreviations; a word-boundary after "MAR" would not fire
+    # inside "MARCH" because "CH" is still a word character.
+    r"(APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JAN|FEB|MAR)",
     re.I,
 )
 _MONTH_SET = frozenset(MONTH_LABELS)
@@ -158,6 +161,23 @@ _MONTH_SET = frozenset(MONTH_LABELS)
 def _extract_month_lbl(s: str) -> Optional[str]:
     m = _MONTH_RE.search(str(s).upper())
     return m.group(1).upper() if m else None
+
+
+_MC_NUM_RE = re.compile(r"(\d+)$")
+
+
+def _norm_machine(raw: str) -> str:
+    """Normalise a machine label to canonical form "M/C-N".
+
+    Handles record labels like "PIPE M/C - 1", "M/C-1", "M/C - 1", etc.
+    Extracts the trailing digit(s) and returns "M/C-<N>".
+    Returns the uppercased original if no digit is found.
+    """
+    s = _norm(raw)
+    m = _MC_NUM_RE.search(s)
+    if m:
+        return f"M/C-{m.group(1)}"
+    return s
 
 
 # ── DASHBOARD tab parser ───────────────────────────────────────────────────────
@@ -234,10 +254,23 @@ def _read_dashboard_pipeline(values: list) -> dict[str, dict]:
 
 # ── KH-1 wages loader (PIPELINE filter) ───────────────────────────────────────
 
+def _find_subdept_col(hdr_row: list) -> int:
+    """Return the 0-based column index of the SUB DEPARTMENT column in KH-1."""
+    import costing_wages as _cw
+    for ci, cell in enumerate(hdr_row):
+        h = _cw._norm_hdr(cell)
+        if h in ("SUB DEPARTMENT", "SUB-DEPARTMENT", "SUBDEPARTMENT",
+                 "SUB DEPT", "SUB-DEPT"):
+            return ci
+    return -1
+
+
 def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
     """Read the KH-1 tab from a monthly wages workbook and sum PIPELINE wages.
 
-    Filter: DEPARTMENT == "PIPELINE" (same KH-1 tab, different sub-dept to CPVC).
+    KH-1 structure: DEPARTMENT (col 6) == "CPVC", SUB DEPARTMENT (col 7) == "PIPELINE".
+    The PIPELINE machine operators sit inside the CPVC department block — the
+    sub-department column distinguishes them from Mixer, Moulding, Toolroom, etc.
     TOTAL PAYABLE column is found by header text (position shifts between files).
 
     Returns the total wages float, or None on any parse failure.
@@ -255,12 +288,21 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
     if not kh1_vals or len(kh1_vals) <= _cw._KH1_HEADER_ROW:
         return None
 
-    hdr_row  = kh1_vals[_cw._KH1_HEADER_ROW]
-    tp_col   = _cw._find_total_payable_col(hdr_row)
-    dept_col = _cw._find_dept_col(hdr_row)
+    hdr_row    = kh1_vals[_cw._KH1_HEADER_ROW]
+    tp_col     = _cw._find_total_payable_col(hdr_row)
+    dept_col   = _cw._find_dept_col(hdr_row)
+    subdept_col = _find_subdept_col(hdr_row)
 
     if tp_col < 0 or dept_col < 0:
-        logger.warning("_read_pipeline_wages: could not find columns in KH-1 for %s", ym)
+        logger.warning("_read_pipeline_wages: could not find DEPT/TP columns in KH-1 for %s", ym)
+        return None
+
+    if subdept_col < 0:
+        logger.warning(
+            "_read_pipeline_wages: SUB DEPARTMENT column not found in KH-1 for %s "
+            "— cannot isolate PIPELINE rows (would over-sum entire CPVC dept)",
+            ym,
+        )
         return None
 
     # Sanity-check: confirm located column actually says TOTAL PAYABLE
@@ -272,13 +314,14 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
         )
         return None
 
-    total = 0.0
+    total  = 0.0
     n_rows = 0
     for row in kh1_vals[_cw._KH1_DATA_START:]:
         if not row or dept_col >= len(row):
             continue
-        dept = _cw.normalise_dept(row[dept_col])
-        if dept != "PIPELINE":
+        dept    = _cw.normalise_dept(row[dept_col])
+        subdept = _norm(row[subdept_col] if subdept_col < len(row) else "")
+        if dept != "CPVC" or subdept != "PIPELINE":
             continue
         v = _num(row[tp_col] if tp_col < len(row) else None)
         if v is not None:
@@ -287,13 +330,13 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
 
     if n_rows == 0:
         logger.warning(
-            "_read_pipeline_wages: no PIPELINE rows found in KH-1 for %s "
-            "(dept col=%d; CPVC rows may be present — check dept label)",
-            ym, dept_col,
+            "_read_pipeline_wages: no CPVC/PIPELINE rows found in KH-1 for %s "
+            "(dept col=%d, subdept col=%d)",
+            ym, dept_col, subdept_col,
         )
         return None
 
-    logger.debug("_read_pipeline_wages: %s → %.0f (from %d rows)", ym, total, n_rows)
+    logger.debug("_read_pipeline_wages: %s → %.0f (from %d PIPELINE rows)", ym, total, n_rows)
     return round(total, 2)
 
 
@@ -419,14 +462,15 @@ def _build_section2_fy2627(records, n_months: int) -> list:
     Returns a list of row dicts for each machine in MACHINE_ORDER, plus a
     TOTAL row at the end.
     """
-    # Accumulate actual_hours and gross output per machine label
+    # Accumulate actual_hours and gross output per machine label.
+    # Record machine labels look like "PIPE M/C - 1"; normalise to "M/C-1".
     mc_hrs:    dict[str, float] = {}
     mc_output: dict[str, float] = {}
 
     for r in records:
         if r.plant != "PIPE":
             continue
-        mc = _norm(r.machine or "")
+        mc = _norm_machine(r.machine or "")
         if not mc:
             continue
         mc_hrs[mc]    = mc_hrs.get(mc, 0.0) + float(r.actual_hours or 0.0)
@@ -441,7 +485,7 @@ def _build_section2_fy2627(records, n_months: int) -> list:
     sum_avg_hr      = 0.0    # for OutputEff% total formula: sum(avg_hr)/sum(ideal_rate)
 
     for mc_raw in MACHINE_ORDER:
-        mc     = _norm(mc_raw)
+        mc     = _norm_machine(mc_raw)
         ideal_rate = MACHINE_IDEAL_RATES.get(mc_raw, 0)
         ideal_hrs  = n_months * IDEAL_HOURS_PER_MONTH
 
