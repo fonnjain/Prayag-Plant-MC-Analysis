@@ -3567,6 +3567,8 @@ def mgmt_segment_labour_view():
     import mgmt_labour_power as _mlp
 
     fy = request.args.get("fy", "2627")
+    if fy not in _mlp._FY_YM:  # restrict to FY maps we actually define
+        fy = "2627"
     data = _mlp.build_mgmt_report_data(fy)
     return render_template(
         "report_mgmt_segment_labour.html",

@@ -90,6 +90,7 @@
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Unit<br>Utilise/KG</th>
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">7.08<br>Rate (₹)</th>
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Power (₹)</th>
+              <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Solar<br>(₹)</th>
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Power (₹)‡</th>
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Per KG<br>Labour (₹)‡</th>
               <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Total<br>Cost (₹)</th>
@@ -134,6 +135,7 @@
               <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.unit_per_kg) if tr.unit_per_kg is not none else "—" }}</td>
               <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.rate_708) if tr.rate_708 is not none else "—" }}</td>
               <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.total_power) if tr.total_power is not none else "—" }}</td>
+              <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.solar) if tr.solar is not none else "—" }}</td>
               {# per-kg — our computation #}
               <td class="px-2 py-2 text-right whitespace-nowrap" {% if tr.per_kg_computed %}style="color:#0a7a3c"{% endif %}>
                 {% if tr.per_kg_power is not none %}{{ "%.2f"|format(tr.per_kg_power) }}{% if tr.per_kg_computed %} ‡{% endif %}{% else %}—{% endif %}
@@ -188,6 +190,7 @@
               <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "%.2f"|format(row.unit_per_kg) if row.unit_per_kg is not none else '<span class="text-gray-300">—</span>' }}</td>
               <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.rate_708) if row.rate_708 is not none else '<span class="text-gray-300">—</span>' }}</td>
               <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.total_power) if row.total_power is not none else '<span class="text-gray-300">—</span>' }}</td>
+              <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.solar) if row.solar is not none else '<span class="text-gray-300">—</span>' }}</td>
 
               {# per-kg — our computation #}
               {% if row.awaiting %}
