@@ -32,14 +32,17 @@
 {% else %}
 
 {# ─── July divergence banner (most prominent — the key correction) ───────────── #}
-{% set jul_row = data.section.month_rows | selectattr('month_lbl', 'equalto', 'JUL') | first | default(none) %}
+{% set jul_row   = data.section.month_rows | selectattr('month_lbl', 'equalto', 'JUL') | first | default(none) %}
+{% set may_row_h = data.section.month_rows | selectattr('month_lbl', 'equalto', 'MAY') | first | default(none) %}
+{% set apr_row_h = data.section.month_rows | selectattr('month_lbl', 'equalto', 'APR') | first | default(none) %}
+{% set jun_row_h = data.section.month_rows | selectattr('month_lbl', 'equalto', 'JUN') | first | default(none) %}
 <div class="mb-4 px-3 py-3 rounded-xl border-2 text-[11px] leading-snug"
      style="background:rgba(197,90,17,0.06);border-color:rgba(197,90,17,0.40)">
   <div class="flex items-center gap-2 mb-1.5">
     <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2.5" class="flex-shrink-0">
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
     </svg>
-    <div class="font-bold" style="color:var(--terra)">HDPE July Correction — Sheet reports 0 kg; we compute 22,448.04 kg</div>
+    <div class="font-bold" style="color:var(--terra)">HDPE July Correction — Sheet reports 0 kg; we compute {% if jul_row and jul_row.net_kg is not none %}{{ "{:,.2f}".format(jul_row.net_kg) }}{% else %}—{% endif %} kg</div>
   </div>
   <div class="text-gray-700 leading-relaxed">
     The workbook's <span class="font-semibold">SUMMARY tab reads only the Daily Report matrix</span>, which has been
@@ -53,7 +56,7 @@
       {% if data.section.total_row.net_kg %}{{ "{:,.2f}".format(data.section.total_row.net_kg) }}{% else %}—{% endif %}
     kg</strong></span> (block tabs).
     <br>
-    The sheet's Per KG Labour Cost TOTAL shows ₹547.78 (₹8,16,185 ÷ 1,490 kg). On our figure (~27,719 kg gross)
+    The sheet's Per KG Labour Cost TOTAL shows ₹547.78 (₹8,16,185 ÷ 1,490 kg). On our figure ({% if data.section.total_row.gross_kg %}{{ "{:,.0f}".format(data.section.total_row.gross_kg) }}{% else %}—{% endif %} kg gross)
     the cost is roughly <strong>₹50/kg</strong> — the plausible number.
     <br>
     <span class="font-semibold">July detail:</span>
@@ -66,7 +69,7 @@
     This report uses block tabs (Cardinal Rule). The sheet divergence is visible in the table below.
   </div>
   <div class="mt-1 text-[10px] text-gray-500">
-    MAY rounding note: sheet shows 1,370.00 kg vs our 1,369.20 kg (0.80 kg). Not flagged — rounding, not a data error.
+    MAY rounding note: sheet shows 1,370.00 kg vs our {% if may_row_h and may_row_h.net_kg is not none %}{{ "{:,.2f}".format(may_row_h.net_kg) }} kg ({{ "{:.2f}".format(1370.0 - may_row_h.net_kg) }} kg){% else %}1,369.20 kg (0.80 kg){% endif %}. Not flagged — rounding, not a data error.
   </div>
 </div>
 
@@ -76,7 +79,7 @@
   <div class="font-semibold mb-0.5" style="color:#92400e">HDPE-R42 — Two sources disagree on HDPE wages (open, same pattern as Garden R-42)</div>
   <div class="text-gray-700">
     <span class="font-semibold">Our source</span> (Segment Cost workbook, HDPE Pipe tab, R-11):
-    APR ₹4,62,166 + MAY ₹4,24,919 + JUN ₹4,91,772 =
+    APR ₹{{ "{:,}".format((apr_row_h.wages or 0) | int) if apr_row_h and apr_row_h.wages is not none else "—" }} + MAY ₹{{ "{:,}".format((may_row_h.wages or 0) | int) if may_row_h and may_row_h.wages is not none else "—" }} + JUN ₹{{ "{:,}".format((jun_row_h.wages or 0) | int) if jun_row_h and jun_row_h.wages is not none else "—" }} =
     <span class="font-semibold">₹{{ "{:,}".format(data.hdpe_wages_seg_cost) }}</span> · JUL AWAITING.
     <br>
     <span class="font-semibold">Sheet SUMMARY</span> (comparison only):
@@ -295,7 +298,7 @@
         The Daily Report has no rows for M/C-2 July (unmaintained). Since neither source provides a value,
         rejection_tracked = False for M/C-2. The Rej% for July cannot be computed without knowing M/C-2's
         rejection; showing 0.00% would imply zero rejection, which is unverified. Rendered n/a.
-        M/C-1 rejection (3,782 kg from block tab) is shown in the Rejection KG column labelled "M/C-1 only".
+        M/C-1 rejection ({% if jul_row and jul_row.reject_kg is not none %}{{ "{:,.0f}".format(jul_row.reject_kg) }}{% else %}3,782{% endif %} kg from block tab) is shown in the Rejection KG column labelled "M/C-1 only".
       </span>
     </div>
     {% endif %}

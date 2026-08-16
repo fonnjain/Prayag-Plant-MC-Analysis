@@ -69,18 +69,25 @@
   {% endif %}
 </div>
 
+{# ─── R-42 wages banner — variables (tr not yet set; set it early here) ─────── #}
+{% set _gtr     = data.section.total_row %}
+{% set _apr_row = data.section.month_rows | selectattr('month_lbl', 'equalto', 'APR') | first | default(none) %}
+{% set _jun_row = data.section.month_rows | selectattr('month_lbl', 'equalto', 'JUN') | first | default(none) %}
+{# DR-gross denominator for per-KG rate: DR-net + block-tab rejection #}
+{% set _dr_gross = (_gtr.dr_net_kg or 0) + (_gtr.reject_kg or 0) %}
+
 {# ─── R-42 wages banner ──────────────────────────────────────────────────────── #}
 <div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
      style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.30)">
   <div class="font-semibold mb-0.5" style="color:#92400e">R-42 — Two annuals disagree on Garden wages (open)</div>
   <div class="text-gray-700">
     <span class="font-semibold">Our source</span> (Segment Cost workbook, Garden Pipe tab, R-11):
-    Paid Wages <span class="font-semibold">₹2,20,797</span> + Contractor <span class="font-semibold">₹50,547</span>
-    = ₹2,71,344 total · ₹2.02/kg on DR-gross basis.
+    Paid Wages <span class="font-semibold">₹{{ "{:,}".format((_gtr.wages or 0) | int) }}</span> + Contractor <span class="font-semibold">₹{{ "{:,}".format((_gtr.contractor_wages or 0) | int) }}</span>
+    = ₹{{ "{:,}".format(((_gtr.wages or 0) + (_gtr.contractor_wages or 0)) | int) }} total · {% if _dr_gross > 0 %}₹{{ "{:.2f}".format(((_gtr.wages or 0) + (_gtr.contractor_wages or 0)) / _dr_gross) }}/kg{% else %}—{% endif %} on DR-gross basis.
     <br>
     <span class="font-semibold">Annual Garden workbook SUMMARY tab</span> (comparison only):
     Paid Wages <span class="font-semibold">₹4,26,164</span> · ₹2.97/kg on DR-gross basis.
-    Paid hours are identical in both (1,389.5 / 3,853.5 / 3,895.5), so they describe the same labour — but the ratio varies by month (1.37 / 1.92 / 2.59), ruling out a simple scaling.
+    Paid hours are identical in both ({{ "{:,.1f}".format(_apr_row.paid_hrs) if _apr_row and _apr_row.paid_hrs is not none else "—" }} / {{ "{:,.1f}".format(may_row.paid_hrs) if may_row and may_row.paid_hrs is not none else "—" }} / {{ "{:,.1f}".format(_jun_row.paid_hrs) if _jun_row and _jun_row.paid_hrs is not none else "—" }}), so they describe the same labour — but the ratio varies by month (1.37 / 1.92 / 2.59), ruling out a simple scaling.
     Divergence is open. We use the Segment Cost workbook.
   </div>
 </div>
