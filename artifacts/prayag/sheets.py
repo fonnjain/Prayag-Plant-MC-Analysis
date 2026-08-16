@@ -2134,7 +2134,7 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
       r.machine      = machine_label
       r.ideal_hours  = 0.0     # utilisation suppressed until a baseline is set
       r.ideal_output = 0.0
-      r.ideal_source = "none"
+      r.ideal_source = ideal_hours.SRC_NOT_SET  # no business-supplied planned hours yet
       if hrs > 0:
           r.runhours_tracked = True
           if r.date not in dates_assigned:
@@ -2165,7 +2165,7 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
           runner_lumps=0.0,
           planned_output=0.0, ideal_output=0.0,
           actual_hours=hrs, ideal_hours=0.0,
-          ideal_hours_sheet=0.0, ideal_source="none",
+          ideal_hours_sheet=0.0, ideal_source=ideal_hours.SRC_NOT_SET,
           runhours_tracked=True,
           ideal_month_hours=0.0,
           location="", is_finishing=False, has_oee=False,

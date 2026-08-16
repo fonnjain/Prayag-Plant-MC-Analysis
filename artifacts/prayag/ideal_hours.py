@@ -53,7 +53,17 @@ PIPE_IDEAL_DAYS_BASIS = "calendar"
 # / DAILY layout ``emit``).
 APP_DEFAULT_IDEAL_HOURS: dict = {
     "GARDEN": 500.0,   # Garden Pipe — app-logic default (not in sheet)
-    "TANK": 500.0,     # Tanks (KH) — app-logic default (not in sheet)
+    # TANK removed (2026-08-16, R-07/R-16/R-25):
+    #   Tank has real run hours (R-39) but NO business-supplied planned hours.
+    #   The 500-h placeholder was authorised only as a denominator while Tank
+    #   was treated as output-only.  Closing R-25 (run hours now tracked) caused
+    #   resolve() to fall through to this default, producing 232÷500 = 46.4% for
+    #   VN July and 0÷500 = 0.0% (green) for KH/WB — both fabricated (R-07).
+    #   Without this entry resolve() returns (None, SRC_NOT_SET) and utilisation
+    #   stays suppressed, which is the correct behaviour until planned hours are
+    #   supplied by the business.  Having hours is not the same as having a
+    #   standard to measure them against.  FM #14: unblocking a metric must be
+    #   accompanied by a check that its denominator also resolves to a real value.
     "HDPE": 550.0,     # HDPE — app-logic default (not in sheet)
 }
 

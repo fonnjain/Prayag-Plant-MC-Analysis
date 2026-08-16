@@ -1,0 +1,87 @@
+# Tank — Utilisation Is Being Computed Against a Forbidden Placeholder
+
+Read `PRAYAG_RULES.md`. Touches **R-07, R-08, R-16, R-25, R-35**, and Failure Mode #14.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis` (verified at `f8f544e`).
+
+The R-39 hours reconciliation is correct and should not be touched. What follows is an unintended consequence of unblocking it.
+
+---
+
+## FIX 1 — Tank utilisation is fabricated (the live defect)
+
+Closing R-25 emptied `PLANTS_WITHOUT_RUNHOURS`, so `runhours_tracked` is now true for Tank and `ideal_hours.resolve()` runs. Its precedence is override → sheet value → app default, and `APP_DEFAULT_IDEAL_HOURS` still contains:
+
+```python
+"TANK": 500.0,     # Tanks (KH) — app-logic default (not in sheet)
+```
+
+Tank has **no ideal hours in any sheet** and **no `baselines.json` entry**, so every Tank plant-month now falls through to that 500-hour default. Two consequences, both wrong:
+
+- **VN July renders 232 ÷ 500 = 46.4% utilisation** against a figure nobody supplied.
+- **KH (all months) and WB (May–July) render 0 ÷ 500 = 0.0%** — a **green zero** that reads as "the plant was idle" rather than "this is not recorded." That is Failure Mode #14 in a third place, after Garden and HDPE.
+
+`baselines.json` states the position plainly: *ship only real, business-supplied planned hours; do NOT enter estimates or the sheet's flat 500-h placeholder.* That is **R-16**, and a percentage built on that placeholder is fabricated (**R-07**).
+
+### Required change
+
+**Remove `"TANK"` from `APP_DEFAULT_IDEAL_HOURS`.** With no override, no sheet value and no default, `resolve()` returns `(None, SRC_NOT_SET)`, `util_available` stays false, and utilisation is suppressed — exactly as `_metrics_json` intends.
+
+Leave `GARDEN` and `HDPE` defaults alone; they are a separate question.
+
+Add a comment recording why, so it is not reinstated: Tank has real run hours (R-39) but **no ideal hours from the business**, so utilisation stays suppressed until planned hours are supplied. Having hours is not the same as having a standard to measure them against.
+
+### Validate
+
+- **Reconciled hours still display**: VN Apr **76** · May **196** · Jun **208** · Jul **232**; WB Apr **100**.
+- **Utilisation is blank / n/a on every Tank plant-month** — not 46.4%, not 0.0%.
+- Print, per Tank plant-month: `actual_hours`, `ideal_hours`, the **ideal-hours source** (must read `not_set`), and the displayed utilisation.
+- **No other segment's utilisation moves**: Garden Apr 27.5% · Jun 66.9%; HDPE May ≈3.8%; PIPE, MOULDING, PTMT unchanged. If any moves, **stop** — the default was shared.
+- Tank production unchanged: VN Jun **533,500 Ltr** · WB Jul **1,702,000** · KH Jun **1,419,500**; VN Jun still reconciles to its annual at **±0**.
+
+---
+
+## FIX 2 — Two machines are being reported as one row
+
+In `_emit_tank`:
+
+```python
+machine_label = " + ".join(dr_machine_labels)
+```
+
+For **WB April**, which has two machines, this emits a single record labelled `MACHINE-1 + MACHINE-2`. The machine view therefore shows **one combined row**, with hours and output not split between them — which is not what the QA review asked for.
+
+This may be the correct interim: `PROD. REPORT` has no machine column, so per-machine attribution of output genuinely is not available, and splitting it would be invention (**R-07**).
+
+**Do not change the behaviour in this pass.** Instead:
+
+1. Report what the WB April machine view actually renders — the label, hours, output.
+2. Report whether `DAILY REPORT` splits hours and output **per machine per date** for WB April. If it does, per-machine attribution of *hours* is available even though output is not, and that is worth knowing before deciding.
+3. If the combined label stays, it must say so: render it as a single row explicitly labelled as covering both machines, not as an unexplained `MACHINE-1 + MACHINE-2` string.
+
+---
+
+## Do not touch
+
+`tank_reconcile.py` and the R-39 date-wise-max logic — **correct, verified across four VN months, leave it** · the synthetic zero-output records for DR-only dates (VN Jul 19, Apr 28) · the rejected-exceeds-produced guard · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` / `machine_planning_*.html` (**R-20**) · Garden and HDPE block-tab paths and their rejection joins · `GARDEN_WB` · vanished-file detection · R-27 warning · the basis labels · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Still open, and not for this pass
+
+- **Both rejection bases.** VN July should show litres **5,500 Ltr / 0.97%** *and* kilograms **449.3 kg / 3.09%**, each labelled (**R-22**). The plant's own dashboard reports 3.09%; an unlabelled 0.97% will read as an error. Report which is currently shown.
+- **Kilogram output.** Report whether Tank pages display kg at all: VN Apr 5,395.80 · May 13,535.00 · Jun 13,526.00 · Jul 14,548.90 · WB Apr 11,163.00 · KH May 21,090.00 · Jun 30,490.50.
+- **KH June's two bad source entries** — the 90-rejection cell and the 243-piece row — are with the plant (**R-35**). Do not code around them.
+- **KH's 2.24× annual gap** (**R-26**) must remain visible.
+
+---
+
+## For the rulebook
+
+Add to **Failure Mode #14**: removing a suppression flag can switch on a *fabricated* figure downstream. Closing R-25 was correct about hours, but `APP_DEFAULT_IDEAL_HOURS` then supplied a 500-hour denominator that no one had authorised. **When a metric is unblocked, check what its denominator resolves to before shipping.**
+
+## Report back
+
+The `APP_DEFAULT_IDEAL_HOURS` change · per-plant-month actual hours, ideal hours, ideal source and displayed utilisation · confirmation that no other segment's utilisation moved and no Tank production figure changed · the WB April machine-view findings · and what the rejection cell and kg display currently show.
