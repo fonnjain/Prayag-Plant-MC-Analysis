@@ -3475,6 +3475,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/compound-compilation"
             if rpt["id"] == "ptmt_moulds":
                 rpt["view_url"] = "/management-reports/ptmt-moulds-summary"
+            if rpt["id"] == "ptmt_mould_eff":
+                rpt["view_url"] = "/management-reports/ptmt-mould-efficiency"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3790,6 +3792,49 @@ def mgmt_tank_wb_summary_view():
     data = _mts.build_tank_summary("TANK_WB", fy)
     return render_template(
         "report_mgmt_tank_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/ptmt-mould-efficiency")
+def mgmt_ptmt_mould_eff_view():
+    """Management Report 12 — PTMT Moulding %age in Efficiency.
+
+    Source: Report-7 (Actual M/C Run in Min) + MASTER (cycle times).
+    Month selector via ?view=total|2026-04|…  Default: total.
+    """
+    from mgmt_ptmt_mould_eff import build_ptmt_mould_eff
+    fy   = request.args.get("fy", "2627")
+    view = request.args.get("view", "total")
+    data = build_ptmt_mould_eff(fy)
+    # Validate view param — fall back to "total" if unknown
+    valid_views = {"total"} | set(data.get("months", []))
+    if view not in valid_views:
+        view = "total"
+    return render_template(
+        "report_mgmt_ptmt_mould_eff.html",
+        data=data,
+        view=view,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/pipe-moulds-summary")
+def mgmt_pipe_moulds_summary_view():
+    """Management Report 13 — (D) Pipe Moulds Summary.
+
+    Two YoY blocks (FY26-27 Apr-Jul vs FY25-26 Apr-Jul).
+    Source: Reports 17-21 in the JUL'26 PIPE workbook (FY26-27, cumulative)
+    and the finalized Annual 25-26 Mould Summary workbook (FY25-26).
+    """
+    from mgmt_pipe_moulds_summary import build_pipe_moulds_summary
+    fy   = request.args.get("fy", "2627")
+    data = build_pipe_moulds_summary(fy)
+    return render_template(
+        "report_mgmt_pipe_moulds_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),

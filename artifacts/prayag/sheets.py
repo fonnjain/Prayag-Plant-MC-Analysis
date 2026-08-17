@@ -3444,6 +3444,78 @@ def load_ptmt_pieces(ym: str) -> dict:
         return result
 
 
+_ptmt_r9_cache: dict = {}
+_ptmt_r9_lock = threading.Lock()
+
+
+def load_ptmt_report9(ym: str) -> dict:
+    """Load PTMT Report-9 (per-mould production summary) for *ym*.
+
+    Report-9 is in the same monthly planning workbook as Report-7.
+    Cached 30 min.  Returns the EMPTY sentinel on any error.
+    """
+    import parsers as _par
+    EMPTY = {"available": False, "total_pcs": 0.0, "moulds": {}, "ym": ym}
+    now = time.time()
+    c = _ptmt_r9_cache.get(ym)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _ptmt_r9_lock:
+        c = _ptmt_r9_cache.get(ym)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id("PTMT", ym)
+        result = EMPTY
+        if fid:
+            try:
+                vals = read_values(fid, "Report-9", token)
+                result = _par.parse_ptmt_report9(vals, ym)
+            except Exception:
+                pass
+        _ptmt_r9_cache[ym] = (now, result)
+        return result
+
+
+_ptmt_mould_data_cache: dict = {}
+_ptmt_md_lock = threading.Lock()
+
+
+def load_ptmt_mould_data(ym: str) -> dict:
+    """Load PTMT Report-7 per-mould (PSF-xxx) aggregation for *ym*.
+
+    Groups by Item Code instead of machine — used by the PTMT Moulding
+    %age in Efficiency management report (Report 12).  Cached 30 min.
+    Returns the EMPTY sentinel on any error so callers degrade gracefully.
+    """
+    import parsers as _par
+    EMPTY = {"available": False, "total_pcs": 0.0, "moulds": {}, "ym": ym}
+    now = time.time()
+    c = _ptmt_mould_data_cache.get(ym)
+    if c and now - c[0] < _PLANNING_TTL:
+        return c[1]
+    with _ptmt_md_lock:
+        c = _ptmt_mould_data_cache.get(ym)
+        if c and now - c[0] < _PLANNING_TTL:
+            return c[1]
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+        fid = sources.planning_file_id("PTMT", ym)
+        r7_tab = sources.PLANNING_SOURCES["PTMT"]["report7_tab"]
+        result = EMPTY
+        if fid:
+            try:
+                vals = read_values(fid, r7_tab, token)
+                result = _par.parse_ptmt_report7_by_mould(vals, ym)
+            except Exception:
+                pass
+        _ptmt_mould_data_cache[ym] = (now, result)
+        return result
+
+
 def load_ptmt_master(ym: str) -> list:
     """Load PTMT MASTER mould standards for *ym*.
 
@@ -3825,3 +3897,219 @@ def load_corrective_replan_actuals(ym: str) -> dict:
         result = {"file_id": fid, "r11": r11, "r12": r12, "error": error}
         _replan_cache[ym] = (now, result)
         return result
+
+
+# ---------------------------------------------------------------------------
+# Pipe Moulds Summary — Management Report 13
+# ---------------------------------------------------------------------------
+
+_PIPE_MOULD_FY_TABS: dict = {
+    "Report-17": "CPVC",
+    "Report-18": "UPVC",
+    "Report-19": "SWR",
+    "Report-20": "AGRI",
+    "Report-21": "PPR",
+}
+
+_PIPE_MOULD_ANNUAL_TABS: dict = {
+    "CPVC Mould Summary (25-26)": "CPVC",
+    "UPVC Mould Summary (25-26)": "UPVC",
+    "SWR Mould Summary (25-26)":  "SWR",
+    "AGRI Mould Summary (25-26)": "AGRI",
+}
+
+# File ID for the finalized FY25-26 annual mould summary workbook.
+_PIPE_MOULD_ANNUAL_2526_FID = "1N5W8QQmIAnWqbkATCruLyjSriqDJ6JtkwgIIXOm1dSk"
+
+_pipe_mould_fy_cache: dict = {}
+_pipe_mould_fy_lock = threading.Lock()
+_PIPE_MOULD_FY_TTL = 1800  # 30 min
+
+
+def load_pipe_moulds_fy(fy: str = "2627") -> dict:
+    """Load the cumulative mould-working data for *fy* from the latest monthly
+    PIPE workbook (Reports 17–21, 4-month cumulative format).
+
+    The JUL workbook carries APR + MAY + JUN + JUL blocks.  All five material
+    tabs (CPVC / UPVC / SWR / AGRI / PPR) are read in one ``batch_get``.
+
+    Returns::
+
+        {
+          "available": bool,
+          "fy": str,            # e.g. "2627"
+          "n_months": int,      # months summed (1-4)
+          "latest_ym": str,     # source workbook month (e.g. "2026-07")
+          "file_id": str,
+          "groups": [result, …],   # parse_cumulative_mould_fy results
+          "missing": [str, …],     # materials whose tab was absent
+          "grand_pcs": float,
+          "grand_kg":  float,
+          "grand_hrs": float,
+          "grand_n_run": int,
+        }
+    """
+    now = time.time()
+    c = _pipe_mould_fy_cache.get(fy)
+    if c and now - c[0] < _PIPE_MOULD_FY_TTL:
+        return c[1]
+    with _pipe_mould_fy_lock:
+        c = _pipe_mould_fy_cache.get(fy)
+        if c and now - c[0] < _PIPE_MOULD_FY_TTL:
+            return c[1]
+
+        EMPTY = {
+            "available": False, "fy": fy, "n_months": 0,
+            "latest_ym": "", "file_id": "",
+            "groups": [], "missing": [],
+            "grand_pcs": 0.0, "grand_kg": 0.0, "grand_hrs": 0.0,
+            "grand_n_run": 0,
+        }
+
+        if is_demo_mode():
+            _pipe_mould_fy_cache[fy] = (now, EMPTY)
+            return EMPTY
+
+        import parsers as _par
+
+        # FY → ordered list of source months (APR first)
+        _fy_months: dict = {"2627": ["2026-04", "2026-05", "2026-06", "2026-07"]}
+        months = _fy_months.get(fy, [])
+        if not months:
+            _pipe_mould_fy_cache[fy] = (now, EMPTY)
+            return EMPTY
+
+        # Find the latest workbook that exists in DAILY_SOURCES
+        latest_ym = ""
+        file_id = ""
+        for ym in reversed(months):
+            fid = _daily_file_id("PIPE", ym)
+            if fid:
+                latest_ym = ym
+                file_id = fid
+                break
+        if not file_id:
+            _pipe_mould_fy_cache[fy] = (now, EMPTY)
+            return EMPTY
+
+        n_months = months.index(latest_ym) + 1  # how many months are in the file
+
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+
+        try:
+            raw = batch_get(file_id, list(_PIPE_MOULD_FY_TABS), token)
+        except SheetReadError:
+            raise
+
+        groups = []
+        missing = []
+        grand_pcs = grand_kg = grand_hrs = 0.0
+        grand_n_run = 0
+        for tab, grp in _PIPE_MOULD_FY_TABS.items():
+            result = _par.parse_cumulative_mould_fy(
+                raw.get(tab, []), group=grp, n_months=n_months
+            )
+            if result is None:
+                missing.append(grp)
+            else:
+                groups.append(result)
+                grand_pcs  += result["total_pcs"]
+                grand_kg   += result["total_kg"]
+                grand_hrs  += result["total_hrs"]
+                grand_n_run += result["n_run"]
+
+        out = {
+            "available": bool(groups),
+            "fy": fy,
+            "n_months": n_months,
+            "latest_ym": latest_ym,
+            "file_id": file_id,
+            "groups": groups,
+            "missing": missing,
+            "grand_pcs": grand_pcs,
+            "grand_kg": grand_kg,
+            "grand_hrs": grand_hrs,
+            "grand_n_run": grand_n_run,
+        }
+        _pipe_mould_fy_cache[fy] = (now, out)
+        return out
+
+
+_pipe_mould_annual_cache: dict = {}
+_pipe_mould_annual_lock = threading.Lock()
+_PIPE_MOULD_ANNUAL_TTL = 3600  # 1 hour (rarely changes)
+
+
+def load_pipe_moulds_annual_2526() -> dict:
+    """Load the APR-JUL aggregate from the finalized FY25-26 annual mould
+    summary workbook (one tab per material: CPVC / UPVC / SWR / AGRI).
+
+    PPR is absent from FY25-26 (new material in FY26-27).
+
+    Returns the same shape as ``load_pipe_moulds_fy`` but with
+    ``n_total`` populated (all rows in the mould register, not just those
+    that ran).
+    """
+    now = time.time()
+    c = _pipe_mould_annual_cache.get("2526")
+    if c and now - c[0] < _PIPE_MOULD_ANNUAL_TTL:
+        return c[1]
+    with _pipe_mould_annual_lock:
+        c = _pipe_mould_annual_cache.get("2526")
+        if c and now - c[0] < _PIPE_MOULD_ANNUAL_TTL:
+            return c[1]
+
+        EMPTY = {
+            "available": False, "fy": "2526", "file_id": _PIPE_MOULD_ANNUAL_2526_FID,
+            "groups": [], "missing": [],
+            "grand_pcs": 0.0, "grand_kg": 0.0, "grand_hrs": 0.0,
+            "grand_n_run": 0,
+        }
+
+        if is_demo_mode():
+            _pipe_mould_annual_cache["2526"] = (now, EMPTY)
+            return EMPTY
+
+        import parsers as _par
+        token = _get_access_token()
+        if not token:
+            raise SheetReadError("Google Sheets connection not authorized.")
+
+        fid = _PIPE_MOULD_ANNUAL_2526_FID
+        try:
+            raw = batch_get(fid, list(_PIPE_MOULD_ANNUAL_TABS), token)
+        except SheetReadError:
+            raise
+
+        groups = []
+        missing = []
+        grand_pcs = grand_kg = grand_hrs = 0.0
+        grand_n_run = 0
+        for tab, grp in _PIPE_MOULD_ANNUAL_TABS.items():
+            result = _par.parse_annual_mould_summary_apr_jul(
+                raw.get(tab, []), group=grp
+            )
+            if result is None:
+                missing.append(grp)
+            else:
+                groups.append(result)
+                grand_pcs  += result["total_pcs"]
+                grand_kg   += result["total_kg"]
+                grand_hrs  += result["total_hrs"]
+                grand_n_run += result["n_run"]
+
+        out = {
+            "available": bool(groups),
+            "fy": "2526",
+            "file_id": fid,
+            "groups": groups,
+            "missing": missing,
+            "grand_pcs": grand_pcs,
+            "grand_kg": grand_kg,
+            "grand_hrs": grand_hrs,
+            "grand_n_run": grand_n_run,
+        }
+        _pipe_mould_annual_cache["2526"] = (now, out)
+        return out

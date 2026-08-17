@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}(D) Pipe Moulds Summary — Management Report 13{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+  {# ── Header ──────────────────────────────────────────────────────────────── #}
+  <div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+      <h4 class="mb-0 fw-semibold">(D) Pipe Moulds Summary</h4>
+      <p class="text-muted small mb-0">Management Report 13 · YoY comparison: Apr–Jul</p>
+    </div>
+    <div class="text-end text-muted small">
+      <div>{{ today_disp }}</div>
+      <div>{{ last_synced }}</div>
+    </div>
+  </div>
+
+  {# ── Sourcing note ────────────────────────────────────────────────────────── #}
+  <div class="alert alert-secondary py-2 px-3 small mb-3">
+    <strong>Sources:</strong> {{ data.sourcing_note }}
+  </div>
+
+  {# ── Defect note ──────────────────────────────────────────────────────────── #}
+  <div class="alert alert-warning py-2 px-3 small mb-3">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+    <strong>Sheet defect flagged:</strong> {{ data.defect_note }}
+  </div>
+
+  {# ── Hours / n_total sourcing note ────────────────────────────────────────── #}
+  <div class="alert alert-info py-2 px-3 small mb-4">
+    <i class="bi bi-info-circle-fill me-1"></i>
+    {{ data.hours_note }}
+  </div>
+
+  {# ══════════════════════════════════════════════════════════════════════════ #}
+  {# Period blocks                                                              #}
+  {# ══════════════════════════════════════════════════════════════════════════ #}
+
+  {% for block in data.blocks %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between py-2">
+      <div>
+        <span class="fw-semibold">{{ block.period_label }}</span>
+        {% if block.fy_key == "2627" %}
+          <span class="badge bg-primary ms-2">FY 26-27</span>
+          {% if block.source_ym %}
+            <span class="text-muted small ms-2">(cumulative from {{ block.source_ym }})</span>
+          {% endif %}
+        {% else %}
+          <span class="badge bg-secondary ms-2">FY 25-26</span>
+          <span class="text-muted small ms-2">(finalized annual)</span>
+        {% endif %}
+      </div>
+      {% if block.missing %}
+        <span class="badge bg-danger">Missing: {{ block.missing | join(", ") }}</span>
+      {% endif %}
+    </div>
+
+    <div class="card-body p-0">
+      {% if block.unavailable %}
+        <div class="p-4 text-muted text-center">
+          Source data not available for this period.
+        </div>
+      {% else %}
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered table-hover mb-0 align-middle text-center">
+            <thead class="table-light">
+              <tr>
+                <th class="text-start" style="min-width:80px">Material</th>
+                <th>
+                  No. of Total Mould
+                  {% if block.fy_key == "2627" %}
+                    <br><span class="text-muted" style="font-size:0.72em; font-weight:normal">(registry, not available)</span>
+                  {% endif %}
+                </th>
+                <th>No. of Mould Run</th>
+                <th>
+                  Mould Run Hours
+                  {% if block.fy_key == "2627" %}
+                    <br><span class="text-muted" style="font-size:0.72em; font-weight:normal">(formula-derived, see note)</span>
+                  {% endif %}
+                </th>
+                <th>Av. Hr/Mould</th>
+                <th>Output (Pcs)</th>
+                <th>Output (KG)</th>
+                <th>Avg./Month (KG)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in block.rows %}
+              <tr {% if row.material == "PPR" %}class="table-light"{% endif %}>
+                <td class="text-start fw-semibold">{{ row.material }}</td>
+                <td class="text-muted">{{ row.d_n_total }}</td>
+                <td>{{ row.d_n_run }}</td>
+                <td>{{ row.d_hrs }}</td>
+                <td>{{ row.d_av_hr }}</td>
+                <td>{{ row.d_pcs }}</td>
+                <td class="fw-semibold">{{ row.d_kg }}</td>
+                <td>{{ row.d_avg_month }}</td>
+              </tr>
+              {% endfor %}
+
+              {# TOTAL row #}
+              {% set tot = block.total_row %}
+              <tr class="table-primary fw-bold">
+                <td class="text-start">TOTAL</td>
+                <td class="text-muted">{{ tot.d_n_total }}</td>
+                <td>{{ tot.d_n_run }}</td>
+                <td>{{ tot.d_hrs }}</td>
+                <td>{{ tot.d_av_hr }}</td>
+                <td>{{ tot.d_pcs }}</td>
+                <td>{{ tot.d_kg }}</td>
+                <td>{{ tot.d_avg_month }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {% if block.fy_key == "2627" and block.has_ppr %}
+        <div class="px-3 pb-2 pt-1">
+          <p class="text-muted small mb-0">
+            <i class="bi bi-asterisk me-1"></i>
+            <strong>PPR</strong> (Report-21): new material in FY26-27.
+            Mould codes PP42–PP57 registered in the monthly PIPE workbook.
+            All production figures sourced from the cumulative Report-21 tab.
+          </p>
+        </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  {# ══════════════════════════════════════════════════════════════════════════ #}
+  {# Reconciliation badge — FY26-27 vs spec anchors                            #}
+  {# ══════════════════════════════════════════════════════════════════════════ #}
+
+  {% if data.recon %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header py-2 fw-semibold">
+      FY26-27 Reconciliation — Our figures vs Spec
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Check</th>
+              <th class="text-end">Ours (computed)</th>
+              <th class="text-end">Spec</th>
+              <th class="text-center">Status</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for chk in data.recon %}
+            <tr>
+              <td class="fw-semibold small">{{ chk.label }}</td>
+              <td class="text-end font-monospace small">{{ chk.ours }}</td>
+              <td class="text-end font-monospace small text-muted">{{ chk.spec }}</td>
+              <td class="text-center">
+                {% if chk.status == "PASS" %}
+                  <span class="badge bg-success">PASS</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark">DIFF</span>
+                {% endif %}
+              </td>
+              <td class="text-muted small">{{ chk.note }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {# Spec hours anchors — not in recon table since hours differ by design #}
+      <div class="px-3 py-2">
+        <p class="text-muted small mb-1">
+          <strong>Spec hours anchors (not reproduced from Report-17..21 formula):</strong>
+          CPVC 7,195 h · UPVC 4,398 h · SWR 4,455 h · AGRI 1,162 h · PPR 39 h
+          → Total 17,249 h.  See hours note above for explanation.
+        </p>
+        <p class="text-muted small mb-0">
+          <strong>Spec n_total anchors (require full mould registry):</strong>
+          CPVC 210 · UPVC 170 · SWR 89 · AGRI 129 · PPR 10 → Total 608.
+          Our Reports 17–21 give n_run only (moulds that produced); the
+          full registry is in the FY26-27 annual workbook (not yet in Drive).
+        </p>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

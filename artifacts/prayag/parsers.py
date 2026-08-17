@@ -2235,6 +2235,226 @@ def parse_mould_working(values: List[list], *, group: str) -> Optional[dict]:
     }
 
 
+def parse_cumulative_mould_fy(
+    values: List[list],
+    *,
+    group: str,
+    n_months: int = 4,
+) -> Optional[dict]:
+    """Parse a **cumulative** mould-working tab from the latest monthly PIPE
+    workbook (Reports 17–21 in the JUL'26 file).
+
+    Each month's data is appended to the right as a 4-column block:
+    ``[PRODUCTION IN PCS | PRODUCTION IN KG | gross_kg | UTIL HRS]``.
+    The JUL workbook contains APR + MAY + JUN + JUL (4 blocks).
+
+    Only the first *n_months* blocks are summed.  Returns::
+
+        {group, n_run, total_pcs, total_kg, total_hrs,
+         sheet_total_pcs, sheet_total_kg, sheet_total_hrs}
+
+    or ``None`` when the tab is missing or has no recognisable header.
+    ``n_run`` = distinct mould codes that had pcs > 0 or kg > 0 across the
+    summed months.  ``n_total`` is intentionally absent — the monthly
+    Report-17..21 templates only list moulds that ran, not the full registry;
+    the caller must source the registry count separately.
+    """
+    if not values:
+        return None
+
+    # ── locate the sub-header row containing "PRODUCTION IN PCS" ─────────────
+    band = values[:6]
+    sub_hdr_idx = -1
+    for i, row in enumerate(band):
+        if any("PRODUCTION IN PCS" in str(v).upper() for v in row):
+            sub_hdr_idx = i
+            break
+    if sub_hdr_idx < 0:
+        return None
+
+    sub_hdr = values[sub_hdr_idx]
+    # Column offsets where each month's PCS block starts
+    month_starts: List[int] = [
+        c for c, v in enumerate(sub_hdr)
+        if "PRODUCTION IN PCS" in str(v).upper()
+    ]
+    if not month_starts:
+        return None
+    used_starts = month_starts[:n_months]
+
+    # ── identity-row column for the mould code ────────────────────────────────
+    id_row = values[sub_hdr_idx - 1] if sub_hdr_idx >= 1 else []
+    mould_c = next(
+        (c for c, v in enumerate(id_row) if str(v).strip().upper() == "MOULD"),
+        -1,
+    )
+    if mould_c < 0:
+        # Fall back: search the whole band
+        mould_c = next(
+            (c for row in band for c, v in enumerate(row)
+             if str(v).strip().upper() == "MOULD"),
+            -1,
+        )
+
+    # ── TOTAL row (used for the sheet-level cross-check) ─────────────────────
+    sno_c = next(
+        (c for row in band for c, v in enumerate(row)
+         if "S.NO" in str(v).upper()),
+        -1,
+    )
+    total_idx = -1
+    for i, row in enumerate(values[:8]):
+        cell = str(row[sno_c]).strip().upper() if 0 <= sno_c < len(row) else ""
+        if cell == "TOTAL":
+            total_idx = i
+            break
+
+    # Sheet TOTAL cross-check (sum across used month blocks)
+    sh_pcs = sh_kg = sh_hrs = 0.0
+    if total_idx >= 0:
+        tr = values[total_idx]
+        for s in used_starts:
+            sh_pcs += num(tr[s])     if s < len(tr) else 0.0
+            sh_kg  += num(tr[s + 1]) if s + 1 < len(tr) else 0.0
+            sh_hrs += num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+
+    # ── detail rows ───────────────────────────────────────────────────────────
+    data_start = (total_idx + 1) if total_idx >= 0 else (sub_hdr_idx + 2)
+    run_codes: set = set()
+    total_pcs = total_kg = total_hrs = 0.0
+
+    for row in values[data_start:]:
+        code = str(row[mould_c]).strip() if 0 <= mould_c < len(row) else ""
+        if not code or "TOTAL" in code.upper() or "GRAND" in code.upper():
+            continue
+        r_pcs = r_kg = r_hrs = 0.0
+        for s in used_starts:
+            r_pcs += num(row[s])     if s < len(row) else 0.0
+            r_kg  += num(row[s + 1]) if s + 1 < len(row) else 0.0
+            r_hrs += num(row[s + 3]) if s + 3 < len(row) else 0.0
+        total_pcs += r_pcs
+        total_kg  += r_kg
+        total_hrs += r_hrs
+        if r_pcs > 0 or r_kg > 0:
+            run_codes.add(code)
+
+    return {
+        "group": group,
+        "n_run": len(run_codes),
+        "total_pcs": total_pcs,
+        "total_kg": total_kg,
+        "total_hrs": total_hrs,
+        "sheet_total_pcs": sh_pcs,
+        "sheet_total_kg": sh_kg,
+        "sheet_total_hrs": sh_hrs,
+    }
+
+
+def parse_annual_mould_summary_apr_jul(
+    values: List[list],
+    *,
+    group: str,
+) -> Optional[dict]:
+    """Parse a per-material annual mould-summary tab (e.g. 'CPVC Mould Summary
+    (25-26)') and return the APR-JUL four-month aggregate.
+
+    The tab has one row per mould with 12 month blocks (4 cols each:
+    pcs / kg / gross_kg / util_hrs) starting from the first column that
+    carries "PRODUCTION IN PCS" in the sub-header row.
+
+    Returns::
+
+        {group, n_total, n_run, total_pcs, total_kg, total_hrs,
+         sheet_total_pcs, sheet_total_kg, sheet_total_hrs}
+
+    or ``None`` when the tab is missing / unrecognisable.
+    ``n_total`` = all mould-data rows; ``n_run`` = moulds with pcs > 0 in any
+    of APR-JUL.  APR-JUL = the first 4 month blocks (months 1-4).
+    """
+    if not values:
+        return None
+
+    # Sub-header row carrying "PRODUCTION IN PCS"
+    sub_hdr_idx = -1
+    for i, row in enumerate(values[:5]):
+        if any("PRODUCTION IN PCS" in str(v).upper() for v in row):
+            sub_hdr_idx = i
+            break
+    if sub_hdr_idx < 0:
+        return None
+
+    sub_hdr = values[sub_hdr_idx]
+    all_starts: List[int] = [
+        c for c, v in enumerate(sub_hdr)
+        if "PRODUCTION IN PCS" in str(v).upper()
+    ]
+    if len(all_starts) < 4:
+        return None
+    used_starts = all_starts[:4]  # APR-JUL = first 4 months
+
+    # Mould column — search the sub-header row itself (identity labels live there
+    # for both CPVC layout — no leading blank — and AGRI/UPVC/SWR — leading blank).
+    mould_c = next(
+        (c for c, v in enumerate(sub_hdr) if str(v).strip().upper() == "MOULD"),
+        -1,
+    )
+    if mould_c < 0:
+        # Last-resort: scan all rows in the band
+        for row in values[max(0, sub_hdr_idx - 2): sub_hdr_idx + 1]:
+            for c, v in enumerate(row):
+                if str(v).strip().upper() == "MOULD":
+                    mould_c = c
+                    break
+            if mould_c >= 0:
+                break
+
+    # TOTAL row (always sub_hdr_idx + 1 in the annual layout)
+    total_row_idx = sub_hdr_idx + 1
+    tr = values[total_row_idx] if total_row_idx < len(values) else []
+    sh_pcs = sh_kg = sh_hrs = 0.0
+    for s in used_starts:
+        sh_pcs += num(tr[s])     if s < len(tr) else 0.0
+        sh_kg  += num(tr[s + 1]) if s + 1 < len(tr) else 0.0
+        sh_hrs += num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+
+    # Detail rows
+    data_start = total_row_idx + 1
+    n_total = 0
+    run_codes: set = set()
+    total_pcs = total_kg = total_hrs = 0.0
+
+    for row in values[data_start:]:
+        code = str(row[mould_c]).strip() if 0 <= mould_c < len(row) else ""
+        if not code or "TOTAL" in code.upper():
+            continue
+        # Skip rows whose first non-empty cell is clearly a header repeat
+        if any(kw in code.upper() for kw in ("S.NO", "MOULD CAVITY", "PRODUCTION")):
+            continue
+        n_total += 1
+        r_pcs = r_kg = r_hrs = 0.0
+        for s in used_starts:
+            r_pcs += num(row[s])     if s < len(row) else 0.0
+            r_kg  += num(row[s + 1]) if s + 1 < len(row) else 0.0
+            r_hrs += num(row[s + 3]) if s + 3 < len(row) else 0.0
+        total_pcs += r_pcs
+        total_kg  += r_kg
+        total_hrs += r_hrs
+        if r_pcs > 0 or r_kg > 0:
+            run_codes.add(code)
+
+    return {
+        "group": group,
+        "n_total": n_total,
+        "n_run": len(run_codes),
+        "total_pcs": total_pcs,
+        "total_kg": total_kg,
+        "total_hrs": total_hrs,
+        "sheet_total_pcs": sh_pcs,
+        "sheet_total_kg": sh_kg,
+        "sheet_total_hrs": sh_hrs,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Planning parsers (B1 / B2) — on-demand, never on the "/" critical path
 # ---------------------------------------------------------------------------
@@ -2517,6 +2737,228 @@ def parse_ptmt_report7(values: list, ym: str) -> dict:
         "n_rows":    n_rows,
         "n_dates":   len(dates_seen),
         "machines":  machines,
+        "ym":        ym,
+    }
+
+
+def parse_ptmt_report9(values: list, ym: str) -> dict:
+    """Parse PTMT Report-9 (per-mould production summary) for *ym*.
+
+    Report-9 structure (one monthly workbook, one tab per month):
+      Row 2  : fixed headers (S.NO., MOULD, TYPE, CYCLE TIME PER PC,
+                PC WEIGHT) then a month label spanning the block columns
+      Row 3  : block sub-headers (MOULD RUN COUNT, PRODUCTION IN PCS,
+                PRODUCTION IN KG, WEIGHT OF TOTAL PRODUCTION,
+                MOULD UTILISATION IN HOURS)
+      Row 4  : TOTAL row
+      Row 5+ : one row per mould
+
+    Column layout (0-indexed):
+      C0 : key like 'PSF-26PBT' (ignored — use C2)
+      C1 : S.NO.
+      C2 : MOULD CODE  (PSF-xxx)
+      C3 : TYPE        (PBT / LD / …)
+      C4 : CYCLE TIME PER PC  (secs/pc)
+      C5 : PC WEIGHT  (grams/pc)
+      C6 : MOULD RUN COUNT
+      C7 : PRODUCTION IN PCS
+      C8 : PRODUCTION IN KG
+      C9 : WEIGHT OF TOTAL PRODUCTION
+      C10: MOULD UTILISATION IN HOURS  (= pcs × ct / 3600)
+      C11: MOULD UTILISATION IN MINUTES  (= pcs × ct / 60, unlabeled)
+
+    C11 sums to the spec's "Actual M/C Run Min" for each month block.
+
+    Returns:
+        {
+          "available": bool,
+          "total_pcs": float,
+          "moulds": {
+              "PSF-26": {
+                  "sno": int,
+                  "mat_type": str,
+                  "ct": float,        # cycle time in secs/pc
+                  "pc_weight_g": float,
+                  "run_count": int,
+                  "pcs": float,
+                  "kg": float,
+                  "std_min": float,   # C11 = pcs × ct / 60 (spec 'Actual M/C Run Min')
+              },
+              …
+          },
+          "ym": str,
+        }
+    """
+    EMPTY = {"available": False, "total_pcs": 0.0, "moulds": {}, "ym": ym}
+    if not values or len(values) < 5:
+        return EMPTY
+
+    # Locate the header row: row with 'S.NO.' in C1
+    header_idx = -1
+    for i, row in enumerate(values[:8]):
+        if len(row) > 1 and str(row[1]).strip().upper() == "S.NO.":
+            header_idx = i
+            break
+    if header_idx < 0:
+        return EMPTY
+
+    total_idx = header_idx + 2      # row 4 (0-based) — the TOTAL row
+    data_start = header_idx + 3     # row 5 onwards
+
+    moulds: dict = {}
+    total_pcs = 0.0
+
+    for i, row in enumerate(values[data_start:], data_start):
+        # Must have at least up to C7 (pcs column)
+        if len(row) < 8:
+            continue
+        c1 = str(row[1]).strip() if len(row) > 1 else ""
+        c2 = str(row[2]).strip() if len(row) > 2 else ""
+        # data rows: C1 is a number (S.NO.) and C2 is the mould code
+        if not c2 or c2.upper() == "TOTAL":
+            continue
+        try:
+            sno = int(float(c1)) if c1 else 0
+        except ValueError:
+            sno = 0
+
+        mat_type     = str(row[3]).strip() if len(row) > 3 else ""
+        ct           = num(row[4]) if len(row) > 4 else 0.0
+        pc_weight_g  = num(row[5]) if len(row) > 5 else 0.0
+        run_count    = int(num(row[6])) if len(row) > 6 else 0
+        pcs          = num(row[7]) if len(row) > 7 else 0.0
+        kg           = num(row[8]) if len(row) > 8 else 0.0
+        std_min      = num(row[11]) if len(row) > 11 else (pcs * ct / 60 if ct else 0.0)
+
+        if pcs == 0:
+            continue
+
+        total_pcs += pcs
+        if c2 in moulds:
+            # Same mould code on multiple rows (e.g. two cavity sizes or
+            # two mould-change runs in the same month) — accumulate.
+            m = moulds[c2]
+            m["pcs"]       += pcs
+            m["kg"]        += kg
+            m["std_min"]   += std_min
+            m["run_count"] += run_count
+            # keep the first-seen ct / pc_weight / mat_type
+        else:
+            moulds[c2] = {
+                "sno":         sno,
+                "mat_type":    mat_type,
+                "ct":          ct,
+                "pc_weight_g": pc_weight_g,
+                "run_count":   run_count,
+                "pcs":         pcs,
+                "kg":          kg,
+                "std_min":     std_min,
+            }
+
+    return {
+        "available": bool(moulds),
+        "total_pcs": total_pcs,
+        "moulds":    moulds,
+        "ym":        ym,
+    }
+
+
+def parse_ptmt_report7_by_mould(values: list, ym: str) -> dict:
+    """Parse PTMT Report-7 grouped by mould (Item Code = PSF-xxx).
+
+    Same header / data logic as parse_ptmt_report7 but aggregates by
+    mould code instead of machine.  Used by the PTMT Moulding %age in
+    Efficiency management report (Report 12).
+
+    Returns:
+        {
+          "available": bool,
+          "total_pcs": float,
+          "moulds": {
+              "PSF-219": {
+                  "pcs": float,          # production pcs
+                  "actual_min": float,   # Actual M/C Run in Min (col 20)
+                  "name": str,           # Item Name (first occurrence)
+                  "mat_type": str,       # MATERIAL column (PBT / LD / …)
+                  "cycle_time_r7": float # Cycle Time Per Pcs Standard (F) col 8
+              },
+              …
+          },
+          "ym": str,
+        }
+    """
+    EMPTY = {"available": False, "total_pcs": 0.0, "moulds": {}, "ym": ym}
+    if not values:
+        return EMPTY
+
+    # Locate header row (contains both "MATERIAL" and "DATE").
+    header_idx = -1
+    for i, row in enumerate(values[:10]):
+        up = [str(v).strip().upper() for v in row]
+        if "MATERIAL" in up and "DATE" in up:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return EMPTY
+
+    sub_idx = header_idx + 1
+    band = values[header_idx:sub_idx + 1]
+
+    def fc(pred):
+        return _plan_find_col(band, pred)
+
+    mat_c   = fc(lambda h: h == "MATERIAL")
+    code_c  = fc(lambda h: h == "ITEM CODE")
+    name_c  = fc(lambda h: h == "ITEM NAME")
+    cycp_c  = fc(lambda h: "CYCLE TIME PER PCS" in h or "CYCLE TIME PER PC" in h)
+    pcs_c   = fc(lambda h: h == "PC" or h == "OUTPUT PRODUCTION")
+    run_c   = fc(lambda h: "ACTUAL M/C RUN IN MIN" in h or
+                            ("ACTUAL" in h and "RUN" in h and "MIN" in h))
+
+    if code_c < 0 or mat_c < 0:
+        return EMPTY
+
+    def g(row, c):
+        return row[c] if 0 <= c < len(row) else ""
+
+    total_pcs = 0.0
+    moulds: dict = {}
+
+    for row in values[sub_idx + 1:]:
+        if not row:
+            continue
+        mat = str(g(row, mat_c)).strip()
+        if not mat:
+            continue
+        day = _long_date_day(g(row, 1))     # col 1 = DATE
+        if day is None:
+            continue
+
+        code = str(g(row, code_c)).strip()
+        if not code:
+            continue
+
+        pcs = num(g(row, pcs_c)) if pcs_c >= 0 else 0.0
+        rm  = num(g(row, run_c)) if run_c  >= 0 else 0.0
+        ct  = num(g(row, cycp_c)) if cycp_c >= 0 else 0.0
+
+        total_pcs += pcs
+        entry = moulds.setdefault(code, {
+            "pcs": 0.0, "actual_min": 0.0,
+            "name": str(g(row, name_c)).strip() if name_c >= 0 else "",
+            "mat_type": mat,
+            "cycle_time_r7": ct,
+        })
+        entry["pcs"]        += pcs
+        entry["actual_min"] += rm
+        # Keep first non-zero cycle time (column is constant for a mould)
+        if ct and not entry["cycle_time_r7"]:
+            entry["cycle_time_r7"] = ct
+
+    return {
+        "available": bool(moulds),
+        "total_pcs": total_pcs,
+        "moulds":    moulds,
         "ym":        ym,
     }
 

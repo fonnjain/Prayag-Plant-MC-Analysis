@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title_suffix %} — PTMT Moulding %age in Efficiency{% endblock %}
+
+{% block content %}
+
+{# ── macros ────────────────────────────────────────────────────────────────── #}
+{% macro ki(v) %}{% if v is none %}—{% else %}{{ "{:,.0f}".format(v) }}{% endif %}{% endmacro %}
+{% macro kf(v, d=2) %}{% if v is none %}—{% else %}{{ ("{:,."+d|string+"f}").format(v) }}{% endif %}{% endmacro %}
+
+{# ── Page header ──────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports" class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      PTMT Moulding %age in Efficiency — {{ data.fy_label }}
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">
+      Report 12 · Bhiwadi PTMT plant · {{ data.mould_count }} moulds · Report-9 basis · {{ today_disp }}
+    </div>
+  </div>
+  <div class="text-[10px] text-gray-400 shrink-0 mt-1">synced {{ last_synced }}</div>
+</div>
+
+{# ── Sourcing note ─────────────────────────────────────────────────────────── #}
+<div class="mb-3 px-3 py-2 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(200,150,0,0.35)">
+  <span class="font-semibold" style="color:rgba(160,100,0,1)">Sourcing note —</span>
+  <span class="text-gray-700">{{ data.sourcing_note }}</span>
+</div>
+
+{% if not data.has_data %}
+<div class="kpi-card p-5 text-center text-sm text-gray-500">
+  No PTMT mould-efficiency data available for {{ data.fy_label }}.
+  Ensure Report-9 tabs are present in the PTMT monthly planning workbooks.
+</div>
+{% else %}
+
+{# ── Reconciliation badge ─────────────────────────────────────────────────── #}
+{% set a = data.anchors %}
+<details class="mb-3">
+  <summary class="cursor-pointer px-3 py-2 rounded-xl border text-[11px] font-semibold"
+           style="background:rgba(31,56,100,0.03);border-color:rgba(31,56,100,0.14);color:var(--navy)">
+    Reconciliation vs spec anchors ▾
+  </summary>
+  <div class="mt-1 px-3 py-2 rounded-b-xl border-x border-b text-[11px]"
+       style="border-color:rgba(31,56,100,0.14)">
+    <table class="text-[11px] border-collapse w-auto">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.06)">
+          {% for h in ["Figure","Ours","Spec","Δ","Status"] %}
+          <th class="px-2 py-1 text-left text-gray-600 font-semibold border-b"
+              style="border-color:rgba(31,56,100,0.12)">{{ h }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {# APR pcs #}
+        {% if a.apr_pcs is not none %}
+        {% set d = (a.apr_pcs - a.spec_apr_pcs) %}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-0.5 text-gray-700 font-medium">APR Production Pcs</td>
+          <td class="px-2 py-0.5 tabular-nums text-right">{{ "{:,}".format(a.apr_pcs|int) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ "{:,}".format(a.spec_apr_pcs) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right {% if d|abs < 100 %}text-green-600{% else %}text-red-600{% endif %}">{{ "{:+,}".format(d|int) }}</td>
+          <td class="px-2 py-0.5 {% if d|abs < 100 %}text-green-600{% else %}text-red-600{% endif %}">{% if d|abs < 100 %}✓ match{% else %}gap{% endif %}</td>
+        </tr>
+        {% endif %}
+        {# APR Std Min vs spec actual #}
+        {% if a.apr_std is not none %}
+        {% set d = (a.apr_std - a.spec_apr_actual) %}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-0.5 text-gray-700 font-medium">APR Actual M/C Run Min (C11)</td>
+          <td class="px-2 py-0.5 tabular-nums text-right">{{ "{:,.0f}".format(a.apr_std) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ "{:,}".format(a.spec_apr_actual) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right {% if d|abs < 500 %}text-green-600{% else %}text-orange-600{% endif %}">{{ "{:+,.0f}".format(d) }}</td>
+          <td class="px-2 py-0.5 {% if d|abs < 500 %}text-green-600{% else %}text-orange-600{% endif %}">{% if d|abs < 500 %}✓ match{% else %}≈ match{% endif %}</td>
+        </tr>
+        {# APR Ideal (spec only) #}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-0.5 text-gray-700 font-medium">APR Ideal M/C Run Min</td>
+          <td class="px-2 py-0.5 text-gray-400 italic">not computable</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ "{:,}".format(a.spec_apr_ideal) }}</td>
+          <td class="px-2 py-0.5 text-gray-400">—</td>
+          <td class="px-2 py-0.5 text-orange-600">annual WB</td>
+        </tr>
+        {% endif %}
+        {# MAY pcs #}
+        {% if a.may_pcs is not none %}
+        {% set d = (a.may_pcs - a.spec_may_pcs) %}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-0.5 text-gray-700 font-medium">MAY Production Pcs</td>
+          <td class="px-2 py-0.5 tabular-nums text-right">{{ "{:,}".format(a.may_pcs|int) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ "{:,}".format(a.spec_may_pcs) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right {% if d|abs < 100 %}text-green-600{% else %}text-red-600{% endif %}">{{ "{:+,}".format(d|int) }}</td>
+          <td class="px-2 py-0.5 {% if d|abs < 100 %}text-green-600{% else %}text-red-600{% endif %}">{% if d|abs < 100 %}✓ match{% else %}gap{% endif %}</td>
+        </tr>
+        {% endif %}
+        {# FY pcs #}
+        {% if a.fy_pcs is not none %}
+        {% set d = (a.fy_pcs - a.spec_fy_pcs) %}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-0.5 text-gray-700 font-medium">FY Production Pcs</td>
+          <td class="px-2 py-0.5 tabular-nums text-right">{{ "{:,}".format(a.fy_pcs|int) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ "{:,}".format(a.spec_fy_pcs) }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right {% if d|abs < 10000 %}text-green-600{% else %}text-orange-600{% endif %}">{{ "{:+,}".format(d|int) }}</td>
+          <td class="px-2 py-0.5 {% if d|abs < 10000 %}text-green-600{% else %}text-orange-600{% endif %}">{% if d|abs < 10000 %}≈ match{% else %}gap{% endif %}</td>
+        </tr>
+        {% endif %}
+        {# Mould count #}
+        <tr>
+          <td class="px-2 py-0.5 text-gray-700 font-medium">Mould count (any FY production)</td>
+          <td class="px-2 py-0.5 tabular-nums text-right">{{ a.fy_moulds }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right text-gray-500">{{ a.spec_fy_moulds }}</td>
+          <td class="px-2 py-0.5 tabular-nums text-right {% if (a.fy_moulds - a.spec_fy_moulds)|abs < 20 %}text-orange-600{% else %}text-red-600{% endif %}">{{ "{:+}".format(a.fy_moulds - a.spec_fy_moulds) }}</td>
+          <td class="px-2 py-0.5 text-orange-600">≈</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="mt-1.5 text-[10px] text-gray-500 leading-snug">
+      Spec Ideal & Efficiency come from the ANNUAL PTMT Moulding %age in Efficiency 26-27 workbook
+      (not in Drive). Spec APR eff = 97.04% · MAY eff = 101.66% · TOTAL eff = 100.53%.
+    </div>
+  </div>
+</details>
+
+{# ── Month selector tabs ───────────────────────────────────────────────────── #}
+<div class="mb-3 flex flex-wrap gap-1.5">
+  <a href="?view=total&fy={{ data.fy }}"
+     class="px-3 py-1 rounded-lg text-xs font-semibold border transition-colors
+            {% if view == 'total' %}text-white{% else %}text-gray-600 hover:border-blue-300{% endif %}"
+     style="{% if view == 'total' %}background:var(--navy);border-color:var(--navy){% else %}border-color:rgba(31,56,100,0.18){% endif %}">
+    TOTAL
+  </a>
+  {% for ym in data.view_months %}
+  <a href="?view={{ ym }}&fy={{ data.fy }}"
+     class="px-3 py-1 rounded-lg text-xs font-semibold border transition-colors
+            {% if view == ym %}text-white{% else %}text-gray-600 hover:border-blue-300{% endif %}"
+     style="{% if view == ym %}background:var(--navy);border-color:var(--navy){% else %}border-color:rgba(31,56,100,0.18){% endif %}">
+    {{ data.month_labels.get(ym, ym) }}
+  </a>
+  {% endfor %}
+</div>
+
+{# ── Determine current block ───────────────────────────────────────────────── #}
+{% set is_total = (view == "total") %}
+{% set cur_ym   = view if not is_total else "" %}
+{% set cur_lbl  = "TOTAL" if is_total else data.month_labels.get(cur_ym, cur_ym) %}
+
+{# ── Mould table ──────────────────────────────────────────────────────────── #}
+<div class="kpi-card overflow-x-auto" style="max-height:72vh;overflow-y:auto">
+  <table class="min-w-full text-xs border-collapse" style="table-layout:fixed">
+    <colgroup>
+      <col style="width:40px">   {# S.NO #}
+      <col style="width:74px">   {# MOULD CODE #}
+      <col style="width:44px">   {# TYPE #}
+      <col style="min-width:130px;max-width:200px"> {# NAME #}
+      <col style="width:44px">   {# CAV #}
+      <col style="width:60px">   {# CT s/pc #}
+      <col style="width:60px">   {# WT g #}
+      <col style="width:64px">   {# RUNS #}
+      <col style="width:96px">   {# Production Pcs #}
+      <col style="width:88px">   {# Ideal Min #}
+      <col style="width:88px">   {# Actual Min (Std) #}
+      <col style="width:72px">   {# Efficiency #}
+    </colgroup>
+    <thead class="sticky top-0 z-20">
+      <tr style="background:rgba(31,56,100,0.09)">
+        {# ── Fixed columns ── #}
+        <th class="px-1.5 py-2 text-center text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">S.NO</th>
+        <th class="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">MOULD</th>
+        <th class="px-1.5 py-2 text-center text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">TYPE</th>
+        <th class="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">NAME</th>
+        <th class="px-1.5 py-2 text-center text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">CAV</th>
+        <th class="px-1.5 py-2 text-center text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">CT<br><span class="font-normal">(s/pc)</span></th>
+        <th class="px-1.5 py-2 text-center text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">WT<br><span class="font-normal">(g)</span></th>
+        {# ── Block columns — header shows current view ── #}
+        <th class="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">{{ cur_lbl }}<br><span class="font-normal">Runs</span></th>
+        <th class="px-2 py-2 text-right text-[10px] font-bold border-b border-r"
+            style="border-color:rgba(31,56,100,0.14);color:var(--navy)">{{ cur_lbl }}<br><span class="font-normal text-gray-500">Pcs</span></th>
+        <th class="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">Ideal<br><span class="font-normal">Min</span></th>
+        <th class="px-2 py-2 text-right text-[10px] font-semibold text-gray-600 border-b border-r"
+            style="border-color:rgba(31,56,100,0.14)">Actual<br><span class="font-normal">Min ★</span></th>
+        <th class="px-2 py-2 text-right text-[10px] font-semibold text-gray-400 border-b"
+            style="border-color:rgba(31,56,100,0.14)">Eff %<br><span class="font-normal">★</span></th>
+      </tr>
+    </thead>
+    <tbody>
+
+      {# ── TOTAL ROW ────────────────────────────────────────────────────────── #}
+      {% set tr = data.total_row %}
+      {% if tr %}
+      {% set tb = tr.total if is_total else tr.monthly.get(cur_ym, {}) %}
+      <tr style="background:rgba(31,56,100,0.08);font-weight:700;position:sticky;top:33px;z-index:15">
+        <td class="px-1.5 py-2 text-center border-r border-b"
+            style="border-color:rgba(31,56,100,0.14);color:var(--navy)">—</td>
+        <td class="px-2 py-2 border-r border-b font-bold"
+            style="border-color:rgba(31,56,100,0.14);color:var(--navy)" colspan="6">TOTAL</td>
+        <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+            style="border-color:rgba(31,56,100,0.14);color:var(--navy)">
+          {% if tb and tb.run_count is not none %}{{ "{:,}".format(tb.run_count|int) }}{% else %}—{% endif %}
+        </td>
+        <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+            style="border-color:rgba(31,56,100,0.14);color:var(--navy)">
+          {{ ki(tb.pcs) if tb else "—" }}
+        </td>
+        <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+            style="border-color:rgba(31,56,100,0.14)">
+          {{ ki(tb.ideal_min) if tb else "—" }}
+        </td>
+        <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-500 italic"
+            style="border-color:rgba(31,56,100,0.14)">—</td>
+        <td class="px-2 py-2 text-right border-b text-gray-400 italic"
+            style="border-color:rgba(31,56,100,0.14)">—</td>
+      </tr>
+      {% endif %}
+
+      {# ── MOULD ROWS ─────────────────────────────────────────────────────────── #}
+      {% for row in data.rows %}
+      {% set blk = row.total if is_total else row.monthly.get(cur_ym) %}
+      {% if blk and blk.pcs is not none %}
+      <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/30{% endif %}
+                 hover:bg-blue-50/20 transition-colors"
+          style="border-bottom:1px solid rgba(31,56,100,0.06)">
+        <td class="px-1.5 py-1 text-center text-gray-400 text-[10px] border-r"
+            style="border-color:rgba(31,56,100,0.07)">{{ row.sno }}</td>
+        <td class="px-2 py-1 font-mono text-[11px] font-semibold border-r"
+            style="border-color:rgba(31,56,100,0.07);color:var(--navy)">{{ row.code }}</td>
+        <td class="px-1.5 py-1 text-center text-[10px] text-gray-500 border-r"
+            style="border-color:rgba(31,56,100,0.07)">{{ row.mat_type or "—" }}</td>
+        <td class="px-2 py-1 text-[10px] text-gray-700 border-r truncate"
+            style="border-color:rgba(31,56,100,0.07)" title="{{ row.name }}">{{ row.name or "—" }}</td>
+        <td class="px-1.5 py-1 text-center text-[10px] text-gray-500 border-r"
+            style="border-color:rgba(31,56,100,0.07)">
+          {% if row.cavity is not none %}{{ row.cavity }}{% else %}—{% endif %}
+        </td>
+        <td class="px-1.5 py-1 text-center text-[10px] tabular-nums text-gray-600 border-r"
+            style="border-color:rgba(31,56,100,0.07)">
+          {% if row.cycle_time is not none %}{{ "{:.2f}".format(row.cycle_time) }}{% else %}—{% endif %}
+        </td>
+        <td class="px-1.5 py-1 text-center text-[10px] tabular-nums text-gray-500 border-r"
+            style="border-color:rgba(31,56,100,0.07)">
+          {% if row.pc_weight_g is not none %}{{ "{:.3f}".format(row.pc_weight_g) }}{% else %}—{% endif %}
+        </td>
+        <td class="px-2 py-1 text-right tabular-nums text-[10px] text-gray-500 border-r"
+            style="border-color:rgba(31,56,100,0.07)">
+          {% if blk.run_count is not none %}{{ blk.run_count }}{% else %}—{% endif %}
+        </td>
+        <td class="px-2 py-1 text-right tabular-nums font-semibold text-gray-700 border-r"
+            style="border-color:rgba(31,56,100,0.07)">{{ ki(blk.pcs) }}</td>
+        <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r"
+            style="border-color:rgba(31,56,100,0.07)">{{ ki(blk.ideal_min) }}</td>
+        <td class="px-2 py-1 text-right tabular-nums text-gray-400 italic border-r"
+            style="border-color:rgba(31,56,100,0.07)">—</td>
+        <td class="px-2 py-1 text-right text-gray-400 italic">—</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+
+    </tbody>
+  </table>
+</div>
+
+{# ── Footer ───────────────────────────────────────────────────────────────── #}
+<div class="mt-2 text-[10px] text-gray-400 px-1 leading-relaxed">
+  ★ Actual M/C Run Min and Efficiency % require the ANNUAL PTMT Moulding %age in Efficiency
+  workbook (not in Drive). Spec APR: Ideal=891,279 · Actual=918,451 · Eff=97.04% ·
+  MAY: 101.66% · TOTAL: 100.53%.
+  Ideal Min shown here = pcs × cycle time ÷ 60 (formula, verified for PSF-219 / PSF-23 / PSF-314 / PSF-184).
+</div>
+
+{% endif %} {# has_data #}
+
+{% endblock %}

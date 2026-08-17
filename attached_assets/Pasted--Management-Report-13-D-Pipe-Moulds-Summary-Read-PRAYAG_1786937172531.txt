@@ -1,0 +1,98 @@
+# Management Report 13 — (D) Pipe Moulds Summary
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Spreadsheet:** `(D). Annual 26-27 Pipe Moulds Summary` · **Worksheet:** `SUMMARY`
+
+*(The 217 × 59 dimension noted earlier belongs to the per-material detail tabs — `CPVC Mould Summary (26-27)` and its siblings. The `SUMMARY` tab is small.)*
+
+---
+
+## Layout
+
+```
+YEARS | MATERIAL | No. of Total Mould | No. of Mould Run | Mould Run Hours |
+Av. Run Hour Per Mould | Output (Pcs) | Output (KG) | Avg. Output on a Month
+```
+
+**Two blocks**, material rows then a TOTAL:
+
+**Apr,26 – Jul,26**
+
+| Material | Total Moulds | Moulds Run | Run Hours | Av Hr/Mould | Output (Pcs) | Output (KG) | Avg/Month |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CPVC | 210 | 145 | 7,195 | 49.62 | 2,986,681 | 80,330.59 | 20,083 |
+| UPVC | 170 | 139 | 4,398 | 31.64 | 1,678,108 | 96,075.43 | 24,019 |
+| SWR | 89 | 74 | 4,455 | 60.20 | 589,703 | 147,772.82 | 36,943 |
+| AGRI | 129 | 83 | 1,162 | 14.00 | 250,631 | 40,415.13 | 10,104 |
+| **PPR** | 10 | 16 | 39 | 2.45 | 35,659 | 1,421.42 | 355 |
+| *sheet TOTAL* | *608* | *441* | *17,210* | *155.46* | *5,505,123* | *364,594* | *91,148* |
+
+**Apr,25 – Jul,25** — CPVC 204/170/11,055/65.03/2,904,526/81,320.97/20,330 · UPVC 169/137/9,798/71.52/1,738,340/98,450.27/24,613 · SWR 81/86/12,642/147.00/557,312/136,188.26/34,047 · AGRI 82/63/2,493/39.57/182,129/29,556.55/7,389 · TOTAL 536/456/35,987/323.11/5,382,307/345,516/86,379. **No PPR row** — that material is new in FY26-27.
+
+---
+
+## The sheet's TOTAL row omits PPR from six of seven columns
+
+Verified against the material rows:
+
+| Column | Sheet TOTAL | Sum of all five | Sum without PPR | Verdict |
+|---|---:|---:|---:|---|
+| No. of Total Mould | 608 | **608** | 598 | PPR **included** |
+| No. of Mould Run | 441 | 457 | **441** | PPR excluded |
+| Mould Run Hours | 17,210 | 17,249 | **17,210** | PPR excluded |
+| Av. Run Hour Per Mould | 155.46 | 157.91 | **155.46** | PPR excluded |
+| Output (Pcs) | 5,505,123 | 5,540,782 | **5,505,123** | PPR excluded |
+| Output (KG) | 364,594 | 366,015.39 | **364,593.97** | PPR excluded |
+| Avg. Output on a Month | 91,148 | 91,504 | **91,149** | PPR excluded |
+
+**PPR was added as a new material in FY26-27 and the TOTAL formulas were extended in only one column.** The result is a TOTAL row that is internally inconsistent — `No. of Total Mould` counts ten moulds whose output, hours and run-count are excluded from every other column.
+
+**The corroboration is exact.** Output (KG) including PPR sums to **366,015.39** — our verified Moulding total of **366,015**. So the sheet's 364,594 is short by precisely PPR's 1,421.42 kg, and our figure is right.
+
+## And `Av. Run Hour Per Mould` is a sum of ratios
+
+Same defect as Reports 6 and 11, now in a third workbook:
+
+```
+sheet TOTAL   49.62 + 31.64 + 60.20 + 14.00  =  155.46      (four materials, PPR dropped)
+correct       17,210 hours  /  441 moulds run  =  39.02
+```
+
+Note the per-material values are correct — CPVC 7,195 ÷ 145 = 49.62 — so the denominator is **moulds run**, not total moulds. Use the same denominator.
+
+**Compute all seven TOTALs correctly, including PPR, and flag each divergence.**
+
+---
+
+## Sources for our recomputation
+
+- **Output (KG)** — our Moulding path (Report-12), which already totals 366,015 and reconciles across all three source layers.
+- **Output (Pcs), mould counts, run hours** — the Pipe Moulds chain: Reports 17–20 (CPVC/UPVC/SWR/AGRI, owner **Ms Pooja**) via the `C RAW-1` / `U RAW-1` / `AGRI RAW-1` / `SWR RAW-1` tabs into the mould summary. **Confirm PPR's source before building** — it is new this year and may not follow the same chain.
+- **FY25-26 block** — closed year, may be read from the finalized annual as-is (**R-03**). **Label it.** The FY26-27 block must be fully recomputed.
+
+If any metric has no source on our side, render it **blank with a note, never zero** (**R-07**, **R-08**).
+
+---
+
+## Validate
+
+- Both blocks render with the exact column order, material rows then TOTAL.
+- **Our TOTALs include PPR**: 608 moulds · 457 run · 17,249 hours · 5,540,782 pcs · **366,015.39 kg** · 91,504 avg/month.
+- `Av. Run Hour Per Mould` TOTAL renders **39.02** (17,210 ÷ 441 on the sheet's basis, or 17,249 ÷ 457 = 37.74 on ours including PPR — **state which and why**), with the sheet's 155.46 flagged.
+- The PPR omission flagged as a **single clear note**, not seven separate badges — it is one defect affecting six columns.
+- Output (KG) reconciles to our Moulding total of 366,015.
+- FY25-26 block labelled as read from the closed annual (**R-03**).
+- **No existing figure moves**: PIPE 1,277,971 · Moulding 366,015 / 35,972 h · PTMT 524,465 · Garden 232,528/138,052 · HDPE 23,817.24 · Tank per Reports 7–9 · Compound per Report 10. If any moves, **stop**.
+
+## Do not touch
+
+`mgmt_moulding_summary`'s eleven exported symbols (GOM depends on them) · `tank_reconcile.py` / R-39 (**R-41**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` (**R-18**) · `mp_*.py` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · the `_failed_pairs` guard · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Both blocks against the figures above · PPR's source · which denominator was used for Av. Run Hour Per Mould and why · the PPR-omission note as it renders · confirmation that Output (KG) reconciles to 366,015 and no existing figure moved.
