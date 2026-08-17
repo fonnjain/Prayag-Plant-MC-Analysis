@@ -1096,18 +1096,92 @@ def serial_garden(ym: str) -> _SheetFlagPair:
             sections=[Section(r23_cols, r23_data)],
         ))
 
-    # ---- Note: per-machine tabs require builder extension ----
-    sheets.append(ReportSheet(
-        name="Note on Omitted Tabs",
-        title="Garden — Tabs Requiring Per-Machine Data",
-        note=(
-            "The following tabs are specified for this report but require "
-            "per-machine monthly breakdowns that the build_garden_summary "
-            "builder does not yet expose: HOURS, OUTPUT, MC-1, MC-2, MC-3, "
-            "MC-4. These will be added when the builder is extended to return "
-            "per-machine sections."
-        ),
-    ))
+    # ---- Per-machine tabs (HOURS / OUTPUT / MC-n) ----
+    by_machine = sec.get("by_machine") or {}
+
+    def _mc_short_g(name: str) -> str:
+        """'GARDEN M/C - 1' → 'MC-1'"""
+        tail = name.rsplit("-", 1)[-1].strip()
+        return f"MC-{tail}" if tail.isdigit() else name
+
+    sorted_mcs_g = sorted(
+        by_machine.keys(),
+        key=lambda n: int(n.rsplit("-", 1)[-1].strip())
+            if n.rsplit("-", 1)[-1].strip().isdigit() else 0,
+    )
+
+    if sorted_mcs_g:
+        _mc_month_lbls_g = [r["month_lbl"]
+                            for r in (by_machine[sorted_mcs_g[0]].get("month_rows") or [])]
+
+        # HOURS pivot — machines as rows, months as columns
+        hrs_cols_g = (
+            [Column("machine", "Machine", "text", width=14)] +
+            [Column(lbl, lbl, "int") for lbl in _mc_month_lbls_g] +
+            [Column("_total", "TOTAL", "int", total=True)]
+        )
+        hrs_rows_g = []
+        for mc in sorted_mcs_g:
+            row: dict = {"machine": _mc_short_g(mc)}
+            tot = 0.0
+            for r in by_machine[mc].get("month_rows") or []:
+                row[r["month_lbl"]] = r.get("run_hrs")
+                tot += r.get("run_hrs") or 0.0
+            row["_total"] = tot or None
+            hrs_rows_g.append(row)
+        sheets.append(ReportSheet(
+            name="HOURS",
+            title=f"Garden — Run Hours by Machine — {fy_lbl}",
+            subtitle="Monthly run hours per machine (from Daily Report matrix).",
+            sections=[Section(hrs_cols_g, hrs_rows_g)],
+        ))
+
+        # OUTPUT pivot — machines as rows, months as columns (net KG)
+        out_cols_g = (
+            [Column("machine", "Machine", "text", width=14)] +
+            [Column(lbl, lbl, "kg") for lbl in _mc_month_lbls_g] +
+            [Column("_total", "TOTAL", "kg", total=True)]
+        )
+        out_rows_g = []
+        for mc in sorted_mcs_g:
+            row = {"machine": _mc_short_g(mc)}
+            tot = 0.0
+            for r in by_machine[mc].get("month_rows") or []:
+                row[r["month_lbl"]] = r.get("net_kg")
+                tot += r.get("net_kg") or 0.0
+            row["_total"] = tot or None
+            out_rows_g.append(row)
+        sheets.append(ReportSheet(
+            name="OUTPUT",
+            title=f"Garden — Net KG Output by Machine — {fy_lbl}",
+            subtitle="Monthly net output (KG) per machine (block tab basis).",
+            sections=[Section(out_cols_g, out_rows_g)],
+        ))
+
+        # MC-n detail tabs — months as rows, per-machine summary columns
+        mc_cols_g = [
+            Column("month_lbl",    "Month",          "text", width=10),
+            Column("run_hrs",      "Run Hours",      "int",  total=True),
+            Column("net_kg",       "Net KG",         "kg",   total=True),
+            Column("reject_kg",    "Reject KG",      "kg",   total=True),
+            Column("gross_kg",     "Gross KG",       "kg",   total=True),
+            Column("rej_pct_gross","Rej % (gross)",  "pct"),
+        ]
+        for mc in sorted_mcs_g:
+            mc_data   = by_machine[mc]
+            mc_short  = _mc_short_g(mc)
+            tab_name  = mc_short.replace("/", "-").replace(" ", "")  # "MC-1"
+            mc_drows  = [_row(r, [c.key for c in mc_cols_g])
+                         for r in (mc_data.get("month_rows") or [])]
+            mc_tot    = _row(mc_data.get("total_row") or {}, [c.key for c in mc_cols_g])
+            mc_tot["month_lbl"] = "TOTAL"
+            sheets.append(ReportSheet(
+                name=tab_name,
+                title=f"Garden — {mc_short} — Monthly Detail — {fy_lbl}",
+                subtitle=f"Monthly output, rejection and run hours for {mc_short}.",
+                sections=[Section(mc_cols_g, mc_drows,
+                                  mc_tot if mc_data.get("total_row") else None)],
+            ))
 
     return sheets, flags
 
@@ -1194,19 +1268,156 @@ def serial_hdpe(ym: str) -> _SheetFlagPair:
         cell_comments=sum_cell_comments,
     ))
 
-    # ---- Note: per-machine tabs require builder extension ----
-    sheets.append(ReportSheet(
-        name="Note on Omitted Tabs",
-        title="HDPE — Tabs Requiring Per-Machine Data",
-        note=(
-            "The following tabs are specified for this report but require "
-            "per-machine monthly breakdowns that the build_hdpe_summary "
-            "builder does not yet expose: SUMMARY-1, HOURS, OUTPUT, "
-            "MC-1, MC-2, MC-3, MC-4, MC-5, MC-6. "
-            "These will be added when the builder is extended to return "
-            "per-machine sections."
-        ),
-    ))
+    # ---- SUMMARY-1 tab — DR vs block-tab reconciliation ----
+    r23_rows_h = [r for r in all_rows if r.get("r23_has_data")]
+    if r23_rows_h:
+        r23_cols_h = [
+            Column("month_lbl",  "Month",        "text", width=10),
+            Column("net_kg",     "Our Net KG",   "kg"),
+            Column("dr_net_kg",  "DR Net KG",    "kg"),
+            Column("gross_kg",   "Our Gross KG", "kg"),
+            Column("dr_gross_kg","DR Gross KG",  "kg"),
+        ]
+        r23_data_h = [_row(r, [c.key for c in r23_cols_h]) for r in r23_rows_h]
+        for r in r23_rows_h:
+            if r.get("r23_differs"):
+                flags.append(Flag(
+                    rule="R-23",
+                    section="SUMMARY-1",
+                    month=str(r.get("month_lbl") or ""),
+                    our_figure=f"{r.get('net_kg',0):,.0f} kg",
+                    source_figure=f"{r.get('dr_net_kg',0):,.0f} kg (DR)",
+                    difference=(
+                        f"{(r.get('net_kg',0) or 0) - (r.get('dr_net_kg',0) or 0):,.0f} kg"
+                    ),
+                    note=(
+                        "HDPE block-tab net KG differs from DR-basis net. "
+                        "JUL: DR is unmaintained (0) vs our 22,448.04 kg from block tabs."
+                    ),
+                    cell_comment="R-23: DR basis ≠ block-tab output — see Notes.",
+                ))
+        sheets.append(ReportSheet(
+            name="SUMMARY-1",
+            title=f"HDPE — DR vs Block-Tab Reconciliation — {fy_lbl}",
+            subtitle=(
+                "R-23 check: Daily Report basis (what the sheet SUMMARY reads) "
+                "vs our block-tab computed figures. JUL 22,448.04 kg is correct; "
+                "the DR is unmaintained for HDPE."
+            ),
+            sections=[Section(r23_cols_h, r23_data_h)],
+        ))
+
+    # ---- Per-machine tabs (HOURS / OUTPUT / MC-n) ----
+    by_machine_h = sec.get("by_machine") or {}
+
+    def _mc_short_h(name: str) -> str:
+        """'HDPE M/C - 2' → 'MC-2'"""
+        tail = name.rsplit("-", 1)[-1].strip()
+        return f"MC-{tail}" if tail.isdigit() else name
+
+    sorted_mcs_h = sorted(
+        by_machine_h.keys(),
+        key=lambda n: int(n.rsplit("-", 1)[-1].strip())
+            if n.rsplit("-", 1)[-1].strip().isdigit() else 0,
+    )
+
+    if sorted_mcs_h:
+        _mc_month_lbls_h = [r["month_lbl"]
+                            for r in (by_machine_h[sorted_mcs_h[0]].get("month_rows") or [])]
+
+        # HOURS pivot
+        hrs_cols_h = (
+            [Column("machine", "Machine", "text", width=14)] +
+            [Column(lbl, lbl, "int") for lbl in _mc_month_lbls_h] +
+            [Column("_total", "TOTAL", "int", total=True)]
+        )
+        hrs_rows_h = []
+        for mc in sorted_mcs_h:
+            row: dict = {"machine": _mc_short_h(mc)}
+            tot = 0.0
+            for r in by_machine_h[mc].get("month_rows") or []:
+                lbl = r["month_lbl"]
+                rh  = None if r.get("is_idle") else r.get("run_hrs")
+                row[lbl] = "IDLE" if r.get("is_idle") else rh
+                tot += rh or 0.0
+            row["_total"] = tot or None
+            hrs_rows_h.append(row)
+        sheets.append(ReportSheet(
+            name="HOURS",
+            title=f"HDPE — Run Hours by Machine — {fy_lbl}",
+            subtitle=(
+                "Monthly run hours per machine (Daily Report matrix join). "
+                "APR and JUN: IDLE (machines genuinely not running)."
+            ),
+            sections=[Section(hrs_cols_h, hrs_rows_h)],
+        ))
+
+        # OUTPUT pivot
+        out_cols_h = (
+            [Column("machine", "Machine", "text", width=14)] +
+            [Column(lbl, lbl, "kg") for lbl in _mc_month_lbls_h] +
+            [Column("_total", "TOTAL", "kg", total=True)]
+        )
+        out_rows_h = []
+        for mc in sorted_mcs_h:
+            row = {"machine": _mc_short_h(mc)}
+            tot = 0.0
+            for r in by_machine_h[mc].get("month_rows") or []:
+                lbl = r["month_lbl"]
+                nk  = r.get("net_kg")
+                row[lbl] = "IDLE" if r.get("is_idle") else nk
+                tot += nk or 0.0
+            row["_total"] = tot or None
+            out_rows_h.append(row)
+        sheets.append(ReportSheet(
+            name="OUTPUT",
+            title=f"HDPE — Net KG Output by Machine — {fy_lbl}",
+            subtitle=(
+                "Monthly net output (KG) per machine (block tab basis). "
+                "APR and JUN: IDLE. JUL M/C-2: rejection tracked as n/a."
+            ),
+            sections=[Section(out_cols_h, out_rows_h)],
+        ))
+
+        # MC-n detail tabs
+        mc_cols_h = [
+            Column("month_lbl",    "Month",          "text", width=10),
+            Column("run_hrs",      "Run Hours",      "int",  total=True),
+            Column("net_kg",       "Net KG",         "kg",   total=True),
+            Column("reject_kg",    "Reject KG",      "kg",   total=True),
+            Column("gross_kg",     "Gross KG",       "kg",   total=True),
+            Column("rej_pct_gross","Rej % (gross)",  "pct"),
+        ]
+        for mc in sorted_mcs_h:
+            mc_data   = by_machine_h[mc]
+            mc_short  = _mc_short_h(mc)
+            tab_name  = mc_short.replace("/", "-").replace(" ", "")
+            mc_drows: list = []
+            for r in (mc_data.get("month_rows") or []):
+                drow = _row(r, [c.key for c in mc_cols_h])
+                if r.get("is_idle"):
+                    drow["net_kg"] = "IDLE"
+                    drow["reject_kg"] = "IDLE"
+                    drow["gross_kg"] = "IDLE"
+                    drow["rej_pct_gross"] = "IDLE"
+                elif r.get("has_unknown_rej"):
+                    drow["rej_pct_gross"] = "n/a"
+                mc_drows.append(drow)
+            mc_tot = _row(mc_data.get("total_row") or {}, [c.key for c in mc_cols_h])
+            mc_tot["month_lbl"] = "TOTAL"
+            if mc_data.get("total_row", {}).get("has_unknown_rej"):
+                mc_tot["rej_pct_gross"] = "n/a"
+            sheets.append(ReportSheet(
+                name=tab_name,
+                title=f"HDPE — {mc_short} — Monthly Detail — {fy_lbl}",
+                subtitle=(
+                    f"Monthly output, rejection and run hours for {mc_short}. "
+                    "APR/JUN: IDLE. JUL M/C-2: rejection 'n/a' "
+                    "(column present but blank — R-08)."
+                ),
+                sections=[Section(mc_cols_h, mc_drows,
+                                  mc_tot if mc_data.get("total_row") else None)],
+            ))
 
     return sheets, flags
 
@@ -1468,14 +1679,17 @@ def serial_ptmt_moulds(ym: str) -> _SheetFlagPair:
     # Add note about omitted tabs
     sheets.append(ReportSheet(
         name="Note on Omitted Tabs",
-        title="PTMT — Tabs Requiring Per-Machine Data",
+        title="PTMT — Tabs Not Produced (Pipeline Gap)",
         note=(
-            "The source workbook contains MC Utilization, Month Wise MC, "
-            "Group Wise, and Material Wise tabs. These require per-machine "
-            "monthly data that is not currently available from the "
-            "build_ptmt_summary builder output. Only the SUMMARY tab is "
-            "produced here. The web-based management report page shows the "
-            "same SUMMARY-level figures."
+            "The source workbook contains four tabs not produced here: "
+            "MC Utilization, Month Wise MC, GROUP WISE, and MATERIAL WISE. "
+            "Unlike Garden and HDPE — where machine-grain daily records exist "
+            "and per-machine tabs have now been added — PTMT has no per-machine "
+            "daily production records in the current pipeline. Individual "
+            "mould-to-machine assignment is not tracked at the daily record "
+            "level, so these tabs cannot be derived from the same sources as "
+            "the rest of the report. Only the SUMMARY tab is produced here; "
+            "it matches the web-page figures."
         ),
     ))
 
@@ -1614,7 +1828,7 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
         sheets.append(ReportSheet(name="SUMMARY",
                                   title=f"Pipe Moulds Summary — {fy_lbl}"))
 
-    # ---- Per-FY block tabs ----
+    # ---- Per-material tabs (source workbook layout: one tab per material) ----
     pm_cols = [
         Column("material",  "Material",     "text", width=14),
         Column("n_total",   "Total Moulds", "int",  total=True),
@@ -1625,21 +1839,14 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
         Column("kg",        "KG",           "kg",   total=True),
         Column("avg_month", "Avg / Month",  "rate"),
     ]
+    fy_abbrev = f"{fy[:2]}-{fy[2:]}"   # "2627" → "26-27"
+
+    # Collect flags and shared provenance from all blocks first
+    shared_prov: list = []
     for block in blocks:
         if not isinstance(block, dict):
             continue
         period_lbl = block.get("period_label") or block.get("fy_key") or "FY"
-        blk_rows = block.get("rows") or []
-        blk_total = block.get("total_row") or {}
-        missing = block.get("missing") or []
-        unavail = block.get("unavailable") or []
-
-        b_data = [_row(r, [c.key for c in pm_cols]) for r in blk_rows
-                  if isinstance(r, dict)]
-        b_totrow = _row(blk_total, [c.key for c in pm_cols])
-        b_totrow["material"] = "TOTAL"
-
-        # PPR missing flag
         if not block.get("has_ppr"):
             flags.append(Flag(
                 rule="PPR-Missing",
@@ -1652,32 +1859,64 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
                      "It is excluded from the TOTAL.",
                 cell_comment="PPR excluded from TOTAL — data unavailable.",
             ))
-        for mv in missing:
-            flags.append(Flag(rule="Missing", section=period_lbl,
-                              note=str(mv)))
-        for uv in unavail:
-            flags.append(Flag(rule="Unavailable", section=period_lbl,
-                              note=str(uv)))
+        for mv in (block.get("missing") or []):
+            flags.append(Flag(rule="Missing", section=period_lbl, note=str(mv)))
+        for uv in (block.get("unavailable") or []):
+            flags.append(Flag(rule="Unavailable", section=period_lbl, note=str(uv)))
+        if not shared_prov:
+            if d.get("sourcing_note"):
+                shared_prov.append(d["sourcing_note"])
+            if d.get("defect_note"):
+                shared_prov.append(d["defect_note"])
+                flags.append(Flag(rule="Sheet-Defect", section=period_lbl,
+                                  note=d["defect_note"]))
+            if d.get("hours_note"):
+                shared_prov.append(d["hours_note"])
 
-        prov = []
-        if d.get("sourcing_note"):
-            prov = [d["sourcing_note"]]
-        if d.get("defect_note"):
-            prov.append(d["defect_note"])
-            flags.append(Flag(
-                rule="Sheet-Defect",
-                section=period_lbl,
-                note=d["defect_note"],
-            ))
-        if d.get("hours_note"):
-            prov.append(d["hours_note"])
+    # Collect materials: spec order is CPVC, UPVC, AGRI, SWR, PPR.
+    # Any extra materials from the builder are appended after in source order.
+    _SPEC_ORDER = ["CPVC", "UPVC", "AGRI", "SWR", "PPR"]
+    seen_mats: set = set()
+    all_mats_from_blocks: list = []
+    for block in blocks:
+        for row in (block.get("rows") or []):
+            mat = row.get("material")
+            if mat and mat != "TOTAL" and mat not in seen_mats:
+                seen_mats.add(mat)
+                all_mats_from_blocks.append(mat)
+    materials_order: list = [m for m in _SPEC_ORDER if m in seen_mats] + [
+        m for m in all_mats_from_blocks if m not in _SPEC_ORDER
+    ]
 
+    # One tab per material; both FY periods as sections inside
+    for mat in materials_order:
+        tab_name = f"{mat} Mould Summary ({fy_abbrev})"[:31]
+        sections_pm: list = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            period_lbl = block.get("period_label") or block.get("fy_key") or "FY"
+            fy_key = block.get("fy_key", "")
+            blk_rows = block.get("rows") or []
+            mat_row = next((r for r in blk_rows
+                            if isinstance(r, dict) and r.get("material") == mat), None)
+            if mat_row is not None:
+                data_rows_pm = [_row(mat_row, [c.key for c in pm_cols])]
+            else:
+                absent = {c.key: None for c in pm_cols}
+                absent["material"] = "⚠ unavailable"
+                data_rows_pm = [absent]
+            heading = (
+                f"{period_lbl} — R-03: closed FY25-26 annual workbook"
+                if fy_key == "2526" else period_lbl
+            )
+            sections_pm.append(Section(pm_cols, data_rows_pm, heading=heading))
         sheets.append(ReportSheet(
-            name=period_lbl[:31],
-            title=f"Pipe Moulds — {period_lbl} — {fy_lbl}",
-            subtitle="Mould run count, hours, pieces and KG by material.",
-            sections=[Section(pm_cols, b_data, b_totrow if blk_total else None)],
-            provenance=prov,
+            name=tab_name,
+            title=f"Pipe Moulds — {mat} — {fy_lbl}",
+            subtitle=f"Both FY periods for {mat}. FY25-26 sourced from closed annual (R-03).",
+            sections=sections_pm,
+            provenance=shared_prov,
         ))
 
     return sheets, flags

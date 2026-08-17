@@ -91,17 +91,18 @@ def _fsum(rows: list, key: str) -> Optional[float]:
 
 # ── Core data accumulator ──────────────────────────────────────────────────────
 
-def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict, dict]:
+def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict, dict, dict]:
     """Accumulate per-ym totals from daily Garden records.
 
     Returns:
-      kh_net     {ym: float}  — block-tab net output (plant=GARDEN, KH only)
-      kh_reject  {ym: float}  — rejection from Daily Report join
-      kh_run_hrs {ym: float}  — run hours from Daily Report
-      wb_net     {ym: float}  — West Bengal net output (plant=GARDEN_WB)
-      wb_reject  {ym: float}  — WB rejection
-      kh_dr_net  {ym: float}  — Daily Report basis net output (sum of r.reject_denominator)
-                                 0.0 for months where DR was not filled (e.g. May)
+      kh_net        {ym: float}  — block-tab net output (plant=GARDEN, KH only)
+      kh_reject     {ym: float}  — rejection from Daily Report join
+      kh_run_hrs    {ym: float}  — run hours from Daily Report
+      wb_net        {ym: float}  — West Bengal net output (plant=GARDEN_WB)
+      wb_reject     {ym: float}  — WB rejection
+      kh_dr_net     {ym: float}  — DR-basis net output (sum of r.reject_denominator)
+                                   0.0 for months where DR was not filled (e.g. May)
+      kh_by_machine {ym: {machine: {net, reject, run_hrs}}}  — per-machine grain
     """
     kh_net: dict[str, float]    = {}
     kh_reject: dict[str, float] = {}
@@ -109,6 +110,7 @@ def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict, dict]:
     wb_net: dict[str, float]    = {}
     wb_reject: dict[str, float] = {}
     kh_dr_net: dict[str, float] = {}   # live DR-basis net — replaces hardcoded constants
+    kh_by_machine: dict = {}           # ym -> machine_label -> {net, reject, run_hrs}
 
     for r in records:
         ym = getattr(r, "period", None)
@@ -116,20 +118,33 @@ def _accumulate_garden(records) -> tuple[dict, dict, dict, dict, dict, dict]:
             continue
 
         if r.plant == "GARDEN":
-            kh_net[ym]    = kh_net.get(ym, 0.0)    + float(r.total_count      or 0.0)
-            kh_reject[ym] = kh_reject.get(ym, 0.0) + float(r.reject_count     or 0.0)
-            kh_run_hrs[ym] = kh_run_hrs.get(ym, 0.0) + float(r.actual_hours   or 0.0)
+            tc  = float(r.total_count      or 0.0)
+            rc  = float(r.reject_count     or 0.0)
+            rh  = float(r.actual_hours     or 0.0)
+            rd  = float(r.reject_denominator or 0.0)
+
+            kh_net[ym]    = kh_net.get(ym, 0.0)    + tc
+            kh_reject[ym] = kh_reject.get(ym, 0.0) + rc
+            kh_run_hrs[ym] = kh_run_hrs.get(ym, 0.0) + rh
             # r.reject_denominator = DR output per machine-date (sheets.py L1866/L1908).
             # Summing this over all GARDEN records for a month gives DR-basis net output.
             # For months where the DR was not filled (May), all records default to 0.0,
             # so kh_dr_net[ym] = 0.0 — correct: the DR genuinely shows zero for that month.
-            kh_dr_net[ym] = kh_dr_net.get(ym, 0.0) + float(r.reject_denominator or 0.0)
+            kh_dr_net[ym] = kh_dr_net.get(ym, 0.0) + rd
+
+            machine = getattr(r, "machine", None) or "?"
+            mc_d = kh_by_machine.setdefault(ym, {}).setdefault(
+                machine, {"net": 0.0, "reject": 0.0, "run_hrs": 0.0}
+            )
+            mc_d["net"]     += tc
+            mc_d["reject"]  += rc
+            mc_d["run_hrs"] += rh
 
         elif r.plant == "GARDEN_WB":
             wb_net[ym]    = wb_net.get(ym, 0.0)    + float(r.total_count  or 0.0)
             wb_reject[ym] = wb_reject.get(ym, 0.0) + float(r.reject_count or 0.0)
 
-    return kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net
+    return kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net, kh_by_machine
 
 
 # ── Section builder ────────────────────────────────────────────────────────────
@@ -143,10 +158,12 @@ def _build_section(
     wb_reject: dict,
     garden_labour: dict,
     kh_dr_net: dict,
+    kh_by_machine: dict | None = None,
 ) -> dict:
-    """Build monthly rows (APR-MAR order) + TOTAL row.
+    """Build monthly rows (APR-MAR order) + TOTAL row + per-machine sections.
 
     month_rows_display is the same list reversed (MAR→APR) for template rendering.
+    by_machine: {machine_label: {month_rows, total_row}} — for HOURS/OUTPUT/MC-n tabs.
     """
     fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
     fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
@@ -278,10 +295,55 @@ def _build_section(
         "dr_net_kg":          t_dr_net,   # for banner: total DR-basis net across active months
     }
 
+    # ── Per-machine breakdown (for HOURS / OUTPUT / MC-n export tabs) ─────────────
+    # Collect all machines seen across all months, sorted by trailing number.
+    _all_mc = sorted(
+        {mc for ym_d in (kh_by_machine or {}).values() for mc in ym_d},
+        key=lambda n: int(n.rsplit("-", 1)[-1].strip())
+            if n.rsplit("-", 1)[-1].strip().isdigit() else 0,
+    )
+    by_machine: dict = {}
+    for mc_label in _all_mc:
+        mc_month_rows: list = []
+        mc_net_t = mc_rej_t = mc_rh_t = 0.0
+        for lbl in MONTH_LABELS:
+            ym     = fy_ym.get(lbl)
+            mc_d   = (kh_by_machine or {}).get(ym, {}).get(mc_label, {})
+            net    = mc_d.get("net")    or None
+            rej    = mc_d.get("reject") or None
+            rh     = mc_d.get("run_hrs") or None
+            gross  = ((net or 0.0) + (rej or 0.0)) or None
+            rp_g   = (_safe_div(rej, gross) * 100) if (rej and gross) else None
+            mc_month_rows.append({
+                "month_lbl": lbl, "ym": ym,
+                "run_hrs":      rh,
+                "net_kg":       net,
+                "reject_kg":    rej,
+                "gross_kg":     gross,
+                "rej_pct_gross": rp_g,
+            })
+            if net: mc_net_t += net
+            if rej: mc_rej_t += rej
+            if rh:  mc_rh_t  += rh
+        mc_gross_t = (mc_net_t + mc_rej_t) or None
+        by_machine[mc_label] = {
+            "month_rows": mc_month_rows,
+            "total_row": {
+                "month_lbl":    "TOTAL", "ym": None,
+                "run_hrs":      mc_rh_t  or None,
+                "net_kg":       mc_net_t or None,
+                "reject_kg":    mc_rej_t or None,
+                "gross_kg":     mc_gross_t,
+                "rej_pct_gross": (_safe_div(mc_rej_t, mc_gross_t) * 100)
+                    if (mc_rej_t and mc_gross_t) else None,
+            },
+        }
+
     return {
         "month_rows":         month_rows,
         "month_rows_display": list(reversed(month_rows)),  # latest-first for template
         "total_row":          total_row,
+        "by_machine":         by_machine,
     }
 
 
@@ -309,7 +371,8 @@ def _do_build(fy: str) -> dict:
     )
     failed_yms = sorted({ym for p, ym in _failed_pairs if p in {"GARDEN", "GARDEN_WB"}})
 
-    kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net = _accumulate_garden(daily_all)
+    kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net, kh_by_machine = \
+        _accumulate_garden(daily_all)
 
     # Segment Cost workbook — "Garden Pipe" tab (R-11)
     try:
@@ -320,7 +383,8 @@ def _do_build(fy: str) -> dict:
         garden_labour = {}
 
     section = _build_section(
-        fy, kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, garden_labour, kh_dr_net
+        fy, kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, garden_labour, kh_dr_net,
+        kh_by_machine=kh_by_machine,
     )
 
     return {

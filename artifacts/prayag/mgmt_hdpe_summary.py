@@ -99,7 +99,7 @@ def _fsum(rows: list, key: str) -> Optional[float]:
 
 # ── Core data accumulator ──────────────────────────────────────────────────────
 
-def _accumulate_hdpe(records) -> tuple[dict, dict, dict, dict, dict]:
+def _accumulate_hdpe(records) -> tuple[dict, dict, dict, dict, dict, dict]:
     """Accumulate per-ym totals from daily HDPE records.
 
     Returns:
@@ -109,12 +109,14 @@ def _accumulate_hdpe(records) -> tuple[dict, dict, dict, dict, dict]:
       kh_dr_net       {ym: float}  — DR-basis net (reject_denominator sum) for R-23 comparison
       has_unknown_rej {ym: bool}   — True if any machine had output but blank rejection column
                                      (rejection_tracked=False AND reject_count==0 AND output>0)
+      kh_by_machine   {ym: {machine: {net, reject, run_hrs, has_unknown_rej}}}  — per-machine grain
     """
     kh_net: dict[str, float]          = {}
     kh_reject: dict[str, float]       = {}
     kh_run_hrs: dict[str, float]      = {}
     kh_dr_net: dict[str, float]       = {}
     has_unknown_rej: dict[str, bool]  = {}
+    kh_by_machine: dict               = {}   # ym -> machine_label -> {net, reject, run_hrs, has_unknown_rej}
 
     for r in records:
         ym = getattr(r, "period", None)
@@ -141,10 +143,21 @@ def _accumulate_hdpe(records) -> tuple[dict, dict, dict, dict, dict]:
         #            AND reject_count == 0 (block tab column present but empty).
         # This fires on JUL M/C-2 (516.76 kg output, blank rejection column).
         # It does NOT fire on JUL M/C-1 (reject_count=3782 from block tab → non-zero).
-        if tc > 0.0 and not r.rejection_tracked and rc == 0.0:
+        unk_rej_mc = tc > 0.0 and not r.rejection_tracked and rc == 0.0
+        if unk_rej_mc:
             has_unknown_rej[ym] = True
 
-    return kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej
+        machine = getattr(r, "machine", None) or "?"
+        mc_d = kh_by_machine.setdefault(ym, {}).setdefault(
+            machine, {"net": 0.0, "reject": 0.0, "run_hrs": 0.0, "has_unknown_rej": False}
+        )
+        mc_d["net"]             += tc
+        mc_d["reject"]          += rc
+        mc_d["run_hrs"]         += rh
+        if unk_rej_mc:
+            mc_d["has_unknown_rej"] = True
+
+    return kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej, kh_by_machine
 
 
 # ── Section builder ────────────────────────────────────────────────────────────
@@ -157,8 +170,14 @@ def _build_section(
     kh_dr_net: dict,
     has_unknown_rej: dict,
     hdpe_labour: dict,
+    kh_by_machine: dict | None = None,
 ) -> dict:
-    """Build monthly rows (APR-MAR order) + TOTAL row."""
+    """Build monthly rows (APR-MAR order) + TOTAL row + per-machine sections.
+
+    by_machine: {machine_label: {month_rows, total_row}} — for HOURS/OUTPUT/MC-n tabs.
+    Idle months (APR, JUN) carry is_idle=True in per-machine rows.
+    JUL M/C-2: has_unknown_rej → rej_pct_gross = 'n/a', never 0.
+    """
     fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
     fy_disp = _FY_DISP.get(fy, _FY_DISP["2627"])
     idle    = _IDLE_MONTHS.get(fy, frozenset())
@@ -290,10 +309,67 @@ def _build_section(
         "per_kg_cost":        _safe_div(t_wages, t_gross),
     }
 
+    # ── Per-machine breakdown (for HOURS / OUTPUT / MC-n export tabs) ─────────────
+    # Collect all machines, sorted by trailing number.
+    _all_mc = sorted(
+        {mc for ym_d in (kh_by_machine or {}).values() for mc in ym_d},
+        key=lambda n: int(n.rsplit("-", 1)[-1].strip())
+            if n.rsplit("-", 1)[-1].strip().isdigit() else 0,
+    )
+    by_machine: dict = {}
+    for mc_label in _all_mc:
+        mc_rows: list = []
+        mc_net_t = mc_rej_t = mc_rh_t = 0.0
+        mc_has_unk = False
+        for lbl in MONTH_LABELS:
+            ym        = fy_ym.get(lbl)
+            is_mc_idle = ym in idle
+            mc_d      = (kh_by_machine or {}).get(ym, {}).get(mc_label, {})
+            net       = (mc_d.get("net")     or None) if not is_mc_idle else None
+            rej       = (mc_d.get("reject")  or None) if not is_mc_idle else None
+            rh        = (mc_d.get("run_hrs") or None) if not is_mc_idle else None
+            unk       = mc_d.get("has_unknown_rej", False)
+            mc_has_unk = mc_has_unk or unk
+            gross     = ((net or 0.0) + (rej or 0.0)) or None
+            rej_pct   = (
+                "n/a" if unk
+                else ((_safe_div(rej, gross) * 100) if (rej and gross) else None)
+            )
+            mc_rows.append({
+                "month_lbl":       lbl, "ym": ym, "is_idle": is_mc_idle,
+                "run_hrs":         rh,
+                "net_kg":          net,
+                "reject_kg":       rej,
+                "gross_kg":        gross,
+                "rej_pct_gross":   rej_pct,
+                "has_unknown_rej": unk,
+            })
+            if net: mc_net_t += net
+            if rej: mc_rej_t += rej
+            if rh:  mc_rh_t  += rh
+        mc_gross_t = (mc_net_t + mc_rej_t) or None
+        by_machine[mc_label] = {
+            "month_rows": mc_rows,
+            "total_row": {
+                "month_lbl":       "TOTAL", "ym": None, "is_idle": False,
+                "run_hrs":         mc_rh_t  or None,
+                "net_kg":          mc_net_t or None,
+                "reject_kg":       mc_rej_t or None,
+                "gross_kg":        mc_gross_t,
+                "rej_pct_gross":   (
+                    "n/a" if mc_has_unk
+                    else (_safe_div(mc_rej_t, mc_gross_t) * 100
+                          if (mc_rej_t and mc_gross_t) else None)
+                ),
+                "has_unknown_rej": mc_has_unk,
+            },
+        }
+
     return {
         "month_rows":         month_rows,
         "month_rows_display": list(reversed(month_rows)),   # latest-first for template
         "total_row":          total_row,
+        "by_machine":         by_machine,
     }
 
 
@@ -321,7 +397,8 @@ def _do_build(fy: str) -> dict:
     )
     failed_yms = sorted({ym for p, ym in _failed_pairs if p == "HDPE"})
 
-    kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej = _accumulate_hdpe(daily_all)
+    kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej, kh_by_machine = \
+        _accumulate_hdpe(daily_all)
 
     # Segment Cost workbook — dedicated "HDPE Pipe" tab (R-11, not a UNIT roll-up)
     try:
@@ -332,7 +409,8 @@ def _do_build(fy: str) -> dict:
         hdpe_labour = {}
 
     section = _build_section(
-        fy, kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej, hdpe_labour
+        fy, kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej, hdpe_labour,
+        kh_by_machine=kh_by_machine,
     )
 
     return {

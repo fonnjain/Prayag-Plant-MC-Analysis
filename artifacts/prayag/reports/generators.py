@@ -309,118 +309,204 @@ def gen_segment_labour(rid, label, plant, ym) -> ReportModel:
 # ============================================================================
 def gen_compound(rid, label, plant, ym) -> ReportModel:
     """Compound mass-balance summary — recomputed from Pipe & Fitting daily
-    mixer-logbook tabs (Reports 6–10, CG 122).  One row per compound; columns
-    are Opening, Batch, Given, Closing, Loss (kg) and Loss %.  A second sheet
-    shows the raw-material chemical breakdown across all compounds.
+    mixer-logbook tabs (Reports 6–10, CG 122).
+
+    TOTAL tab: full-FY aggregate across all 12 months.
+    Monthly tabs (APR-26 … MAR-27): per-month balance + raw-material breakdown.
+    Months with no data show the row structure with blank cells — never zeros
+    (R-07/R-08).
 
     No dedicated mgmt_*.py builder exists; this uses the compound module
     directly — the same path as the /compound web page.
+
+    gen_compound and gen_ptmt_eff are the two reports that cannot be trivially
+    routed through a serial_* function because they have no mgmt_*.py builder.
+    Moving them would require creating a new mgmt_compound.py / mgmt_ptmt_eff.py
+    wrapper, which is out of scope here (the constraint is "do not touch
+    mgmt_*.py builder calculations"). The inline path is retained intentionally.
     """
     import compound as _cmpd
+
+    # ── Compute all 12 FY months from the requested ym ─────────────────────────
     try:
-        data = sheets.load_compound_data([ym])
+        yr, mo = int(ym[:4]), int(ym[5:7])
+    except Exception:
+        yr, mo = 2026, 7
+    fy_start = yr if mo >= 4 else yr - 1
+    _MO_ABBR = {1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
+                7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"}
+    fy_months = (
+        [f"{fy_start}-{m:02d}" for m in range(4, 13)] +
+        [f"{fy_start + 1}-{m:02d}" for m in range(1, 4)]
+    )
+
+    def _tab_label(m_ym: str) -> str:
+        try:
+            my, mm = int(m_ym[:4]), int(m_ym[5:7])
+            return f"{_MO_ABBR[mm]}-{str(my)[-2:]}"
+        except Exception:
+            return m_ym
+
+    # Load all FY months in a single Sheets call
+    try:
+        data = sheets.load_compound_data(fy_months)
     except sheets.SheetReadError as e:
         return _awaiting(rid, label, plant, ym, str(e))
 
-    comp = _cmpd.build_compilation(data["by_compound"], data["months"])
-    if not comp.get("has_data"):
+    by_compound = data["by_compound"]
+    got_months  = set(data.get("months") or [])
+
+    # Full-FY compilation for TOTAL tab
+    fy_comp = _cmpd.build_compilation(by_compound, fy_months)
+    if not fy_comp.get("has_data"):
         return _awaiting(rid, label, plant, ym,
-                         "No compound data found for this month.")
+                         "No compound data found for this financial year.")
 
-    # --- Sheet 1: per-compound balance summary ---
-    bal_cols = [
-        Column("cmp",      "Compound",      "text", width=16),
-        Column("opening",  "Opening (kg)",  "kg"),
-        Column("batch",    "Batch (kg)",    "kg",   total=True),
-        Column("given",    "Given (kg)",    "kg",   total=True),
-        Column("closing",  "Closing (kg)", "kg"),
-        Column("loss_kg",  "Loss (kg)",    "kg",   total=True),
-        Column("loss_pct", "Loss %",        "pct"),
-    ]
-    bal_rows = []
-    for c in comp["cols"]:
-        if not c.get("has_data"):
-            continue
-        loss_kg = c.get("batch", 0.0) - c.get("given", 0.0)
-        bal_rows.append({
-            "cmp":      c["label"],
-            "opening":  c.get("opening") or None,
-            "batch":    c.get("batch") or None,
-            "given":    c.get("given") or None,
-            "closing":  c.get("closing") or None,
-            "loss_kg":  loss_kg if (c.get("batch") and c.get("given")) else None,
-            "loss_pct": c.get("loss_pct") or None,
-        })
-    tot = comp["total"]
-    t_batch = tot.get("batch", 0.0) or 0.0
-    t_given = tot.get("given", 0.0) or 0.0
-    bal_total = {
-        "cmp":      "GRAND TOTAL",
-        "opening":  None,
-        "batch":    t_batch or None,
-        "given":    t_given or None,
-        "closing":  None,
-        "loss_kg":  (t_batch - t_given) if (t_batch and t_given) else None,
-        "loss_pct": tot.get("loss_pct") or None,
-    }
-    bal_sheet = ReportSheet(
-        name="Compound Balance",
-        title=f"Compound / Material Balance — {month_disp(ym)}",
-        subtitle="Kaharani · Pipe & Fitting mixer-logbook mass-balance, recomputed "
-                 "from daily tabs (Reports 6–10, CG 122). Closing = Opening + Batch "
-                 "− Given; Loss % = Loss / Batch.",
-        sections=[Section(bal_cols, bal_rows, bal_total)],
-        provenance=[
-            f"Grand batch {t_batch:,.0f} kg · given {t_given:,.0f} kg "
-            f"· loss {(t_batch - t_given):,.0f} kg "
-            f"({(tot.get('loss_pct') or 0)*100:.2f}%).",
-            "Source: Pipe & Fitting daily workbook, mixer-logbook tabs.",
-        ],
-    )
+    # ── Column / row helpers (shared across TOTAL + monthly tabs) ──────────────
+    def _bal_cols():
+        return [
+            Column("cmp",      "Compound",        "text", width=16),
+            Column("opening",  "Opening (kg)",    "kg"),
+            Column("batch",    "Batch (kg)",      "kg",   total=True),
+            Column("given",    "Given (kg)",      "kg",   total=True),
+            Column("closing",  "Closing (kg)",    "kg"),
+            Column("loss_kg",  "Loss (kg)",       "kg",   total=True),
+            Column("loss_pct", "Loss %",          "pct"),
+        ]
 
-    # --- Sheet 2: raw-material chemical breakdown ---
-    mat_items = comp.get("materials", [])
-    cmp_keys  = [c["key"] for c in comp["cols"] if c.get("has_data")]
-    cmp_lbls  = {c["key"]: c["label"] for c in comp["cols"]}
-    mat_cols  = [Column("mat", "Material / Chemical", "text", width=24)]
-    for k in cmp_keys:
-        mat_cols.append(Column(k, cmp_lbls.get(k, k), "kg", total=True))
-    mat_cols.append(Column("_tot", "Total (kg)", "kg", total=True))
-
-    mat_rows = []
-    m_grand: dict = {k: 0.0 for k in cmp_keys}
-    m_grand["_tot"] = 0.0
-    for item in mat_items:
-        row: dict = {"mat": item["name"]}
-        row_tot = 0.0
+    def _mat_cols(comp):
+        """One column per compound that has_data, plus Total."""
+        cmp_keys = [c["key"] for c in comp["cols"] if c.get("has_data")]
+        cmp_lbls = {c["key"]: c["label"] for c in comp["cols"]}
+        cols = [Column("mat", "Material / Chemical", "text", width=24)]
         for k in cmp_keys:
-            v = item["by"].get(k, 0.0)
-            row[k] = v or None
-            row_tot += v
-            m_grand[k] += v
-        row["_tot"] = row_tot or None
-        m_grand["_tot"] += row_tot
-        mat_rows.append(row)
-    mat_total = {k: (m_grand[k] or None) for k in cmp_keys}
-    mat_total["mat"] = "TOTAL"
-    mat_total["_tot"] = m_grand["_tot"] or None
+            cols.append(Column(k, cmp_lbls.get(k, k), "kg", total=True))
+        cols.append(Column("_tot", "Total (kg)", "kg", total=True))
+        return cols, cmp_keys
 
-    mat_sheet = ReportSheet(
-        name="Raw Materials",
-        title=f"Raw Material Breakdown — {month_disp(ym)}",
-        subtitle="Chemical / raw-material usage across compounds. "
-                 "Sourced from the same mixer-logbook tabs as the balance sheet.",
-        sections=[Section(mat_cols, mat_rows, mat_total)],
-    )
+    def _bal_rows_and_total(comp):
+        """Rows = one per compound (all included, blanks for no-data months)."""
+        rows = []
+        for c in comp["cols"]:
+            loss_kg = (c.get("batch") or 0.0) - (c.get("given") or 0.0)
+            rows.append({
+                "cmp":      c["label"],
+                "opening":  c.get("opening") or None,
+                "batch":    c.get("batch") or None,
+                "given":    c.get("given") or None,
+                "closing":  c.get("closing") or None,
+                "loss_kg":  loss_kg if (c.get("batch") and c.get("given")) else None,
+                "loss_pct": c.get("loss_pct") or None,
+            })
+        tot = comp["total"]
+        t_batch = tot.get("batch") or 0.0
+        t_given = tot.get("given") or 0.0
+        total_row = {
+            "cmp":      "GRAND TOTAL",
+            "opening":  None,
+            "batch":    t_batch or None,
+            "given":    t_given or None,
+            "closing":  None,
+            "loss_kg":  (t_batch - t_given) if (t_batch and t_given) else None,
+            "loss_pct": tot.get("loss_pct") or None,
+        }
+        return rows, total_row
 
+    def _mat_rows_and_total(comp, cmp_keys):
+        mat_items = comp.get("materials") or []
+        rows = []
+        m_grand: dict = {k: 0.0 for k in cmp_keys}
+        m_grand["_tot"] = 0.0
+        for item in mat_items:
+            row: dict = {"mat": item["name"]}
+            row_tot = 0.0
+            for k in cmp_keys:
+                v = item["by"].get(k, 0.0)
+                row[k] = v or None
+                row_tot += v
+                m_grand[k] += v
+            row["_tot"] = row_tot or None
+            m_grand["_tot"] += row_tot
+            rows.append(row)
+        mat_total = {k: (m_grand[k] or None) for k in cmp_keys}
+        mat_total["mat"] = "TOTAL"
+        mat_total["_tot"] = m_grand["_tot"] or None
+        return rows, mat_total
+
+    # ── TOTAL tab (full FY) ─────────────────────────────────────────────────────
+    fy_bc = _bal_cols()
+    fy_brows, fy_btot = _bal_rows_and_total(fy_comp)
+    fy_mc, fy_ckeys = _mat_cols(fy_comp)
+    fy_mrows, fy_mtot = _mat_rows_and_total(fy_comp, fy_ckeys)
+    fy_t_batch = fy_comp["total"].get("batch") or 0.0
+    fy_t_given = fy_comp["total"].get("given") or 0.0
+    fy_loss_pct = (fy_comp["total"].get("loss_pct") or 0) * 100
+
+    result_sheets: list = [ReportSheet(
+        name="TOTAL",
+        title=f"Compound Balance — Full FY Total — {fy_start % 100:02d}-{(fy_start+1) % 100:02d}",
+        subtitle=(
+            "Kaharani · Pipe & Fitting mixer-logbook mass-balance, full-FY aggregate. "
+            "Closing = Opening + Batch − Given. "
+            "Loss % = Loss ÷ Batch (UPVC: Loss ÷ Material out of Mixer → 0.51% not 0.50%)."
+        ),
+        sections=[Section(fy_bc, fy_brows, fy_btot),
+                  Section(fy_mc, fy_mrows, fy_mtot)],
+        provenance=[
+            f"Grand batch {fy_t_batch:,.0f} kg · given {fy_t_given:,.0f} kg "
+            f"· loss {(fy_t_batch - fy_t_given):,.0f} kg ({fy_loss_pct:.2f}%).",
+            "Source: Pipe & Fitting daily workbook (Kaharani), mixer-logbook tabs "
+            "(Reports 6–10, CG 122). Same source as the /compound web page.",
+        ],
+    )]
+
+    # ── Monthly tabs (APR-26 … MAR-27) ─────────────────────────────────────────
+    for m_ym in fy_months:
+        tab_lbl  = _tab_label(m_ym)
+        has_data = m_ym in got_months
+        # Filter each compound's parse list to this month only
+        sub = {k: [p for p in plist if p.get("ym") == m_ym]
+               for k, plist in by_compound.items()}
+        mo_comp = _cmpd.build_compilation(sub, [m_ym])
+
+        mo_bc = _bal_cols()
+        if has_data:
+            mo_brows, mo_btot = _bal_rows_and_total(mo_comp)
+            mo_mc, mo_ckeys = _mat_cols(mo_comp)
+            mo_mrows, mo_mtot = _mat_rows_and_total(mo_comp, mo_ckeys)
+            sections_mo = [Section(mo_bc, mo_brows, mo_btot),
+                           Section(mo_mc, mo_mrows, mo_mtot)]
+        else:
+            # Show row structure with blank cells — never zeros (R-07/R-08)
+            mo_brows = [
+                {"cmp": c["label"], "opening": None, "batch": None, "given": None,
+                 "closing": None, "loss_kg": None, "loss_pct": None}
+                for c in _cmpd.COMPOUNDS
+            ]
+            sections_mo = [Section(mo_bc, mo_brows)]
+
+        result_sheets.append(ReportSheet(
+            name=tab_lbl,
+            title=f"Compound Balance — {tab_lbl}",
+            subtitle=(
+                "Monthly mixer-logbook balance. "
+                "Loss = Batch − Material out of Mixer. Loss % = Loss ÷ Batch."
+                if has_data else
+                "No compound data recorded for this month — row structure shown, "
+                "cells blank (R-07/R-08)."
+            ),
+            sections=sections_mo,
+        ))
+
+    t_batch = fy_t_batch
     return ReportModel(rid=rid, label=label, plant=plant, ym=ym,
         month_disp=month_disp(ym),
         cover_source=(
             "Pipe & Fitting daily workbook (Kaharani), mixer-logbook tabs "
             "(Reports 6–10, CG 122). Same source as the /compound web page."
         ),
-        sheets=[bal_sheet, mat_sheet],
-        headline=f"{t_batch:,.0f} kg batch")
+        sheets=result_sheets,
+        headline=f"{t_batch:,.0f} kg batch (FY)")
 
 
 # ============================================================================
