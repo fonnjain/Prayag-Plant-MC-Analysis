@@ -361,7 +361,13 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
         Column("util_pct",  "Util %",        "pct"),
         Column("out_eff",   "Out Eff %",     "pct"),
     ]
-    s3_data = [_row(r, [c.key for c in s3_cols]) for r in s3_groups]
+    def _s3_row(r):
+        row = _row(r, [c.key for c in s3_cols])
+        # "machines" is stored as a list in the builder — join for the cell
+        if isinstance(row.get("machines"), list):
+            row["machines"] = ", ".join(str(m) for m in row["machines"])
+        return row
+    s3_data = [_s3_row(r) for r in s3_groups]
     s3_totrow = _row(s3_total, [c.key for c in s3_cols])
     s3_totrow["type"] = "TOTAL"
     sheets.append(ReportSheet(
@@ -378,6 +384,16 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
     if s4_month_rows and mc_labels:
         mcw_cols = ([Column("month_lbl", "Month", "text", width=10)] +
                     [Column(mc, mc, "num") for mc in mc_labels])
+        def _mc_cell(mc_data):
+            """Scalar from a per-machine cols entry; prefers output over hours."""
+            if not isinstance(mc_data, dict):
+                return _v(mc_data)
+            for _k in ("output_kg", "out", "kg", "val", "hrs"):
+                _v2 = mc_data.get(_k)
+                if _v2 is not None:
+                    return _v(_v2)
+            return _v(None)
+
         mcw_rows = []
         for mo in s4_month_rows:
             if not isinstance(mo, dict):
@@ -385,20 +401,11 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
             cols_data = mo.get("cols") or {}
             row = {"month_lbl": mo.get("month_lbl") or mo.get("month_disp") or ""}
             for mc in mc_labels:
-                mc_data = cols_data.get(mc)
-                if isinstance(mc_data, dict):
-                    row[mc] = _v(mc_data.get("output_kg") or mc_data.get("hrs")
-                                 or mc_data.get("kg") or mc_data.get("val"))
-                else:
-                    row[mc] = _v(mc_data)
+                row[mc] = _mc_cell(cols_data.get(mc))
             mcw_rows.append(row)
         total_row_mcw = {"month_lbl": "TOTAL"}
         for mc, mc_data in s4_total_cols.items():
-            if isinstance(mc_data, dict):
-                total_row_mcw[mc] = _v(mc_data.get("output_kg") or mc_data.get("hrs")
-                                       or mc_data.get("kg") or mc_data.get("val"))
-            else:
-                total_row_mcw[mc] = _v(mc_data)
+            total_row_mcw[mc] = _mc_cell(mc_data)
         sheets.append(ReportSheet(
             name="MC WISE",
             title=f"Pipe — Machine-wise Monthly — {fy_lbl}",
@@ -422,9 +429,15 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
                 ))
             elif isinstance(machines[0], dict):
                 sample = machines[0]
-                ex_keys = [k for k in sample if k not in ("machine","mc_label")]
+                # Exclude nested lists/dicts (e.g. "rows", "month_rows") —
+                # only scalar fields can be written as cell values.
+                _SKIP = {"machine","mc_label","rows","month_rows","dates"}
+                ex_keys = [k for k in sample
+                           if k not in _SKIP
+                           and not isinstance(sample.get(k), (list, dict))]
                 mh_cols = ([Column("machine", "Machine", "text", width=16)] +
-                            [Column(k, k, "num") for k in ex_keys])
+                            [Column(k, k.replace("_"," ").title(), "num")
+                             for k in ex_keys])
                 sheets.append(ReportSheet(
                     name=tab_name,
                     title=f"Pipe — {tab_name} — {fy_lbl}",
