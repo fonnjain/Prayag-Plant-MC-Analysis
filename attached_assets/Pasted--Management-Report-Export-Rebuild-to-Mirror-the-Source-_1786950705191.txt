@@ -1,0 +1,106 @@
+# Management Report Export — Rebuild to Mirror the Source Workbooks
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule applies in full: match the structure, compute every number ourselves, flag differences, never copy a cell.**
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`. **Push Reports 7–13 first — GitHub is at `7474d3c` (Report 6) and this work touches shared code.**
+
+---
+
+## The problem
+
+The `.xlsx` download and the HTML pages are **two entirely separate pipelines**:
+
+| | Route | Built by |
+|---|---|---|
+| Pages | `/management-reports/<name>-summary` | the thirteen `mgmt_*.py` builders |
+| Export | `/management-reports/<rid>.xlsx` | `reports/registry.py` → `generators.py` → `xlsx.py` |
+
+`management_report_download` calls `rreg.report_bytes(rid, ym)`, which never touches a `mgmt_*` builder. Those generators predate all thirteen report builds.
+
+**So every download is producing the old content** — no new sections, no flags, no corrections, no multi-tab structure. The Cardinal Rule work is absent from the artefact people actually circulate.
+
+---
+
+## Target — mirror each source workbook's tab structure
+
+Reproduce the tab layout of the workbook each report is modelled on:
+
+| Report | Tabs to produce |
+|---|---|
+| **1 Segment Labour** | `Combined Wages` · `UNIT-1` · `UNIT-2` · `UNIT-3` · `Ideal Power Cost` · `Ideal Labour Cost` · `REJECTION & PRODUCTION` |
+| **2 Pipe M/C** | `SUMMARY` · `SUMMARY-1` · `MATERIAL` · `MC WISE` · `HOURS` · `OUTPUT` · `MC-1`…`MC-9` · `MONTHWISE` |
+| **3 Moulding** | `SUMMARY` · `SUMMARY-1` · `HOURS` · `MC - 1`…`MC - 27` |
+| **4 GOM** | `SUMMARY` · `SUMMARY-1` · `150` · `200` · `250` · `275` · `350` · `450` |
+| **5 Garden** | `SUMMARY` · `SUMMARY-1` · `HOURS` · `OUTPUT` · `MC-1`…`MC-4` |
+| **6 HDPE** | `SUMMARY` · `SUMMARY-1` · `HOURS` · `OUTPUT` · `MC-1`…`MC-6` |
+| **7–9 Tank** | `SUMMARY (LTR)` · `SUMMARY (PCS)` · one tab per size (`500 LTR`, `750 LTR`, …) — sizes per plant |
+| **10 Compound** | `TOTAL` · `APR-26` … `MAR-27` |
+| **11 PTMT Moulds** | `SUMMARY` · `MC Utilization` · `Month Wise MC` · `GROUP WISE` · `MATERIAL WISE` |
+| **12 PTMT Efficiency** | `PTMT` |
+| **13 Pipe Moulds** | `SUMMARY` · `CPVC Mould Summary (26-27)` · `UPVC…` · `AGRI…` · `SWR…` · `PPR…` |
+
+**Only produce tabs we can populate from our own recomputation.** Where a source tab has no counterpart in our data (`DATA`, `Sheet1`, the `RAW` tabs, `Copy of …`, `CUSTOM-01/02`, `ADMIN`, `D`), **omit it** — do not create an empty tab, and do not copy the source's contents to fill it.
+
+Match column order, header text, month ordering (latest-first where the source is), and TOTAL row placement per report, exactly as the pages already do.
+
+---
+
+## Build it from the page builders, not a parallel path
+
+**This is the point of the exercise.** The export must call the same `mgmt_*.py` builders the pages use, so a figure can never differ between what someone sees and what they download. Do **not** write a second set of calculations.
+
+Practically: each builder already returns a structured result. Add a thin serialiser that turns that same result into worksheets. If a builder's return shape makes this awkward, **report it rather than duplicating logic**.
+
+Keep the existing behaviour from the current generator docstring: **recomputed VALUES, never live formulas.** No `IMPORTRANGE`, no cell references, no links back to source workbooks.
+
+---
+
+## Flags — a `Notes` tab per workbook
+
+On the pages, divergences appear as amber badges and banners. In a spreadsheet they must survive copying, printing and forwarding.
+
+**Add a `Notes` tab as the last sheet of every workbook**, with one row per flag:
+
+```
+Rule | Report section | Month | Our figure | Source figure | Difference | Note
+```
+
+Populate it from the same flag data the templates use — R-23, R-42 (Garden and HDPE), R-43, R-24, R-26, the KH June data errors, the sum-of-monthly TOTAL defects, the PPR-missing-from-TOTAL note, and the basis labels (gross/net, machine hours vs mould hours, daily vs annual).
+
+**In addition, mark the affected cell itself.** Where a figure carries a flag, add an Excel cell comment with the short form (e.g. *"R-24: daily 147,835 vs annual 160,478 — separate mould chain"*) so the note travels with the number when a row is copied.
+
+`AWAITING SOURCE DATA` must render as that text, **never as 0 or an empty cell** (**R-07**, **R-08**). Same for `n/a`, `IDLE` and `⚠ unavailable`.
+
+---
+
+## Suggestions worth taking
+
+**A cover sheet as the first tab** — report name, the month or FY period, generation timestamp, the source workbook it mirrors, and a one-line statement that every figure is recomputed from live source data and is not copied from the workbook. That single line prevents the most likely misunderstanding when the file is forwarded.
+
+**Number formats matching the source** — thousands separators, two decimals on per-kg and cost columns, percentages as percentages. Bold TOTAL rows. Freeze the header row and any sticky left columns. It costs little and makes the file usable without reformatting.
+
+**Keep the ZIP bundle working** — `zip_bundle` should pick up the rebuilt reports. Confirm it still reports `built`/`total`/`skipped` honestly rather than silently dropping a failed report.
+
+**Fail loudly on a partial build.** If a builder returns a `_failed_pairs` result or raises, the export must not write a workbook containing silent blanks. Either omit the file and list it in `skipped`, or write it with the failure recorded on the `Notes` tab. **Never a clean-looking file built from a failed read** — that is the cold-cache failure in a more dangerous form, because a downloaded file outlives the page.
+
+---
+
+## Validate
+
+- Every report downloads with the tab structure above; no empty tabs; no tab we cannot populate.
+- **Figures identical between page and download** for all thirteen — spot-check PIPE 1,277,971 · Moulding 366,015 / 35,972 h · PTMT 524,465 daily and 77,418 machine hours · Garden 138,052 DR basis · HDPE 23,817.24 with JUL 22,448.04 · Tank VN 221,250/534,000/533,500/565,500 · KH APR 846,600.
+- `Notes` tab present in all thirteen, populated, with cell comments on flagged figures.
+- AWAITING / n/a / IDLE render as text, never 0 or blank.
+- No formulas, no external references in any output file.
+- ZIP bundle builds and reports skips honestly.
+- **No page figure changes.** If any does, **stop**.
+
+## Do not touch
+
+The thirteen `mgmt_*.py` builders' calculations — serialise their existing output, do not modify it · `tank_reconcile.py` / R-39 (**R-41**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `mp_*.py` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · the `_failed_pairs` guard · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The tab list produced per report · confirmation that the export calls the page builders rather than a parallel path · the `Notes` tab contents for two reports as a sample · the page-vs-download figure comparison · how a failed build is handled · confirmation that no page figure moved.
