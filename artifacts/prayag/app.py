@@ -3461,9 +3461,9 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/moulding-summary"
             if rpt["id"] == "gom":
                 rpt["view_url"] = "/management-reports/gom-summary"
-            if rpt["id"] == "garden_summary":
+            if rpt["id"] == "garden":
                 rpt["view_url"] = "/management-reports/garden-pipe-summary"
-            if rpt["id"] == "hdpe_summary":
+            if rpt["id"] == "hdpe":
                 rpt["view_url"] = "/management-reports/hdpe-summary"
             if rpt["id"] == "tank_kh":
                 rpt["view_url"] = "/management-reports/tank-kh-summary"
@@ -3475,8 +3475,10 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/compound-compilation"
             if rpt["id"] == "ptmt_moulds":
                 rpt["view_url"] = "/management-reports/ptmt-moulds-summary"
-            if rpt["id"] == "ptmt_mould_eff":
+            if rpt["id"] == "mould_eff":
                 rpt["view_url"] = "/management-reports/ptmt-mould-efficiency"
+            if rpt["id"] == "pipe_moulds":
+                rpt["view_url"] = "/management-reports/pipe-moulds-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface

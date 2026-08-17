@@ -86,6 +86,7 @@ _PLANT_FAMILY: dict[str, str] = {
 # -05 = 500 Ltr, -07 = 750 Ltr (not 700): read directly from the sheet.
 
 _SIZE_CODE_MAP: dict[str, int] = {
+    "03": 300,   # Confirmed from SIZE (LTR.) col in PROD. REPORT (May 2026 KH workbook)
     "05": 500,
     "07": 750,
     "10": 1000,
