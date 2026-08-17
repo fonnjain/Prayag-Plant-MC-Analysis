@@ -80,7 +80,9 @@ def _build_failed(err) -> _SheetFlagPair:
 #       builder: mgmt_labour_power.build_mgmt_report_data(fy)
 # ============================================================================
 def serial_segment_labour(ym: str) -> _SheetFlagPair:
-    from mgmt_labour_power import build_mgmt_report_data
+    from mgmt_labour_power import (
+        build_mgmt_report_data, _IDEAL_COST_SEGS,
+    )
     fy = _fy_from_ym(ym)
     d = build_mgmt_report_data(fy)
     if d.get("error"):
@@ -89,11 +91,14 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
     sheets: List[ReportSheet] = []
     fy_lbl = d.get("fy_label", f"FY {fy}")
 
-    # ---- Combined Wages tab ----
+    # =========================================================================
+    # Tab 1 — Combined Wages
+    # Shows per-segment rows (indented) grouped under their unit, then a unit
+    # subtotal row, then the grand-total row.
+    # =========================================================================
     cw = d.get("combined_wages") or {}
-    cw_units = cw.get("units") or []
     cw_cols = [
-        Column("label",            "Unit",              "text", width=16),
+        Column("label",            "Segment / Unit",    "text", width=20),
         Column("n_payroll",        "Payroll Staff",     "int"),
         Column("n_contractor",     "Contractor",        "int"),
         Column("n_total",          "Total Headcount",   "int",  total=True),
@@ -101,173 +106,372 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         Column("contractor_wages", "Contractor (₹)",    "cur",  total=True),
         Column("total_wages",      "Total Wages (₹)",   "cur",  total=True),
     ]
+    cw_keys = ["n_payroll","n_contractor","n_total","paid_wages",
+               "contractor_wages","total_wages"]
     cw_rows = []
-    for u in cw_units:
-        if isinstance(u, dict):
-            cw_rows.append({**_row(u, ["n_payroll","n_contractor","n_total",
-                                       "paid_wages","contractor_wages","total_wages"]),
-                            "label": u.get("label","")})
-    gt = cw.get("grand_total") or {}
-    cw_total = {**_row(gt, ["n_total","paid_wages","contractor_wages","total_wages"]),
-                "label": "GRAND TOTAL"}
-    sheets.append(ReportSheet(
-        name="Combined Wages",
-        title=f"Combined Wages — {fy_lbl}",
-        subtitle="All units combined headcount and wages.",
-        sections=[Section(cw_cols, cw_rows, cw_total if gt else None)],
-    ))
-
-    # ---- UNIT-1, UNIT-2, UNIT-3 tabs ----
-    unit_row_keys = [
-        "month_label","n_labour","n_contractor","n_total_lab",
-        "paid_hours","paid_wages","contractor_wages","total_wages",
-        "jvvl","total_power","solar","per_kg_power","per_kg_labour","total_cost",
-    ]
-    unit_cols = [
-        Column("month_label",      "Month",           "text", width=10),
-        Column("n_labour",         "Labour",          "int"),
-        Column("n_contractor",     "Contractor",      "int"),
-        Column("n_total_lab",      "Total",           "int"),
-        Column("paid_hours",       "Paid Hours",      "num"),
-        Column("paid_wages",       "Payroll (₹)",     "cur",  total=True),
-        Column("contractor_wages", "Contractor (₹)",  "cur",  total=True),
-        Column("total_wages",      "Total Wages (₹)", "cur",  total=True),
-        Column("jvvl",             "Units (kWh)",     "num"),
-        Column("total_power",      "Power Cost (₹)",  "cur",  total=True),
-        Column("solar",            "Solar (₹)",       "cur"),
-        Column("per_kg_power",     "Power / KG (₹)",  "rate"),
-        Column("per_kg_labour",    "Labour / KG (₹)", "rate"),
-        Column("total_cost",       "Total Cost (₹)",  "cur",  total=True),
-    ]
-    for u in (d.get("units") or []):
+    for u in (cw.get("units") or []):
         if not isinstance(u, dict):
             continue
-        lbl = u.get("label", "UNIT")
-        tab_rows, total_row = [], {}
+        # Per-segment rows indented under this unit
         for seg in (u.get("segments") or []):
             if not isinstance(seg, dict):
                 continue
+            cw_rows.append({**_row(seg, cw_keys),
+                            "label": f"  {seg.get('name','')}"})
+        # Unit subtotal
+        cw_rows.append({**_row(u, cw_keys),
+                        "label": u.get("label","")})
+    gt = cw.get("grand_total") or {}
+    cw_total = {**_row(gt, cw_keys), "label": "GRAND TOTAL"}
+    sheets.append(ReportSheet(
+        name="Combined Wages",
+        title=f"Combined Wages — {fy_lbl}",
+        subtitle=(
+            "Per-segment headcount and wages from the annual segment-cost workbook. "
+            "Indented rows = segments; bold rows = unit subtotals."
+        ),
+        sections=[Section(cw_cols, cw_rows, cw_total if gt else None)],
+    ))
+
+    # =========================================================================
+    # Tabs 2–4 — UNIT-1 / UNIT-2 / UNIT-3
+    # 17-column layout matching the source workbook.
+    # Row order: TOTAL row first (per segment), then APR → MAR.
+    # =========================================================================
+    # Note: kwh / unit_per_kg / rate_708 / solar are UNIT-level columns in the
+    # source workbook; the per-segment tabs do not carry them, so those cells
+    # will be blank for per-segment rows.  jvvl here = per-segment JVVL Power
+    # Amount (₹), which equals total_power for per-seg rows.
+    unit_cols = [
+        Column("segment",          "Segment",               "text", width=14),
+        Column("month_label",      "Month",                 "text", width=8),
+        Column("n_labour",         "No. Of Labour",         "int"),
+        Column("n_contractor",     "Contractor Labour",     "int"),
+        Column("n_total_lab",      "Total Labour",          "int"),
+        Column("paid_wages",       "Paid Wages (₹)",        "cur",  total=True),
+        Column("contractor_wages", "Contr. Wages (₹)",      "cur",  total=True),
+        Column("total_wages",      "Total Paid Wages (₹)", "cur",  total=True),
+        Column("our_prod_kg",      "Total Prod. (Kgs)",    "kg",   total=True),
+        Column("jvvl",             "JVVL Power Amt (₹)",   "cur",  total=True),
+        Column("kwh",              "Elec. Gen. (kWh)",      "num"),
+        Column("unit_per_kg",      "Unit / KG",             "rate"),
+        Column("rate_708",         "7.08 Basic Rate",       "rate"),
+        Column("total_power",      "Total Power (₹)",       "cur",  total=True),
+        Column("per_kg_power",     "Per KG Power (₹)",      "rate"),
+        Column("per_kg_labour",    "Per KG Labour (₹)",     "rate"),
+        Column("total_cost",       "Total Cost (₹)",        "cur",  total=True),
+    ]
+    unit_keys = [c.key for c in unit_cols]
+
+    for u in (d.get("units") or []):
+        if not isinstance(u, dict):
+            continue
+        u_lbl = u.get("label", "UNIT")
+        tab_rows: List[dict] = []
+        tab_comments: dict = {}
+
+        for seg in (u.get("segments") or []):
+            if not isinstance(seg, dict):
+                continue
+            seg_name = seg.get("name", "")
+
+            # TOTAL row for this segment comes first
+            tr = seg.get("total_row") or {}
+            tot_row = _row(tr, unit_keys)
+            tot_row["segment"]     = seg_name
+            tot_row["month_label"] = "TOTAL"
+            if tr.get("awaiting"):
+                tot_row["total_wages"] = "AWAITING SOURCE DATA"
+            tab_rows.append(tot_row)
+
+            # Monthly rows APR → MAR
             for mr in (seg.get("month_rows") or []):
                 if not isinstance(mr, dict):
                     continue
-                row = _row(mr, unit_row_keys)
+                row = _row(mr, unit_keys)
+                row["segment"]     = seg_name
+                row["month_label"] = str(
+                    mr.get("month_label") or mr.get("month_disp") or "")
                 if mr.get("awaiting"):
                     row["total_wages"] = "AWAITING SOURCE DATA"
+                    mo_lbl = row["month_label"]
                     flags.append(Flag(
-                        rule="R-42",
-                        section=lbl,
-                        month=str(mr.get("month_label") or mr.get("month_disp") or ""),
-                        our_figure="AWAITING",
+                        rule="R-07",
+                        section=u_lbl,
+                        month=f"{seg_name} {mo_lbl}",
+                        our_figure="AWAITING SOURCE DATA",
                         source_figure="—",
                         difference="—",
-                        note=f"Wages not yet received from HR for "
-                             f"{mr.get('month_label') or mr.get('month_disp','')}.",
-                        cell_comment="Wages awaiting HR source sheet for this month.",
+                        note=(
+                            f"Wages for {seg_name} {mo_lbl} not yet received "
+                            f"from HR (R-07 / R-08). Cell shows 'AWAITING SOURCE "
+                            f"DATA', never 0 or blank."
+                        ),
+                        cell_comment="R-07: Wages awaiting HR source sheet.",
                     ))
+                    if seg_name and mo_lbl:
+                        tab_comments[(f"{seg_name}|{mo_lbl}", "total_wages")] = (
+                            "R-07: Wages awaiting HR source sheet.")
                 tab_rows.append(row)
-            tr = seg.get("total_row") or {}
-            for k, val in tr.items():
-                if k not in ("month_label","month_disp","segment","unit","ym"):
-                    total_row[k] = _v(val)
-        total_row["month_label"] = "TOTAL"
+
+        # Standing #REF! flag for UNIT-1 (source workbook roll-up tab is broken)
+        if u_lbl == "UNIT-1":
+            flags.append(Flag(
+                rule="UNIT-1 #REF!",
+                section=u_lbl,
+                month="All months",
+                our_figure="Computed (per-segment tabs: CP, PTMT, Hardware, Sink)",
+                source_figure="#REF! / 0 (UNIT-1 roll-up tab in source workbook)",
+                difference="—",
+                note=(
+                    "The source workbook's UNIT-1 roll-up tab has #REF! errors in "
+                    "the headcount columns and reads 0 in the production column. "
+                    "Our figures are computed from the per-segment tabs (CP, PTMT, "
+                    "Hardware, Sink), which do not have this defect. "
+                    "Cardinal Rule: we report the per-segment computed figure; "
+                    "the broken roll-up tab is not used."
+                ),
+            ))
+
+        # R-22 basis note (production = gross in costing; net on production pages)
         sheets.append(ReportSheet(
-            name=lbl,
-            title=f"{lbl} — Labour & Power Cost — {fy_lbl}",
-            subtitle="Month-wise headcount, wages, power units and cost per KG.",
-            sections=[Section(unit_cols, tab_rows,
-                              total_row if tab_rows else None)],
+            name=u_lbl,
+            title=f"{u_lbl} — Labour & Power Cost — {fy_lbl}",
+            subtitle=(
+                "R-22: 'Total Prod. (Kgs)' is GROSS (net + rejection), matching "
+                "the source workbook's own note. Production management pages use net. "
+                "TOTAL row appears first per segment, then APR–MAR. "
+                "kwh / Unit/KG / 7.08 Rate columns are UNIT-level in the source "
+                "workbook; they are blank here (per-segment tabs do not carry them)."
+            ),
+            sections=[Section(unit_cols, tab_rows)],
+            cell_comments=tab_comments,
         ))
 
-    # ---- Ideal Power Cost tab ----
+    # Standing R-22 flag (one entry, covers all three UNIT tabs)
+    flags.append(Flag(
+        rule="R-22",
+        section="UNIT-1 / UNIT-2 / UNIT-3",
+        month="All",
+        our_figure="Gross (net + rejection)",
+        source_figure="As per source workbook note",
+        difference="—",
+        note=(
+            "Production figures in the UNIT tabs use GROSS basis (total output "
+            "including rejection), matching the source workbook note. "
+            "The plant production pages (Garden, HDPE, Pipe, PTMT) use NET. "
+            "This is intentional — the costing model uses gross."
+        ),
+    ))
+
+    # =========================================================================
+    # Tab 5 — Ideal Power Cost
+    # Columns: Month | Pipe | Fittings | Garden | HDPE | Tank | PTMT | Total
+    # Builder shape: ideal_power_sec.months = [{month_lbl, segs: {seg: {net, ideal_cost}}, total_ideal}, ...]
+    # =========================================================================
+    _R43_POWER_NOTE = (
+        "R-43: The source workbook's Fittings production column in the Ideal "
+        "Power Cost tab contains PIECE COUNTS (APR: 13,40,117 pcs), not kg. "
+        "Multiplying by a per-kg rate inflates the Ideal Power Cost for Fittings "
+        "~15×. Our figure uses Moulding gross output kg, which is the correct basis."
+    )
+    _R43_LABOUR_NOTE = (
+        "R-43: The source workbook's Fittings production column in the Ideal "
+        "Labour Cost tab contains PIECE COUNTS (APR: 13,40,117 pcs), not kg. "
+        "Multiplying by a per-kg rate inflates the Ideal Labour Cost for Fittings "
+        "~15×. Our figure uses Moulding gross output kg, which is the correct basis."
+    )
+    _IC_SEGS = list(_IDEAL_COST_SEGS)  # ["Pipe","Fittings","Garden","HDPE","Tank","PTMT"]
+
+    def _build_ideal_tab(sec: dict, kind: str, note: str) -> ReportSheet:
+        """Pivot {month_lbl, segs:{seg:{ideal_cost}}, total_ideal} into tabular form."""
+        months_data = sec.get("months") or []
+        tot_raw     = sec.get("total_row") or {}
+        tab_name    = "Ideal Power Cost" if kind == "power" else "Ideal Labour Cost"
+        rate_note   = "₹/kg rates: Pipe 4.0, Fittings 8.0, Garden 3.0, HDPE 4.0, Tank 5.0, PTMT 5.0" \
+                      if kind == "power" else \
+                      "₹/kg rates: Pipe 2.5, Fittings 6.5, Garden 3.0, HDPE 1.25, Tank 6.0, PTMT 6.0"
+
+        cols = [Column("month_lbl", "Month", "text", width=8)]
+        for seg in _IC_SEGS:
+            cols.append(Column(f"ic_{seg}", seg, "cur", total=True))
+        cols.append(Column("total_ideal", "Total Ideal (₹)", "cur", total=True))
+
+        rows: List[dict] = []
+        cell_comments: dict = {}
+        for mo in months_data:
+            if not isinstance(mo, dict):
+                continue
+            mo_lbl = mo.get("month_lbl") or mo.get("month_disp") or ""
+            row: dict = {"month_lbl": mo_lbl}
+            segs_data = mo.get("segs") or {}
+            for seg in _IC_SEGS:
+                row[f"ic_{seg}"] = _v((segs_data.get(seg) or {}).get("ideal_cost"))
+            row["total_ideal"] = _v(mo.get("total_ideal"))
+            rows.append(row)
+            # R-43 cell comment on Fittings column for every month
+            if mo_lbl:
+                cell_comments[(mo_lbl, "ic_Fittings")] = (
+                    "R-43: Fittings production is kg (Moulding gross output). "
+                    "Source workbook column is piece count — inflates ideal cost ~15×."
+                )
+
+        tot_segs = (tot_raw.get("segs") or {})
+        total_row: dict = {"month_lbl": "TOTAL"}
+        for seg in _IC_SEGS:
+            total_row[f"ic_{seg}"] = _v((tot_segs.get(seg) or {}).get("ideal_cost"))
+        total_row["total_ideal"] = _v(tot_raw.get("total_ideal"))
+
+        return ReportSheet(
+            name=tab_name,
+            title=f"{tab_name} — {fy_lbl}",
+            subtitle=(
+                f"Monthly ideal cost by segment (₹ = gross production kg × rate). "
+                f"{rate_note}. "
+                f"R-43: Fittings column uses Moulding gross kg (not source piece count)."
+            ),
+            sections=[Section(cols, rows, total_row if rows else None)],
+            cell_comments=cell_comments,
+        )
+
     ip = d.get("ideal_power_sec") or {}
-    ip_rates = ip.get("rates") or []
-    if ip_rates and isinstance(ip_rates[0], dict):
-        sample = ip_rates[0]
-        ip_month_keys = [k for k in sample if k not in ("seg","segment","total_ideal")]
-        ip_cols = ([Column("seg", "Segment", "text", width=18)] +
-                   [Column(k, k, "cur") for k in ip_month_keys] +
-                   [Column("total_ideal", "Total Ideal (₹)", "cur", total=True)])
-        ip_rows = []
-        for rr in ip_rates:
-            if isinstance(rr, dict):
-                row = {k: _v(rr.get(k)) for k in ip_month_keys}
-                row["seg"] = rr.get("seg") or rr.get("segment") or ""
-                row["total_ideal"] = _v(rr.get("total_ideal"))
-                ip_rows.append(row)
-        itr = ip.get("total_row") or {}
-        ip_total = {k: _v(itr.get(k)) for k in ["total_ideal"] + ip_month_keys}
-        ip_total["seg"] = "TOTAL"
-        sheets.append(ReportSheet(
-            name="Ideal Power Cost",
-            title=f"Ideal Power Cost — {fy_lbl}",
-            sections=[Section(ip_cols, ip_rows, ip_total if itr else None)],
+    if ip.get("months"):
+        sheets.append(_build_ideal_tab(ip, "power", _R43_POWER_NOTE))
+        flags.append(Flag(
+            rule="R-43",
+            section="Ideal Power Cost",
+            month="All months",
+            our_figure="Moulding gross kg × ₹8.0/kg",
+            source_figure="Piece count × ₹8.0/kg (APR: 13,40,117 pcs)",
+            difference="~15× inflated in source",
+            note=_R43_POWER_NOTE,
+            cell_comment="R-43: Fittings uses kg, not the source's piece count.",
         ))
     else:
         sheets.append(ReportSheet(
             name="Ideal Power Cost",
             title=f"Ideal Power Cost — {fy_lbl}",
-            note="Ideal power cost structure not available from current builder output.",
+            note="Ideal power cost not available from builder output.",
         ))
 
-    # ---- Ideal Labour Cost tab ----
     il = d.get("ideal_labour_sec") or {}
-    il_rates = il.get("rates") or []
-    if il_rates and isinstance(il_rates[0], dict):
-        sample = il_rates[0]
-        il_month_keys = [k for k in sample if k not in ("seg","segment","total_ideal")]
-        il_cols = ([Column("seg", "Segment", "text", width=18)] +
-                   [Column(k, k, "cur") for k in il_month_keys] +
-                   [Column("total_ideal", "Total Ideal (₹)", "cur", total=True)])
-        il_rows = []
-        for rr in il_rates:
-            if isinstance(rr, dict):
-                row = {k: _v(rr.get(k)) for k in il_month_keys}
-                row["seg"] = rr.get("seg") or rr.get("segment") or ""
-                row["total_ideal"] = _v(rr.get("total_ideal"))
-                il_rows.append(row)
-        iltr = il.get("total_row") or {}
-        il_total = {k: _v(iltr.get(k)) for k in ["total_ideal"] + il_month_keys}
-        il_total["seg"] = "TOTAL"
-        sheets.append(ReportSheet(
-            name="Ideal Labour Cost",
-            title=f"Ideal Labour Cost — {fy_lbl}",
-            sections=[Section(il_cols, il_rows, il_total if iltr else None)],
+    if il.get("months"):
+        sheets.append(_build_ideal_tab(il, "labour", _R43_LABOUR_NOTE))
+        flags.append(Flag(
+            rule="R-43",
+            section="Ideal Labour Cost",
+            month="All months",
+            our_figure="Moulding gross kg × ₹6.5/kg",
+            source_figure="Piece count × ₹6.5/kg (APR: 13,40,117 pcs)",
+            difference="~15× inflated in source",
+            note=_R43_LABOUR_NOTE,
+            cell_comment="R-43: Fittings uses kg, not the source's piece count.",
         ))
     else:
         sheets.append(ReportSheet(
             name="Ideal Labour Cost",
             title=f"Ideal Labour Cost — {fy_lbl}",
-            note="Ideal labour cost structure not available from current builder output.",
+            note="Ideal labour cost not available from builder output.",
         ))
 
-    # ---- REJECTION & PRODUCTION tab ----
+    # =========================================================================
+    # Tab 7 — REJECTION & PRODUCTION
+    # Builder shape: reject_prod_sec.months = [{month_lbl, segs:{seg:{net,reject,rej_pct,r24_note?}}}]
+    # 3 columns per segment: Net KG | Reject KG | Rej %
+    # =========================================================================
     rp = d.get("reject_prod_sec") or {}
-    rp_segs = [s for s in (rp.get("segs") or []) if isinstance(s, str)]
-    rp_months = rp.get("months") or []
-    if rp_segs and rp_months and isinstance(rp_months[0], dict):
-        rp_cols = ([Column("month_label", "Month", "text", width=10)] +
-                   [Column(s, s, "num") for s in rp_segs])
-        rp_rows = []
+    rp_segs_list = [s for s in (rp.get("segs") or []) if isinstance(s, str)]
+    rp_months    = rp.get("months") or []
+
+    if rp_segs_list and rp_months:
+        rp_cols = [Column("month_lbl", "Month", "text", width=8)]
+        for seg in rp_segs_list:
+            rp_cols.append(Column(f"rp_{seg}_net",
+                                  f"{seg} Net (KG)", "kg", total=True))
+            rp_cols.append(Column(f"rp_{seg}_rej",
+                                  f"{seg} Rej. (KG)", "kg", total=True))
+            rp_cols.append(Column(f"rp_{seg}_pct",
+                                  f"{seg} Rej. %", "pct"))
+
+        rp_rows: List[dict] = []
+        rp_comments: dict = {}
         for mo in rp_months:
-            if isinstance(mo, dict):
-                row = {"month_label": mo.get("month_label") or mo.get("month_disp") or ""}
-                for s in rp_segs:
-                    row[s] = _v(mo.get(s))
-                rp_rows.append(row)
-        rptr = rp.get("total_row") or {}
-        rp_total = {s: _v(rptr.get(s)) for s in rp_segs}
-        rp_total["month_label"] = "TOTAL"
+            if not isinstance(mo, dict):
+                continue
+            mo_lbl = mo.get("month_lbl") or mo.get("month_disp") or ""
+            row: dict = {"month_lbl": mo_lbl}
+            segs_data = mo.get("segs") or {}
+            for seg in rp_segs_list:
+                sd = segs_data.get(seg) or {}
+                row[f"rp_{seg}_net"] = _v(sd.get("net"))
+                row[f"rp_{seg}_rej"] = _v(sd.get("reject"))
+                row[f"rp_{seg}_pct"] = _v(sd.get("rej_pct"))
+                # R-24: PTMT June (and any future months)
+                r24_note = sd.get("r24_note")
+                if r24_note:
+                    net_val    = sd.get("net") or 0.0
+                    annual_val = sd.get("r24_annual") or 0
+                    flags.append(Flag(
+                        rule="R-24",
+                        section="REJECTION & PRODUCTION",
+                        month=f"{seg} {mo_lbl}",
+                        our_figure=f"{net_val:,.0f} kg (daily records)",
+                        source_figure=f"{annual_val:,} kg (annual / mould chain)",
+                        difference="Open — notified to Alok Roy",
+                        note=r24_note,
+                        cell_comment=f"R-24: {r24_note}",
+                    ))
+                    if mo_lbl:
+                        rp_comments[(mo_lbl, f"rp_{seg}_net")] = (
+                            f"R-24: {r24_note}"
+                        )
+            rp_rows.append(row)
+
+        # Total row
+        rp_tot_segs = ((rp.get("total_row") or {}).get("segs") or {})
+        rp_total: dict = {"month_lbl": "TOTAL"}
+        for seg in rp_segs_list:
+            sd = rp_tot_segs.get(seg) or {}
+            rp_total[f"rp_{seg}_net"] = _v(sd.get("net"))
+            rp_total[f"rp_{seg}_rej"] = _v(sd.get("reject"))
+            rp_total[f"rp_{seg}_pct"] = _v(sd.get("rej_pct"))
+
         sheets.append(ReportSheet(
             name="REJECTION & PRODUCTION",
             title=f"Rejection & Production — {fy_lbl}",
-            sections=[Section(rp_cols, rp_rows, rp_total if rptr else None)],
+            subtitle=(
+                "Monthly net production, rejection and rejection % by segment. "
+                "R-24: PTMT June divergence — daily 147,835 kg vs annual "
+                "(mould chain) 160,478 kg; open with Alok Roy."
+            ),
+            sections=[Section(rp_cols, rp_rows, rp_total)],
+            cell_comments=rp_comments,
         ))
     else:
         sheets.append(ReportSheet(
             name="REJECTION & PRODUCTION",
             title=f"Rejection & Production — {fy_lbl}",
-            note="Rejection & production data not available from current builder output.",
+            note="Rejection & production data not available from builder output.",
         ))
+
+    # R-42 Garden Pipe wages standing note (R5 serial has the monthly flag;
+    # document the cross-source divergence here for the R1 export)
+    flags.append(Flag(
+        rule="R-42",
+        section="UNIT-3 / Garden Pipe",
+        month="FY total",
+        our_figure="₹2,20,797 payroll + ₹50,547 contractor (Segment Cost source)",
+        source_figure="₹4,26,164 (Garden annual workbook)",
+        difference="Same paid hours in both; reconciliation open",
+        note=(
+            "Garden Pipe wages from the Segment Cost workbook "
+            "(₹2,20,797 payroll + ₹50,547 contractor = ₹2,71,344 total) "
+            "differ from the Garden annual workbook total (₹4,26,164). "
+            "Paid hours are identical in both sources. "
+            "R-42: figures shown are from the Segment Cost workbook (authoritative "
+            "for this report). The divergence is open with the data owner."
+        ),
+    ))
 
     return sheets, flags
 
