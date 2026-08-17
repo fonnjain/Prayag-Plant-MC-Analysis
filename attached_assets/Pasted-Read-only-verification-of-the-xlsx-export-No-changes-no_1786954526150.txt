@@ -1,0 +1,56 @@
+Read-only verification of the .xlsx export. No changes, no Sheets writes (R-21),
+no cache clearing (R-34). Report only (R-30).
+
+=== 1. TAB COUNT AND NAMES PER REPORT ===
+Download all 13 and report the actual tab list against this expected structure.
+Every workbook = Cover (first) + content tabs + Notes (last).
+
+ R#  Report              Content tabs                                              Total
+  1  Segment Labour      Combined Wages · UNIT-1 · UNIT-2 · UNIT-3 ·                 9
+                         Ideal Power Cost · Ideal Labour Cost · REJECTION & PRODUCTION
+  2  Pipe M/C            SUMMARY · SUMMARY-1 · MATERIAL · MC WISE · HOURS ·         18
+                         OUTPUT · MC-1…MC-9 · MONTHWISE
+  3  Moulding            SUMMARY · SUMMARY-1 · HOURS · MC - 1…MC - 27               32
+  4  GOM                 SUMMARY · SUMMARY-1 · 150 · 200 · 250 · 275 · 350 · 450    10
+  5  Garden              SUMMARY · SUMMARY-1 · HOURS · OUTPUT · MC-1…MC-4           10
+  6  HDPE                SUMMARY · SUMMARY-1 · HOURS · OUTPUT · MC-1…MC-6           12
+  7  Tank KH             SUMMARY (LTR) · SUMMARY (PCS) · 500/750/1000/1500/         11
+                         2000/3000/5000 LTR
+  8  Tank VN             SUMMARY (LTR) · SUMMARY (PCS) · 500/750/1000/2000 LTR       8
+  9  Tank WB             SUMMARY (LTR) · SUMMARY (PCS) · 500/750/1000/2000 LTR       8
+ 10  Compound            TOTAL · APR-26 … MAR-27                                    15
+ 11  PTMT Moulds         SUMMARY · MC Utilization · Month Wise MC ·                  7
+                         GROUP WISE · MATERIAL WISE
+ 12  PTMT Efficiency     PTMT                                                        3
+ 13  Pipe Moulds         SUMMARY · CPVC/UPVC/AGRI/SWR/PPR Mould Summary (26-27)      8
+
+KNOWN GAP: Report 2 currently produces 8 tabs. MC-1…MC-9 and MONTHWISE are absent, though
+the page renders them. Check every report for the same shortfall — per-machine and per-month
+tabs are the ones most likely missing.
+
+Tank size tabs: only produce sizes that exist in that plant's data. Report which you produce.
+
+=== 2. NUMBER FORMATTING — precision is being lost ===
+Report 2 SUMMARY currently exports:
+   Cost/KG      2.5 · 1.0 · 2.6   TOTAL 1.0     should be 2.48 · 1.04 · 2.62 · 1.02
+   Cost/Hr      63.1 · 39.6 · 45.3  TOTAL 34.5  should be 63.08 · 39.61 · 45.27 · 34.54
+   Devot./Person                    TOTAL 293.9 should be 293.90
+   Run Hours    833.0                           hours as integer or consistent 1dp
+   Wages        4,73,293.0                      no decimal on rupee amounts
+Report the number format applied to each column type, and fix nothing yet — confirm which
+columns are affected across all 13 first.
+
+=== 3. PAGE vs EXPORT ===
+The page was observed showing "DASHBOARD tab read failed (429)" with Labour and Paid Hours as
+"—" and TOTAL as AWAITING, while the export of the same report carried 25/30/35/38 and
+37,619 complete. They were built against different cache states.
+Report: does the export capture the read state of its own build, and if a read fails at export
+time, does the file record that (Notes tab) or silently omit the column? Confirm a failed read
+can never produce a clean-looking file.
+
+=== 4. Notes tab ===
+Paste verbatim for Reports 2, 5 and 11. Confirm R-42, R-23, R-24 and basis labels appear with
+figures, and that cell comments exist on flagged cells.
+
+Report the 13 actual tab lists, the formatting audit, the page-vs-export answer, and the Notes
+samples. Change nothing.
