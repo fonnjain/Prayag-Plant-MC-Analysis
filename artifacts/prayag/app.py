@@ -3471,6 +3471,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/tank-vn-summary"
             if rpt["id"] == "tank_wb":
                 rpt["view_url"] = "/management-reports/tank-wb-summary"
+            if rpt["id"] == "compound":
+                rpt["view_url"] = "/management-reports/compound-compilation"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3787,6 +3789,97 @@ def mgmt_tank_wb_summary_view():
     return render_template(
         "report_mgmt_tank_summary.html",
         data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/compound-compilation")
+def mgmt_compound_compilation_view():
+    """Management Report 10 — Compound Compilation (FY 2026-27).
+
+    Layout: compound types across columns, eight balance metrics down rows.
+    Source: Pipe & Fitting daily workbook mixer-logbook tabs (Report-6 to
+    Report-10, plus CG-122 ledger), read daily-first by load_compound_data()
+    and assembled by compound.build_compilation().
+
+    Cardinal Rule: every figure recomputed; sheet figures flagged when different.
+    """
+    import compound as _cmp
+
+    # Full current-FY months (same pool as the standard /compound route).
+    pinfo = parse_period({"period": "current_fy"})
+    try:
+        cdata = load_compound_data(pinfo["months"])
+    except SheetReadError as e:
+        return render_template("sheet_error.html", message=str(e)), 200
+
+    comp        = _cmp.build_compilation(cdata["by_compound"], cdata["months"])
+    validation  = _cmp.validate(comp, cdata["rollup"])
+
+    # ── R-30 relationship checks ─────────────────────────────────────────────
+    # Per spec: check two identities across all six populated columns.
+    # (1) Total Weight Loss at Mixer = Total Batch Weight − Total Material out
+    # (2) Av. Weight Loss % = Weight Loss ÷ Material out of Mixer
+    #
+    # Our compound.py uses BATCH WEIGHT as the denominator for loss_pct
+    # (loss / batch), not Material out.  The UPVC example from the spec shows
+    # the correct denominator is Material out (2,705.40 / 533,430.00 = 0.51%,
+    # not 0.50%).  State the discrepancy; do NOT silently hide it.
+    r30_rows = []
+    for col in comp["cols"]:
+        if not col["in_total"] or col["key"] == "CPVC_F":
+            continue   # CPVC F has no batch weight — identity (1) is N/A
+        batch   = col.get("batch",    0.0) or 0.0
+        mat     = col.get("material", 0.0) or 0.0
+        loss    = col.get("loss",     0.0) or 0.0
+        our_lp  = col.get("loss_pct")           # loss / batch (our formula)
+        mat_lp  = (loss / mat) if mat else None  # loss / material (spec formula)
+        r30_rows.append({
+            "label":    col["label"],
+            "batch":    batch,
+            "material": mat,
+            "loss":     loss,
+            # identity (1): batch − material = loss  (should be True for all)
+            "check1":   abs((batch - mat) - loss) < 0.5,
+            "our_pct":  our_lp,   # displayed as X.XX%
+            "mat_pct":  mat_lp,   # displayed as X.XX%
+            # True when the two denominators produce the same rounded result
+            "pct_agree": (
+                our_lp is not None and mat_lp is not None
+                and abs(our_lp * 100 - mat_lp * 100) < 0.01
+            ),
+        })
+    # TOTAL row
+    tot = comp["total"]
+    tb, tm, tl = ((tot.get(k) or 0.0) for k in ("batch", "material", "loss"))
+    r30_rows.append({
+        "label":    "TOTAL",
+        "batch":    tb, "material": tm, "loss": tl,
+        "check1":   abs((tb - tm) - tl) < 0.5,
+        "our_pct":  tot.get("loss_pct"),
+        "mat_pct":  (tl / tm) if tm else None,
+        "pct_agree": False,  # TOTAL: batch denom differs from material denom
+    })
+
+    # ── Per-column item totals (sum of all raw-material rows) ────────────────
+    # Used to render the "ITEM" header row in Section 2.
+    item_col_totals = {}
+    for col in comp["cols"]:
+        if col["in_total"]:
+            item_col_totals[col["key"]] = sum(
+                m["by"].get(col["key"], 0.0) for m in comp["materials"]
+            )
+    item_grand_total = sum(m["total"] for m in comp["materials"])
+
+    return render_template(
+        "report_mgmt_compound.html",
+        comp=comp,
+        validation=validation,
+        r30=r30_rows,
+        item_col_totals=item_col_totals,
+        item_grand_total=item_grand_total,
+        month_disps=[_month_disp(m) for m in cdata["months"]],
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
     )

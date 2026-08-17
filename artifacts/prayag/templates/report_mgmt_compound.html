@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Compound Compilation{% endblock %}
+
+{% block content %}
+
+{# ── helpers ──────────────────────────────────────────────────────────────── #}
+{% macro kg(v) -%}
+{%- if v is none or v == 0.0 -%}—{%- else -%}{{ "{:,.2f}".format(v) }}{%- endif -%}
+{%- endmacro %}
+{% macro kgz(v) -%}{%- if v is none -%}—{%- else -%}{{ "{:,.2f}".format(v) }}{%- endif -%}{%- endmacro %}
+{% macro pct(v) -%}{%- if v is none -%}—{%- else -%}{{ "{:.2f}".format(v * 100) }}%{%- endif -%}{%- endmacro %}
+
+{# ── Page header ──────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      Compound Compilation — FY 2026-27
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">
+      Report 10 · Pipe &amp; Fitting mixer logbooks · {{ today_disp }}
+      {% if month_disps %} · {{ month_disps | join(", ") }}{% endif %}
+    </div>
+  </div>
+  <div class="text-[10px] text-gray-400 shrink-0 mt-1">synced {{ last_synced }}</div>
+</div>
+
+{# ── Source basis ─────────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1">Source basis</div>
+  <div class="text-gray-600">
+    Every figure recomputed daily-first from the Pipe &amp; Fitting monthly workbooks:
+    <span class="font-semibold">Report-6</span> (CPVC) ·
+    <span class="font-semibold">Report-7</span> (UPVC) ·
+    <span class="font-semibold">Report-8(A)</span> (AGRI) ·
+    <span class="font-semibold">Report-8(B)</span> (SWR) ·
+    <span class="font-semibold">Report-9</span> (UPVC F) ·
+    <span class="font-semibold">Report-10</span> (SWR/AGRI F) ·
+    <span class="font-semibold">CG 122</span> (CPVC F purchase/issue ledger).
+    <code class="text-[10px]">Compound 6-10</code> rollup used for reconciliation only, never for headline figures.
+  </div>
+  <div class="text-gray-500 mt-1">
+    <span class="font-medium">CPVC F</span> is a purchase/issue ledger (CG-122), not a mixer logbook —
+    no batch weight or weight-loss figure. Its total purchase quantity is shown as a single merged cell
+    spanning the batch-weight / material-out / compound-given rows, matching the source sheet layout.
+    The TOTAL batch column excludes CPVC F (which has no batch weight); the source sheet adds the
+    purchase quantity to its TOTAL batch — flag: our TOTAL batch will differ by that amount.
+  </div>
+</div>
+
+{# ── No data ──────────────────────────────────────────────────────────────── #}
+{% if not comp.has_data %}
+<div class="kpi-card p-5 text-center text-sm text-gray-500">
+  No compound data for this period.
+  The Pipe &amp; Fitting daily workbooks are the source; ensure the months are pinned in sources.py.
+</div>
+
+{% else %}
+
+{# ── Reconciliation badge ─────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(31,56,100,0.03);border-color:rgba(31,56,100,0.14)">
+  <div class="flex items-center justify-between mb-1">
+    <div class="font-semibold text-gray-700">Reconciliation vs "Compound 6-10" in-sheet rollup</div>
+    {% if not validation.available %}
+      <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">N/A</span>
+    {% elif validation.status == 'PASS' %}
+      <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">PASS</span>
+    {% else %}
+      <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">{{ validation.n_fail }} MISMATCH</span>
+    {% endif %}
+  </div>
+  {% if validation.available %}
+  <div class="text-gray-500">
+    {{ validation.n_pass }} pass · {{ validation.n_fail }} fail · {{ validation.n_na }} n/a
+    (tol {{ "%.1f"|format(validation.tol_pct) }}%) — batch, material-out and compound-given vs monthly rollup tab.
+  </div>
+  {% if validation.n_fail %}
+  <div class="mt-2 overflow-x-auto">
+    <table class="min-w-full text-[11px] border-collapse">
+      <thead><tr style="background:rgba(31,56,100,0.05)">
+        <th class="px-2 py-1 text-left text-gray-500 font-medium border-b" style="border-color:rgba(31,56,100,0.12)">Compound</th>
+        <th class="px-2 py-1 text-left text-gray-500 font-medium border-b" style="border-color:rgba(31,56,100,0.12)">Field</th>
+        <th class="px-2 py-1 text-right text-gray-500 font-medium border-b" style="border-color:rgba(31,56,100,0.12)">Ours</th>
+        <th class="px-2 py-1 text-right text-gray-500 font-medium border-b" style="border-color:rgba(31,56,100,0.12)">Sheet</th>
+        <th class="px-2 py-1 text-right text-gray-500 font-medium border-b" style="border-color:rgba(31,56,100,0.12)">Δ%</th>
+      </tr></thead>
+      <tbody>
+        {% for r in validation.rows if r.status == 'FAIL' %}
+        <tr style="border-bottom:1px solid rgba(31,56,100,0.06)">
+          <td class="px-2 py-1 font-medium text-gray-800">{{ r.compound }}</td>
+          <td class="px-2 py-1 text-gray-600">{{ r.field }}</td>
+          <td class="px-2 py-1 text-right text-gray-700 tabular-nums">{{ "{:,.0f}".format(r.recomputed) }}</td>
+          <td class="px-2 py-1 text-right text-gray-500 tabular-nums">{{ "{:,.0f}".format(r.sheet) if r.sheet else "—" }}</td>
+          <td class="px-2 py-1 text-right font-semibold" style="color:var(--terra)">{{ r.diff_pct }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if validation.diagnoses %}
+  <div class="mt-2 space-y-1.5">
+    {% for d in validation.diagnoses %}
+    <div class="px-2 py-1.5 rounded-lg border text-[11px]"
+         style="background:rgba(200,80,0,0.05);border-color:rgba(200,80,0,0.25)">
+      <span class="font-semibold" style="color:#b84800">{{ d.compound }}</span>
+      <span class="text-gray-600 ml-1">{{ d.text }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+
+{# ── R-30 relationship checks ─────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(31,56,100,0.03);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1">R-30 — Two relationship checks (per spec)</div>
+  <div class="text-gray-600 mb-2">
+    <div><span class="font-medium">(1)</span> Weight Loss = Batch Weight − Material out of Mixer — must hold by construction.</div>
+    <div class="mt-0.5"><span class="font-medium">(2)</span> Av. Weight Loss % = Weight Loss ÷ Material out of Mixer (spec denominator).
+      <span class="font-semibold text-gray-700">Our implementation uses batch weight</span> as the denominator
+      (<code class="text-[10px]">loss / batch</code>).  The difference is small (≤0.06 pp) but the UPVC row
+      is the distinguishing test: sheet shows 0.51% (÷ material), our figure is 0.50% (÷ batch).
+      Both denominators are reported below.</div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-[11px] border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.06)">
+          <th class="px-2 py-1.5 text-left text-gray-600 font-semibold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">Compound</th>
+          <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">Batch (kg)</th>
+          <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">Material out (kg)</th>
+          <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">Loss (kg)</th>
+          <th class="px-2 py-1.5 text-center text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">(1) Loss = B−M?</th>
+          <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12)">Loss% ÷ batch (ours)</th>
+          <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b"
+              style="border-color:rgba(31,56,100,0.12)">Loss% ÷ mat. (spec)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in r30 %}
+        <tr class="{% if loop.last %}font-semibold{% endif %}"
+            style="border-bottom:1px solid rgba(31,56,100,0.06);{% if loop.last %}background:rgba(31,56,100,0.05){% endif %}">
+          <td class="px-2 py-1 text-gray-800 border-r" style="border-color:rgba(31,56,100,0.08)">{{ row.label }}</td>
+          <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r" style="border-color:rgba(31,56,100,0.08)">{{ "{:,.2f}".format(row.batch) }}</td>
+          <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r" style="border-color:rgba(31,56,100,0.08)">{{ "{:,.2f}".format(row.material) }}</td>
+          <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r" style="border-color:rgba(31,56,100,0.08)">{{ "{:,.2f}".format(row.loss) }}</td>
+          <td class="px-2 py-1 text-center border-r" style="border-color:rgba(31,56,100,0.08)">
+            {% if row.check1 %}
+            <span class="text-green-700 font-semibold">✓</span>
+            {% else %}
+            <span style="color:var(--terra)" class="font-semibold">✗ {{ "{:,.2f}".format(row.batch - row.material - row.loss) }} gap</span>
+            {% endif %}
+          </td>
+          <td class="px-2 py-1 text-right tabular-nums border-r" style="border-color:rgba(31,56,100,0.08);color:{% if row.pct_agree %}inherit{% else %}var(--navy){% endif %}">
+            {% if row.our_pct is none %}—{% else %}{{ "{:.2f}".format(row.our_pct * 100) }}%{% endif %}
+          </td>
+          <td class="px-2 py-1 text-right tabular-nums"
+              style="color:{% if row.pct_agree %}inherit{% else %}var(--terra){% endif %}">
+            {% if row.mat_pct is none %}—{% else %}{{ "{:.2f}".format(row.mat_pct * 100) }}%{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-1.5 text-gray-500">
+    Identity (1) holds by construction (loss is computed as batch − material in our pipeline).
+    (2): navy = our figure (÷ batch) · terracotta = spec formula (÷ material out).
+    Our report displays the <span class="font-semibold text-gray-700">÷ batch</span> figure.
+  </div>
+</div>
+
+{# ── SECTION 1: Compound Balance Grid ─────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Section 1 — Mixer Balance</div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.07)">
+          <th class="px-3 py-2 text-left text-gray-600 font-semibold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:200px">Metric</th>
+          {% for col in comp.cols if col.in_total %}
+          <th class="px-2 py-2 text-right text-gray-700 font-bold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:100px">{{ col.label }}</th>
+          {% endfor %}
+          <th class="px-2 py-2 text-right border-b font-bold"
+              style="border-color:rgba(31,56,100,0.12);min-width:110px;color:var(--terra)">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {# We need to track which rows CPVC F spans (batch/material/given = rows 2/3/4 by field name) #}
+        {% set cpvc_f_merge_fields = ["batch", "material", "given"] %}
+
+        {% for field, label in comp.balance_rows %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/40{% endif %} hover:bg-blue-50/30 transition-colors">
+          <td class="px-3 py-2 text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.08)">
+            {{ label }}
+            {% if field == "closing" %}
+            <span class="ml-1 text-[9px] text-gray-400 font-normal">(computed: opening + material − given;
+            source workbook shows 0.00 — not maintained)</span>
+            {% endif %}
+          </td>
+
+          {% for col in comp.cols if col.in_total %}
+            {# ── CPVC F special handling (purchase/issue ledger, no batch weight) ── #}
+            {% if col.key == "CPVC_F" %}
+              {% if field == "batch" %}
+                {# Render merged cell spanning batch/material/given rows #}
+                <td class="px-2 py-2 text-right tabular-nums border-r border-b font-medium text-gray-700"
+                    rowspan="3"
+                    style="border-color:rgba(31,56,100,0.08);vertical-align:middle">
+                  {{ "{:,.2f}".format(col.material) if col.material else "—" }}
+                  <div class="text-[9px] text-gray-400 font-normal leading-tight mt-0.5">purchase / issue</div>
+                </td>
+              {% elif field == "material" or field == "given" %}
+                {# merged — no td rendered #}
+              {% elif field == "loss" or field == "loss_pct" %}
+                <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-400 italic"
+                    style="border-color:rgba(31,56,100,0.08)">—</td>
+              {% else %}
+                <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-700"
+                    style="border-color:rgba(31,56,100,0.08)">
+                  {% if field == "loss_pct" %}—
+                  {% elif col[field] is none or col[field] == 0.0 %}—
+                  {% else %}{{ "{:,.2f}".format(col[field]) }}{% endif %}
+                </td>
+              {% endif %}
+            {# ── Fitting compounds: pulvizer is N/A (no pulverizer used) ───────── #}
+            {% elif field == "pulvizer" and col.key in ("UPVC_F", "SWR_F") %}
+              <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-400 italic"
+                  style="border-color:rgba(31,56,100,0.08)">—</td>
+            {# ── Standard mixer compound cells ─────────────────────────────────── #}
+            {% else %}
+              <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-700"
+                  style="border-color:rgba(31,56,100,0.08)">
+                {% if field == "loss_pct" %}
+                  {{ pct(col.loss_pct) }}
+                {% elif field == "given" %}
+                  {{ "{:,.2f}".format(col.given) if col.given else "—" }}
+                {% elif field == "opening" %}
+                  {{ "{:,.2f}".format(col.opening) if col.opening else "—" }}
+                {% elif field == "closing" %}
+                  {{ "{:,.2f}".format(col.closing) if col.closing else "—" }}
+                {% elif field == "pulvizer" %}
+                  {{ "{:,.2f}".format(col.pulvizer) if col.pulvizer else "—" }}
+                {% else %}
+                  {{ "{:,.2f}".format(col[field]) if col[field] else "—" }}
+                {% endif %}
+              </td>
+            {% endif %}
+          {% endfor %}
+
+          {# ── TOTAL column ──────────────────────────────────────────────────── #}
+          <td class="px-2 py-2 text-right tabular-nums border-b font-bold"
+              style="border-color:rgba(31,56,100,0.08);color:var(--terra)">
+            {% if field == "loss_pct" %}
+              {{ pct(comp.total.loss_pct) }}
+            {% elif field == "closing" %}
+              {{ "{:,.2f}".format(comp.total.closing) if comp.total.closing else "—" }}
+            {% elif field == "given" %}
+              {{ "{:,.2f}".format(comp.total.given) if comp.total.given else "—" }}
+            {% elif field == "opening" %}
+              {{ "{:,.2f}".format(comp.total.opening) if comp.total.opening else "—" }}
+            {% else %}
+              {{ "{:,.2f}".format(comp.total[field]) if comp.total[field] else "—" }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-1.5 text-[10px] text-gray-400 px-1 leading-relaxed">
+    Opening Stock and Closing Stock: computed from daily Mixer-Logbook tabs (opening = first month's
+    recorded stock; closing = opening + material − given). Pulverizer: summed from the daily pulvizer
+    columns in each mixer-logbook tab. "—" in Pulverizer for fitting compounds (UPVC F, SWR/AGRI F):
+    these compounds do not use the pulverizer. Loss% denominator: batch weight (our formula);
+    spec uses material-out — see R-30 table above.
+  </div>
+</div>
+
+{# ── SECTION 2: Raw-Material Breakdown ───────────────────────────────────── #}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+    Section 2 — Raw-Material Breakdown (kg) · {{ comp.materials | length }} item{{ 's' if comp.materials | length != 1 else '' }} · derived from source
+  </div>
+  {% if not comp.materials %}
+  <div class="kpi-card p-4 text-xs text-gray-400 text-center">
+    No raw-material data for this period.
+  </div>
+  {% else %}
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.07)">
+          <th class="px-3 py-2 text-left text-gray-600 font-semibold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:160px">Item / Material</th>
+          {% for col in comp.cols if col.in_total %}
+          <th class="px-2 py-2 text-right text-gray-700 font-bold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:96px">{{ col.label }}</th>
+          {% endfor %}
+          <th class="px-2 py-2 text-right border-b font-bold"
+              style="border-color:rgba(31,56,100,0.12);min-width:110px;color:var(--terra)">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {# ITEM total row (sum of all raw-material rows, per column) #}
+        <tr style="background:rgba(31,56,100,0.08)">
+          <td class="px-3 py-2 font-bold text-gray-800 border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">ITEM</td>
+          {% for col in comp.cols if col.in_total %}
+          <td class="px-2 py-2 text-right tabular-nums font-bold text-gray-800 border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">
+            {{ "{:,.2f}".format(item_col_totals[col.key]) if item_col_totals.get(col.key) else "—" }}
+          </td>
+          {% endfor %}
+          <td class="px-2 py-2 text-right tabular-nums font-bold border-b"
+              style="border-color:rgba(31,56,100,0.14);color:var(--terra)">
+            {{ "{:,.2f}".format(item_grand_total) if item_grand_total else "—" }}
+          </td>
+        </tr>
+        {# Per-material rows, sorted by total (descending) — list derived from source #}
+        {% for mat in comp.materials %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/30{% endif %} hover:bg-blue-50/30 transition-colors">
+          <td class="px-3 py-1.5 text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ mat.name }}</td>
+          {% for col in comp.cols if col.in_total %}
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-600 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">
+            {{ "{:,.2f}".format(mat.by[col.key]) if mat.by.get(col.key) else "" }}
+          </td>
+          {% endfor %}
+          <td class="px-2 py-1.5 text-right tabular-nums font-semibold border-b"
+              style="border-color:rgba(31,56,100,0.07);color:var(--terra)">
+            {{ "{:,.2f}".format(mat.total) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-1.5 text-[10px] text-gray-400 px-1 leading-relaxed">
+    Material list derived from source (one row per chemical name in the daily mixer-logbook tabs),
+    sorted by total kg (descending). Blank cells = 0 kg for that compound.
+    <span class="font-medium text-gray-500">CPVC F gap:</span> the CG-122 purchase ledger does not record
+    individual raw-material names — only the total purchase and issue quantities are available.
+    The CPVC F column's ITEM total and all per-material cells for CPVC F are therefore absent from this
+    breakdown (rendered blank, never zero). The source sheet shows a figure (e.g. 71,050 for Q1) which is
+    the total CG-122 compound quantity, not a raw-material decomposition.
+  </div>
+  {% endif %}
+</div>
+
+{% endif %} {# end has_data #}
+
+{% endblock %}

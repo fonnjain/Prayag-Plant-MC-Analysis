@@ -1,0 +1,84 @@
+# Management Report 10 — Compound Compilation
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Spreadsheet:** `Compound Compilation 2026-27` · **Worksheet:** the `TOTAL` view shown in the QA screenshot.
+
+---
+
+## Layout — compound type across columns, metrics down rows
+
+Another transposed shape. **Columns are compound types**, not months:
+
+```
+(row label) | CPVC | UPVC | AGRI | SWR | UPVC F | AGRI F / SWR F | CPVC F | TOTAL
+```
+
+**Section 1 — the mixer balance**, eight rows in this order:
+
+| Row | CPVC | UPVC | AGRI | SWR | UPVC F | AGRI F/SWR F | CPVC F | TOTAL |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Opening Stock (Compound) | 842.00 | 1,241.00 | 1,489.00 | 1,260.00 | 772.00 | 703.00 | 14,300.00 | 20,607 |
+| Pulvizer | 49,725.00 | 46,875.00 | 21,825.00 | 135,925.00 | – | – | – | 254,350 |
+| Total Batch Weight in KG | 359,296.90 | 536,135.40 | 272,636.00 | 723,501.20 | 101,755.00 | 181,766.94 | *52,700* | 2,227,791.44 |
+| Total Material out of Mixer | 356,464.00 | 533,430.00 | 271,249.00 | 719,913.00 | 101,212.00 | 180,808.00 | *(merged)* | 2,163,076.00 |
+| Total Compound given to Pipe Plant | 355,300.00 | 533,325.00 | 271,975.00 | 718,675.00 | 100,625.00 | 179,200.00 | *(merged)* | 2,159,100.00 |
+| Total Weight Loss at Mixer | 2,832.90 | 2,705.40 | 1,387.00 | 3,588.20 | 543.00 | 958.94 | | 12,015.44 |
+| Av. Weight Loss %age | 0.79% | 0.51% | 0.51% | 0.50% | 0.54% | 0.53% | | 0.56% |
+| Closing Stock (Compound) | | | | | | | | 0.00 |
+
+Note the **`CPVC F` column carries a single merged value (52,700)** spanning the batch-weight, material-out and compound-given rows — reproduce that merge rather than repeating the figure three times.
+
+**Section 2 — material breakdown.** An `ITEM` total row (309,571.90 · 489,260.20 · 244,072.50 · 572,441.00 · 101,755.00 · 181,766.94 · 71,050.00 · **1,969,917.54**) followed by one row per raw material — `CG-122`, `Resin K - 67`, and the rest. **Derive the material list from the source; do not hardcode it.**
+
+---
+
+## Two relationships to verify, not assume
+
+Both hold across all six populated columns in the source. **Confirm they hold in our data before wiring, and report if they do not** (**R-30**):
+
+```
+Total Weight Loss at Mixer  =  Total Batch Weight  −  Total Material out of Mixer
+  CPVC   359,296.90 − 356,464.00 = 2,832.90   ✓
+  UPVC   536,135.40 − 533,430.00 = 2,705.40   ✓
+  SWR    723,501.20 − 719,913.00 = 3,588.20   ✓
+
+Av. Weight Loss %age  =  Weight Loss  ÷  Total Material out of Mixer
+  UPVC   2,705.40 ÷ 533,430.00 = 0.51%   (÷ batch weight gives 0.50% — the sheet shows 0.51%)
+  TOTAL  12,015.44 ÷ 2,163,076.00 = 0.56%
+```
+
+The UPVC row is what distinguishes the two possible denominators, so use it as the test. **State which denominator our implementation uses and why.**
+
+---
+
+## Source — check `compound.py` first
+
+The app already has a `compound.py` module. **Before building, report what it currently reads and produces**, and whether it covers these metrics.
+
+Per the pipeline documentation, compound data originates in **Reports 6–10** of the Pipe & Fitting monthly workbooks (owner: **Mr Shelendra**), flowing to `Compound 6to10` → `Month Wise Data` → this compilation. Confirm which of those our module reads.
+
+If any metric here has no source in our pipeline — opening stock, pulverizer, closing stock are the likely gaps — **render the row blank with a note, never zero** (**R-07**, **R-08**). `Closing Stock` already reads `0.00` in the source with the per-column cells empty, which suggests it is not being maintained; do not reproduce a zero we cannot stand behind.
+
+---
+
+## Validate
+
+- Layout matches: eight metric rows, compound types across columns, TOTAL column last, the `CPVC F` merge preserved.
+- The two relationships above hold in our figures, with the denominator stated.
+- Section 2 renders the `ITEM` total and per-material rows, list derived from source.
+- Any metric we cannot source renders **blank with a note**, never 0.
+- Divergences against the sheet flagged, ours shown.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 · Garden 232,528/138,052 · HDPE 23,817.24 · Moulding 35,972 h · Tank plant pages. If any moves, **stop**.
+
+## Do not touch
+
+`tank_reconcile.py` / R-39 (**R-41**) · the Tank annual parser and double-TOTAL guard (**R-36/37**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` (**R-18**) · `mp_*.py` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · Garden, HDPE, Moulding and GOM builders · `mgmt_moulding_summary`'s eleven exported symbols · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+What `compound.py` currently provides · the two relationship checks with the denominator named · the rendered layout against the figures above · which rows had no source and are blank · confirmation that no existing figure moved.
