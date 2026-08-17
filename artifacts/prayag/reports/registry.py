@@ -80,9 +80,11 @@ def _slug(rd: ReportDef) -> str:
 
 
 def report_filename(rid: str, ym: str) -> str:
+    from datetime import datetime
     rd = _BY_ID.get(rid)
     label = _slug(rd) if rd else rid
-    return f"Prayag_{(rd.plant if rd else 'ALL')}_{label}_{month_slug(ym)}.xlsx"
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    return f"Prayag_{(rd.plant if rd else 'ALL')}_{label}_{month_slug(ym)}_{ts}.xlsx"
 
 
 def report_bytes(rid: str, ym: str) -> bytes:
