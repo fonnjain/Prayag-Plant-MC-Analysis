@@ -1,0 +1,103 @@
+# Management Report 12 — PTMT Moulding %age in Efficiency
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Spreadsheet:** `ANNUAL PTMT Moulding %age in Efficiency 26-27` · **Worksheet:** `PTMT` (single tab)
+
+---
+
+## Layout — per-mould rows, month blocks across
+
+**Fixed left columns**, repeated once:
+
+```
+S.NO. | MOULD | TYPE | NAME | CAVITY | CYCLE TIME PER PC | PC WEIGHT
+```
+
+**Then repeating four-column blocks**, `TOTAL` first, then each month:
+
+```
+Production in Pcs | M/C Run Minute (Ideal) | M/C Run Minute (Actual) | Efficiency in %age
+```
+
+One row per **mould** — roughly 393 of them, not per machine. A `TOTAL` row sits above the mould rows.
+
+---
+
+## Both formulas are confirmed — derive, do not copy
+
+Verified against four independent rows, exact in every case:
+
+```
+Ideal M/C Run Minute  =  Production in Pcs  ×  CYCLE TIME PER PC  ÷  60
+
+  PSF-219   1,404,770 × 6.25   ÷ 60 = 146,330    sheet 146,330
+  PSF-23      314,711 × 21.25  ÷ 60 = 111,460    sheet 111,460
+  PSF-314      65,460 × 100.00 ÷ 60 = 109,100    sheet 109,100
+  PSF-184     747,531 × 8.75   ÷ 60 = 109,015    sheet 109,015
+```
+
+**`CAVITY` is not in the formula** — cycle time is already per piece. It is informational; do not multiply or divide by it.
+
+```
+Efficiency in %age  =  Ideal Minutes  ÷  Actual Minutes
+
+  TOTAL     4,437,919 ÷ 4,414,618 = 100.53%
+  Apr'26      891,279 ÷   918,451 =  97.04%
+  May'26      952,311 ÷   936,751 = 101.66%
+  PSF-184     109,015 ÷   109,511 =  99.55%
+```
+
+Note the direction: **ideal over actual**, so a mould running faster than its standard exceeds 100%. Values above 100% are valid and common in this sheet — 119.55%, 142.68%, 173.13% all appear. **Do not cap them.**
+
+---
+
+## Anchors
+
+| | Figure |
+|---|---:|
+| Apr'26 | 5,211,693 pcs · ideal 891,279 · actual 918,451 · **97.04%** |
+| May'26 | 4,849,870 pcs · ideal 952,311 · actual 936,751 · **101.66%** |
+| TOTAL block | ideal 4,437,919 · actual 4,414,618 · **100.53%** |
+| PTMT production, Apr–Jul (verified) | **24,487,601 pcs** across **393 moulds** |
+
+Sample rows to validate against: `PSF-219` PBT, cavity 2, cycle 6.25, 6.750 g — TOTAL 1,404,770 pcs / 146,330 / 146,330 / 100.00% · `PSF-241` cycle 90.00 — 43,123 / 64,684 / 54,108 / **119.55%** · `PSF-184` — 747,531 / 109,015 / 109,511 / **99.55%**.
+
+**One observation to flag:** the `TOTAL` block's `Production in Pcs` cell on the TOTAL row is **blank** in the source, while the month blocks carry theirs. It should be the sum across months (~24.5 million). Compute ours and flag the gap.
+
+---
+
+## Two things to establish before building
+
+**Where does `M/C Run Minute (Actual)` come from?** Everything else on this sheet derives from production and cycle time, but actual minutes are a recorded quantity. **Report its source before wiring** — likely Report-5 or the mould chain. If we cannot source it, the Efficiency column cannot be computed and must render blank with a note, never zero (**R-07**).
+
+**Is `CYCLE TIME PER PC` a business standard or a sheet assumption?** It is the denominator of every ideal figure here. If it is business-supplied, note it alongside the PIPE and HDPE ideal rates already recorded — but **do not populate `baselines.json`** from it in this pass (**R-16**).
+
+---
+
+## Size — scope before building
+
+393 mould rows × 13 blocks × 4 columns is roughly 20,000 cells. **Do not render it as one flat table.** Propose an approach first — a month selector with the fixed columns pinned, or the TOTAL block by default with months expandable — and report it before implementing. Reports 1–11 were all far smaller.
+
+---
+
+## Validate
+
+- Fixed columns render once; month blocks follow with `TOTAL` first.
+- Both formulas reproduce the sample rows above exactly.
+- Efficiency above 100% renders uncapped.
+- `TOTAL` row `Production in Pcs` computed by us with the source's blank flagged.
+- Any unsourced column blank with a note, never zero.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · PTMT 524,465 daily / 537,109 annual · Garden 232,528/138,052 · HDPE 23,817.24 · Moulding 35,972 h · Tank per Reports 7–9 · Compound per Report 10. If any moves, **stop**.
+
+## Do not touch
+
+`_PTMT_R24_NOTES` (reuse) · `tank_reconcile.py` / R-39 (**R-41**) · Tank annual double-TOTAL guard (**R-36/37**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `segments: []` (**R-18**) · `mp_*.py` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · `mgmt_moulding_summary`'s eleven exported symbols · the `_failed_pairs` guard · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The proposed rendering approach **before** building · the source of `M/C Run Minute (Actual)` · both formulas verified against the sample rows · confirmation that percentages are uncapped, the TOTAL pcs gap is flagged, and no existing figure moved.
