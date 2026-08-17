@@ -1,0 +1,96 @@
+# Management Report 11 — PTMT Moulds Summary
+
+Read `PRAYAG_RULES.md`. **Cardinal Rule:** match the layout, compute every number ourselves, flag differences, never copy a cell.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Spreadsheet:** `ANNUALY PTMT Moulds Summary 26-27` · **Worksheet:** `SUMMARY`
+
+---
+
+## Layout — 18 columns, months latest-first
+
+```
+MONTHS | No. of Run Moulds | Mould Run Hours | Av. Run Hour Per Mould | Nett Output (KG) |
+Rejection (KG) | Lumps (KG) | Runner Produce (KG) | Runner %age | Rejection %age |
+100% Wastage %age | Total Grinder Working | Labour | Actual Paid Hours | Paid Wages |
+Paid Hours Devoted by Per Person | Per Hour Cost on Paid Hours | Per KG Labour Cost
+```
+
+Rows `MAR'27` → `APR'26`, then `TOTAL` (**R-05**).
+
+| | Moulds | Hours | Av/Mould | Nett KG | Rejection | Lumps | Runner | Runner% | Rej% | Wastage% | Grinder | Labour | Paid Hrs | Wages |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| JUL'26 | 298 | 22,318 | 74.89 | 172,639 | 10,476 | 3,253 | 21,166 | 12.26% | 6.07% | 1.88% | 31,641 | 53 | 15,932 | **blank** |
+| JUN'26 | 311 | 20,921 | 67.27 | 160,478 | 9,297 | 2,841 | 19,558 | 12.19% | 5.79% | 1.77% | 28,855 | 52 | 14,171 | 6,49,742 |
+| MAY'26 | 280 | 15,752 | 56.26 | 104,729 | 7,262 | 2,344 | 16,143 | 15.41% | 6.93% | 2.24% | 23,405 | 49 | 14,533 | 6,32,458 |
+| APR'26 | 216 | 16,092 | 74.50 | 99,262 | 5,917 | 1,914 | 15,973 | 16.09% | 5.96% | 1.93% | 21,890 | 61 | 15,332 | 7,27,748 |
+| **TOTAL** | **1,105** | **75,083** | 272.92 | **537,109** | **32,952** | **10,352** | **72,839** | 13.56% | **6.14%** | 1.93% | **105,791** | **215** | **59,967** | **20,09,948** |
+
+---
+
+## Three TOTAL cells add monthly values instead of recomputing
+
+The same defect as Report 6's `Avg. Per Output on Hours`, here in **three** columns:
+
+| Column | Sheet TOTAL | How it got there | Correct figure |
+|---|---:|---|---:|
+| Av. Run Hour Per Mould | **272.92** | 74.89 + 67.27 + 56.26 + 74.50 | **67.95** (75,083 ÷ 1,105) |
+| Paid Hours Devoted by Per Person | **1,121** | 301 + 273 + 297 + 251 | **278.9** (59,967 ÷ 215) |
+| Per Hour Cost on Paid Hours | **137** | 0 + 46 + 44 + 47 | **33.52** (20,09,948 ÷ 59,967) |
+
+Meanwhile `Rejection %age` **is** computed correctly as a ratio (6.14%), so the sheet is internally inconsistent across adjacent columns — exactly as in Report 6.
+
+**Compute ours correctly and flag each divergence**, following the pattern already used for `Avg. Per Output on Hours`.
+
+## And `Per KG Labour Cost` has a period mismatch
+
+The sheet's TOTAL reads **3.53**. But July wages are blank while July output is counted, so the numerator covers three months and the denominator four:
+
+```
+20,09,948 (Apr–Jun wages)  ÷  537,109 (Apr–Jul output)  =  3.74     ← not 3.53 either
+20,09,948 (Apr–Jun wages)  ÷  364,469 (Apr–Jun output)  =  5.51     ← like-for-like
+```
+
+Neither reproduces 3.53, so its derivation is unclear. **Report what the sheet shows, compute ours on a like-for-like basis, and flag the mismatch.** Better still: render the TOTAL as **AWAITING** until July wages arrive, consistent with every other report in the series.
+
+---
+
+## Basis — this sheet is the annual, ours is the daily
+
+This worksheet is the **annual basis: 537,109 kg Nett**. Our daily/Report-5 basis totals **524,465 kg** — the two differ only in June (annual 160,478 vs daily 147,835), which is **R-24**, open with the data owner.
+
+Both are recorded in `PRAYAG_RULES` Part 4 as separate accepted bases, not a discrepancy to resolve. **Show our daily figure, name the basis, and carry the existing R-24 note on June** — reuse `_PTMT_R24_NOTES` from Report 1 rather than creating a second structure.
+
+**Grinding/regrind stays excluded from `Nett Output`** (**R-22**). Note the sheet reports `Total Grinder Working` as its own column (105,791) — that is the grinder throughput shown separately, which is the correct treatment.
+
+---
+
+## Metrics to verify before building
+
+`Lumps (KG)`, `Runner Produce (KG)` and `Total Grinder Working` may not all have a source in our pipeline. `Record.runner_lumps` exists and was used in Report 6 for Moulding — **confirm what it holds for PTMT** and whether lumps and runner are separable or combined in that one field.
+
+`100% Wastage %age` (1.93% total) — establish its formula from the source before reproducing it. If any metric has no source, render it **blank with a note, never zero** (**R-07**, **R-08**).
+
+---
+
+## Validate
+
+- Layout matches, months latest-first, TOTAL at the bottom.
+- Moulds **1,105** · hours **75,083** · rejection **32,952** · rej% **6.14%** · lumps **10,352** · runner **72,839** · grinder **105,791** · labour **215** · paid hours **59,967** · wages **₹20,09,948**.
+- Nett Output on our **daily basis 524,465** with the basis named and **June's R-24 note** carried.
+- The three sum-of-monthly TOTALs render ours (67.95 · 278.9 · 33.52) with the sheet's figures flagged.
+- `Per KG Labour Cost` TOTAL renders AWAITING or the like-for-like 5.51, with the sheet's 3.53 flagged.
+- **July wages AWAITING**, never 0.00.
+- Any unsourced metric blank with a note.
+- **No existing figure moves**: PIPE 1,277,971 · Fittings 366,016 · Garden 232,528/138,052 · HDPE 23,817.24 · Moulding 35,972 h · Tank VN/WB/KH per Reports 7–9. If any moves, **stop**.
+
+## Do not touch
+
+`_PTMT_R24_NOTES` structure (reuse it) · `tank_reconcile.py` / R-39 (**R-41**) · the Tank annual double-TOTAL guard (**R-36/37**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `segments: []` (**R-18**) · `mp_*.py` (**R-20**) · `parse_ideal_labour_rates()` (**R-40**) · `mgmt_moulding_summary`'s eleven exported symbols · the `_failed_pairs` guard just added · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The rendered layout against the figures above · which metrics had no source · the three sum-of-monthly divergences as they render · how `Per KG Labour Cost` TOTAL is handled · confirmation that the daily basis is named, R-24 is carried, and no existing figure moved.

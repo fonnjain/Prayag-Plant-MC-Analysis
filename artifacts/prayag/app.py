@@ -3473,6 +3473,8 @@ def management_reports_index():
                 rpt["view_url"] = "/management-reports/tank-wb-summary"
             if rpt["id"] == "compound":
                 rpt["view_url"] = "/management-reports/compound-compilation"
+            if rpt["id"] == "ptmt_moulds":
+                rpt["view_url"] = "/management-reports/ptmt-moulds-summary"
 
     # If the last ZIP download for THIS month was partial, the download route
     # left a short-lived cookie naming the reports it could not build. Surface
@@ -3788,6 +3790,27 @@ def mgmt_tank_wb_summary_view():
     data = _mts.build_tank_summary("TANK_WB", fy)
     return render_template(
         "report_mgmt_tank_summary.html",
+        data=data,
+        today_disp=_fmt(_today()),
+        last_synced=_sync_ctx(),
+    )
+
+
+@app.route("/management-reports/ptmt-moulds-summary")
+def mgmt_ptmt_moulds_view():
+    """Management Report 11 — PTMT Moulds Summary (FY 2026-27).
+
+    Layout: 18 columns, months latest-first.  Source: PTMT daily Records
+    (Report-5 per-machine matrix, grinding excluded — R-22).
+
+    Daily basis (524,465 kg APR–JUL) vs annual worksheet basis (537,109 kg).
+    June divergence is R-24 (open).  Reuses _PTMT_R24_NOTES from Report 1.
+    """
+    from mgmt_ptmt_summary import build_ptmt_summary
+    fy = request.args.get("fy", "2627")
+    data = build_ptmt_summary(fy)
+    return render_template(
+        "report_mgmt_ptmt_summary.html",
         data=data,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),

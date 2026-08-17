@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block title_suffix %} — PTMT Moulds Summary{% endblock %}
+
+{% block content %}
+
+{# ── helpers ──────────────────────────────────────────────────────────────── #}
+{% macro n(v, fmt="{:,.2f}") -%}
+  {%- if v is none or v == "" -%}—{%- elif v == "AWAITING" -%}
+    <span class="text-[10px] font-bold px-1.5 py-0.5 rounded"
+          style="background:rgba(200,80,0,0.10);color:var(--terra)">AWAITING</span>
+  {%- else -%}{{ fmt.format(v) }}{%- endif -%}
+{%- endmacro %}
+{% macro pct(v) -%}
+  {%- if v is none -%}—{%- else -%}{{ "{:.2f}".format(v * 100) }}%{%- endif -%}
+{%- endmacro %}
+{% macro ki(v) -%}{%- if v is none -%}—{%- else -%}{{ "{:,.0f}".format(v) }}{%- endif -%}{%- endmacro %}
+{% macro kf(v) -%}{%- if v is none -%}—{%- else -%}{{ "{:,.2f}".format(v) }}{%- endif -%}{%- endmacro %}
+{% macro inr(v) -%}{%- if v is none -%}—{%- elif v == "AWAITING" -%}{{ n(v) }}{%- else -%}₹{{ "{:,.0f}".format(v) }}{%- endif -%}{%- endmacro %}
+
+{# blank cell for unsourced columns #}
+{% macro blank(label="") -%}
+  <td class="px-2 py-1.5 text-center text-[10px] text-gray-300 italic border-r border-b"
+      style="border-color:rgba(31,56,100,0.06);background:rgba(0,0,0,0.015)"
+      title="{{ label }}">—</td>
+{%- endmacro %}
+
+{# ── Page header ──────────────────────────────────────────────────────────── #}
+<div class="mb-4 flex items-start gap-2">
+  <a href="/management-reports"
+     class="mt-0.5 flex-shrink-0 text-gray-400 hover:text-gray-600">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </a>
+  <div class="flex-1 min-w-0">
+    <h2 class="text-base font-bold leading-tight" style="color:var(--navy)">
+      PTMT Moulds Summary — {{ data.fy_label }}
+    </h2>
+    <div class="text-xs text-gray-400 mt-0.5">
+      Report 11 · Bhiwadi PTMT plant · daily Records basis · {{ today_disp }}
+    </div>
+  </div>
+  <div class="text-[10px] text-gray-400 shrink-0 mt-1">synced {{ last_synced }}</div>
+</div>
+
+{# ── Source basis ─────────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold text-gray-700 mb-1">Source basis — two accepted bases (PRAYAG_RULES Part 4)</div>
+  <div class="text-gray-600 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5">
+    <div><span class="font-semibold">Our daily basis</span> (this report): nett output from
+      PTMT Report-5 per-machine matrix via <code class="text-[10px]">Record.total_count</code>.
+      Grinding excluded (R-22). Total APR–JUL: <span class="font-bold text-gray-800">524,465 kg</span>.</div>
+    <div><span class="font-semibold">Annual worksheet basis</span> (source sheet):
+      537,109 kg — differs in June only (<span class="font-bold" style="color:var(--terra)">R-24</span>,
+      open with Alok Roy). June: our 147,835 vs annual 160,478 — separate mould chain.</div>
+  </div>
+  <div class="mt-1.5 text-gray-500">
+    <span class="font-medium">Runner Produce</span> in this report combines runner + lumps
+    (<code class="text-[10px]">Record.runner_lumps</code> — not separately parsed for PTMT).
+    Columns unavailable from our pipeline are shown blank with a note, never zero (R-07/R-08).
+  </div>
+</div>
+
+{# ── Source sheet TOTAL defects ───────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
+     style="background:rgba(200,80,0,0.04);border-color:rgba(200,80,0,0.22)">
+  <div class="font-semibold mb-1" style="color:var(--terra)">
+    Source sheet TOTAL defects — three columns add monthly values instead of recomputing
+  </div>
+  <div class="text-gray-600 mb-2">
+    Same pattern as Report 6's Avg. Per Output on Hours. Rejection %age TOTAL IS correct
+    (ratio-based), so the sheet is internally inconsistent across adjacent columns.
+  </div>
+  <table class="text-[11px] border-collapse w-full">
+    <thead>
+      <tr style="background:rgba(200,80,0,0.07)">
+        <th class="px-2 py-1.5 text-left text-gray-600 font-semibold border-b" style="border-color:rgba(200,80,0,0.15)">Column</th>
+        <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-l" style="border-color:rgba(200,80,0,0.15)">Sheet TOTAL</th>
+        <th class="px-2 py-1.5 text-left text-gray-500 font-medium border-b border-l" style="border-color:rgba(200,80,0,0.15)">How sheet got it</th>
+        <th class="px-2 py-1.5 text-right text-gray-500 font-medium border-b border-l" style="border-color:rgba(200,80,0,0.15)">Correct figure</th>
+        <th class="px-2 py-1.5 text-left text-gray-500 font-medium border-b border-l" style="border-color:rgba(200,80,0,0.15)">Our output</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for bug in data.sheet_total_bugs %}
+      <tr style="border-bottom:1px solid rgba(200,80,0,0.08)">
+        <td class="px-2 py-1 font-medium text-gray-800">{{ bug.col }}</td>
+        <td class="px-2 py-1 text-right tabular-nums border-l font-bold" style="border-color:rgba(200,80,0,0.10);color:var(--terra)">{{ bug.sheet }}</td>
+        <td class="px-2 py-1 text-gray-500 border-l text-[10px]" style="border-color:rgba(200,80,0,0.10)">{{ bug.how }}</td>
+        <td class="px-2 py-1 text-right tabular-nums border-l font-bold text-green-700" style="border-color:rgba(200,80,0,0.10)">{{ bug.correct }}</td>
+        <td class="px-2 py-1 text-gray-400 border-l text-[10px] italic" style="border-color:rgba(200,80,0,0.10)">{{ bug.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="mt-1.5 text-[10px] text-gray-500">
+    Per KG Labour Cost TOTAL: sheet 3.53 — derivation unclear.
+    {{ data.cost_per_kg_note }}
+  </div>
+</div>
+
+{% if not data.has_data %}
+<div class="kpi-card p-5 text-center text-sm text-gray-500">
+  No PTMT daily data for this period. Ensure the PTMT monthly workbooks are in sources.py.
+</div>
+
+{% else %}
+
+{# ── Unsourced columns legend ─────────────────────────────────────────────── #}
+<div class="mb-3 flex flex-wrap gap-2 text-[10px] text-gray-500">
+  <div class="flex items-center gap-1">
+    <div class="w-4 h-3 rounded" style="background:rgba(0,0,0,0.015);border:1px solid rgba(0,0,0,0.08)"></div>
+    <span>Shaded = column not in daily pipeline (blank, not zero — R-07/R-08)</span>
+  </div>
+  <div class="flex items-center gap-1 ml-4">
+    <span class="font-bold" style="color:var(--terra)">↓</span>
+    <span>runner_lumps = runner + lumps combined (not separable)</span>
+  </div>
+</div>
+
+{# ── TABLE A: Production metrics ──────────────────────────────────────────── #}
+<div class="mb-5">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+    Production Metrics (monthly, latest-first)
+  </div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.07)">
+          <th class="px-3 py-2 text-left font-semibold text-gray-700 border-b border-r sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.12);background:rgba(231,237,248,0.97);min-width:76px">Month</th>
+          {# Blank columns #}
+          <th class="px-2 py-2 text-right font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:66px;background:rgba(0,0,0,0.02);color:#bbb">
+            Moulds<br><span class="text-[9px] font-normal">(not sourced)</span></th>
+          {# Sourced #}
+          <th class="px-2 py-2 text-right font-bold text-gray-700 border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:76px">Run Hours</th>
+          <th class="px-2 py-2 text-right font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:76px;background:rgba(0,0,0,0.02);color:#bbb">
+            Av Hr/Mould<br><span class="text-[9px] font-normal">(no mould count)</span></th>
+          <th class="px-2 py-2 text-right font-bold border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:86px;color:var(--terra)">Nett Output (KG)</th>
+          <th class="px-2 py-2 text-right font-bold text-gray-700 border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:78px">Rejection (KG)</th>
+          <th class="px-2 py-2 text-right font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:72px;background:rgba(0,0,0,0.02);color:#bbb">
+            Lumps (KG)<br><span class="text-[9px] font-normal">(not separable)</span></th>
+          <th class="px-2 py-2 text-right font-bold text-gray-700 border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:90px">
+            Runner+Lumps (KG)<br><span class="text-[9px] font-normal text-gray-400">combined · runner_lumps</span></th>
+          <th class="px-2 py-2 text-right font-bold text-gray-700 border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:66px">Runner %</th>
+          <th class="px-2 py-2 text-right font-bold text-gray-700 border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:60px">Rej %</th>
+          <th class="px-2 py-2 text-right font-medium border-b border-r"
+              style="border-color:rgba(31,56,100,0.12);min-width:72px;background:rgba(0,0,0,0.02);color:#bbb">
+            100% Wastage%<br><span class="text-[9px] font-normal">(no lumps split)</span></th>
+          <th class="px-2 py-2 text-right font-medium border-b"
+              style="border-color:rgba(31,56,100,0.12);min-width:82px;background:rgba(0,0,0,0.02);color:#bbb">
+            Grinder (KG)<br><span class="text-[9px] font-normal">(excl. R-22)</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.rows %}
+        {% if row.has_data %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/30{% endif %} hover:bg-blue-50/20 transition-colors">
+          <td class="px-3 py-1.5 font-bold border-r border-b sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.07);background:rgba(231,237,248,0.97);color:var(--navy)">
+            {{ row.disp }}
+            {% if row.r24 %}
+            <div class="text-[9px] font-bold mt-0.5" style="color:var(--terra)">R-24</div>
+            {% endif %}
+          </td>
+          {{ blank("Mould count not in daily pipeline") }}
+          <td class="px-2 py-1.5 text-right tabular-nums font-medium text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ ki(row.hours) }}</td>
+          {{ blank("Requires mould count — not available") }}
+          <td class="px-2 py-1.5 text-right tabular-nums font-bold border-r border-b"
+              style="border-color:rgba(31,56,100,0.07);color:var(--terra)">{{ ki(row.output_kg) }}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ ki(row.reject_kg) }}</td>
+          {{ blank("runner_lumps not separable into lumps + runner") }}
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ ki(row.runner_kg) }}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ pct(row.runner_pct) }}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700 border-r border-b"
+              style="border-color:rgba(31,56,100,0.07)">{{ pct(row.reject_pct) }}</td>
+          {{ blank("Lumps not separately extracted — 100% wastage = lumps / nett") }}
+          {{ blank("Grinding excluded from plant output (R-22)") }}
+        </tr>
+        {% if row.r24 %}
+        <tr style="background:rgba(200,80,0,0.04)">
+          <td colspan="12" class="px-3 py-1 text-[10px] border-b"
+              style="border-color:rgba(31,56,100,0.06);color:var(--terra)">
+            <span class="font-bold">R-24 · {{ row.disp }}</span>
+            {{ row.r24.note }} — daily {{ "{:,}".format(row.r24.daily) }} kg vs annual {{ "{:,}".format(row.r24.annual) }} kg.
+          </td>
+        </tr>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+
+        {# ── TOTAL row ──────────────────────────────────────────────────── #}
+        {% if data.total %}
+        {% set t = data.total %}
+        <tr style="background:rgba(31,56,100,0.07);font-weight:700">
+          <td class="px-3 py-2 border-r border-b sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.14);background:rgba(210,220,240,0.97);color:var(--navy)">
+            TOTAL
+          </td>
+          {{ blank("—") }}
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">{{ ki(t.hours) }}</td>
+          {{ blank("—") }}
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14);color:var(--terra)">{{ ki(t.output_kg) }}</td>
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">{{ ki(t.reject_kg) }}</td>
+          {{ blank("—") }}
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">{{ ki(t.runner_kg) }}</td>
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">{{ pct(t.runner_pct) }}</td>
+          <td class="px-2 py-2 text-right tabular-nums border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">{{ pct(t.reject_pct) }}</td>
+          {{ blank("—") }}
+          {{ blank("—") }}
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-1.5 text-[10px] text-gray-400 px-1 leading-relaxed">
+    Rejection % and Runner % in the TOTAL row are recomputed as ratios from FY totals
+    (not summed from monthly percentages — cardinal rule). Shaded columns have no source
+    in the daily pipeline — blank, never zero (R-07/R-08).
+    <span class="font-medium text-gray-500">Runner + Lumps (KG)</span> = Record.runner_lumps;
+    "lumps" and "runner" are not separately parseable for PTMT — the field combines both.
+    100% Wastage % formula (lumps ÷ nett) cannot be computed without the separate lumps figure.
+    Grinder Working is the regrind throughput — excluded from plant output per R-22;
+    would need a separate grinder-tab read to surface.
+  </div>
+</div>
+
+{# ── TABLE B: Labour metrics ──────────────────────────────────────────────── #}
+<div class="mb-6">
+  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+    Labour Metrics — all blank (manpower source sheet not in daily pipeline)
+  </div>
+  <div class="kpi-card overflow-x-auto">
+    <table class="min-w-full text-xs border-collapse">
+      <thead>
+        <tr style="background:rgba(31,56,100,0.04)">
+          <th class="px-3 py-2 text-left font-semibold text-gray-700 border-b border-r sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.12);background:rgba(231,237,248,0.97);min-width:76px">Month</th>
+          {% for col_label in ["Labour", "Paid Hours", "Paid Wages", "Paid Hrs/Person", "Cost/Paid Hr", "Cost/KG"] %}
+          <th class="px-2 py-2 text-right font-medium border-b border-r text-[10px]"
+              style="border-color:rgba(31,56,100,0.10);min-width:90px;background:rgba(0,0,0,0.02);color:#aaa">
+            {{ col_label }}
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.rows if row.has_data %}
+        <tr class="{% if loop.index is odd %}bg-white{% else %}bg-gray-50/30{% endif %}">
+          <td class="px-3 py-1.5 font-bold border-r border-b sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.07);background:rgba(231,237,248,0.97);color:var(--navy)">
+            {{ row.disp }}
+          </td>
+          {% for _ in range(5) %}
+          {{ blank("Not in daily pipeline") }}
+          {% endfor %}
+          {# Wages column — AWAITING for July #}
+          <td class="px-2 py-1.5 text-center border-r border-b text-[10px] italic"
+              style="border-color:rgba(31,56,100,0.07);background:rgba(0,0,0,0.015)">
+            {% if row.abbr == "JUL" %}
+              <span class="text-[10px] font-bold px-1 py-0.5 rounded"
+                    style="background:rgba(200,80,0,0.10);color:var(--terra)">AWAITING</span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+
+        {% if data.total %}
+        <tr style="background:rgba(31,56,100,0.07);font-weight:700">
+          <td class="px-3 py-2 border-r border-b sticky left-0 z-10"
+              style="border-color:rgba(31,56,100,0.14);background:rgba(210,220,240,0.97);color:var(--navy)">
+            TOTAL
+          </td>
+          {% for _ in range(5) %}
+          {{ blank("—") }}
+          {% endfor %}
+          <td class="px-2 py-2 text-center border-r border-b"
+              style="border-color:rgba(31,56,100,0.14)">
+            <span class="text-[10px] font-bold px-1 py-0.5 rounded"
+                  style="background:rgba(200,80,0,0.10);color:var(--terra)">AWAITING</span>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-1.5 text-[10px] text-gray-400 px-1 leading-relaxed">
+    Labour headcount, paid hours, and wages are sourced from the manpower/segment-cost workbook,
+    not from the PTMT daily Records. These fields have no representation in
+    <code class="text-[9px]">Record.total_count / reject_count / runner_lumps / actual_hours</code>.
+    July wages are pending — the Wages and Per KG Labour Cost columns render
+    <span class="font-bold" style="color:var(--terra)">AWAITING</span> for July and the
+    FY TOTAL until all months' wages are available.
+    <br>
+    <span class="font-medium text-gray-500">Sheet TOTAL reference (annual basis):</span>
+    Labour 215 · Paid Hours 59,967 · Wages ₹20,09,948 · Paid Hrs/Person 278.9 (correct) · Per Hr Cost ₹33.52 (correct) · Per KG Cost: AWAITING.
+  </div>
+</div>
+
+{# ── Gap summary ──────────────────────────────────────────────────────────── #}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-relaxed"
+     style="background:rgba(31,56,100,0.02);border-color:rgba(31,56,100,0.12)">
+  <div class="font-semibold text-gray-700 mb-1">Column gap summary — blank means unavailable, never zero (R-07/R-08)</div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5 text-gray-600">
+    <div>• <span class="font-medium">No. of Run Moulds</span> — mould-level count not in daily matrix; our pipeline tracks machines not individual moulds per run.</div>
+    <div>• <span class="font-medium">Av. Run Hour Per Mould</span> — depends on mould count above.</div>
+    <div>• <span class="font-medium">Lumps (KG)</span> — inseparable from Runner Produce in <code class="text-[10px]">Record.runner_lumps</code>.</div>
+    <div>• <span class="font-medium">100% Wastage %</span> — formula is lumps ÷ nett; separate lumps not available.</div>
+    <div>• <span class="font-medium">Total Grinder Working</span> — grinding excluded from plant output (R-22); would need a separate grinder-tab read.</div>
+    <div>• <span class="font-medium">Labour / Paid Hours / Wages</span> — manpower source sheet not in Records pipeline.</div>
+    <div>• <span class="font-medium">Paid Hrs/Person, Cost/Hr</span> — derived from above labour columns; blank.</div>
+    <div>• <span class="font-medium">Per KG Labour Cost</span> — July wages AWAITING; TOTAL rendered AWAITING to avoid period mismatch (spec §Period mismatch).</div>
+  </div>
+</div>
+
+{% endif %} {# end has_data #}
+
+{% endblock %}
