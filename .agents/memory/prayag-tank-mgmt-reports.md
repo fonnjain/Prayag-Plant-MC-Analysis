@@ -42,3 +42,14 @@ Unmapped codes → `TankItemCodeError` (R-06); never silently bucketed.
 
 ## Layout quirk
 The report is TRANSPOSED vs all other management reports. Months are columns (latest-first), each spanning two sub-columns (Production Ltr | Rejection Ltr). Two separate pivot sections share the same TOTAL row values.
+
+## R-06 Failure Mode #9 guard (cold-cache blank months)
+All three Tank builders, plus Garden and HDPE, now guard against partial-read results:
+- `get_daily_records()` appends `{"_failed_pairs": [...]}` sentinel to `reports` when any (plant, ym) read fails.
+- `_do_build` extracts `failed_yms` (filtered to this plant), passes to `_compute_divergences` (skips those months), stores as `"failed_months"` in result.
+- `build_tank_summary` / `build_garden_summary` / `build_hdpe_summary` do NOT write to `_cache` when `failed_months` is non-empty.
+- Template renders "⚠ unavailable" cells (with colspan=2) for failed months; shows page-level orange banner listing the months.
+
+## mgmt_garden_summary + mgmt_hdpe_summary: `get_token` fix
+Both called `_sh.get_token()` which doesn't exist; the correct call is `_sh._get_access_token()`.
+This was a pre-existing bug masked by the pg cache (reads never fell through to the line). Now fixed.

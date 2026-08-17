@@ -31,6 +31,22 @@
 </div>
 {% else %}
 
+{# ─── Failed-months banner (R-06 Failure Mode #9) ────────────────────────────── #}
+{% if data.failed_months %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(180,80,0,0.06);border-color:rgba(180,80,0,0.42)">
+  <div class="font-semibold mb-1" style="color:#b85000">
+    ⚠ Source data unavailable — {{ data.failed_months | length }} month{{ 's' if data.failed_months | length != 1 else '' }} could not be loaded
+  </div>
+  <div class="text-gray-700">
+    Daily workbook read failed (Google Sheets throttled or unavailable) for:
+    <span class="font-mono font-medium">{{ data.failed_months | join(", ") }}</span>.
+    Figures for these months may be missing or understated.
+    This result is <span class="font-semibold">not cached</span> — reload the page in a moment to retry.
+  </div>
+</div>
+{% endif %}
+
 {# ─── July divergence banner (most prominent — the key correction) ───────────── #}
 {% set jul_row   = data.section.month_rows | selectattr('month_lbl', 'equalto', 'JUL') | first | default(none) %}
 {% set may_row_h = data.section.month_rows | selectattr('month_lbl', 'equalto', 'MAY') | first | default(none) %}

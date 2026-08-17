@@ -387,13 +387,21 @@ def _compute_divergences(
     our_total_months: dict,
     sheet_total_months: dict,
     fy_ym_inv: dict,
+    failed_yms: set | None = None,
 ) -> list[dict]:
-    """Flag per-month total production divergences between daily and annual sheet."""
+    """Flag per-month total production divergences between daily and annual sheet.
+
+    ``failed_yms`` — months whose daily read failed.  Divergence banners must
+    not fire against these: we have no "ours" figure, so a −100 % banner would
+    be confident and wrong (R-06 Failure Mode #9).
+    """
     divs: list = []
     all_yms = sorted(
         set(our_total_months.keys()) | set(sheet_total_months.keys())
     )
     for ym in all_yms:
+        if failed_yms and ym in failed_yms:
+            continue  # our data is unavailable — comparison is meaningless
         our_cell  = our_total_months.get(ym)
         shee_cell = sheet_total_months.get(ym)
         our_prod  = (our_cell["prod"]  if our_cell  else None) or 0.0
@@ -427,9 +435,19 @@ def _do_build(plant: str, fy: str) -> dict:
 
     # ── Daily records (all plants; filter in accumulator) ─────────────────────
     try:
-        daily_all, _, _ = _sh.get_daily_records(all_yms)
+        daily_all, _daily_reports, _ = _sh.get_daily_records(all_yms)
     except Exception as exc:
         raise RuntimeError(f"Could not load daily Tank records: {exc}") from exc
+
+    # Extract any failed (plant, ym) pairs surfaced by the sentinel dict that
+    # get_daily_records appends to reports when reads were throttled or failed.
+    # Filter to THIS plant only — failures elsewhere don't affect our pivot.
+    _failed_pairs = next(
+        (r["_failed_pairs"] for r in _daily_reports
+         if isinstance(r, dict) and "_failed_pairs" in r),
+        [],
+    )
+    failed_yms: set = {ym for p, ym in _failed_pairs if p == plant}
 
     by_type, by_size, code_map, unmapped = _accumulate_tank(daily_all, plant)
 
@@ -485,6 +503,7 @@ def _do_build(plant: str, fy: str) -> dict:
         _t_type,
         sheet_total_months,
         fy_ym_inv,
+        failed_yms=failed_yms,      # suppress banners for months we couldn't read
     )
 
     # ── KH data errors (R-35, FY2627 only) ────────────────────────────────────
@@ -512,6 +531,10 @@ def _do_build(plant: str, fy: str) -> dict:
         "data_errors":   data_errors,
         "code_map":      code_map,        # transparency: item_code → {product_type, size_ltr}
         "unmapped_codes": unmapped,
+        # Months whose daily read failed this run (throttled / Sheets unavailable).
+        # Template renders "source unavailable" cells; result is NOT cached so the
+        # next request retries fresh (R-06 Failure Mode #9).
+        "failed_months": sorted(failed_yms),
         "error":         None,
     }
 
@@ -543,6 +566,16 @@ def build_tank_summary(plant: str, fy: str = "2627") -> dict:
             "fy":           fy,
             "fy_label":     _FY_LABEL.get(fy, fy),
         }
+
+    # Do NOT cache a result built from partial reads — some (plant, ym) pairs
+    # failed and their months show as blank rather than "source unavailable".
+    # The next request will retry; once all pairs succeed the result is cached.
+    if result.get("failed_months"):
+        logger.warning(
+            "build_tank_summary(%s, %s): skipping cache — %d month(s) failed: %s",
+            plant, fy, len(result["failed_months"]), result["failed_months"],
+        )
+        return result
 
     with _cache_lock:
         _cache[cache_key] = (time.time(), result)

@@ -2813,6 +2813,14 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
           "temporarily missing from this view. Try Refresh in a moment."
       )
 
+  # Surface the failed-pair list to management-report builders via a sentinel
+  # dict appended to ``reports``.  The 3-tuple return signature is unchanged;
+  # callers that discard reports with ``_`` are completely unaffected.  Builders
+  # that need it extract it with:
+  #   next((r["_failed_pairs"] for r in reports if "_failed_pairs" in r), [])
+  if failed_pairs:
+      reports.append({"_failed_pairs": list(failed_pairs)})
+
   for pair in pairs:
       results = by_pair.get(pair, [])
       for recs, report in results:

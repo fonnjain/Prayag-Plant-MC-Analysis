@@ -303,15 +303,23 @@ def _do_build(fy: str) -> dict:
     import sheets as _sh
     import mgmt_labour_power as _mlp
 
-    token   = _sh.get_token()
+    token   = _sh._get_access_token()
     fy_ym   = _FY_YM.get(fy, _FY_YM["2627"])
     all_yms = list(fy_ym.values())
 
     # Daily records — plant=HDPE (block tabs + DR matrix join for run hours/rejection)
     try:
-        daily_all, _, _ = _sh.get_daily_records(all_yms)
+        daily_all, _daily_reports, _ = _sh.get_daily_records(all_yms)
     except Exception as exc:
         raise RuntimeError(f"Could not load daily HDPE records: {exc}") from exc
+
+    # Extract failed (plant, ym) pairs — filter to HDPE only.
+    _failed_pairs = next(
+        (r["_failed_pairs"] for r in _daily_reports
+         if isinstance(r, dict) and "_failed_pairs" in r),
+        [],
+    )
+    failed_yms = sorted({ym for p, ym in _failed_pairs if p == "HDPE"})
 
     kh_net, kh_reject, kh_run_hrs, kh_dr_net, has_unknown_rej = _accumulate_hdpe(daily_all)
 
@@ -334,6 +342,9 @@ def _do_build(fy: str) -> dict:
         # HDPE-R42 named divergence figures (open question, not live comparison)
         "hdpe_wages_seg_cost":  _HDPE_WAGES_SEG_COST,
         "hdpe_wages_sheet":     _HDPE_WAGES_SHEET,
+        # Months whose daily read failed — result is not cached so next request
+        # retries (R-06 Failure Mode #9).
+        "failed_months": failed_yms,
         "error":    None,
     }
 
@@ -354,6 +365,14 @@ def build_hdpe_summary(fy: str = "2627") -> dict:
             "fy":       fy,
             "fy_label": _FY_LABEL.get(fy, fy),
         }
+
+    # Do NOT cache a result built from partial reads — some months are missing.
+    if result.get("failed_months"):
+        logger.warning(
+            "build_hdpe_summary(%s): skipping cache — %d month(s) failed: %s",
+            fy, len(result["failed_months"]), result["failed_months"],
+        )
+        return result
 
     with _cache_lock:
         _cache[fy] = (time.time(), result)

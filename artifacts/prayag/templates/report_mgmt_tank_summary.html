@@ -78,6 +78,23 @@
 </div>
 {% endif %}
 
+{# ─── Failed-months banner (R-06 Failure Mode #9) ────────────────────────────── #}
+{% if data.failed_months %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(180,80,0,0.06);border-color:rgba(180,80,0,0.42)">
+  <div class="font-semibold mb-1" style="color:#b85000">
+    ⚠ Source data unavailable — {{ data.failed_months | length }} month{{ 's' if data.failed_months | length != 1 else '' }} could not be loaded
+  </div>
+  <div class="text-gray-700">
+    Daily workbook read failed (Google Sheets throttled or unavailable) for:
+    <span class="font-mono font-medium">{{ data.failed_months | join(", ") }}</span>.
+    Cells for these months show <span class="font-semibold">⚠ unavailable</span> instead of blank.
+    Divergence banners are suppressed for these months (no comparison is meaningful without our figure).
+    This result is <span class="font-semibold">not cached</span> — reload the page in a moment to retry.
+  </div>
+</div>
+{% endif %}
+
 {# ─── Per-month divergence flags ──────────────────────────────────────────────── #}
 {% if data.divergences %}
 <div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px]"
@@ -161,6 +178,12 @@
               style="border-color:rgba(31,56,100,0.08)">{{ row.label }}</td>
           {% for ym in data.months %}
           {% set cell = row.months.get(ym) %}
+          {% if ym in data.failed_months %}
+          <td class="px-2 py-1.5 text-center border-r border-b" colspan="2"
+              style="border-color:rgba(31,56,100,0.08);color:#b85000;font-size:10px">
+            ⚠ unavailable
+          </td>
+          {% else %}
           <td class="px-2 py-1.5 text-right tabular-nums border-r border-b"
               style="border-color:rgba(31,56,100,0.08)">
             {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
@@ -169,6 +192,7 @@
               style="border-color:rgba(31,56,100,0.08)">
             {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
           </td>
+          {% endif %}
           {% endfor %}
         </tr>
         {% endfor %}
@@ -179,6 +203,12 @@
               style="border-color:rgba(31,56,100,0.2)">TOTAL</td>
           {% for ym in data.months %}
           {% set cell = data.section_type.total.months.get(ym) %}
+          {% if ym in data.failed_months %}
+          <td class="px-2 py-2 text-center font-bold border-r border-t-2" colspan="2"
+              style="border-color:rgba(31,56,100,0.2);color:#b85000;font-size:10px">
+            ⚠ unavailable
+          </td>
+          {% else %}
           <td class="px-2 py-2 text-right tabular-nums font-bold text-gray-800 border-r border-t-2"
               style="border-color:rgba(31,56,100,0.2)">
             {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
@@ -187,6 +217,7 @@
               style="border-color:rgba(31,56,100,0.2)">
             {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
           </td>
+          {% endif %}
           {% endfor %}
         </tr>
       </tbody>
@@ -231,6 +262,12 @@
               style="border-color:rgba(31,56,100,0.08)">{{ row.label }}</td>
           {% for ym in data.months %}
           {% set cell = row.months.get(ym) %}
+          {% if ym in data.failed_months %}
+          <td class="px-2 py-1.5 text-center border-r border-b" colspan="2"
+              style="border-color:rgba(31,56,100,0.08);color:#b85000;font-size:10px">
+            ⚠ unavailable
+          </td>
+          {% else %}
           <td class="px-2 py-1.5 text-right tabular-nums border-r border-b"
               style="border-color:rgba(31,56,100,0.08)">
             {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
@@ -239,6 +276,7 @@
               style="border-color:rgba(31,56,100,0.08)">
             {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
           </td>
+          {% endif %}
           {% endfor %}
         </tr>
         {% endfor %}
@@ -250,6 +288,12 @@
           {% for ym in data.months %}
           {# Use section_size total (mirrors section_type total; both from same daily data) #}
           {% set cell = data.section_size.total.months.get(ym) %}
+          {% if ym in data.failed_months %}
+          <td class="px-2 py-2 text-center font-bold border-r border-t-2" colspan="2"
+              style="border-color:rgba(31,56,100,0.2);color:#b85000;font-size:10px">
+            ⚠ unavailable
+          </td>
+          {% else %}
           <td class="px-2 py-2 text-right tabular-nums font-bold text-gray-800 border-r border-t-2"
               style="border-color:rgba(31,56,100,0.2)">
             {% if cell and cell.prod is not none %}{{ "{:,.0f}".format(cell.prod) }}{% endif %}
@@ -258,6 +302,7 @@
               style="border-color:rgba(31,56,100,0.2)">
             {% if cell and cell.rej is not none %}{{ "{:,.0f}".format(cell.rej) }}{% endif %}
           </td>
+          {% endif %}
           {% endfor %}
         </tr>
       </tbody>
