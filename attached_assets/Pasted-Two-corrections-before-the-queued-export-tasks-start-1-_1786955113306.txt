@@ -1,0 +1,49 @@
+Two corrections before the queued export tasks start.
+
+=== 1. Tank tabs — my spec was wrong, do NOT build a rename lookup ===
+The audit reports Tank per-size tabs are named by product type ("3 Layer Light") instead of
+size ("500 LTR"), and proposes an item_type -> size lookup. That is the wrong fix.
+
+The source workbooks carry BOTH axes:
+  SUMMARY (LTR) splits by product type AND by size (the two stacked pivots, R-37)
+  and there are SEPARATE per-size tabs: 500 LTR / 750 LTR / 1000 LTR / 1500 LTR /
+  2000 LTR / 3000 LTR / 5000 LTR (KH), and 500/750/1000/2000 LTR (VN, WB)
+
+So the export should produce the per-SIZE tabs the source has, in addition to whatever
+product-type breakdown it already emits. Not a rename — a second set of tabs, grouped by
+SIZE (LTR.) which is read directly from PROD. REPORT.
+
+Also: WB's fifth product-type tab ("4 Layer Colour") is NOT an over-count. WB genuinely has
+five product types. My expected-count table conflated the two axes. Correct the expected
+counts accordingly and report the revised numbers.
+
+=== 2. Report 11 Notes tab rows 2-4 are malformed ===
+Rows 2-4 have the figure in the MONTH column and are labelled R-24, which is wrong on both
+counts:
+
+  R-24 | SUMMARY | 67.95 | 75,083 / 1,105 (annual basis) | Our moulds count is not in...
+
+These are the sum-of-monthly TOTAL defects in the source sheet - a different finding from
+R-24. They should be their own rule with the columns used properly:
+
+  Rule            Section  Month  Our Figure  Source Figure  Difference  Note
+  Sheet TOTAL     SUMMARY  FY     67.95       272.92         +204.97     Source TOTAL adds the four
+  defect                                                                 monthly values instead of
+                                                                         recomputing 75,083 / 1,105
+  (same for 278.9 vs 1,121 and 33.52 vs 137)
+
+Only the JUN'26 row (147,835 vs 160,478) is genuinely R-24.
+
+=== THEN proceed with the three queued tasks, in this order ===
+(a) Number precision — smallest, most visible. Split "num" into int / cur / rate in both the
+    Column definitions and _num_fmt(). Cost/KG 2.48 not 2.5; Wages no decimal; Run Hours
+    integer. Applies to all 13.
+(b) Missing tabs — do R1, R2, R5, R6 first (pure serialiser omissions, data already in the
+    builders). R1 is the worst: one placeholder "Report" tab where seven belong. R10 and R13
+    need restructuring. R11's four tabs stay a documented omission - the per-machine grain
+    genuinely is not in the builder.
+(c) Cell comments last — infrastructure exists (_apply_comments, cell_comments, the Flag
+    placement fields), nothing populates it. Lowest risk; Notes already carries the content.
+
+Validate after each: page figures unchanged, and downloaded figures equal page figures.
+No Sheets writes (R-21), no cache clearing (R-34).
