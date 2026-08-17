@@ -1,0 +1,79 @@
+# Export — Close the Remaining Tab Gaps (all reports except segment-labour)
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+`segment-labour` is already in progress separately — **do not touch it here.**
+
+Six reports remain incomplete. Three are straightforward serialiser work, two need a builder change, one stays a documented omission. **Work through them in the order below and report after each**, so a problem in one does not stall the rest.
+
+---
+
+## Already correct — do not change
+
+`pipe-summary` (18) · `moulding-summary` (32) · `gom-summary` (10) · `tank-vn-summary` (8) · `ptmt-mould-efficiency` (3) · `mould-eff` (3).
+
+**Two corrections to the expected counts** — the export is right and my earlier table was stale:
+- `tank-kh-summary` produces **12** tabs, including `300 LTR`. That is correct — it is the `WT-3LL-03` size added in the `_SIZE_CODE_MAP` fix.
+- `tank-wb-summary` produces **11** tabs including `1500/3000/5000 LTR`. Also correct — WB genuinely produces seven sizes.
+
+Both read their sizes from live data. **Leave them alone** and update any expected-count table to 12 and 11.
+
+---
+
+## 1 · `pipe-moulds-summary` — per-material tabs
+
+**Now:** `Cover · SUMMARY · Apr,26 – Jul,26 · Apr,25 – Jul,25 · Notes` (5)
+**Target:** `Cover · SUMMARY · CPVC Mould Summary (26-27) · UPVC Mould Summary (26-27) · AGRI Mould Summary (26-27) · SWR Mould Summary (26-27) · PPR Mould Summary (26-27) · Notes` (8)
+
+The serialiser currently emits the two **FY-period blocks** as tabs, with the five materials as rows inside each. The source workbook does the opposite: one tab per material, with both FY periods inside. Transpose it — same data, regrouped.
+
+Keep the FY25-26 block labelled as read from the closed annual (**R-03**), and carry the **PPR-missing-from-source-TOTAL** note through to `Notes`.
+
+## 2 · `compound-compilation` — monthly tabs
+
+**Now:** `Cover · Compound Balance · Raw Materials · Notes` (4)
+**Target:** `Cover · TOTAL · APR-26 · MAY-26 · JUN-26 · JUL-26 · AUG-26 … MAR-27 · Notes` (15)
+
+`gen_compound` still uses inline logic rather than a serialiser, and aggregates across months. Restructure the loop to emit one sheet per month plus the `TOTAL` sheet, each carrying the full eight-row mixer balance and the material breakdown.
+
+**Months with no data produce a tab with the row structure and blank cells — never zeros** (**R-07**, **R-08**). Preserve the two verified relationships: `Weight Loss = Batch Weight − Material out of Mixer`, and `Av. Weight Loss % = Loss ÷ Material out of Mixer` (the UPVC row distinguishes that denominator: 0.51% not 0.50%).
+
+**While you are in here:** `gen_compound` and `gen_ptmt_eff` are the only two reports still on an inline path rather than a `serial_*` function, so their download can drift from their page. Report whether they can be routed through serialisers; if not, explain the constraint.
+
+## 3 · `garden-pipe-summary` and `hdpe-summary` — per-machine tabs
+
+**Garden now:** `Cover · SUMMARY · SUMMARY-1 · Note on Omitted Tabs · Notes` (5) → **target 10**: add `HOURS · OUTPUT · MC-1 · MC-2 · MC-3 · MC-4`
+**HDPE now:** `Cover · SUMMARY · Note on Omitted Tabs · Notes` (4) → **target 12**: add `SUMMARY-1 · HOURS · OUTPUT · MC-1 … MC-6`
+
+The omission note says these need the builder to expose per-machine sections. **But both pages render per-machine data**, so the records carry machine grain — this is a builder change, not missing data.
+
+**Report first:** what do `build_garden_summary` and `build_hdpe_summary` currently return, and what is needed to expose the per-machine breakdown the pages already show? Then implement it. Follow the pattern already working in `pipe-summary`, whose `MC-1…MC-9` tabs come from section6's expanded `month_rows`.
+
+Garden's per-machine tabs must carry the rejection join and the synthetic zero-output records for rejection-only dates (July: M/C-2 70 kg, M/C-3 85 kg on the 31st). HDPE's must show **April and June as idle**, and **July M/C-2 rejection as `n/a`**, never 0.00%.
+
+## 4 · `ptmt-moulds-summary` — leave as is
+
+**Now:** `Cover · SUMMARY · Note on Omitted Tabs · Notes` (4). `MC Utilization`, `Month Wise MC`, `GROUP WISE` and `MATERIAL WISE` need per-machine PTMT data that genuinely is not in the pipeline — unlike Garden and HDPE.
+
+**Keep the documented omission.** Confirm the note names the four tabs and states why. Do not fabricate them.
+
+---
+
+## Applies to every report touched
+
+- **Downloaded figures must equal page figures.** Anchors: Garden 232,528 block / 138,052 DR · HDPE 23,817.24 with JUL 22,448.04 · PTMT 524,465 daily · Pipe Moulds all 15 reconciliation checks.
+- Number formats as fixed in `8adb6dd`: `int` for hours and counts, `cur` for rupees, `rate` (2 dp) for cost ratios, `kg` for output.
+- `Notes` tab populated with every flag, and cell comments on the affected figures.
+- `AWAITING SOURCE DATA`, `n/a`, `IDLE`, `⚠ unavailable` render as **text**, never 0 or blank.
+- No formulas, no external references.
+- **No page figure changes.** If any moves, **stop**.
+
+## Do not touch
+
+`segment-labour` (in progress) · the thirteen `mgmt_*.py` builders' **calculations** — expose grain where needed, do not alter arithmetic · `tank-kh-summary` / `tank-wb-summary` size tabs · `tank_reconcile.py` / R-39 (**R-41**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_ideal_labour_rates()` (**R-40**) · `mp_*.py` (**R-20**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back, after each report
+
+Tab list produced · page-vs-download figures · the Garden/HDPE builder finding before you change them · whether `gen_compound` and `gen_ptmt_eff` can move to serialisers · confirmation that no page figure moved.

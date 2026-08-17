@@ -1,0 +1,82 @@
+# Export — Report 1 (Segment Labour / Power / Solar): split the placeholder into seven tabs
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis` (at `8adb6dd`).
+
+The largest remaining export gap. `serial_segment_labour` emits a single placeholder sheet named `Report`, where the source workbook — and our own page — carry **seven** distinct sections.
+
+**This is a mapping job, not a restructure.** `build_mgmt_report_data` already returns the sections separately: `units`, `combined_wages`, `ideal_power_sec`, `ideal_labour_sec`, `reject_prod_sec`. The data is there; only the serialiser flattens it.
+
+---
+
+## Target tab structure
+
+```
+Cover · Combined Wages · UNIT-1 · UNIT-2 · UNIT-3 ·
+Ideal Power Cost · Ideal Labour Cost · REJECTION & PRODUCTION · Notes
+```
+
+**Nine tabs total.** Tab names exactly as above — they mirror the source workbook `Annual 26-27 Segment Wise Labour Cost, Solar Cost & Power Cost`.
+
+**`UNIT-1` / `UNIT-2` / `UNIT-3`** are three separate sheets, one per unit, each with the full 17-column layout the page renders:
+
+```
+SEGMENT | MONTH | No. Of Labour | Contractor Labour | Total Labour |
+Paid Wages | Paid Wages for Contractor Labour | Total Paid Wages |
+Total Production (Kgs) | JVVL Power Amount | Electricity Generation Unit (kWh) |
+Unit Utilise per KG | As per 7.08 Basic Rate | Total Power |
+Per KG Power Cost | Per KG Labour Cost | Total Cost
+```
+
+Rows: `TOTAL` first, then `APR'26` → `MAR'27`. Segment groupings: **UNIT-1** = CP · PTMT · Hardware · Sink · **UNIT-2** = Plumbing · Tank · **UNIT-3** = Garden Pipe · HDPE Pipe.
+
+`Combined Wages` carries the UNIT × SEGMENT aggregate with payroll/contractor/total headcount and wages plus the grand-total row. `Ideal Power Cost` and `Ideal Labour Cost` are the monthly tables with our kg × the per-segment ₹/kg rates. `REJECTION & PRODUCTION` is the monthly net/reject/rej% per segment.
+
+---
+
+## Carry the flags through
+
+The page renders several flags on these sections. All must reach the workbook — on the `Notes` tab, and as cell comments where a specific figure is affected:
+
+- **R-43** on the Fittings column of both Ideal Cost sheets — the source's Fittings figure is a **piece count** (APR 13,40,117) multiplied by a per-kg rate, inflating its ideal cost ~15×; ours uses kilograms and is the correct basis.
+- **R-24** on PTMT June — daily 147,835 vs annual 160,478, separate mould chain. Reuse `_PTMT_R24_NOTES`; do not duplicate it.
+- **R-42** on Garden Pipe wages — ₹2,20,797 + ₹50,547 (our Segment Cost source) against the Garden annual's ₹4,26,164, with identical paid hours in both.
+- **The UNIT-1 `#REF!` divergence** — the source worksheet's headcount columns are broken and its production column reads 0; ours are computed. This is the clearest Cardinal Rule case in the report and should be stated, not silently corrected.
+- **Basis labels** — production is **gross** in costing (rejection included), matching the workbook's own note; the production pages use net. Label it per **R-22**.
+- **`AWAITING SOURCE DATA`** for July wages must render as that text, never 0 or blank (**R-07**, **R-08**).
+
+---
+
+## Formatting
+
+Apply the column kinds fixed in `8adb6dd`: headcount and hours → `int`; wages, power amounts and total cost → `cur` (no decimal); per-kg and per-hour rates → `rate` (2 dp); production → `kg`; percentages as percentages.
+
+Bold TOTAL rows, freeze the header row, and keep the `SEGMENT`/`MONTH` columns leftmost as on the page.
+
+---
+
+## Validate
+
+- Nine tabs, named exactly as listed, in that order.
+- **Downloaded figures equal page figures** for every section — spot-check Garden Pipe wages ₹2,20,797 + ₹50,547, PTMT 524,465 daily basis, Fittings 366,016, PIPE 1,277,971, and the Ideal Labour Fittings column (ours, not the inflated source figure).
+- All four flags plus the basis labels appear on `Notes` with figures, and cell comments sit on the affected cells.
+- July wages read `AWAITING SOURCE DATA`.
+- No formulas, no external references.
+- **No page figure changes.** If any moves, **stop**.
+
+## Do not touch
+
+`build_mgmt_report_data`'s calculations — serialise its existing output, do not modify it · `_PTMT_R24_NOTES` (reuse) · the other twelve serialisers · `tank_reconcile.py` / R-39 (**R-41**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_ideal_labour_rates()` (**R-40**) · `mp_*.py` (**R-20**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+---
+
+## Also report, do not fix
+
+**Garden (R5) and HDPE (R6) omitted tabs.** Both currently carry a "Note on Omitted Tabs" sheet stating that `HOURS`, `OUTPUT` and `MC-1…n` need the builder to expose per-machine sections. But **their pages render per-machine data**, so the records clearly carry machine grain.
+
+Report whether those builders return only a monthly rollup, and what would be needed to expose the per-machine breakdown. If it is a builder change rather than a serialiser one, say so — that is a different situation from **R11**, where the per-machine grain genuinely is not in the pipeline at all. The two should not be conflated.
+
+## Report back
+
+The nine tab names produced · the page-vs-download comparison for each section · the `Notes` tab verbatim · where cell comments were placed · the Garden/HDPE per-machine finding · confirmation that no page figure moved.
