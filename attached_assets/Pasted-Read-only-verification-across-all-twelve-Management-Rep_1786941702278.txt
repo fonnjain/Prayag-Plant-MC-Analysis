@@ -1,0 +1,48 @@
+Read-only verification across all twelve Management Reports. Change nothing.
+No Build mode, no restart, no publish, no Sheets writes (R-21), no cache clearing (R-34).
+Report observed values; if something is wrong, report it — do not fix it (R-30).
+
+WHY: the last such pass found a TypeError breaking two sections of a shipped report, and a
+latent _sh.get_token() AttributeError in two others that only fires on a cold cache. Seven
+reports have landed since. A 200 response with correct headline figures is not proof every
+section rendered.
+
+PER REPORT, PER SECTION:
+1. Does each section render populated — not an empty shell, error banner, or omitted block?
+2. Section counts: R1=8 · R2=7 · R3=6 · R4=1 · R5=1 · R6=3 · R7/8/9=2 blocks each ·
+   R10=2 · R11=1 · R12=1 · R13=2 blocks.
+3. Any Python exception, TypeError, Undefined or Jinja error in the logs during render —
+   even where the page returned 200.
+
+ANCHORS:
+  PIPE 1,277,971 kg / 6,507 h · Fittings 366,016 · Moulding 35,972 h / 366,015 kg
+  PTMT 524,465 daily basis (Report 11: 524,468, 3 kg rounding) · PTMT hours 77,418 with basis note
+  Garden 232,528 block / 138,052 DR · HDPE 23,817.24 (JUL 22,448.04)
+  Tank VN 221,250/534,000/533,500/565,500 · WB 415,000/1,048,500/1,430,000/1,702,000
+       KH 846,600/1,419,500/1,353,500 — both pivots equal per plant per month
+  Report 12 APR TOTAL efficiency 97.04% · Report 13 all 15 reconciliation checks
+
+COLD-PATH CHECK — the one that has bitten twice:
+4. For each report, confirm the failed-read guard is present: does a (plant, ym) whose read
+   FAILS render "⚠ unavailable" rather than blank, and is a partial result excluded from cache?
+   The guard was added to Tank, Garden and HDPE. Confirm whether PTMT, Moulding, GOM, Pipe,
+   Compound and Pipe Moulds share the same get_daily_records shape and therefore the same
+   exposure. Report any builder that lacks it.
+5. Is _sh.get_token() (which does not exist) still called anywhere? It was fixed in Garden and
+   HDPE; grep the remaining builders.
+
+FLAGS — confirm each still renders:
+  R-23 Garden · R-42 Garden and HDPE wages · R-43 Fittings · R-24 PTMT June (Reports 1 and 11)
+  R-26 Tank KH 2.24x · KH June data-error panel · GARDEN_WB disclosure · May DR- badge
+  HDPE IDLE badges and JUL M/C-2 n/a · unknown-band warning · Ideal Hrs (sheet) labels
+  sum-of-monthly divergences: GOM 76.10→10.17 and PTMT 272.92/1,121/137
+  Report 13 PPR-missing-from-TOTAL note · AWAITING on every July wage column, never 0.00
+
+ALSO:
+6. Cross-module imports between the twelve builders — GOM imports 11 symbols from Moulding.
+   Report any others introduced since.
+7. Stale literals in template text that should interpolate from data.* — Reports 4 and 5 were
+   de-literalled; check the ten others.
+
+Confirm at the end: "/" serves, /management-reports lists all twelve, Machine Planning
+untouched, nothing changed.
