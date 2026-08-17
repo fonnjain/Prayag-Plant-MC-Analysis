@@ -97,9 +97,9 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         Column("n_payroll",        "Payroll Staff",     "int"),
         Column("n_contractor",     "Contractor",        "int"),
         Column("n_total",          "Total Headcount",   "int",  total=True),
-        Column("paid_wages",       "Payroll Wages (₹)", "num",  total=True),
-        Column("contractor_wages", "Contractor (₹)",    "num",  total=True),
-        Column("total_wages",      "Total Wages (₹)",   "num",  total=True),
+        Column("paid_wages",       "Payroll Wages (₹)", "cur",  total=True),
+        Column("contractor_wages", "Contractor (₹)",    "cur",  total=True),
+        Column("total_wages",      "Total Wages (₹)",   "cur",  total=True),
     ]
     cw_rows = []
     for u in cw_units:
@@ -129,15 +129,15 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         Column("n_contractor",     "Contractor",      "int"),
         Column("n_total_lab",      "Total",           "int"),
         Column("paid_hours",       "Paid Hours",      "num"),
-        Column("paid_wages",       "Payroll (₹)",     "num",  total=True),
-        Column("contractor_wages", "Contractor (₹)",  "num",  total=True),
-        Column("total_wages",      "Total Wages (₹)", "num",  total=True),
+        Column("paid_wages",       "Payroll (₹)",     "cur",  total=True),
+        Column("contractor_wages", "Contractor (₹)",  "cur",  total=True),
+        Column("total_wages",      "Total Wages (₹)", "cur",  total=True),
         Column("jvvl",             "Units (kWh)",     "num"),
-        Column("total_power",      "Power Cost (₹)",  "num",  total=True),
-        Column("solar",            "Solar (₹)",       "num"),
-        Column("per_kg_power",     "Power / KG (₹)",  "num"),
-        Column("per_kg_labour",    "Labour / KG (₹)", "num"),
-        Column("total_cost",       "Total Cost (₹)",  "num",  total=True),
+        Column("total_power",      "Power Cost (₹)",  "cur",  total=True),
+        Column("solar",            "Solar (₹)",       "cur"),
+        Column("per_kg_power",     "Power / KG (₹)",  "rate"),
+        Column("per_kg_labour",    "Labour / KG (₹)", "rate"),
+        Column("total_cost",       "Total Cost (₹)",  "cur",  total=True),
     ]
     for u in (d.get("units") or []):
         if not isinstance(u, dict):
@@ -185,8 +185,8 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         sample = ip_rates[0]
         ip_month_keys = [k for k in sample if k not in ("seg","segment","total_ideal")]
         ip_cols = ([Column("seg", "Segment", "text", width=18)] +
-                   [Column(k, k, "num") for k in ip_month_keys] +
-                   [Column("total_ideal", "Total Ideal (₹)", "num", total=True)])
+                   [Column(k, k, "cur") for k in ip_month_keys] +
+                   [Column("total_ideal", "Total Ideal (₹)", "cur", total=True)])
         ip_rows = []
         for rr in ip_rates:
             if isinstance(rr, dict):
@@ -216,8 +216,8 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         sample = il_rates[0]
         il_month_keys = [k for k in sample if k not in ("seg","segment","total_ideal")]
         il_cols = ([Column("seg", "Segment", "text", width=18)] +
-                   [Column(k, k, "num") for k in il_month_keys] +
-                   [Column("total_ideal", "Total Ideal (₹)", "num", total=True)])
+                   [Column(k, k, "cur") for k in il_month_keys] +
+                   [Column("total_ideal", "Total Ideal (₹)", "cur", total=True)])
         il_rows = []
         for rr in il_rates:
             if isinstance(rr, dict):
@@ -292,14 +292,14 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
     s1_total = s1.get("total_row") or {}
     s1_cols = [
         Column("month_lbl",         "Month",            "text", width=10),
-        Column("run_hrs",           "Run Hours",        "num",  total=True),
+        Column("run_hrs",           "Run Hours",        "int",  total=True),
         Column("gross_output_kg",   "Output (KG)",      "kg",   total=True),
         Column("labour",            "Labour",           "int",  total=True),
         Column("paid_hrs",          "Paid Hours",       "num"),
-        Column("wages",             "Wages (₹)",        "num",  total=True),
-        Column("devoted_per_person","Devot./Person",    "num"),
-        Column("per_hour_cost",     "Cost / Hr (₹)",   "num"),
-        Column("per_kg_cost",       "Cost / KG (₹)",   "num"),
+        Column("wages",             "Wages (₹)",        "cur",  total=True),
+        Column("devoted_per_person","Devot./Person",    "rate"),
+        Column("per_hour_cost",     "Cost / Hr (₹)",   "rate"),
+        Column("per_kg_cost",       "Cost / KG (₹)",   "rate"),
     ]
     s1_data = [_row(r, [c.key for c in s1_cols]) for r in s1_rows]
     s1_totrow = _row(s1_total, [c.key for c in s1_cols])
@@ -320,11 +320,11 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
     s2_cols = [
         Column("machine",      "Machine",           "text", width=14),
         Column("pipe_type",    "Type",              "text", width=10),
-        Column("actual_hrs",   "Actual Hrs",        "num",  total=True),
-        Column("ideal_hrs",    "Ideal Hrs",         "num"),
+        Column("actual_hrs",   "Actual Hrs",        "int",  total=True),
+        Column("ideal_hrs",    "Ideal Hrs",         "int"),
         Column("actual_out_kg","Output (KG)",       "kg",   total=True),
-        Column("ideal_rate",   "Ideal Rate",        "num"),
-        Column("avg_hr",       "Avg / Hr",          "num"),
+        Column("ideal_rate",   "Ideal Rate",        "rate"),
+        Column("avg_hr",       "Avg / Hr",          "rate"),
         Column("util_pct",     "Utilisation %",     "pct"),
         Column("out_eff_pct",  "Output Eff. %",     "pct"),
     ]
@@ -353,11 +353,11 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
         Column("type",      "Material Type", "text", width=16),
         Column("machines",  "Machines",      "text", width=10),
         Column("qty",       "Qty",           "int"),
-        Column("hrs",       "Hours",         "num",  total=True),
+        Column("hrs",       "Hours",         "int",  total=True),
         Column("output_kg", "Output (KG)",   "kg",   total=True),
-        Column("ideal_out", "Ideal Out",     "num"),
-        Column("ideal_hrs", "Ideal Hrs",     "num"),
-        Column("avg_hr",    "Avg / Hr",      "num"),
+        Column("ideal_out", "Ideal Out",     "kg"),
+        Column("ideal_hrs", "Ideal Hrs",     "int"),
+        Column("avg_hr",    "Avg / Hr",      "rate"),
         Column("util_pct",  "Util %",        "pct"),
         Column("out_eff",   "Out Eff %",     "pct"),
     ]
@@ -376,74 +376,149 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
         sections=[Section(s3_cols, s3_data, s3_totrow if s3_total else None)],
     ))
 
-    # ---- MC WISE tab (section4 — month × machine matrix) ----
+    # ---- MC WISE tab + HOURS + OUTPUT (all from section4 data) ----
     s4 = d.get("section4") or {}
     s4_month_rows = s4.get("month_rows") or []
     s4_total_cols  = s4.get("total_cols") or {}
     mc_labels = list(s4_total_cols.keys()) if s4_total_cols else []
+
+    # Helpers defined unconditionally so MONTHWISE/MC-x sections can reuse them.
+    def _mc_cell(mc_data):
+        """Prefer output_kg over hrs from a per-machine cell dict."""
+        if not isinstance(mc_data, dict):
+            return _v(mc_data)
+        for _k in ("output_kg", "out", "kg", "val", "hrs"):
+            _v2 = mc_data.get(_k)
+            if _v2 is not None:
+                return _v(_v2)
+        return _v(None)
+
+    def _hrs_cell(mc_data):
+        """Extract run-hours-only from a per-machine cell dict."""
+        if not isinstance(mc_data, dict):
+            return _v(mc_data)
+        return _v(mc_data.get("hrs"))
+
     if s4_month_rows and mc_labels:
         mcw_cols = ([Column("month_lbl", "Month", "text", width=10)] +
                     [Column(mc, mc, "num") for mc in mc_labels])
-        def _mc_cell(mc_data):
-            """Scalar from a per-machine cols entry; prefers output over hours."""
-            if not isinstance(mc_data, dict):
-                return _v(mc_data)
-            for _k in ("output_kg", "out", "kg", "val", "hrs"):
-                _v2 = mc_data.get(_k)
-                if _v2 is not None:
-                    return _v(_v2)
-            return _v(None)
-
-        mcw_rows = []
+        hrs_cols = ([Column("month_lbl", "Month", "text", width=10)] +
+                    [Column(mc, mc, "int") for mc in mc_labels])
+        out_cols = ([Column("month_lbl", "Month", "text", width=10)] +
+                    [Column(mc, mc, "kg") for mc in mc_labels])
+        mcw_rows, hrs_rows, out_rows = [], [], []
+        total_row_mcw  = {"month_lbl": "TOTAL"}
+        hrs_totrow     = {"month_lbl": "TOTAL"}
+        out_totrow     = {"month_lbl": "TOTAL"}
         for mo in s4_month_rows:
             if not isinstance(mo, dict):
                 continue
             cols_data = mo.get("cols") or {}
-            row = {"month_lbl": mo.get("month_lbl") or mo.get("month_disp") or ""}
+            lbl = mo.get("month_lbl") or mo.get("month_disp") or ""
+            mrow = {"month_lbl": lbl}
+            hrow = {"month_lbl": lbl}
+            orow = {"month_lbl": lbl}
             for mc in mc_labels:
-                row[mc] = _mc_cell(cols_data.get(mc))
-            mcw_rows.append(row)
-        total_row_mcw = {"month_lbl": "TOTAL"}
+                mc_data = cols_data.get(mc)
+                mrow[mc] = _mc_cell(mc_data)
+                hrow[mc] = _hrs_cell(mc_data)
+                orow[mc] = _mc_cell(mc_data)
+            mcw_rows.append(mrow)
+            hrs_rows.append(hrow)
+            out_rows.append(orow)
         for mc, mc_data in s4_total_cols.items():
             total_row_mcw[mc] = _mc_cell(mc_data)
+            hrs_totrow[mc]    = _hrs_cell(mc_data)
+            out_totrow[mc]    = _mc_cell(mc_data)
         sheets.append(ReportSheet(
             name="MC WISE",
             title=f"Pipe — Machine-wise Monthly — {fy_lbl}",
             subtitle="Month × machine matrix. Values are output (KG) per machine per month.",
             sections=[Section(mcw_cols, mcw_rows, total_row_mcw)],
         ))
+        sheets.append(ReportSheet(
+            name="HOURS",
+            title=f"Pipe — Run Hours by Machine & Month — {fy_lbl}",
+            subtitle="Machine actual run hours per month (integer hours).",
+            sections=[Section(hrs_cols, hrs_rows, hrs_totrow)],
+        ))
+        sheets.append(ReportSheet(
+            name="OUTPUT",
+            title=f"Pipe — Output (KG) by Machine & Month — {fy_lbl}",
+            subtitle="Machine gross output KG per month.",
+            sections=[Section(out_cols, out_rows, out_totrow)],
+        ))
 
-    # ---- HOURS + OUTPUT tabs (section5, section6) ----
-    for sec_key, tab_name in [("section5","HOURS"), ("section6","OUTPUT")]:
-        sx = d.get(sec_key) or {}
-        machines = sx.get("machines") or []
-        if machines:
-            # machines may be a list of strings (machine labels) or dicts
-            if isinstance(machines[0], str):
-                mh_cols = [Column("machine", "Machine", "text", width=20)]
-                sheets.append(ReportSheet(
-                    name=tab_name,
-                    title=f"Pipe — {tab_name} — {fy_lbl}",
-                    sections=[Section(mh_cols,
-                                      [{"machine": m} for m in machines])],
-                ))
-            elif isinstance(machines[0], dict):
-                sample = machines[0]
-                # Exclude nested lists/dicts (e.g. "rows", "month_rows") —
-                # only scalar fields can be written as cell values.
-                _SKIP = {"machine","mc_label","rows","month_rows","dates"}
-                ex_keys = [k for k in sample
-                           if k not in _SKIP
-                           and not isinstance(sample.get(k), (list, dict))]
-                mh_cols = ([Column("machine", "Machine", "text", width=16)] +
-                            [Column(k, k.replace("_"," ").title(), "num")
-                             for k in ex_keys])
-                sheets.append(ReportSheet(
-                    name=tab_name,
-                    title=f"Pipe — {tab_name} — {fy_lbl}",
-                    sections=[Section(mh_cols,
-                                      [_row(m, ["machine"] + ex_keys) for m in machines])],
-                ))
+    # ---- MONTHWISE tab (section5: flat listing, one row per machine-month) ----
+    s5 = d.get("section5") or {}
+    s5_machines = s5.get("machines") or []
+    if s5_machines:
+        mw_cols = [
+            Column("machine",     "Machine",     "text", width=10),
+            Column("pipe_type",   "Type",        "text", width=10),
+            Column("month_lbl",   "Month",       "text", width=8),
+            Column("ideal_hrs",   "Ideal Hrs",   "int"),
+            Column("actual_hrs",  "Actual Hrs",  "int",  total=True),
+            Column("output_kg",   "Output (KG)", "kg",   total=True),
+            Column("ideal_output","Ideal Out",   "kg"),
+            Column("avg_hr",      "Avg / Hr",    "rate"),
+        ]
+        mw_rows = []
+        for mc_dict in s5_machines:
+            if not isinstance(mc_dict, dict):
+                continue
+            mc_lbl  = mc_dict.get("machine", "")
+            mc_type = mc_dict.get("pipe_type", "")
+            for mr in (mc_dict.get("rows") or []):
+                if not isinstance(mr, dict):
+                    continue
+                row = _row(mr, ["month_lbl","ideal_hrs","actual_hrs",
+                                "output_kg","ideal_output","avg_hr"])
+                row["machine"]   = mc_lbl
+                row["pipe_type"] = mc_type
+                mw_rows.append(row)
+        sheets.append(ReportSheet(
+            name="MONTHWISE",
+            title=f"Pipe — Monthwise Detail — {fy_lbl}",
+            subtitle="All machines × all months; one row per machine-month combination.",
+            sections=[Section(mw_cols, mw_rows)],
+        ))
+
+    # ---- Per-machine tabs MC-1…MC-9 (section6: expanded month_rows per machine) ----
+    import re as _re_pipe
+    s6 = d.get("section6") or {}
+    s6_machines = s6.get("machines") or []
+    mc_month_cols = [
+        Column("month_lbl",   "Month",       "text", width=10),
+        Column("ideal_hrs",   "Ideal Hrs",   "int"),
+        Column("actual_hrs",  "Actual Hrs",  "int",  total=True),
+        Column("output_kg",   "Output (KG)", "kg",   total=True),
+        Column("ideal_output","Ideal Out",   "kg"),
+        Column("avg_hr",      "Avg / Hr",    "rate"),
+        Column("util_pct",    "Util %",      "pct"),
+        Column("eff_pct",     "Eff %",       "pct"),
+    ]
+    for mc_dict in s6_machines:
+        if not isinstance(mc_dict, dict):
+            continue
+        mc_lbl  = mc_dict.get("machine", "")
+        mc_type = mc_dict.get("pipe_type", "")
+        _nm = _re_pipe.search(r"(\d+)", str(mc_lbl))
+        _n  = _nm.group(1) if _nm else str(mc_lbl).strip()
+        tab_name_mc = f"MC-{_n}"
+        mr_rows = [_row(r, [c.key for c in mc_month_cols])
+                   for r in (mc_dict.get("month_rows") or [])
+                   if isinstance(r, dict)]
+        tr = mc_dict.get("total_row") or {}
+        mc_totrow = _row(tr, [c.key for c in mc_month_cols])
+        mc_totrow["month_lbl"] = "TOTAL"
+        sheets.append(ReportSheet(
+            name=tab_name_mc[:31],
+            title=f"{tab_name_mc} — {mc_type} — {fy_lbl}",
+            subtitle=f"Ideal rate: {mc_dict.get('ideal_rate','')} kg/hr.",
+            sections=[Section(mc_month_cols, mr_rows,
+                              mc_totrow if tr else None)],
+        ))
 
     return sheets, flags
 
@@ -497,12 +572,12 @@ def serial_moulding(ym: str) -> _SheetFlagPair:
     s2_cols = [
         Column("band",      "Band (Ton)",  "text", width=12),
         Column("mc_count",  "Machines",   "int"),
-        Column("actual_hrs","Actual Hrs",  "num",  total=True),
-        Column("ideal_hrs", "Ideal Hrs",  "num",  total=True),
+        Column("actual_hrs","Actual Hrs",  "int",  total=True),
+        Column("ideal_hrs", "Ideal Hrs",  "int",  total=True),
         Column("output_kg", "Output (KG)","kg",   total=True),
         Column("reject_kg", "Reject (KG)","kg",   total=True),
         Column("runner_kg", "Runner (KG)","kg"),
-        Column("avg_hr",    "Avg / Hr",   "num"),
+        Column("avg_hr",    "Avg / Hr",   "rate"),
         Column("util_pct",  "Util %",     "pct"),
     ]
     s2_secs = []
@@ -547,12 +622,12 @@ def serial_moulding(ym: str) -> _SheetFlagPair:
     mc_list = s3.get("machines") or []
     mc_detail_cols = [
         Column("month_lbl",  "Month",       "text", width=10),
-        Column("ideal_hrs",  "Ideal Hrs",   "num"),
-        Column("actual_hrs", "Actual Hrs",  "num",  total=True),
+        Column("ideal_hrs",  "Ideal Hrs",   "int"),
+        Column("actual_hrs", "Actual Hrs",  "int",  total=True),
         Column("output_kg",  "Output (KG)", "kg",   total=True),
         Column("reject_kg",  "Reject (KG)", "kg",   total=True),
         Column("runner_kg",  "Runner (KG)", "kg"),
-        Column("avg_hr",     "Avg / Hr",    "num"),
+        Column("avg_hr",     "Avg / Hr",    "rate"),
         Column("util_pct",   "Util %",      "pct"),
     ]
     import re as _re2
@@ -740,36 +815,40 @@ def serial_garden(ym: str) -> _SheetFlagPair:
     # ---- SUMMARY tab ----
     sum_cols = [
         Column("month_lbl",       "Month",          "text", width=10),
-        Column("run_hrs",         "Run Hours",      "num",  total=True),
+        Column("run_hrs",         "Run Hours",      "int",  total=True),
         Column("net_kg",          "Net KG",         "kg",   total=True),
         Column("reject_kg",       "Reject KG",      "kg",   total=True),
         Column("gross_kg",        "Gross KG",       "kg",   total=True),
         Column("rej_pct_gross",   "Rej % (gross)",  "pct"),
         Column("labour",          "Labour",         "int"),
         Column("paid_hrs",        "Paid Hrs",       "num"),
-        Column("wages",           "Wages (₹)",      "num",  total=True),
-        Column("contractor_wages","Contractor (₹)", "num",  total=True),
-        Column("devoted_per_person","Devot./Person","num"),
-        Column("per_hour_cost",   "Cost / Hr (₹)", "num"),
-        Column("per_kg_cost",     "Cost / KG (₹)", "num"),
+        Column("wages",           "Wages (₹)",      "cur",  total=True),
+        Column("contractor_wages","Contractor (₹)", "cur",  total=True),
+        Column("devoted_per_person","Devot./Person","rate"),
+        Column("per_hour_cost",   "Cost / Hr (₹)", "rate"),
+        Column("per_kg_cost",     "Cost / KG (₹)", "rate"),
     ]
     sum_rows = []
+    sum_cell_comments: dict = {}
     for r in all_rows:
         if not isinstance(r, dict):
             continue
         row = _row(r, [c.key for c in sum_cols])
         if r.get("awaiting_wages"):
             row["wages"] = "AWAITING SOURCE DATA"
+            lbl = str(r.get("month_lbl") or r.get("month_disp") or "")
             flags.append(Flag(
                 rule="R-42",
                 section="SUMMARY",
-                month=str(r.get("month_lbl") or r.get("month_disp") or ""),
+                month=lbl,
                 our_figure="AWAITING",
                 source_figure="—",
                 difference="—",
-                note=f"Garden wages not yet received for {r.get('month_lbl','')}.",
+                note=f"Garden wages not yet received for {lbl}.",
                 cell_comment="Wages awaiting HR source sheet.",
             ))
+            if lbl:
+                sum_cell_comments[(lbl, "wages")] = "R-42: Wages awaiting HR source sheet."
         sum_rows.append(row)
     totrow = _row(total_row, [c.key for c in sum_cols])
     totrow["month_lbl"] = "TOTAL"
@@ -779,6 +858,7 @@ def serial_garden(ym: str) -> _SheetFlagPair:
         subtitle="GARDEN plant — monthly hours, output (DR basis), wages and cost. "
                  "Net kg from the daily daily-report workbook.",
         sections=[Section(sum_cols, sum_rows, totrow if total_row else None)],
+        cell_comments=sum_cell_comments,
     ))
 
     # ---- SUMMARY-1 tab — DR vs WB reconciliation ----
@@ -812,6 +892,19 @@ def serial_garden(ym: str) -> _SheetFlagPair:
             sections=[Section(r23_cols, r23_data)],
         ))
 
+    # ---- Note: per-machine tabs require builder extension ----
+    sheets.append(ReportSheet(
+        name="Note on Omitted Tabs",
+        title="Garden — Tabs Requiring Per-Machine Data",
+        note=(
+            "The following tabs are specified for this report but require "
+            "per-machine monthly breakdowns that the build_garden_summary "
+            "builder does not yet expose: HOURS, OUTPUT, MC-1, MC-2, MC-3, "
+            "MC-4. These will be added when the builder is extended to return "
+            "per-machine sections."
+        ),
+    ))
+
     return sheets, flags
 
 
@@ -835,20 +928,21 @@ def serial_hdpe(ym: str) -> _SheetFlagPair:
 
     sum_cols = [
         Column("month_lbl",       "Month",          "text", width=10),
-        Column("run_hrs",         "Run Hours",      "num",  total=True),
+        Column("run_hrs",         "Run Hours",      "int",  total=True),
         Column("net_kg",          "Net KG",         "kg",   total=True),
         Column("reject_kg",       "Reject KG",      "kg",   total=True),
         Column("gross_kg",        "Gross KG",       "kg",   total=True),
         Column("rej_pct_gross",   "Rej % (gross)",  "pct"),
         Column("labour",          "Labour",         "int"),
         Column("paid_hrs",        "Paid Hrs",       "num"),
-        Column("wages",           "Wages (₹)",      "num",  total=True),
-        Column("contractor_wages","Contractor (₹)", "num",  total=True),
-        Column("devoted_per_person","Devot./Person","num"),
-        Column("per_hour_cost",   "Cost / Hr (₹)", "num"),
-        Column("per_kg_cost",     "Cost / KG (₹)", "num"),
+        Column("wages",           "Wages (₹)",      "cur",  total=True),
+        Column("contractor_wages","Contractor (₹)", "cur",  total=True),
+        Column("devoted_per_person","Devot./Person","rate"),
+        Column("per_hour_cost",   "Cost / Hr (₹)", "rate"),
+        Column("per_kg_cost",     "Cost / KG (₹)", "rate"),
     ]
     sum_rows = []
+    sum_cell_comments: dict = {}
     for r in all_rows:
         if not isinstance(r, dict):
             continue
@@ -858,27 +952,33 @@ def serial_hdpe(ym: str) -> _SheetFlagPair:
             row["gross_kg"] = "IDLE"
         if r.get("awaiting_wages"):
             row["wages"] = "AWAITING SOURCE DATA"
+            lbl = str(r.get("month_lbl") or "")
             flags.append(Flag(
                 rule="R-42",
                 section="SUMMARY",
-                month=str(r.get("month_lbl") or ""),
+                month=lbl,
                 our_figure="AWAITING",
                 source_figure="—",
                 difference="—",
-                note=f"HDPE wages not yet received for {r.get('month_lbl','')}.",
+                note=f"HDPE wages not yet received for {lbl}.",
                 cell_comment="Wages awaiting HR source sheet.",
             ))
+            if lbl:
+                sum_cell_comments[(lbl, "wages")] = "R-42: Wages awaiting HR source sheet."
         if r.get("r23_differs"):
+            lbl = str(r.get("month_lbl") or "")
             flags.append(Flag(
                 rule="R-23",
                 section="SUMMARY",
-                month=str(r.get("month_lbl") or ""),
+                month=lbl,
                 our_figure=f"{r.get('net_kg',0):,.0f} kg",
                 source_figure=f"{r.get('dr_net_kg',0):,.0f} kg (DR)",
                 difference=f"{(r.get('net_kg',0) or 0) - (r.get('dr_net_kg',0) or 0):,.0f} kg",
                 note="HDPE daily-report net KG differs from our computed figure.",
                 cell_comment="R-23: DR net KG differs from computed.",
             ))
+            if lbl:
+                sum_cell_comments[(lbl, "net_kg")] = "R-23: DR net KG differs from computed — see Notes."
         sum_rows.append(row)
     totrow = _row(total_row, [c.key for c in sum_cols])
     totrow["month_lbl"] = "TOTAL"
@@ -887,6 +987,21 @@ def serial_hdpe(ym: str) -> _SheetFlagPair:
         title=f"HDPE M/C Summary — {fy_lbl}",
         subtitle="HDPE plant — monthly hours, output (DR basis), wages and cost.",
         sections=[Section(sum_cols, sum_rows, totrow if total_row else None)],
+        cell_comments=sum_cell_comments,
+    ))
+
+    # ---- Note: per-machine tabs require builder extension ----
+    sheets.append(ReportSheet(
+        name="Note on Omitted Tabs",
+        title="HDPE — Tabs Requiring Per-Machine Data",
+        note=(
+            "The following tabs are specified for this report but require "
+            "per-machine monthly breakdowns that the build_hdpe_summary "
+            "builder does not yet expose: SUMMARY-1, HOURS, OUTPUT, "
+            "MC-1, MC-2, MC-3, MC-4, MC-5, MC-6. "
+            "These will be added when the builder is extended to return "
+            "per-machine sections."
+        ),
     ))
 
     return sheets, flags
@@ -978,39 +1093,42 @@ def serial_tank(ym: str, plant: str = "TANK") -> _SheetFlagPair:
         f"{plant_lbl} — production in pieces, by item and month.",
     ))
 
-    # ---- Per-size tabs (from section_type rows grouped by size label) ----
-    size_groups: dict = {}
-    for row in (st.get("rows") or []):
-        if not isinstance(row, dict):
+    # ---- Per-size tabs (from section_size — one tab per litre capacity) ----
+    # section_size.rows has one dict per size ("500", "750", etc.) with monthly data.
+    for sz_row in (ss.get("rows") or []):
+        if not isinstance(sz_row, dict):
             continue
-        item_lbl = str(row.get("label") or row.get("item") or "")
-        # Extract size from label e.g. "500 LTR", "HKTANK 750 LTR"
-        import re as _re
-        m = _re.search(r"(\d{3,4})\s*(?:LTR|L|PCS)?", item_lbl.upper())
-        size_key = m.group(1) + " LTR" if m else item_lbl[:20]
-        size_groups.setdefault(size_key, []).append(row)
-    for size_key, size_rows in size_groups.items():
-        tab_name = size_key[:31]
-        t_cols = ([Column("label", "Item", "text", width=24)] +
+        sz_lbl = str(sz_row.get("label") or sz_row.get("item") or "")
+        if not sz_lbl:
+            continue
+        # Builder returns bare numbers ("500", "750"); append " LTR" for tab name.
+        tab_name = (f"{sz_lbl} LTR"
+                    if not sz_lbl.upper().endswith("LTR") else sz_lbl)[:31]
+        t_cols = ([Column("label", "Size", "text", width=18)] +
                   [Column(ym_k, disp, "num") for ym_k, disp in zip(months, months_disp)] +
-                  [Column("_total", "Total", "num", total=True)])
-        t_rows = []
-        for row in size_rows:
-            t_row = {"label": row.get("label","")}
-            mos = row.get("months") or {}
-            row_total = 0.0
-            for ym_k in months:
-                cell = mos.get(ym_k)
-                val = (cell.get("prod") or cell.get("ltr") if isinstance(cell,dict) else cell)
-                t_row[ym_k] = _v(val)
-                if isinstance(val, (int,float)):
-                    row_total += val
-            t_row["_total"] = row_total or None
-            t_rows.append(t_row)
+                  [Column("_total", "Total / FY", "num", total=True)])
+        t_row = {"label": tab_name}
+        row_total = 0.0
+        any_val = False
+        mos = sz_row.get("months") or {}
+        for ym_k in months:
+            cell = mos.get(ym_k)
+            if isinstance(cell, dict):
+                val = (cell.get("pcs") or cell.get("prod")
+                       or cell.get("ltr") or cell.get("kg"))
+            elif cell is None:
+                val = None
+            else:
+                val = cell
+            t_row[ym_k] = _v(val)
+            if val is not None and isinstance(val, (int, float)):
+                row_total += val
+                any_val = True
+        t_row["_total"] = row_total if any_val else None
         sheets.append(ReportSheet(
             name=tab_name,
-            title=f"{plant_lbl} — {size_key} — {fy_lbl}",
-            sections=[Section(t_cols, t_rows)],
+            title=f"{plant_lbl} — {tab_name} — {fy_lbl}",
+            sections=[Section(t_cols, [t_row])],
         ))
 
     # ---- Flags: data_errors (R-26), divergences ----
@@ -1059,22 +1177,22 @@ def serial_ptmt_moulds(ym: str) -> _SheetFlagPair:
     total = d.get("total") or {}
     sum_cols = [
         Column("disp",         "Month",          "text", width=12),
-        Column("hours",        "Run Hours",      "num",  total=True),
+        Column("hours",        "Run Hours",      "int",  total=True),
         Column("output_kg",    "Output (KG)",    "kg",   total=True),
         Column("reject_kg",    "Reject (KG)",    "kg",   total=True),
         Column("runner_kg",    "Runner (KG)",    "kg",   total=True),
         Column("reject_pct",   "Reject %",       "pct"),
         Column("runner_pct",   "Runner %",       "pct"),
         Column("moulds",       "Active Moulds",  "int"),
-        Column("av_hr_per_mould","Hrs / Mould",  "num"),
+        Column("av_hr_per_mould","Hrs / Mould",  "rate"),
         Column("lumps_kg",     "Lumps (KG)",     "kg"),
         Column("wastage_pct",  "Wastage %",      "pct"),
         Column("grinder_kg",   "Grinder (KG)",   "kg"),
         Column("labour",       "Labour",         "int"),
         Column("paid_hours",   "Paid Hours",     "num"),
-        Column("wages",        "Wages (₹)",      "num",  total=True),
-        Column("cost_per_hr",  "Cost / Hr (₹)",  "num"),
-        Column("cost_per_kg",  "Cost / KG (₹)",  "num"),
+        Column("wages",        "Wages (₹)",      "cur",  total=True),
+        Column("cost_per_hr",  "Cost / Hr (₹)",  "rate"),
+        Column("cost_per_kg",  "Cost / KG (₹)",  "rate"),
     ]
     data_rows = []
     for r in rows:
@@ -1107,20 +1225,41 @@ def serial_ptmt_moulds(ym: str) -> _SheetFlagPair:
     ))
 
     # Flags from sheet_total_bugs
+    # Builder dict shape: {"col": str, "sheet": numeric (wrong TOTAL),
+    #   "correct": numeric (our recomputed value), "formula": str,
+    #   "sourced": bool, "note": str}
     for bug in (d.get("sheet_total_bugs") or []):
-        if isinstance(bug, dict):
-            flags.append(Flag(
-                rule="R-24",
-                section="SUMMARY",
-                month="",
-                our_figure=str(bug.get("sourced") or bug.get("correct") or ""),
-                source_figure=str(bug.get("formula") or ""),
-                difference="",
-                note=str(bug.get("note") or
-                         f"Sheet TOTAL defect in column '{bug.get('col','')}' "
-                         f"of sheet '{bug.get('sheet','')}'."),
-                cell_comment=f"R-24 sheet total defect: {bug.get('col','')}",
-            ))
+        if not isinstance(bug, dict):
+            continue
+        correct_val = bug.get("correct")
+        sheet_val   = bug.get("sheet")
+        formula     = bug.get("formula") or ""
+        col_name    = bug.get("col") or ""
+        sourced     = bug.get("sourced", True)
+        bug_note    = bug.get("note") or ""
+        try:
+            _diff    = float(sheet_val) - float(correct_val)
+            diff_str = (f"+{_diff:,.2f}" if _diff > 0 else f"{_diff:,.2f}")
+        except Exception:
+            diff_str = ""
+        flags.append(Flag(
+            rule="Sheet TOTAL defect",
+            section="SUMMARY",
+            month="FY",
+            our_figure=(f"{float(correct_val):,.2f}"
+                        if correct_val is not None else "—"),
+            source_figure=(f"{float(sheet_val):,.2f}"
+                           if sheet_val is not None else "—"),
+            difference=diff_str,
+            note=(
+                f"Source sheet TOTAL for '{col_name}' sums the four monthly "
+                f"values instead of recomputing the ratio ({formula}). "
+                + (f"{bug_note} " if bug_note else "")
+                + ("" if sourced else
+                   "Column is blank in our output (not in Records pipeline).")
+            ),
+            cell_comment=f"Sheet TOTAL defect: {col_name}",
+        ))
 
     # Add note about omitted tabs
     sheets.append(ReportSheet(
@@ -1167,8 +1306,8 @@ def serial_ptmt_mould_eff(ym: str) -> _SheetFlagPair:
         eff_cols.append(Column(f"m_{ym_k}", str(lbl)[:10], "num"))
     eff_cols += [
         Column("total_pcs", "Total Pcs",       "int",  total=True),
-        Column("total_hrs", "Total Hrs",       "num",  total=True),
-        Column("ideal_hrs", "Ideal Hrs",       "num"),
+        Column("total_hrs", "Total Hrs",       "int",  total=True),
+        Column("ideal_hrs", "Ideal Hrs",       "int"),
         Column("util_pct",  "Utilisation %",   "pct"),
     ]
 
@@ -1276,11 +1415,11 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
         Column("material",  "Material",     "text", width=14),
         Column("n_total",   "Total Moulds", "int",  total=True),
         Column("n_run",     "Run Moulds",   "int",  total=True),
-        Column("hrs",       "Hours",        "num",  total=True),
-        Column("av_hr",     "Avg Hrs",      "num"),
+        Column("hrs",       "Hours",        "int",  total=True),
+        Column("av_hr",     "Avg Hrs",      "rate"),
         Column("pcs",       "Pieces",       "int",  total=True),
         Column("kg",        "KG",           "kg",   total=True),
-        Column("avg_month", "Avg / Month",  "num"),
+        Column("avg_month", "Avg / Month",  "rate"),
     ]
     for block in blocks:
         if not isinstance(block, dict):

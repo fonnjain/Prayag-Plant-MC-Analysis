@@ -330,12 +330,12 @@ def gen_compound(rid, label, plant, ym) -> ReportModel:
     # --- Sheet 1: per-compound balance summary ---
     bal_cols = [
         Column("cmp",      "Compound",      "text", width=16),
-        Column("opening",  "Opening (kg)",  "num"),
-        Column("batch",    "Batch (kg)",     "num",  total=True),
-        Column("given",    "Given (kg)",     "num",  total=True),
-        Column("closing",  "Closing (kg)",  "num"),
-        Column("loss_kg",  "Loss (kg)",      "num",  total=True),
-        Column("loss_pct", "Loss %",         "pct"),
+        Column("opening",  "Opening (kg)",  "kg"),
+        Column("batch",    "Batch (kg)",    "kg",   total=True),
+        Column("given",    "Given (kg)",    "kg",   total=True),
+        Column("closing",  "Closing (kg)", "kg"),
+        Column("loss_kg",  "Loss (kg)",    "kg",   total=True),
+        Column("loss_pct", "Loss %",        "pct"),
     ]
     bal_rows = []
     for c in comp["cols"]:
@@ -384,8 +384,8 @@ def gen_compound(rid, label, plant, ym) -> ReportModel:
     cmp_lbls  = {c["key"]: c["label"] for c in comp["cols"]}
     mat_cols  = [Column("mat", "Material / Chemical", "text", width=24)]
     for k in cmp_keys:
-        mat_cols.append(Column(k, cmp_lbls.get(k, k), "num", total=True))
-    mat_cols.append(Column("_tot", "Total (kg)", "num", total=True))
+        mat_cols.append(Column(k, cmp_lbls.get(k, k), "kg", total=True))
+    mat_cols.append(Column("_tot", "Total (kg)", "kg", total=True))
 
     mat_rows = []
     m_grand: dict = {k: 0.0 for k in cmp_keys}
@@ -461,9 +461,9 @@ def gen_ptmt_eff(rid, label, plant, ym) -> ReportModel:
     cols = [Column("ton",  "Tonnage Group",   "text", width=14),
             Column("n",    "Machines",        "int",  total=True),
             Column("out",  "Output (KG)",     "kg",   total=True),
-            Column("hrs",  "Run Hours",       "num",  total=True),
+            Column("hrs",  "Run Hours",       "int",  total=True),
             Column("util", "Utilisation %",   "pct"),
-            Column("avg",  "Avg Output / Hr", "num")]
+            Column("avg",  "Avg Output / Hr", "rate")]
     rows = []
     t_n = t_kg = t_h = 0.0
     for ton in sorted(bands, key=lambda x: int(x) if str(x).isdigit() else 9999):

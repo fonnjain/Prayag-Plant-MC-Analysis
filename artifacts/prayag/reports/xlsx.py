@@ -46,11 +46,20 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
 
 def _num_fmt(kind: str) -> str:
-    """Number format string; the third clause renders a real 0 as "-"."""
-    if kind == "int":
+    """Number format string; the third clause renders a real 0 as "-".
+
+    Kinds:
+      "int"  — whole counts, run hours, headcount         → no decimal
+      "kg"   — output / reject KG totals                  → no decimal
+      "cur"  — rupee totals (wages, power cost, …)        → no decimal
+      "rate" — cost/kg, cost/hr, devot/person, avg/hr     → 2 dp
+      "pct"  — percentage                                  → 1 dp + %
+      "num"  — generic numeric (paid hours, kWh, …)       → 1 dp
+    """
+    if kind in ("int", "kg", "cur"):
         return '#,##0;-#,##0;"-"'
-    if kind == "kg":
-        return '#,##0;-#,##0;"-"'
+    if kind == "rate":
+        return '#,##0.00;-#,##0.00;"-"'
     if kind == "pct":
         return '0.0"%";-0.0"%";"-"'
     if kind == "num":
