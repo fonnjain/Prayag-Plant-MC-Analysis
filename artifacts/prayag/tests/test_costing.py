@@ -491,6 +491,12 @@ class TestFreezeLogic:
             fid = cm.labour_file_id("PLUMBING", fy)
             assert fid, f"Missing file_id for PLUMBING/{fy}"
 
+    def test_july_2627_payroll_file_is_registered(self):
+        cm = _import_model()
+        assert cm.WAGES_SOURCES["PLUMBING"]["2627"]["2026-07"] == (
+            "1Rzs9I_Ua6ij1Es65S-T-xEBAk8o9E0wrpiB5h9JQrSM"
+        )
+
     def test_ptmt_no_file_id(self):
         cm = _import_model()
         assert cm.labour_file_id("PTMT", "2627") is None

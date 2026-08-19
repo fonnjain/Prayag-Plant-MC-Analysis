@@ -133,22 +133,24 @@
         <tbody>
           {% set tr = data.section1.total_row %}
           <tr style="background:rgba(31,56,100,0.07);border-bottom:2px solid rgba(31,56,100,0.20);font-weight:600">
-            <td class="px-2 py-2 whitespace-nowrap"
-                style="color:var(--navy);position:sticky;left:0;background:rgba(236,240,248,1);z-index:1">TOTAL</td>
+            <td class="px-2 py-2"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(236,240,248,1);z-index:1">
+              <div class="whitespace-nowrap">TOTAL</div>
+              {% if tr.awaiting %}
+              <div class="text-[9px] font-normal leading-tight" style="color:#c57a00">
+                Partial payroll through {{ tr.parsed_wage_months|join(", ") }} ·
+                awaiting {{ tr.awaiting_months|join(", ") }}
+              </div>
+              {% endif %}
+            </td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.run_hrs) if tr.run_hrs is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.gross_output_kg) if tr.gross_output_kg is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.labour) if tr.labour is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.paid_hrs) if tr.paid_hrs is not none else "—" }}</td>
-            {% if tr.awaiting %}
-            <td class="px-2 py-2 text-right whitespace-nowrap" colspan="4">
-              <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING SOURCE DATA</span>
-            </td>
-            {% else %}
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.wages) if tr.wages is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.1f"|format(tr.devoted_per_person) if tr.devoted_per_person is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.per_hour_cost) if tr.per_hour_cost is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "%.2f"|format(tr.per_kg_cost) if tr.per_kg_cost is not none else "—" }}</td>
-            {% endif %}
           </tr>
           {% for row in data.section1.month_rows %}
           <tr style="border-bottom:1px solid rgba(0,0,0,0.05){% if loop.index is divisibleby 3 %};border-bottom:1px solid rgba(0,0,0,0.09){% endif %}">
@@ -161,9 +163,21 @@
             {% if row.awaiting %}
             <td class="px-2 py-1.5 text-right whitespace-nowrap" colspan="4">
               <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING</span>
+              {% if row.wages_source %}
+              <a class="block text-[9px] font-normal underline" style="color:#a05000"
+                 href="{{ row.wages_source.url }}" target="_blank" rel="noopener"
+                 title="{{ row.wages_source.file_id }}">Registered KH-1 payroll could not be parsed</a>
+              {% endif %}
             </td>
             {% else %}
-            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if row.wages is not none %}{{ "{:,.0f}".format(row.wages) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if row.wages is not none %}{{ "{:,.0f}".format(row.wages) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% if row.wages_source %}
+              <a class="block text-[9px] font-normal underline" style="color:#65758f"
+                 href="{{ row.wages_source.url }}" target="_blank" rel="noopener"
+                 title="{{ row.wages_source.file_id }}">{{ row.wages_source.label }}</a>
+              {% endif %}
+            </td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if row.devoted_per_person is not none %}{{ "%.1f"|format(row.devoted_per_person) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if row.per_hour_cost is not none %}{{ "%.2f"|format(row.per_hour_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if row.per_kg_cost is not none %}{{ "%.2f"|format(row.per_kg_cost) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
@@ -177,8 +191,9 @@
          style="border-color:rgba(0,0,0,0.06);background:rgba(249,250,252,1)">
       Run Hours + Output from daily records (plant=PIPE, gross = good + rejected) ·
       Labour &amp; Paid Hours from Employee Data Details DASHBOARD tab (PIPELINE row) ·
-      Wages from monthly KH-1 workbooks (PIPELINE filter) ·
-      <span style="color:#c57a00">AWAITING</span> = wages workbook not yet registered
+      Wages from monthly KH-1 payroll workbooks (CPVC / PIPELINE filter; linked below each loaded wage) ·
+      <span style="color:#c57a00">AWAITING</span> = wages source is unavailable or could not be parsed ·
+      partial-total cost rates use only successfully parsed payroll months
     </div>
   </div>
 </div>

@@ -113,6 +113,9 @@ WAGES_SOURCES: dict[str, dict[str, dict[str, str]]] = {
         },
         # FY 2026-27: Apr-2026 onwards (add as files become available)
         "2627": {
+            # Jul-2026 payroll is the KH-1 register linked from the Pipe M/C
+            # SUMMARY row.  CPVC is the full Plumbing segment in this file.
+            "2026-07": "1Rzs9I_Ua6ij1Es65S-T-xEBAk8o9E0wrpiB5h9JQrSM",
         },
     },
     "PTMT": {},   # stubbed — to be added when PTMT costing is built

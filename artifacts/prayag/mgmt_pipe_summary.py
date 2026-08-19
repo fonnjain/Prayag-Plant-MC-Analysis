@@ -399,10 +399,20 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
         wages    = None
         awaiting = False
         fid = wages_src.get(ym)
+        wages_source = None
         if fid:
             wages = _read_pipeline_wages(ym, fid, token)
+            wages_source = {
+                "file_id": fid,
+                "url": f"https://docs.google.com/spreadsheets/d/{fid}/edit",
+                "label": "KH-1 payroll · CPVC / PIPELINE",
+                "parsed": wages is not None,
+            }
             if wages is None:
-                warnings.append(f"{lbl}: wages file found but parse returned None")
+                awaiting = True
+                warnings.append(
+                    f"{lbl}: registered KH-1 payroll source {fid} could not be parsed"
+                )
         else:
             awaiting = True  # no file registered yet for this month
 
@@ -420,6 +430,7 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
             "labour":            labour,
             "paid_hrs":          paid_hrs,
             "wages":             wages,
+            "wages_source":      wages_source,
             "awaiting":          awaiting,
             "devoted_per_person": devoted_per_person,
             "per_hour_cost":     per_hour_cost,
@@ -438,6 +449,21 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
     t_wages      = _fsum("wages")
 
     any_awaiting = any(r["awaiting"] for r in month_rows)
+    parsed_wage_rows = [r for r in month_rows if r["wages"] is not None]
+    wage_scope_paid_hrs = sum(
+        r["paid_hrs"] for r in parsed_wage_rows if r["paid_hrs"] is not None
+    ) or None
+    wage_scope_gross_out = sum(
+        r["gross_output_kg"]
+        for r in parsed_wage_rows
+        if r["gross_output_kg"] is not None
+    ) or None
+    parsed_wage_months = [
+        r["month_disp"] for r in parsed_wage_rows
+    ]
+    awaiting_months = [
+        r["month_disp"] for r in month_rows if r["awaiting"]
+    ]
 
     total_row = {
         "run_hrs":            t_run_hrs,
@@ -446,9 +472,13 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
         "paid_hrs":           t_paid_hrs,
         "wages":              t_wages,
         "awaiting":           any_awaiting,
+        "awaiting_months":    awaiting_months,
+        "parsed_wage_months": parsed_wage_months,
         "devoted_per_person": _safe_div(t_paid_hrs, t_labour),
-        "per_hour_cost":      _safe_div(t_wages, t_paid_hrs),
-        "per_kg_cost":        _safe_div(t_wages, t_gross_out),
+        # A partial payroll total must not be diluted by an unpaid month's
+        # hours or output.  The template labels this scope when wages await.
+        "per_hour_cost":      _safe_div(t_wages, wage_scope_paid_hrs),
+        "per_kg_cost":        _safe_div(t_wages, wage_scope_gross_out),
     }
 
     return {"month_rows": month_rows, "total_row": total_row, "warnings": warnings}
