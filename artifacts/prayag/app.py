@@ -3835,7 +3835,9 @@ def mgmt_ptmt_mould_eff_view():
 def mgmt_pipe_moulds_summary_view():
     """Management Report 13 — (D) Pipe Moulds Summary.
 
-    Two YoY blocks (FY26-27 Apr-Jul vs FY25-26 Apr-Jul).
+    Primary current-FY cumulative block vs FY25-26 Apr-Jul. Once later months
+    are complete, the current workbook also supplies an audit-only Apr-Jul
+    source baseline for the confirmed anchors.
     Source: Reports 17-21 in the JUL'26 PIPE workbook (FY26-27, cumulative)
     and the finalized Annual 25-26 Mould Summary workbook (FY25-26).
     """

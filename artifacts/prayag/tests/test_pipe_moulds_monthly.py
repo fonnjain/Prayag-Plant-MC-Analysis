@@ -296,15 +296,45 @@ def test_builder_and_download_extend_to_latest_month_and_flag_partial_sources(mo
     assert [r["month"] for r in current_block["month_rows"]] == [
         "Apr,26", "May,26", "Jun,26", "Jul,26", "Aug,26",
     ]
-    assert built["recon"] == []
-    assert "not compared" in built["recon_note"]
+    baseline = built["baseline_block"]
+    assert baseline is not None
+    assert baseline["period_label"] == "Apr,26 – Jul,26"
+    assert [r["month"] for r in baseline["month_rows"]] == [
+        "Apr,26", "May,26", "Jun,26", "Jul,26",
+    ]
+    assert baseline["rows"][0]["kg"] == 100
+    assert baseline["rows"][0]["n_run"] == 2
+    assert baseline["total_row"]["kg"] == 100
+    assert built["recon"]
+    assert all(check["status"] == "WARN" for check in built["recon"])
+    assert "primary cumulative period" in built["recon_note"]
 
     sheets, flags = serial_pipe_moulds("2026-08")
+    summary_sheet = next(sheet for sheet in sheets if sheet.name == "SUMMARY")
+    assert "PRIMARY cumulative subtotal" in summary_sheet.sections[0].heading
+    assert "APR–JUL audit baseline subtotal" in summary_sheet.sections[1].heading
+    assert "APR–JUL anchor reconciliation" in summary_sheet.sections[2].heading
     cpvc = next(sheet for sheet in sheets if sheet.name.startswith("CPVC"))
     assert [row["month"] for row in cpvc.sections[0].rows] == [
         "Apr,26", "May,26", "Jun,26", "Jul,26", "Aug,26",
     ]
+    assert "audit baseline subtotal" in cpvc.sections[1].heading
     assert not [flag for flag in flags if flag.rule == "Incomplete-Month"]
+
+    workbook = render_workbook(ReportModel(
+        rid="pipe_moulds", label="Pipe Moulds", plant="KH", ym="2026-08",
+        month_disp="Aug 2026", sheets=sheets, flags=flags,
+    ))
+    summary_ws = workbook["SUMMARY"]
+    summary_text = {
+        str(cell.value)
+        for row in summary_ws.iter_rows()
+        for cell in row
+        if cell.value is not None
+    }
+    assert any("PRIMARY cumulative subtotal" in text for text in summary_text)
+    assert any("APR–JUL audit baseline subtotal" in text for text in summary_text)
+    assert any("APR–JUL anchor reconciliation" in text for text in summary_text)
 
 
 def test_builder_and_download_flag_partial_month_blocks(monkeypatch):

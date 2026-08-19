@@ -1876,8 +1876,53 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
 
     blocks = d.get("blocks") or []
 
-    # ---- SUMMARY tab — recon table ----
+    # ---- SUMMARY tab — primary cumulative scope, optional audit baseline, recon ----
     recon = d.get("recon") or []
+    baseline_block = d.get("baseline_block")
+    primary_block = next(
+        (
+            block for block in blocks
+            if isinstance(block, dict) and block.get("scope") == "primary"
+        ),
+        None,
+    )
+    scope_cols = [
+        Column("material",  "Material",    "text", width=14),
+        Column("n_run",     "Run Moulds",  "int",  total=True),
+        Column("hrs",       "Hours",       "int",  total=True),
+        Column("pcs",       "Pieces",      "int",  total=True),
+        Column("kg",        "KG",          "kg",   total=True),
+        Column("avg_month", "Avg / Month", "rate"),
+    ]
+    summary_sections = []
+    if primary_block:
+        summary_sections.append(Section(
+            scope_cols,
+            [_row(row, [c.key for c in scope_cols])
+             for row in (primary_block.get("rows") or [])
+             if isinstance(row, dict)],
+            _row(primary_block["total_row"], [c.key for c in scope_cols])
+            if primary_block.get("total_row") else None,
+            heading=(
+                f"PRIMARY cumulative subtotal — "
+                f"{primary_block.get('period_label') or fy_lbl} "
+                "(the report and download scope)"
+            ),
+        ))
+    if isinstance(baseline_block, dict):
+        summary_sections.append(Section(
+            scope_cols,
+            [_row(row, [c.key for c in scope_cols])
+             for row in (baseline_block.get("rows") or [])
+             if isinstance(row, dict)],
+            _row(baseline_block["total_row"], [c.key for c in scope_cols])
+            if baseline_block.get("total_row") else None,
+            heading=(
+                f"APR–JUL audit baseline subtotal — "
+                f"{baseline_block.get('period_label')} "
+                "(same latest workbook; not the download scope)"
+            ),
+        ))
     if recon:
         rec_cols = [
             Column("label",  "Check",          "text", width=28),
@@ -1888,15 +1933,23 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
         ]
         rec_rows = [_row(r, [c.key for c in rec_cols]) for r in recon
                     if isinstance(r, dict)]
-        sheets.append(ReportSheet(
-            name="SUMMARY",
-            title=f"Pipe Moulds — Reconciliation Summary — {fy_lbl}",
-            subtitle="Self-check table comparing computed figures to source anchors.",
-            sections=[Section(rec_cols, rec_rows)],
+        summary_sections.append(Section(
+            rec_cols,
+            rec_rows,
+            heading=(
+                f"APR–JUL anchor reconciliation — "
+                f"{d.get('recon_scope_label') or 'Apr–Jul,26'} baseline only"
+            ),
         ))
-    else:
-        sheets.append(ReportSheet(name="SUMMARY",
-                                  title=f"Pipe Moulds Summary — {fy_lbl}"))
+    sheets.append(ReportSheet(
+        name="SUMMARY",
+        title=f"Pipe Moulds — Reconciliation Summary — {fy_lbl}",
+        subtitle=(
+            "Primary cumulative figures remain the report and download scope. "
+            "Apr–Jul figures, when shown separately, are an audit-only source baseline."
+        ),
+        sections=summary_sections,
+    ))
 
     # ---- Per-material tabs (source workbook layout: one tab per material) ----
     pm_cols = [
@@ -2011,11 +2064,37 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
             heading = (
                 f"{period_lbl} — monthly source figures + Apr–Jul total "
                 f"(R-03: closed FY25-26 annual workbook)"
-                if fy_key == "2526" else period_lbl
+                if fy_key == "2526"
+                else f"PRIMARY cumulative scope — {period_lbl}"
             )
             sections_pm.append(Section(
                 pm_cols, data_rows_pm, total_row=period_total, heading=heading
             ))
+            if (
+                fy_key == "2627"
+                and isinstance(baseline_block, dict)
+                and (base_row := next(
+                    (row for row in (baseline_block.get("rows") or [])
+                     if isinstance(row, dict) and row.get("material") == mat),
+                    None,
+                )) is not None
+            ):
+                baseline_total = _row({
+                    **base_row,
+                    "month": (
+                        f"{baseline_block.get('period_label')} "
+                        "audit baseline subtotal"
+                    ),
+                }, [c.key for c in pm_cols])
+                sections_pm.append(Section(
+                    pm_cols,
+                    [],
+                    total_row=baseline_total,
+                    heading=(
+                        "APR–JUL audit baseline subtotal — same latest workbook; "
+                        "not the primary download scope"
+                    ),
+                ))
         sheets.append(ReportSheet(
             name=tab_name,
             title=f"Pipe Moulds — {mat} — {fy_lbl}",

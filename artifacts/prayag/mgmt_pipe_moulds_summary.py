@@ -1,7 +1,9 @@
 """Management Report 13 — (D) Pipe Moulds Summary.
 
-Two YoY blocks (current FY cumulative period vs FY25-26 Apr-Jul), five materials
-(CPVC / UPVC / SWR / AGRI / PPR), eight columns each.
+Two YoY blocks (current FY cumulative period vs FY25-26 Apr-Jul), plus an
+Apr-Jul FY26-27 source baseline once later complete cumulative months arrive.
+The baseline is audit-only: the current cumulative period remains the primary
+report and download scope.
 
 Data sources
 ------------
@@ -235,6 +237,44 @@ def _build_month_rows(
     return rows
 
 
+def _restrict_to_month_indexes(result: dict, month_indexes: set[int]) -> dict:
+    """Return one cumulative-parser result for an exact set of source blocks.
+
+    ``load_pipe_moulds_fy`` already restricts every material to the shared
+    completed scope.  This second restriction is deliberately local to the
+    report: it reconstructs the closed Apr-Jul source baseline from the *same*
+    latest workbook without changing that published cumulative scope.
+    """
+    months = [
+        month for month in result.get("months", [])
+        if month.get("month_index") in month_indexes
+    ]
+    run_codes = {
+        code
+        for month in months
+        for code in month.get("run_codes", [])
+    }
+    return {
+        **result,
+        "months": months,
+        "n_run": len(run_codes),
+        "total_pcs": sum(month.get("total_pcs", 0.0) for month in months),
+        "total_kg": sum(month.get("total_kg", 0.0) for month in months),
+        "total_hrs": sum(month.get("total_hrs", 0.0) for month in months),
+        "sheet_total_pcs": sum(
+            month.get("sheet_total_pcs", 0.0) for month in months
+        ),
+        "sheet_total_kg": sum(
+            month.get("sheet_total_kg", 0.0) for month in months
+        ),
+        "sheet_total_hrs": sum(
+            month.get("sheet_total_hrs", 0.0) for month in months
+        ),
+        "complete_month_indexes": sorted(month_indexes),
+        "complete_n_months": len(months),
+    }
+
+
 # ── Reconciliation badge builder ──────────────────────────────────────────────
 
 def _build_recon(rows_2627: list[dict]) -> list[dict]:
@@ -325,7 +365,8 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
               },
               ...
           ],
-          "recon": [...],      # reconciliation badge checks (FY26-27)
+           "baseline_block": {...} | None, # Apr-Jul current-FY audit subtotal
+           "recon": [...],      # Apr-Jul reconciliation badge checks
           "sourcing_note": str,
           "defect_note": str,  # PPR omission note
           "hours_note": str,   # formula vs spec discrepancy
@@ -388,7 +429,74 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
         "source_ym":     fy2627_data.get("latest_ym", ""),
         "n_months":      fy2627_data.get("n_months", 0),
         "complete_n_months": complete_n_months_2627,
+        "scope":          "primary",
     }
+
+    # ── FY26-27 Apr-Jul source baseline ───────────────────────────────────────
+    # Reports 17–21 are cumulative.  Once a later completed month is appended,
+    # the first four complete blocks in that *same* latest workbook remain the
+    # confirmed Apr-Jul source period.  Do not make this a third primary report
+    # block or alter the download scope; it exists solely for continuing audit.
+    baseline_months_2627 = cfg_2627["months"]
+    baseline_indexes_2627 = {
+        index
+        for index, month in enumerate(months_2627)
+        if month in baseline_months_2627
+    }
+    baseline_ready = (
+        len(baseline_indexes_2627) == len(baseline_months_2627)
+        and set(baseline_months_2627).issubset(complete_months_2627)
+    )
+    later_complete_months = [
+        month for month in complete_months_2627
+        if month not in baseline_months_2627
+    ]
+    baseline_block = None
+    if baseline_ready and later_complete_months:
+        baseline_by_group = {
+            material: _restrict_to_month_indexes(result, baseline_indexes_2627)
+            for material, result in by_grp_2627.items()
+        }
+        baseline_rows = [
+            _build_row(
+                material,
+                baseline_by_group[material],
+                len(baseline_months_2627),
+                has_n_total=False,
+            )
+            for material in _MATERIAL_ORDER
+            if material in baseline_by_group
+        ]
+        baseline_block = {
+            "period_label": _period_label(
+                baseline_months_2627, cfg_2627["label"]
+            ),
+            "fy_key": "2627",
+            "rows": baseline_rows,
+            "month_rows": _build_month_rows(
+                baseline_by_group,
+                baseline_months_2627,
+                has_n_total=False,
+            ),
+            "total_row": _build_total_row(
+                baseline_rows,
+                len(baseline_months_2627),
+                has_n_total=False,
+            ),
+            "has_n_total": False,
+            "has_ppr": any(
+                row["material"] == "PPR" for row in baseline_rows
+            ),
+            "missing": [],
+            "month_issues": [],
+            "incomplete": False,
+            "unavailable": False,
+            "source_ym": fy2627_data.get("latest_ym", ""),
+            "n_months": len(baseline_months_2627),
+            "complete_n_months": len(baseline_months_2627),
+            "scope": "apr_jul_baseline",
+            "later_complete_months": later_complete_months,
+        }
 
     # ── FY25-26 block ─────────────────────────────────────────────────────────
     cfg_2526 = _FY_PERIODS["2526"]
@@ -427,15 +535,18 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
     }
 
     # ── Reconciliation badge ─────────────────────────────────────────────────
-    # The anchors are specifically Apr–Jul.  Once the cumulative workbook has
-    # appended a later month, comparing the whole current period to those fixed
-    # figures would produce a false discrepancy.
-    recon = _build_recon(rows_2627) if complete_months_2627 == cfg_2627["months"] else []
+    # The anchors are specifically Apr-Jul.  Always compare them to that exact
+    # scope, never to an extended cumulative total.  When the primary published
+    # scope is already Apr-Jul it is itself the baseline; once later months are
+    # complete, use the separately reconstructed audit-only subtotal above.
+    recon_rows = baseline_block["rows"] if baseline_block else rows_2627
+    recon = _build_recon(recon_rows) if baseline_ready else []
+    recon_scope_label = _period_label(baseline_months_2627, cfg_2627["label"])
     recon_note = (
-        "Reconciliation anchors cover Apr–Jul,26 and remain valid for that "
-        "closed baseline. They are not compared to the extended cumulative "
-        f"period ({period_2627})."
-        if complete_months_2627 and complete_months_2627 != cfg_2627["months"] else ""
+        f"Apr–Jul,26 anchors are checked only against the separate {recon_scope_label} "
+        f"source baseline from the latest cumulative workbook ({baseline_block['source_ym']}). "
+        f"The primary cumulative period ({period_2627}) remains the report and download scope."
+        if baseline_block else ""
     )
 
     # ── Notes ─────────────────────────────────────────────────────────────────
@@ -470,8 +581,10 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
     return {
         "fy":            fy,
         "blocks":        [block_2627, block_2526],
+        "baseline_block": baseline_block,
         "recon":         recon,
         "recon_note":    recon_note,
+        "recon_scope_label": recon_scope_label,
         "current_period_label": period_2627,
         "sourcing_note": sourcing_note,
         "defect_note":   defect_note,

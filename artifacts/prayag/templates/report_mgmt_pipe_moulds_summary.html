@@ -8,7 +8,7 @@
   <div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
     <div>
       <h4 class="mb-0 fw-semibold">(D) Pipe Moulds Summary</h4>
-      <p class="text-muted small mb-0">Management Report 13 · YoY comparison: {{ data.current_period_label }}</p>
+      <p class="text-muted small mb-0">Management Report 13 · Primary cumulative period: {{ data.current_period_label }}</p>
     </div>
     <div class="text-end text-muted small">
       <div>{{ today_disp }}</div>
@@ -44,6 +44,7 @@
         <span class="fw-semibold">{{ block.period_label }}</span>
         {% if block.fy_key == "2627" %}
           <span class="badge bg-primary ms-2">FY 26-27</span>
+          <span class="badge bg-dark ms-1">Primary cumulative scope</span>
           {% if block.source_ym %}
             <span class="text-muted small ms-2">(cumulative from {{ block.source_ym }})</span>
           {% endif %}
@@ -183,14 +184,78 @@
   </div>
   {% endfor %}
 
+  {# ── Apr–Jul audit baseline: only after later complete months arrive ─────── #}
+  {% if data.baseline_block %}
+  {% set baseline = data.baseline_block %}
+  <div class="card shadow-sm border-info mb-4">
+    <div class="card-header bg-info-subtle d-flex align-items-center justify-content-between py-2">
+      <div>
+        <span class="fw-semibold">{{ baseline.period_label }} Source Baseline Subtotal</span>
+        <span class="badge bg-info text-dark ms-2">Audit baseline</span>
+        {% if baseline.source_ym %}
+          <span class="text-muted small ms-2">(recalculated from latest cumulative workbook: {{ baseline.source_ym }})</span>
+        {% endif %}
+      </div>
+      <span class="text-muted small">Not the primary report/download scope</span>
+    </div>
+    <div class="card-body p-0">
+      <div class="px-3 pt-3 pb-2 small text-muted">
+        This closed Apr–Jul subtotal is retained for the confirmed source check.
+        Later completed months remain in the primary cumulative period above and are not included here.
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered table-hover mb-0 align-middle text-center">
+          <thead class="table-light">
+            <tr>
+              <th class="text-start" style="min-width:80px">Material</th>
+              <th>No. of Total Mould<br><span class="text-muted" style="font-size:0.72em; font-weight:normal">(registry, not available)</span></th>
+              <th>No. of Mould Run</th>
+              <th>Mould Run Hours<br><span class="text-muted" style="font-size:0.72em; font-weight:normal">(formula-derived)</span></th>
+              <th>Av. Hr/Mould</th>
+              <th>Output (Pcs)</th>
+              <th>Output (KG)</th>
+              <th>Avg./Month (KG)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in baseline.rows %}
+            <tr {% if row.material == "PPR" %}class="table-light"{% endif %}>
+              <td class="text-start fw-semibold">{{ row.material }}</td>
+              <td class="text-muted">{{ row.d_n_total }}</td>
+              <td>{{ row.d_n_run }}</td>
+              <td>{{ row.d_hrs }}</td>
+              <td>{{ row.d_av_hr }}</td>
+              <td>{{ row.d_pcs }}</td>
+              <td class="fw-semibold">{{ row.d_kg }}</td>
+              <td>{{ row.d_avg_month }}</td>
+            </tr>
+            {% endfor %}
+            {% set tot = baseline.total_row %}
+            <tr class="table-info fw-bold">
+              <td class="text-start">TOTAL</td>
+              <td class="text-muted">{{ tot.d_n_total }}</td>
+              <td>{{ tot.d_n_run }}</td>
+              <td>{{ tot.d_hrs }}</td>
+              <td>{{ tot.d_av_hr }}</td>
+              <td>{{ tot.d_pcs }}</td>
+              <td>{{ tot.d_kg }}</td>
+              <td>{{ tot.d_avg_month }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {# ══════════════════════════════════════════════════════════════════════════ #}
-  {# Reconciliation badge — FY26-27 vs spec anchors                            #}
+  {# Reconciliation badge — Apr–Jul FY26-27 source baseline vs anchors         #}
   {# ══════════════════════════════════════════════════════════════════════════ #}
 
   {% if data.recon %}
   <div class="card shadow-sm mb-4">
     <div class="card-header py-2 fw-semibold">
-      FY26-27 Reconciliation — Our figures vs Spec
+      Apr–Jul Reconciliation — Source Baseline vs Confirmed Anchors
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -198,7 +263,7 @@
           <thead class="table-light">
             <tr>
               <th>Check</th>
-              <th class="text-end">Ours (computed)</th>
+              <th class="text-end">Baseline (computed)</th>
               <th class="text-end">Spec</th>
               <th class="text-center">Status</th>
               <th>Note</th>
