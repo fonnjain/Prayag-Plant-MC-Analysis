@@ -1830,6 +1830,7 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
 
     # ---- Per-material tabs (source workbook layout: one tab per material) ----
     pm_cols = [
+        Column("month",     "Month",        "text", width=12),
         Column("material",  "Material",     "text", width=14),
         Column("n_total",   "Total Moulds", "int",  total=True),
         Column("n_run",     "Run Moulds",   "int",  total=True),
@@ -1901,16 +1902,37 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
             mat_row = next((r for r in blk_rows
                             if isinstance(r, dict) and r.get("material") == mat), None)
             if mat_row is not None:
-                data_rows_pm = [_row(mat_row, [c.key for c in pm_cols])]
+                data_rows_pm = [
+                    _row(row, [c.key for c in pm_cols])
+                    for row in (block.get("month_rows") or [])
+                    if isinstance(row, dict) and row.get("material") == mat
+                ]
+                # Older or incomplete sources may have an aggregate without
+                # recognisable monthly blocks. Preserve the total transparently
+                # instead of fabricating a month-level history.
+                if not data_rows_pm:
+                    data_rows_pm = [_row({
+                        **mat_row,
+                        "month": "Monthly grain unavailable",
+                    }, [c.key for c in pm_cols])]
+                period_total = _row({
+                    **mat_row,
+                    "month": f"{period_lbl} total",
+                }, [c.key for c in pm_cols])
             else:
                 absent = {c.key: None for c in pm_cols}
+                absent["month"] = period_lbl
                 absent["material"] = "⚠ unavailable"
                 data_rows_pm = [absent]
+                period_total = None
             heading = (
-                f"{period_lbl} — R-03: closed FY25-26 annual workbook"
+                f"{period_lbl} — monthly source figures + Apr–Jul total "
+                f"(R-03: closed FY25-26 annual workbook)"
                 if fy_key == "2526" else period_lbl
             )
-            sections_pm.append(Section(pm_cols, data_rows_pm, heading=heading))
+            sections_pm.append(Section(
+                pm_cols, data_rows_pm, total_row=period_total, heading=heading
+            ))
         sheets.append(ReportSheet(
             name=tab_name,
             title=f"Pipe Moulds — {mat} — {fy_lbl}",

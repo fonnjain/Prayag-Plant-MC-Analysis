@@ -154,6 +154,45 @@ def _build_total_row(rows: list[dict], n_months: int, *, has_n_total: bool) -> d
     }
 
 
+def _month_label(ym: str) -> str:
+    """Return a compact, source-independent label for an ISO month."""
+    year, month = ym.split("-", 1)
+    names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return f"{names[int(month) - 1]},{year[-2:]}"
+
+
+def _build_month_rows(
+    by_group: dict[str, dict],
+    months: list[str],
+    *,
+    has_n_total: bool,
+) -> list[dict]:
+    """Build explicit material/month rows from parser block-level results.
+
+    The aggregate material rows intentionally remain separate: they are the
+    report's reconciliation anchors, while these rows preserve the grain needed
+    by the material worksheets and the on-screen source detail.
+    """
+    rows: list[dict] = []
+    for month_index, ym in enumerate(months):
+        for material in _MATERIAL_ORDER:
+            result = by_group.get(material)
+            if result is None:
+                continue
+            month_result = next(
+                (r for r in result.get("months", [])
+                 if r.get("month_index") == month_index),
+                None,
+            )
+            if month_result is None:
+                continue
+            row = _build_row(material, month_result, 0, has_n_total=has_n_total)
+            row["month"] = _month_label(ym)
+            rows.append(row)
+    return rows
+
+
 # ── Reconciliation badge builder ──────────────────────────────────────────────
 
 def _build_recon(rows_2627: list[dict]) -> list[dict]:
@@ -235,6 +274,7 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
                 "period_label": str,      # "Apr,26 – Jul,26"
                 "fy_key": str,            # "2627" | "2526"
                 "rows": [row_dict, ...],  # one per material
+                "month_rows": [row_dict, ...],  # one per material/month
                 "total_row": row_dict,
                 "has_n_total": bool,      # False for FY26-27
                 "has_ppr": bool,          # PPR present in this block
@@ -267,11 +307,17 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
         )
 
     total_2627 = _build_total_row(rows_2627, cfg_2627["n_months"], has_n_total=False)
+    month_rows_2627 = _build_month_rows(
+        by_grp_2627,
+        cfg_2627["months"][:fy2627_data.get("n_months", 0)],
+        has_n_total=False,
+    )
 
     block_2627 = {
         "period_label":  cfg_2627["label"],
         "fy_key":        "2627",
         "rows":          rows_2627,
+        "month_rows":    month_rows_2627,
         "total_row":     total_2627,
         "has_n_total":   False,
         "has_ppr":       any(r["material"] == "PPR" for r in rows_2627),
@@ -299,11 +345,15 @@ def build_pipe_moulds_summary(fy: str = "2627") -> dict:
         )
 
     total_2526 = _build_total_row(rows_2526, cfg_2526["n_months"], has_n_total=True)
+    month_rows_2526 = _build_month_rows(
+        by_grp_2526, cfg_2526["months"], has_n_total=False
+    )
 
     block_2526 = {
         "period_label":  cfg_2526["label"],
         "fy_key":        "2526",
         "rows":          rows_2526,
+        "month_rows":    month_rows_2526,
         "total_row":     total_2526,
         "has_n_total":   True,
         "has_ppr":       False,

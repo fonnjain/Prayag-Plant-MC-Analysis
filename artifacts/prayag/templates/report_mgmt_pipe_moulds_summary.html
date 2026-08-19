@@ -127,6 +127,45 @@
           </p>
         </div>
         {% endif %}
+
+        {% if block.month_rows %}
+        <div class="border-top px-3 py-3">
+          <div class="small fw-semibold mb-2">Month-by-month source detail</div>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0 align-middle text-center small">
+              <thead class="table-light">
+                <tr>
+                  <th class="text-start">Month</th>
+                  <th class="text-start">Material</th>
+                  <th>Moulds Run</th>
+                  <th>Formula Hours</th>
+                  <th>Output (Pcs)</th>
+                  <th>Output (KG)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in block.month_rows %}
+                <tr>
+                  <td class="text-start">{{ row.month }}</td>
+                  <td class="text-start fw-semibold">{{ row.material }}</td>
+                  <td>{{ row.d_n_run }}</td>
+                  <td>{{ row.d_hrs }}</td>
+                  <td>{{ row.d_pcs }}</td>
+                  <td class="fw-semibold">{{ row.d_kg }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if block.fy_key == "2627" %}
+          <p class="text-muted small mb-0 mt-2">
+            Formula hours are shown as supplied by Reports 17–21. They are not
+            reconciled to the known FY26-27 spec-hours difference; see the
+            source note above.
+          </p>
+          {% endif %}
+        </div>
+        {% endif %}
       {% endif %}
     </div>
   </div>

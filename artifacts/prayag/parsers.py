@@ -2309,18 +2309,35 @@ def parse_cumulative_mould_fy(
             total_idx = i
             break
 
-    # Sheet TOTAL cross-check (sum across used month blocks)
+    # Sheet TOTAL cross-check, retained both per month and as the FY aggregate.
     sh_pcs = sh_kg = sh_hrs = 0.0
+    monthly: List[dict] = [
+        {
+            "month_index": i,
+            "n_run": 0,
+            "total_pcs": 0.0,
+            "total_kg": 0.0,
+            "total_hrs": 0.0,
+            "sheet_total_pcs": 0.0,
+            "sheet_total_kg": 0.0,
+            "sheet_total_hrs": 0.0,
+        }
+        for i in range(len(used_starts))
+    ]
     if total_idx >= 0:
         tr = values[total_idx]
-        for s in used_starts:
-            sh_pcs += num(tr[s])     if s < len(tr) else 0.0
-            sh_kg  += num(tr[s + 1]) if s + 1 < len(tr) else 0.0
-            sh_hrs += num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+        for i, s in enumerate(used_starts):
+            monthly[i]["sheet_total_pcs"] = num(tr[s]) if s < len(tr) else 0.0
+            monthly[i]["sheet_total_kg"] = num(tr[s + 1]) if s + 1 < len(tr) else 0.0
+            monthly[i]["sheet_total_hrs"] = num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+            sh_pcs += monthly[i]["sheet_total_pcs"]
+            sh_kg += monthly[i]["sheet_total_kg"]
+            sh_hrs += monthly[i]["sheet_total_hrs"]
 
     # ── detail rows ───────────────────────────────────────────────────────────
     data_start = (total_idx + 1) if total_idx >= 0 else (sub_hdr_idx + 2)
     run_codes: set = set()
+    month_run_codes: List[set] = [set() for _ in used_starts]
     total_pcs = total_kg = total_hrs = 0.0
 
     for row in values[data_start:]:
@@ -2328,15 +2345,26 @@ def parse_cumulative_mould_fy(
         if not code or "TOTAL" in code.upper() or "GRAND" in code.upper():
             continue
         r_pcs = r_kg = r_hrs = 0.0
-        for s in used_starts:
-            r_pcs += num(row[s])     if s < len(row) else 0.0
-            r_kg  += num(row[s + 1]) if s + 1 < len(row) else 0.0
-            r_hrs += num(row[s + 3]) if s + 3 < len(row) else 0.0
+        for i, s in enumerate(used_starts):
+            m_pcs = num(row[s]) if s < len(row) else 0.0
+            m_kg = num(row[s + 1]) if s + 1 < len(row) else 0.0
+            m_hrs = num(row[s + 3]) if s + 3 < len(row) else 0.0
+            monthly[i]["total_pcs"] += m_pcs
+            monthly[i]["total_kg"] += m_kg
+            monthly[i]["total_hrs"] += m_hrs
+            r_pcs += m_pcs
+            r_kg += m_kg
+            r_hrs += m_hrs
+            if m_pcs > 0 or m_kg > 0:
+                month_run_codes[i].add(code)
         total_pcs += r_pcs
         total_kg  += r_kg
         total_hrs += r_hrs
         if r_pcs > 0 or r_kg > 0:
             run_codes.add(code)
+
+    for i, codes in enumerate(month_run_codes):
+        monthly[i]["n_run"] = len(codes)
 
     return {
         "group": group,
@@ -2347,6 +2375,10 @@ def parse_cumulative_mould_fy(
         "sheet_total_pcs": sh_pcs,
         "sheet_total_kg": sh_kg,
         "sheet_total_hrs": sh_hrs,
+        # The columns are cumulative workbook blocks, ordered Apr onward.
+        # Keep them separate so consumers can render honest month history
+        # rather than trying to recover it from the FY aggregate.
+        "months": monthly,
     }
 
 
@@ -2412,15 +2444,32 @@ def parse_annual_mould_summary_apr_jul(
     total_row_idx = sub_hdr_idx + 1
     tr = values[total_row_idx] if total_row_idx < len(values) else []
     sh_pcs = sh_kg = sh_hrs = 0.0
-    for s in used_starts:
-        sh_pcs += num(tr[s])     if s < len(tr) else 0.0
-        sh_kg  += num(tr[s + 1]) if s + 1 < len(tr) else 0.0
-        sh_hrs += num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+    monthly: List[dict] = [
+        {
+            "month_index": i,
+            "n_run": 0,
+            "total_pcs": 0.0,
+            "total_kg": 0.0,
+            "total_hrs": 0.0,
+            "sheet_total_pcs": 0.0,
+            "sheet_total_kg": 0.0,
+            "sheet_total_hrs": 0.0,
+        }
+        for i in range(len(used_starts))
+    ]
+    for i, s in enumerate(used_starts):
+        monthly[i]["sheet_total_pcs"] = num(tr[s]) if s < len(tr) else 0.0
+        monthly[i]["sheet_total_kg"] = num(tr[s + 1]) if s + 1 < len(tr) else 0.0
+        monthly[i]["sheet_total_hrs"] = num(tr[s + 3]) if s + 3 < len(tr) else 0.0
+        sh_pcs += monthly[i]["sheet_total_pcs"]
+        sh_kg += monthly[i]["sheet_total_kg"]
+        sh_hrs += monthly[i]["sheet_total_hrs"]
 
     # Detail rows
     data_start = total_row_idx + 1
     n_total = 0
     run_codes: set = set()
+    month_run_codes: List[set] = [set() for _ in used_starts]
     total_pcs = total_kg = total_hrs = 0.0
 
     for row in values[data_start:]:
@@ -2432,15 +2481,26 @@ def parse_annual_mould_summary_apr_jul(
             continue
         n_total += 1
         r_pcs = r_kg = r_hrs = 0.0
-        for s in used_starts:
-            r_pcs += num(row[s])     if s < len(row) else 0.0
-            r_kg  += num(row[s + 1]) if s + 1 < len(row) else 0.0
-            r_hrs += num(row[s + 3]) if s + 3 < len(row) else 0.0
+        for i, s in enumerate(used_starts):
+            m_pcs = num(row[s]) if s < len(row) else 0.0
+            m_kg = num(row[s + 1]) if s + 1 < len(row) else 0.0
+            m_hrs = num(row[s + 3]) if s + 3 < len(row) else 0.0
+            monthly[i]["total_pcs"] += m_pcs
+            monthly[i]["total_kg"] += m_kg
+            monthly[i]["total_hrs"] += m_hrs
+            r_pcs += m_pcs
+            r_kg += m_kg
+            r_hrs += m_hrs
+            if m_pcs > 0 or m_kg > 0:
+                month_run_codes[i].add(code)
         total_pcs += r_pcs
         total_kg  += r_kg
         total_hrs += r_hrs
         if r_pcs > 0 or r_kg > 0:
             run_codes.add(code)
+
+    for i, codes in enumerate(month_run_codes):
+        monthly[i]["n_run"] = len(codes)
 
     return {
         "group": group,
@@ -2452,6 +2512,7 @@ def parse_annual_mould_summary_apr_jul(
         "sheet_total_pcs": sh_pcs,
         "sheet_total_kg": sh_kg,
         "sheet_total_hrs": sh_hrs,
+        "months": monthly,
     }
 
 
