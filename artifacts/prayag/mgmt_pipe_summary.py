@@ -74,7 +74,10 @@ PIPE_WAGES: dict[str, dict[str, str]] = {
         "2026-04": "1lWOHcMsoWpTmiTyvSRys1xoMiAkeNdSmQGFySR0bBpw",
         "2026-05": "1jCU8KxjJzwsdhX0EcHuyYabvUp15Y1VAQzhloXnTHLQ",
         "2026-06": "1fxsmw7HQL7pockus_MI1SV3RhMakCFYv2-VE9iFMrh8",
-        # JUL 2026 onwards: not yet registered
+        # Pinned from the far-right linked payroll-register column in the
+        # Pipe M/C SUMMARY tab; KH-1 parses CPVC / PIPELINE only.
+        "2026-07": "1Rzs9I_Ua6ij1Es65S-T-xEBAk8o9E0wrpiB5h9JQrSM",
+        # AUG 2026 onwards: not yet registered
     }
 }
 

@@ -66,6 +66,7 @@ import freshness
 import compound as compound_mod
 import auth
 from pdf_export import generate_report_pdf, generate_ai_report_pdf
+from report_cell_accessors import pivot_cell
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
     WORKED_EXAMPLE, COMPUTE_NOTE, HEADER_TERM_MAP,
@@ -89,6 +90,12 @@ def _inject_auth():
         "auth_configured": auth.app_password() is not None,
         "auth_user": auth.current_user(),
     }
+
+
+@app.context_processor
+def _inject_report_cell_accessors():
+    """Expose the same pivot-cell contract to Jinja and Excel serialisers."""
+    return {"pivot_cell": pivot_cell}
 
 
 @app.context_processor

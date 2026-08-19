@@ -351,10 +351,12 @@
             {% for mc in s4.machines %}
             {% set c = s4.total_cols[mc] %}
             <td class="px-1 py-2 text-right whitespace-nowrap" style="border-left:1px solid rgba(124,58,237,0.10)">
-              {% if c.hrs is not none %}{{ "{:,.0f}".format(c.hrs) }}{% else %}—{% endif %}
+              {% set hrs = pivot_cell(c, 'hrs') %}
+              {% if hrs is not none %}{{ "{:,.0f}".format(hrs) }}{% else %}—{% endif %}
             </td>
             <td class="px-1 py-2 text-right whitespace-nowrap">
-              {% if c.out is not none %}{{ "{:,.0f}".format(c.out) }}{% else %}—{% endif %}
+              {% set out = pivot_cell(c, 'out') %}
+              {% if out is not none %}{{ "{:,.0f}".format(out) }}{% else %}—{% endif %}
             </td>
             {% endfor %}
           </tr>
@@ -367,10 +369,12 @@
             {% for mc in s4.machines %}
             {% set c = row.cols[mc] %}
             <td class="px-1 py-1.5 text-right whitespace-nowrap text-gray-600" style="border-left:1px solid rgba(124,58,237,0.07)">
-              {% if c.hrs %}{{ "{:,.0f}".format(c.hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% set hrs = pivot_cell(c, 'hrs') %}
+              {% if hrs %}{{ "{:,.0f}".format(hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
             </td>
             <td class="px-1 py-1.5 text-right whitespace-nowrap text-gray-700">
-              {% if c.out %}{{ "{:,.0f}".format(c.out) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% set out = pivot_cell(c, 'out') %}
+              {% if out %}{{ "{:,.0f}".format(out) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
             </td>
             {% endfor %}
           </tr>

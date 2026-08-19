@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from .model import Column, Flag, ReportSheet, Section
+from report_cell_accessors import pivot_cell
 
 _SheetFlagPair = Tuple[List[ReportSheet], List[Flag]]
 
@@ -69,6 +70,47 @@ def _avg(n, d):
 def _row(row_dict, keys):
     """Extract a subset of keys from a row dict, passing None for missing keys."""
     return {k: _v(row_dict.get(k)) for k in keys}
+
+
+def _pivot_pair_columns(machines: list[str]) -> list[Column]:
+    """Excel columns matching the page's Hours | Output pair per machine."""
+    columns: list[Column] = []
+    for machine in machines:
+        columns.extend([
+            Column(f"{machine}__hrs", f"{machine} Hrs", "int"),
+            Column(f"{machine}__out", f"{machine} Output (KG)", "kg"),
+        ])
+    return columns
+
+
+def _pivot_pair_row(label: str, cells: dict, machines: list[str]) -> dict:
+    """Flatten builder pivot cells without changing their Hours/Output meaning."""
+    row = {"month_lbl": label}
+    for machine in machines:
+        cell = cells.get(machine)
+        row[f"{machine}__hrs"] = pivot_cell(cell, "hrs")
+        row[f"{machine}__out"] = pivot_cell(cell, "out")
+    return row
+
+
+def _month_metric_columns(months: list[str]) -> list[Column]:
+    """Create the page-equivalent Hrs | Gross KG | Avg/Hr group for each month."""
+    columns: list[Column] = []
+    for month in months:
+        columns.extend([
+            Column(f"{month}__hrs", f"{month} Hrs", "num"),
+            Column(f"{month}__gross_kg", f"{month} Gross KG", "kg"),
+            Column(f"{month}__avg_hr", f"{month} Avg/Hr", "rate"),
+        ])
+    return columns
+
+
+def _set_month_metrics(row: dict, month: str, values: object) -> None:
+    """Flatten a GOM nested monthly cell without losing any page-visible metric."""
+    cell = values if isinstance(values, dict) else {}
+    row[f"{month}__hrs"] = cell.get("hrs")
+    row[f"{month}__gross_kg"] = cell.get("gross_kg")
+    row[f"{month}__avg_hr"] = cell.get("avg_hr")
 
 
 def _build_failed(err) -> _SheetFlagPair:
@@ -586,32 +628,15 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
     s4_total_cols  = s4.get("total_cols") or {}
     mc_labels = list(s4_total_cols.keys()) if s4_total_cols else []
 
-    # Helpers defined unconditionally so MONTHWISE/MC-x sections can reuse them.
-    def _mc_cell(mc_data):
-        """Prefer output_kg over hrs from a per-machine cell dict."""
-        if not isinstance(mc_data, dict):
-            return _v(mc_data)
-        for _k in ("output_kg", "out", "kg", "val", "hrs"):
-            _v2 = mc_data.get(_k)
-            if _v2 is not None:
-                return _v(_v2)
-        return _v(None)
-
-    def _hrs_cell(mc_data):
-        """Extract run-hours-only from a per-machine cell dict."""
-        if not isinstance(mc_data, dict):
-            return _v(mc_data)
-        return _v(mc_data.get("hrs"))
-
     if s4_month_rows and mc_labels:
         mcw_cols = ([Column("month_lbl", "Month", "text", width=10)] +
-                    [Column(mc, mc, "num") for mc in mc_labels])
+                    _pivot_pair_columns(mc_labels))
         hrs_cols = ([Column("month_lbl", "Month", "text", width=10)] +
                     [Column(mc, mc, "int") for mc in mc_labels])
         out_cols = ([Column("month_lbl", "Month", "text", width=10)] +
                     [Column(mc, mc, "kg") for mc in mc_labels])
         mcw_rows, hrs_rows, out_rows = [], [], []
-        total_row_mcw  = {"month_lbl": "TOTAL"}
+        total_row_mcw = _pivot_pair_row("TOTAL", s4_total_cols, mc_labels)
         hrs_totrow     = {"month_lbl": "TOTAL"}
         out_totrow     = {"month_lbl": "TOTAL"}
         for mo in s4_month_rows:
@@ -619,25 +644,23 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
                 continue
             cols_data = mo.get("cols") or {}
             lbl = mo.get("month_lbl") or mo.get("month_disp") or ""
-            mrow = {"month_lbl": lbl}
+            mrow = _pivot_pair_row(lbl, cols_data, mc_labels)
             hrow = {"month_lbl": lbl}
             orow = {"month_lbl": lbl}
             for mc in mc_labels:
                 mc_data = cols_data.get(mc)
-                mrow[mc] = _mc_cell(mc_data)
-                hrow[mc] = _hrs_cell(mc_data)
-                orow[mc] = _mc_cell(mc_data)
+                hrow[mc] = pivot_cell(mc_data, "hrs")
+                orow[mc] = pivot_cell(mc_data, "out")
             mcw_rows.append(mrow)
             hrs_rows.append(hrow)
             out_rows.append(orow)
         for mc, mc_data in s4_total_cols.items():
-            total_row_mcw[mc] = _mc_cell(mc_data)
-            hrs_totrow[mc]    = _hrs_cell(mc_data)
-            out_totrow[mc]    = _mc_cell(mc_data)
+            hrs_totrow[mc] = pivot_cell(mc_data, "hrs")
+            out_totrow[mc] = pivot_cell(mc_data, "out")
         sheets.append(ReportSheet(
             name="MC WISE",
             title=f"Pipe — Machine-wise Monthly — {fy_lbl}",
-            subtitle="Month × machine matrix. Values are output (KG) per machine per month.",
+            subtitle="Month × machine matrix. Each machine has Hours and Output (KG).",
             sections=[Section(mcw_cols, mcw_rows, total_row_mcw)],
         ))
         sheets.append(ReportSheet(
@@ -798,27 +821,45 @@ def serial_moulding(ym: str) -> _SheetFlagPair:
         note="" if s2_secs else "No year-on-year data.",
     ))
 
-    # ---- HOURS tab (section4 — month rows + machine breakdown) ----
+    # ---- PIVOT + HOURS tabs (section4 — month rows + machine breakdown) ----
     s4 = d.get("section4") or {}
     s4_month_rows = s4.get("month_rows") or []
-    mc_bands = s4.get("mc_bands") or []
+    s4_machines = s4.get("machines") or []
     if s4_month_rows:
+        pivot_cols = ([Column("month_lbl", "Month", "text", width=10)] +
+                      _pivot_pair_columns(s4_machines))
         h_cols = ([Column("month_lbl", "Month", "text", width=10)] +
-                  [Column(str(b), f"{b} Ton", "num") for b in mc_bands])
-        h_rows = []
+                  [Column(machine, f"{machine} Hrs", "int")
+                   for machine in s4_machines])
+        pivot_rows, h_rows = [], []
+        pivot_total = _pivot_pair_row(
+            "TOTAL", s4.get("total_cols") or {}, s4_machines,
+        )
+        h_total = {"month_lbl": "TOTAL"}
+        for machine in s4_machines:
+            h_total[machine] = pivot_cell(
+                (s4.get("total_cols") or {}).get(machine), "hrs",
+            )
         for mo in s4_month_rows:
             if not isinstance(mo, dict):
                 continue
             cols_data = mo.get("cols") or {}
-            row = {"month_lbl": mo.get("month_lbl") or mo.get("month_disp") or ""}
-            for b in mc_bands:
-                bc = cols_data.get(str(b)) or cols_data.get(b)
-                row[str(b)] = (bc.get("hrs") if isinstance(bc, dict) else _v(bc))
+            label = mo.get("month_lbl") or mo.get("month_disp") or ""
+            pivot_rows.append(_pivot_pair_row(label, cols_data, s4_machines))
+            row = {"month_lbl": label}
+            for machine in s4_machines:
+                row[machine] = pivot_cell(cols_data.get(machine), "hrs")
             h_rows.append(row)
+        sheets.append(ReportSheet(
+            name="PIVOT",
+            title=f"Moulding — Machine Monthly Pivot — {fy_lbl}",
+            subtitle="Month × machine matrix. Each machine has Hours and Output (KG).",
+            sections=[Section(pivot_cols, pivot_rows, pivot_total)],
+        ))
         sheets.append(ReportSheet(
             name="HOURS",
             title=f"Moulding — Run Hours by Band & Month — {fy_lbl}",
-            sections=[Section(h_cols, h_rows)],
+            sections=[Section(h_cols, h_rows, h_total)],
         ))
 
     # ---- Per-machine tabs (section3 — MC-1 to MC-27) ----
@@ -881,23 +922,52 @@ def serial_gom(ym: str) -> _SheetFlagPair:
 
     # ---- SUMMARY tab (section1 — re-uses moulding YoY, net basis) ----
     s1 = d.get("section1") or {}
-    s1_rows = s1.get("rows") or []
-    if s1_rows:
-        s1_col_keys = [k for k in s1_rows[0] if k not in ("ym","is_total")]
-        s1_cols = [Column(k, k.replace("_"," ").title(),
-                          "text" if k in ("band","month_lbl") else "num",
-                          width=12 if k == "band" else None)
-                   for k in s1_col_keys]
-        sheets.append(ReportSheet(
-            name="SUMMARY",
-            title=f"GOM — Band Summary (net) — {fy_lbl}",
-            subtitle="Production by tonnage band, net basis, year-on-year.",
-            sections=[Section(s1_cols,
-                              [_row(r, s1_col_keys) for r in s1_rows])],
+    s1_cols = [
+        Column("band",             "Band (Ton)",          "text", width=12),
+        Column("mc_count",         "Machines",            "int"),
+        Column("ideal_hrs",        "Ideal Hrs",           "int"),
+        Column("actual_hrs",       "Actual Hrs",          "int", total=True),
+        Column("output_kg",        "Output (KG)",         "kg",  total=True),
+        Column("reject_kg",        "Reject (KG)",         "kg",  total=True),
+        Column("runner_kg",        "Runner (KG)",         "kg"),
+        Column("avg_hr",           "Avg / Hr",            "rate"),
+        Column("avg_hr_sheet",     "Avg / Hr (Sheet)",    "rate"),
+        Column("util_pct",         "Util %",              "pct"),
+    ]
+
+    def _s1_row(source: dict) -> dict:
+        row = _row(source, [column.key for column in s1_cols])
+        # The FY26-27 GOM page displays the weighted rate as its main TOTAL
+        # value and retains the sheet's sum-of-rates as an explicit annotation.
+        if source.get("avg_hr_weighted") is not None:
+            row["avg_hr"] = source["avg_hr_weighted"]
+            row["avg_hr_sheet"] = source.get("avg_hr_sheet")
+        return row
+
+    s1_sections = []
+    for label, source_rows in [
+        (s1.get("fy2627_label", "FY 26-27"), s1.get("fy2627") or []),
+        (s1.get("fy2526_label", "FY 25-26"), s1.get("fy2526") or []),
+    ]:
+        if not source_rows:
+            continue
+        regular_rows = [_s1_row(row) for row in source_rows
+                        if isinstance(row, dict) and not row.get("is_total")]
+        total = next((row for row in source_rows
+                      if isinstance(row, dict) and row.get("is_total")), None)
+        s1_sections.append(Section(
+            s1_cols,
+            regular_rows,
+            _s1_row(total) if total else None,
+            heading=label,
         ))
-    else:
-        sheets.append(ReportSheet(name="SUMMARY", title=f"GOM Summary — {fy_lbl}",
-                                  note="No data."))
+    sheets.append(ReportSheet(
+        name="SUMMARY",
+        title=f"GOM — Band Summary (net) — {fy_lbl}",
+        subtitle="Production by tonnage band, net basis, year-on-year.",
+        sections=s1_sections,
+        note="" if s1_sections else "No data.",
+    ))
 
     # ---- SUMMARY-1 tab (section2 — band × month, gross) ----
     s2 = d.get("section2") or {}
@@ -908,10 +978,10 @@ def serial_gom(ym: str) -> _SheetFlagPair:
         months_order = list(mo_dict.keys())
     s2_cols = ([Column("band",    "Band (Ton)", "text", width=12),
                 Column("mc_count","Machines",   "int")] +
-               [Column(m, m, "num") for m in months_order] +
+               _month_metric_columns(months_order) +
                [Column("_total_hrs", "Total Hrs",     "num", total=True),
                 Column("_total_kg",  "Total Output (KG)", "kg",  total=True),
-                Column("_avg_hr",    "Avg / Hr",      "num")])
+                Column("_avg_hr",    "Avg / Hr",      "rate")])
     s2_rows = []
     for br in s2_band_rows:
         if not isinstance(br, dict):
@@ -920,7 +990,7 @@ def serial_gom(ym: str) -> _SheetFlagPair:
         tot = br.get("total") or {}
         for m in months_order:
             mc = (br.get("months") or {}).get(m) or {}
-            row[m] = _v(mc.get("hrs") if mc else None)
+            _set_month_metrics(row, m, mc)
         row["_total_hrs"] = _v(tot.get("hrs"))
         row["_total_kg"]  = _v(tot.get("gross_kg"))
         row["_avg_hr"]    = _v(tot.get("avg_hr"))
@@ -928,7 +998,7 @@ def serial_gom(ym: str) -> _SheetFlagPair:
     s2_total_r = s2.get("total_row") or {}
     s2_totrow = {"band":"TOTAL", "mc_count": None}
     for m in months_order:
-        s2_totrow[m] = None
+        _set_month_metrics(s2_totrow, m, (s2_total_r.get("months") or {}).get(m))
     s2_tot_total = s2_total_r.get("total") or {}
     s2_totrow["_total_hrs"] = _v(s2_tot_total.get("hrs"))
     s2_totrow["_total_kg"]  = _v(s2_tot_total.get("gross_kg"))
@@ -955,7 +1025,7 @@ def serial_gom(ym: str) -> _SheetFlagPair:
             mo_d = mr_list[0].get("months") or {}
             months_keys = list(mo_d.keys())
             break
-    band_mc_cols += [Column(m, m, "num") for m in months_keys]
+    band_mc_cols += _month_metric_columns(months_keys)
     band_mc_cols += [Column("_total_hrs","Total Hrs","num",total=True),
                      Column("_total_kg","Total KG","kg",total=True),
                      Column("_avg_hr","Avg/Hr","num")]
@@ -974,7 +1044,7 @@ def serial_gom(ym: str) -> _SheetFlagPair:
             tot = mr.get("total") or {}
             for m in months_keys:
                 mc_val = (mr.get("months") or {}).get(m) or {}
-                row[m] = _v(mc_val.get("hrs") if isinstance(mc_val, dict) else mc_val)
+                _set_month_metrics(row, m, mc_val)
             row["_total_hrs"] = _v(tot.get("hrs"))
             row["_total_kg"]  = _v(tot.get("gross_kg"))
             row["_avg_hr"]    = _v(tot.get("avg_hr"))
@@ -983,7 +1053,7 @@ def serial_gom(ym: str) -> _SheetFlagPair:
         tot_r = tr.get("total") if isinstance(tr, dict) else {}
         band_totrow = {"band_mc_num":"TOTAL","global_mc":"","mould_id":""}
         for m in months_keys:
-            band_totrow[m] = None
+            _set_month_metrics(band_totrow, m, None)
         band_totrow["_total_hrs"] = _v((tot_r or {}).get("hrs"))
         band_totrow["_total_kg"]  = _v((tot_r or {}).get("gross_kg"))
         band_totrow["_avg_hr"]    = _v((tot_r or {}).get("avg_hr"))

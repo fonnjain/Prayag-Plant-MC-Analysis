@@ -71,3 +71,16 @@ add a baselines.json entry when the team supplies real planned hours.
 read fails — typically Google Sheets throttling on a cold read. Re-run build-state
 before treating a #7 failure as a real bug; a parse gap would surface as a warning with
 rows, not this raise.
+
+# A registered monthly payroll source can temporarily render as unparsed
+
+After a cold restart or a concentrated set of Sheets reads, a Management Report can
+show “wages file found but parse returned None” even when the linked KH-1 workbook
+and its segment parser are valid. This is a transient Sheets 429 condition, distinct
+from `AWAITING` (which means no workbook is registered).
+
+**Why:** the page reads several monthly workbooks together; Sheets may reject that
+burst while a single source read succeeds after a cooldown.
+**How to apply:** retain the source registration and retry after backoff before
+changing data or treating the month as missing. Do not turn a temporary parse warning
+into an `AWAITING` state.

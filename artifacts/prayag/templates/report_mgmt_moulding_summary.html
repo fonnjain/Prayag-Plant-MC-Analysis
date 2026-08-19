@@ -364,10 +364,12 @@
             {% for mc in s4.machines %}
             {% set c = s4.total_cols[mc] %}
             <td class="px-1 py-2 text-right tabular-nums border-l border-gray-200">
-              {% if c.hrs %}{{ '{:,.0f}'.format(c.hrs) }}{% else %}0{% endif %}
+              {% set hrs = pivot_cell(c, 'hrs') %}
+              {% if hrs %}{{ '{:,.0f}'.format(hrs) }}{% else %}0{% endif %}
             </td>
             <td class="px-1 py-2 text-right tabular-nums">
-              {% if c.out %}{{ '{:,.0f}'.format(c.out) }}{% else %}0{% endif %}
+              {% set out = pivot_cell(c, 'out') %}
+              {% if out %}{{ '{:,.0f}'.format(out) }}{% else %}0{% endif %}
             </td>
             {% endfor %}
           </tr>
@@ -378,10 +380,12 @@
             {% for mc in s4.machines %}
             {% set c = row.cols[mc] %}
             <td class="px-1 py-1.5 text-right tabular-nums text-gray-600 border-l border-gray-100">
-              {% if c.hrs %}{{ '{:,.0f}'.format(c.hrs) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+              {% set hrs = pivot_cell(c, 'hrs') %}
+              {% if hrs %}{{ '{:,.0f}'.format(hrs) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
             </td>
             <td class="px-1 py-1.5 text-right tabular-nums text-gray-700">
-              {% if c.out %}{{ '{:,.0f}'.format(c.out) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+              {% set out = pivot_cell(c, 'out') %}
+              {% if out %}{{ '{:,.0f}'.format(out) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
             </td>
             {% endfor %}
           </tr>
