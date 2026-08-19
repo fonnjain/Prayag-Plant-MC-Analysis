@@ -3926,23 +3926,89 @@ _pipe_mould_fy_lock = threading.Lock()
 _PIPE_MOULD_FY_TTL = 1800  # 30 min
 
 
+def _pipe_mould_fiscal_months(fy: str) -> list[str]:
+    """Return the registered fiscal-month order for a PIPE moulds workbook."""
+    if fy == "2627":
+        return list(sources.FY_MONTHS)
+    if fy == "2526":
+        return list(sources.FY_MONTHS_2526)
+    try:
+        start_year = 2000 + int(fy[:2])
+    except (TypeError, ValueError):
+        return []
+    return [
+        f"{year}-{month:02d}"
+        for year, month in (
+            [(start_year, m) for m in range(4, 13)]
+            + [(start_year + 1, m) for m in range(1, 4)]
+        )
+    ]
+
+
+def _pipe_mould_file_id(ym: str) -> Optional[str]:
+    """Resolve one exact PIPE workbook month without a latest-file fallback."""
+    files = sources.DAILY_SOURCES.get("PIPE", {}).get("files", {})
+    if ym in files:
+        return files[ym]
+    try:
+        import source_registry as _reg
+        result = _reg.get_pipe_file_id(ym)
+        if result and result.get("file_id"):
+            return result["file_id"]
+    except Exception:
+        pass
+    return None
+
+
+def _restrict_pipe_mould_result(result: dict, complete_indexes: set[int]) -> dict:
+    """Return a cumulative result restricted to one shared completed scope."""
+    months = [
+        month for month in result.get("months", [])
+        if month.get("month_index") in complete_indexes
+    ]
+    run_codes = {
+        code
+        for month in months
+        for code in month.get("run_codes", [])
+    }
+    return {
+        **result,
+        "months": months,
+        "n_run": len(run_codes),
+        "total_pcs": sum(month.get("total_pcs", 0.0) for month in months),
+        "total_kg": sum(month.get("total_kg", 0.0) for month in months),
+        "total_hrs": sum(month.get("total_hrs", 0.0) for month in months),
+        "sheet_total_pcs": sum(month.get("sheet_total_pcs", 0.0) for month in months),
+        "sheet_total_kg": sum(month.get("sheet_total_kg", 0.0) for month in months),
+        "sheet_total_hrs": sum(month.get("sheet_total_hrs", 0.0) for month in months),
+        "complete_month_indexes": sorted(complete_indexes),
+        "complete_n_months": len(complete_indexes),
+    }
+
+
 def load_pipe_moulds_fy(fy: str = "2627") -> dict:
     """Load the cumulative mould-working data for *fy* from the latest monthly
-    PIPE workbook (Reports 17–21, 4-month cumulative format).
+    PIPE workbook (Reports 17–21, cumulative fiscal-month format).
 
-    The JUL workbook carries APR + MAY + JUN + JUL blocks.  All five material
-    tabs (CPVC / UPVC / SWR / AGRI / PPR) are read in one ``batch_get``.
+    The latest available workbook determines the month blocks used; e.g. the
+    JUL workbook carries APR + MAY + JUN + JUL blocks.  All five material tabs
+    (CPVC / UPVC / SWR / AGRI / PPR) are read in one ``batch_get``.
 
     Returns::
 
         {
           "available": bool,
           "fy": str,            # e.g. "2627"
-          "n_months": int,      # months summed (1-4)
+           "n_months": int,      # fiscal months expected through latest source
+           "complete_n_months": int,  # months complete across all material tabs
+           "complete_months": [str, ...],  # published, source-ordered months
+           "months": [str, ...], # source-ordered YYYY-MM values
           "latest_ym": str,     # source workbook month (e.g. "2026-07")
           "file_id": str,
           "groups": [result, …],   # parse_cumulative_mould_fy results
           "missing": [str, …],     # materials whose tab was absent
+           "missing_months": [{month, materials}, ...],
+           "partial_months": [{month, materials}, ...],
           "grand_pcs": float,
           "grand_kg":  float,
           "grand_hrs": float,
@@ -3960,8 +4026,10 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
 
         EMPTY = {
             "available": False, "fy": fy, "n_months": 0,
+            "complete_n_months": 0, "months": [], "complete_months": [],
             "latest_ym": "", "file_id": "",
             "groups": [], "missing": [],
+            "missing_months": [], "partial_months": [],
             "grand_pcs": 0.0, "grand_kg": 0.0, "grand_hrs": 0.0,
             "grand_n_run": 0,
         }
@@ -3972,18 +4040,22 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
 
         import parsers as _par
 
-        # FY → ordered list of source months (APR first)
-        _fy_months: dict = {"2627": ["2026-04", "2026-05", "2026-06", "2026-07"]}
-        months = _fy_months.get(fy, [])
+        # Source order is fiscal (APR first), not alphabetic report labels.
+        # This list already includes future months so a newly registered PIPE
+        # workbook is included without a source-code release.
+        months = _pipe_mould_fiscal_months(fy)
         if not months:
             _pipe_mould_fy_cache[fy] = (now, EMPTY)
             return EMPTY
 
-        # Find the latest workbook that exists in DAILY_SOURCES
+        # Find the latest exact source in fiscal order.  Do not use
+        # ``_daily_file_id`` here: its historical fallback returns the latest
+        # registered workbook for an unavailable requested month, which would
+        # incorrectly make a future month appear as the cumulative source.
         latest_ym = ""
         file_id = ""
         for ym in reversed(months):
-            fid = _daily_file_id("PIPE", ym)
+            fid = _pipe_mould_file_id(ym)
             if fid:
                 latest_ym = ym
                 file_id = fid
@@ -3992,7 +4064,8 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
             _pipe_mould_fy_cache[fy] = (now, EMPTY)
             return EMPTY
 
-        n_months = months.index(latest_ym) + 1  # how many months are in the file
+        source_months = months[:months.index(latest_ym) + 1]
+        n_months = len(source_months)
 
         token = _get_access_token()
         if not token:
@@ -4003,8 +4076,10 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
         except SheetReadError:
             raise
 
-        groups = []
+        parsed_by_group: dict[str, dict] = {}
         missing = []
+        missing_by_month: dict[str, list[str]] = {}
+        partial_by_month: dict[str, list[str]] = {}
         grand_pcs = grand_kg = grand_hrs = 0.0
         grand_n_run = 0
         for tab, grp in _PIPE_MOULD_FY_TABS.items():
@@ -4013,21 +4088,67 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
             )
             if result is None:
                 missing.append(grp)
+                # An absent material tab leaves every month incomplete for the
+                # combined report. Its absence must be visible at month grain,
+                # not merely as a material-level footnote.
+                for month in source_months:
+                    missing_by_month.setdefault(month, []).append(grp)
             else:
-                groups.append(result)
-                grand_pcs  += result["total_pcs"]
-                grand_kg   += result["total_kg"]
-                grand_hrs  += result["total_hrs"]
-                grand_n_run += result["n_run"]
+                parsed_by_group[grp] = result
+                for month_index in result.get("missing_month_indexes", []):
+                    if month_index < len(source_months):
+                        missing_by_month.setdefault(
+                            source_months[month_index], []
+                        ).append(grp)
+                for month_index in result.get("partial_month_indexes", []):
+                    if month_index < len(source_months):
+                        partial_by_month.setdefault(
+                            source_months[month_index], []
+                        ).append(grp)
+        complete_indexes = set(range(n_months))
+        for grp in _PIPE_MOULD_FY_TABS.values():
+            result = parsed_by_group.get(grp)
+            if result is None:
+                complete_indexes.clear()
+                break
+            complete_indexes &= set(result.get(
+                    "complete_month_indexes",
+                    [r.get("month_index") for r in result.get("months", [])],
+            ))
+
+        groups = []
+        for grp in _PIPE_MOULD_FY_TABS.values():
+            result = parsed_by_group.get(grp)
+            if result is None:
+                continue
+            filtered = _restrict_pipe_mould_result(result, complete_indexes)
+            groups.append(filtered)
+            grand_pcs += filtered["total_pcs"]
+            grand_kg += filtered["total_kg"]
+            grand_hrs += filtered["total_hrs"]
+            grand_n_run += filtered["n_run"]
 
         out = {
-            "available": bool(groups),
+            "available": bool(groups) and bool(complete_indexes),
             "fy": fy,
             "n_months": n_months,
+            "complete_n_months": len(complete_indexes),
+            "months": source_months,
+            "complete_months": [
+                source_months[index] for index in sorted(complete_indexes)
+            ],
             "latest_ym": latest_ym,
             "file_id": file_id,
             "groups": groups,
             "missing": missing,
+            "missing_months": [
+                {"month": month, "materials": materials}
+                for month, materials in missing_by_month.items()
+            ],
+            "partial_months": [
+                {"month": month, "materials": materials}
+                for month, materials in partial_by_month.items()
+            ],
             "grand_pcs": grand_pcs,
             "grand_kg": grand_kg,
             "grand_hrs": grand_hrs,

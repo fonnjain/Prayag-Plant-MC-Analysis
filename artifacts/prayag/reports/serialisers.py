@@ -1932,8 +1932,21 @@ def serial_pipe_moulds(ym: str) -> _SheetFlagPair:
             ))
         for mv in (block.get("missing") or []):
             flags.append(Flag(rule="Missing", section=period_lbl, note=str(mv)))
-        for uv in (block.get("unavailable") or []):
-            flags.append(Flag(rule="Unavailable", section=period_lbl, note=str(uv)))
+        for issue in (block.get("month_issues") or []):
+            if not isinstance(issue, dict):
+                continue
+            flags.append(Flag(
+                rule="Incomplete-Month",
+                section=period_lbl,
+                month=str(issue.get("month") or ""),
+                note=str(issue.get("note") or "Incomplete cumulative month block"),
+            ))
+        if block.get("unavailable"):
+            flags.append(Flag(
+                rule="Unavailable",
+                section=period_lbl,
+                note="No complete source period is available for this block.",
+            ))
         if not shared_prov:
             if d.get("sourcing_note"):
                 shared_prov.append(d["sourcing_note"])

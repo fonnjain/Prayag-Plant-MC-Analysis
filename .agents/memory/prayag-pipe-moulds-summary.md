@@ -52,5 +52,22 @@ All 15 reconciliation checks PASS:
 The workbook TOTAL row omits PPR from 6 of 7 columns (only n_total includes PPR).
 Report always shows the correct inclusive TOTAL and flags the defect in a note.
 
+### Cumulative completeness rule
+Published current-period totals use a **shared** completed-month scope across all
+five Reports 17–21. A month only enters the material totals, combined TOTAL,
+averages, download rows, and Apr–Jul reconciliation when every material tab has
+a complete four-column block. A missing tab is missing for every fiscal month;
+a partial/missing trailing block is flagged and excluded rather than treated as
+finished history.
+
+**Why:** Mixing a complete August block from one material with an incomplete
+August block from another produces a misleading combined total and dilutes (or
+inflates) Avg./Month.
+
+**How to apply:** Keep the latest workbook's source month range separate from
+the published completed range. The former drives the review warning; the latter
+drives calculations and determines whether the fixed Apr–Jul reconciliation
+anchors still apply.
+
 ### Route
 `/management-reports/pipe-moulds-summary` → `mgmt_pipe_moulds_summary_view()` → `mgmt_pipe_moulds_summary.py:build_pipe_moulds_summary()`

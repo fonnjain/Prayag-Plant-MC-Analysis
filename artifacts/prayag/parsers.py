@@ -2280,7 +2280,28 @@ def parse_cumulative_mould_fy(
     ]
     if not month_starts:
         return None
-    used_starts = month_starts[:n_months]
+    # A cumulative workbook can be created before the current month's block
+    # has been copied into every material tab.  Do not silently turn that
+    # trailing block into a completed zero month.  Keep the source index so
+    # callers can map the result back to the fiscal-month list.
+    requested_indexes = list(range(n_months))
+    complete_indexes: List[int] = []
+    partial_indexes: List[int] = []
+    for month_index in requested_indexes[:len(month_starts)]:
+        start = month_starts[month_index]
+        next_start = (
+            month_starts[month_index + 1]
+            if month_index + 1 < len(month_starts)
+            else len(sub_hdr)
+        )
+        # Each block is PCS / KG / GROSS KG / HOURS.  A short trailing
+        # header is a partial block, not an all-zero completed month.
+        if next_start - start >= 4 and start + 3 < len(sub_hdr):
+            complete_indexes.append(month_index)
+        else:
+            partial_indexes.append(month_index)
+    missing_indexes = list(range(len(month_starts), n_months))
+    used_starts = [(i, month_starts[i]) for i in complete_indexes]
 
     # ── identity-row column for the mould code ────────────────────────────────
     id_row = values[sub_hdr_idx - 1] if sub_hdr_idx >= 1 else []
@@ -2313,7 +2334,7 @@ def parse_cumulative_mould_fy(
     sh_pcs = sh_kg = sh_hrs = 0.0
     monthly: List[dict] = [
         {
-            "month_index": i,
+            "month_index": month_index,
             "n_run": 0,
             "total_pcs": 0.0,
             "total_kg": 0.0,
@@ -2322,11 +2343,11 @@ def parse_cumulative_mould_fy(
             "sheet_total_kg": 0.0,
             "sheet_total_hrs": 0.0,
         }
-        for i in range(len(used_starts))
+        for month_index, _start in used_starts
     ]
     if total_idx >= 0:
         tr = values[total_idx]
-        for i, s in enumerate(used_starts):
+        for i, (month_index, s) in enumerate(used_starts):
             monthly[i]["sheet_total_pcs"] = num(tr[s]) if s < len(tr) else 0.0
             monthly[i]["sheet_total_kg"] = num(tr[s + 1]) if s + 1 < len(tr) else 0.0
             monthly[i]["sheet_total_hrs"] = num(tr[s + 3]) if s + 3 < len(tr) else 0.0
@@ -2345,7 +2366,7 @@ def parse_cumulative_mould_fy(
         if not code or "TOTAL" in code.upper() or "GRAND" in code.upper():
             continue
         r_pcs = r_kg = r_hrs = 0.0
-        for i, s in enumerate(used_starts):
+        for i, (month_index, s) in enumerate(used_starts):
             m_pcs = num(row[s]) if s < len(row) else 0.0
             m_kg = num(row[s + 1]) if s + 1 < len(row) else 0.0
             m_hrs = num(row[s + 3]) if s + 3 < len(row) else 0.0
@@ -2365,6 +2386,10 @@ def parse_cumulative_mould_fy(
 
     for i, codes in enumerate(month_run_codes):
         monthly[i]["n_run"] = len(codes)
+        # The loader may need to exclude a partial month across every material
+        # tab. Preserve the identifiers so its filtered aggregate can retain
+        # an exact distinct-mould count rather than summing monthly counts.
+        monthly[i]["run_codes"] = sorted(codes)
 
     return {
         "group": group,
@@ -2375,6 +2400,10 @@ def parse_cumulative_mould_fy(
         "sheet_total_pcs": sh_pcs,
         "sheet_total_kg": sh_kg,
         "sheet_total_hrs": sh_hrs,
+        "complete_month_indexes": complete_indexes,
+        "missing_month_indexes": missing_indexes,
+        "partial_month_indexes": partial_indexes,
+        "complete_n_months": len(complete_indexes),
         # The columns are cumulative workbook blocks, ordered Apr onward.
         # Keep them separate so consumers can render honest month history
         # rather than trying to recover it from the FY aggregate.

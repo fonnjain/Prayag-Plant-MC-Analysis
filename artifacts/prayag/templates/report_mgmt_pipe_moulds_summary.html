@@ -8,7 +8,7 @@
   <div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
     <div>
       <h4 class="mb-0 fw-semibold">(D) Pipe Moulds Summary</h4>
-      <p class="text-muted small mb-0">Management Report 13 · YoY comparison: Apr–Jul</p>
+      <p class="text-muted small mb-0">Management Report 13 · YoY comparison: {{ data.current_period_label }}</p>
     </div>
     <div class="text-end text-muted small">
       <div>{{ today_disp }}</div>
@@ -55,6 +55,9 @@
       {% if block.missing %}
         <span class="badge bg-danger">Missing: {{ block.missing | join(", ") }}</span>
       {% endif %}
+      {% if block.incomplete %}
+        <span class="badge bg-warning text-dark ms-1">Incomplete source</span>
+      {% endif %}
     </div>
 
     <div class="card-body p-0">
@@ -63,6 +66,15 @@
           Source data not available for this period.
         </div>
       {% else %}
+        {% if block.month_issues %}
+        <div class="alert alert-warning rounded-0 border-0 border-bottom mb-0 py-2 px-3 small">
+          <strong>Month blocks need review:</strong>
+          {% for issue in block.month_issues %}
+            {{ issue.note }}{% if not loop.last %}; {% endif %}
+          {% endfor %}
+          These blocks are excluded from the period totals and averages until complete.
+        </div>
+        {% endif %}
         <div class="table-responsive">
           <table class="table table-sm table-bordered table-hover mb-0 align-middle text-center">
             <thead class="table-light">
@@ -227,6 +239,12 @@
         </p>
       </div>
     </div>
+  </div>
+  {% endif %}
+
+  {% if data.recon_note %}
+  <div class="alert alert-info py-2 px-3 small mb-4">
+    <i class="bi bi-info-circle-fill me-1"></i>{{ data.recon_note }}
   </div>
   {% endif %}
 
