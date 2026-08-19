@@ -1,0 +1,89 @@
+# Management Reports — Finish the Layout
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**The Cardinal Rule stands and is not in question here.** Every figure remains recomputed from live source data. **No number may change in this work.**
+
+The QA rounds are about **structure**: sections missing, columns dropped, month rows collapsed to totals, and layouts that do not mirror the source sheet. Nothing about the figures themselves is in dispute.
+
+**The goal: for every report, the page and the download must both mirror the source workbook's layout** — same sections, same columns, same column order, same row grain.
+
+---
+
+## What QA reported, by report
+
+### Garden Pipe
+
+**Page:** only the SUMMARY section renders. `SUMMARY-1`, `HOURS`, `OUTPUT`, `M/C-1`, `M/C-2`, `M/C-3`, `M/C-4` all show nothing.
+**Download:** `SUMMARY-1` and `OUTPUT` sections do not carry the columns the source has.
+
+### HDPE
+
+**Page:** only SUMMARY renders. `SUMMARY-1`, `HOURS`, `OUTPUT`, `M/C-1`…`M/C-6` all show nothing.
+**Download:** `SUMMARY` empty; `HOURS` empty; `OUTPUT` incomplete.
+**Both:** only `M/C-1` and `M/C-2` appear. **The source carries all six.** Machines that did not run must render with **0**, not be omitted — an absent machine and an idle machine look identical otherwise (**R-06**).
+
+### PTMT Moulding %age in Efficiency
+
+**Page:** the `Actual Min` and `Efficiency` columns show nothing.
+**Download:** no data at all.
+This report's calculations were verified exactly against source (PSF-219 ideal 146,330 minutes; April TOTAL efficiency 97.04%), so the figures are known good — this is a rendering and serialisation problem only.
+
+### (D) Pipe Moulds
+
+**Page:** formatting does not follow the source; only summary-level rows appear.
+**Download:** only the `Output` column carries values. These headings show nothing: `No. of Total Mould` · `No. of Mould Run` · `Mould Run Hours` · `Av. Run Hour Per Mould` · `Output (KG)` · `Avg. Output on a Month`.
+**Both:** only totals appear where the source shows **month by month**.
+
+### (C) Group of Moulding
+
+`SUMMARY` renders on the page but exports empty. `SUMMARY-1` and the band tabs (`150`–`450`) lose `Output` and `Avg. Per Output on Hours` in the download.
+
+### (B) Moulding
+
+`HOURS` appears in the download but not on the page. The `Moulding M/C 26-27` monthly pivot does not export at all.
+
+### (A) Pipe
+
+`M/C WISE` shows Hours **and** Output on the page but Output only in the download. `HOURS` appears in the download but not on the page. The `MATERIAL` section does not render its FY25-26 block — that closed-year data is already read by `SUMMARY-1`, so it exists.
+
+---
+
+## The underlying cause, and the durable fix
+
+Most of these are **key-contract mismatches**: the builder returns one field name, and the template or serialiser reads another. The lookup fails silently and the column disappears — no error, just a blank.
+
+Two already confirmed:
+- GOM's serialiser reads `section1.rows`; the builder returns `section1.fy2627[]` and `section1.fy2526[]`.
+- Several sections serialise `months[ym].hrs` only, dropping `gross_kg` and `avg_hr`.
+
+**Fix the individual mismatches, then remove the class.** A shared accessor for each cell shape, used by **both** the template and the serialiser, means a renamed field breaks loudly in one place instead of silently blanking a column in two. The `{hrs, out}` accessor already added is the pattern — extend it.
+
+**Then add a guard:** if a section the report declares produces **zero populated columns or zero rows**, log a named warning rather than rendering an empty block (**R-06**). Every fault above was silent.
+
+---
+
+## Constraints
+
+- **No figure changes.** Anchors that must hold: PIPE 6,507 h / 1,277,971 kg / July wages ₹6,19,455 · Moulding 366,015 kg / 35,972 h · GOM 366,015 / 35,972 / 66.61% · Garden 234,208 block basis / 138,052 daily-report basis / 5,259.50 rejection · HDPE 23,817.24 with July 22,448.04 · PTMT 524,465 daily basis. If any moves, **stop**.
+- **Existing flags stay** — R-23, R-24, R-42, R-43, R-26, the sum-of-monthly TOTAL notes, the basis labels. They are correct and they explain real divergences.
+- `AWAITING SOURCE DATA`, `n/a`, `IDLE`, `⚠ unavailable` render as **text**, never 0 or blank.
+- Idle machines render **0**; machines with no source render **blank with a note**. The two must be distinguishable.
+- No formulas or external references in any exported file.
+
+## Do not touch
+
+The thirteen builders' **calculations** — expose grain and fix field lookups, do not alter arithmetic · `tank_reconcile.py` / R-39 (**R-41**) · `pipe_reconcile.py` (**R-15**) · `baselines.json` (**R-16**) · `parse_ideal_labour_rates()` (**R-40**) · `mp_*.py` (**R-20**) · `auth.py`.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Order of work
+
+1. **Garden and HDPE page sections** — the largest visible gap; six and nine sections blank respectively.
+2. **PTMT Efficiency** — page columns and the whole download.
+3. **Pipe Moulds** — month grain plus the six missing headings.
+4. **GOM, Moulding, Pipe** — the export key mismatches.
+5. **Pipe MATERIAL FY25-26 block.**
+6. **The shared accessor and the empty-section warning.**
+
+Report after each, with the tab or section list produced and confirmation that no figure moved.

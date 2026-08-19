@@ -308,6 +308,186 @@
   </div>{# end kpi-card #}
 </div>
 
+{# ─── SUMMARY-1: DR vs WB reconciliation ─────────────────────────────────────── #}
+{% set r23_rows = data.section.month_rows | selectattr('r23_has_data') | list %}
+{% if r23_rows %}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:var(--navy)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">SUMMARY-1 — DR vs WB Reconciliation (R-23)</h3>
+    <div class="text-xs text-gray-400">Block tabs vs Daily Report vs Annual WB net KG</div>
+  </div>
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.18)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy);min-width:68px">Month</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Our Net KG<br><span class="font-normal text-[9px] text-gray-400">(block tabs)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">DR Net KG<br><span class="font-normal text-[9px] text-gray-400">(Daily Report)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">WB Net KG<br><span class="font-normal text-[9px] text-gray-400">(Annual WB)</span></th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Our Gross KG</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">DR Gross KG</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in r23_rows %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05){% if row.r23_differs %};background:rgba(31,56,100,0.04){% endif %}">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600">
+              {{ row.month_disp }}
+              {% if row.r23_differs %}
+              <span class="ml-1 px-1 rounded text-[8px] font-bold" style="background:rgba(31,56,100,0.12);color:var(--navy)">R-23</span>
+              {% endif %}
+            </td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.net_kg) if row.net_kg else "—" }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">{{ "{:,.0f}".format(row.dr_net_kg) if row.dr_net_kg is not none else "—" }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-500">{{ "{:,.1f}".format(row.wb_net_kg) if row.wb_net_kg else "—" }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{{ "{:,.0f}".format(row.gross_kg) if row.gross_kg else "—" }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">{{ "{:,.0f}".format(row.dr_gross_kg) if row.dr_gross_kg is not none else "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ─── Per-machine breakdowns (HOURS / OUTPUT / MC-n) ─────────────────────────── #}
+{% set by_machine = data.section.by_machine %}
+{% if by_machine %}
+
+{# HOURS pivot — machines as rows, months as columns #}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:#0d7a3e"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">HOURS — Run Hours by Machine</h3>
+    <div class="text-xs text-gray-400">Monthly run hours per machine · Daily Report matrix</div>
+  </div>
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          {% for mc, mcd in by_machine.items() %}{% if loop.first %}
+          <tr style="background:rgba(13,122,62,0.06);border-bottom:1px solid rgba(13,122,62,0.18)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy);min-width:68px">Machine</th>
+            {% for mr in mcd.month_rows %}<th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">{{ mr.month_lbl }}</th>{% endfor %}
+            <th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">TOTAL</th>
+          </tr>
+          {% endif %}{% endfor %}
+        </thead>
+        <tbody>
+          {% for mc, mcd in by_machine.items() %}
+          {% set mc_short = "MC-" ~ mc.rsplit("-", 1)[-1].strip() %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05)">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600">{{ mc_short }}</td>
+            {% for mr in mcd.month_rows %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if mr.run_hrs %}{{ "{:,.1f}".format(mr.run_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap font-semibold text-gray-700">
+              {{ "{:,.1f}".format(mcd.total_row.run_hrs) if mcd.total_row.run_hrs else "—" }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# OUTPUT pivot — machines as rows, months as columns (net KG) #}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:#0d7a3e"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">OUTPUT — Net KG by Machine</h3>
+    <div class="text-xs text-gray-400">Monthly net output (KG) per machine · block tab basis</div>
+  </div>
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          {% for mc, mcd in by_machine.items() %}{% if loop.first %}
+          <tr style="background:rgba(13,122,62,0.06);border-bottom:1px solid rgba(13,122,62,0.18)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy);min-width:68px">Machine</th>
+            {% for mr in mcd.month_rows %}<th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">{{ mr.month_lbl }}</th>{% endfor %}
+            <th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">TOTAL</th>
+          </tr>
+          {% endif %}{% endfor %}
+        </thead>
+        <tbody>
+          {% for mc, mcd in by_machine.items() %}
+          {% set mc_short = "MC-" ~ mc.rsplit("-", 1)[-1].strip() %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05)">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600">{{ mc_short }}</td>
+            {% for mr in mcd.month_rows %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
+              {% if mr.net_kg %}{{ "{:,.0f}".format(mr.net_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap font-semibold text-gray-700">
+              {{ "{:,.0f}".format(mcd.total_row.net_kg) if mcd.total_row.net_kg else "—" }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# MC-n detail tables #}
+{% for mc, mcd in by_machine.items() %}
+{% set mc_short = "MC-" ~ mc.rsplit("-", 1)[-1].strip() %}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-2">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:var(--terra)"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">{{ mc_short }} — Monthly Detail</h3>
+    <div class="text-xs text-gray-400">{{ mc }}</div>
+  </div>
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(180,80,0,0.06);border-bottom:1px solid rgba(180,80,0,0.18)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy);min-width:68px">Month</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Run Hours</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Net KG</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Reject KG</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Gross KG</th>
+            <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Rej %<br><span class="font-normal text-[9px] text-gray-400">(of gross)</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for mr in mcd.month_rows %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05)">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600">{{ mr.month_lbl }}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if mr.run_hrs %}{{ "{:,.1f}".format(mr.run_hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if mr.net_kg %}{{ "{:,.0f}".format(mr.net_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if mr.reject_kg %}{{ "{:,.0f}".format(mr.reject_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if mr.gross_kg %}{{ "{:,.0f}".format(mr.gross_kg) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">{% if mr.rej_pct_gross is not none %}{{ "%.2f"|format(mr.rej_pct_gross) }}%{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+          {% set tr_mc = mcd.total_row %}
+          <tr style="background:rgba(13,122,62,0.07);border-top:2px solid rgba(13,122,62,0.22);font-weight:600">
+            <td class="px-2 py-2 whitespace-nowrap" style="color:var(--navy)">TOTAL</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.1f}".format(tr_mc.run_hrs) if tr_mc.run_hrs else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr_mc.net_kg) if tr_mc.net_kg else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr_mc.reject_kg) if tr_mc.reject_kg else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr_mc.gross_kg) if tr_mc.gross_kg else "—" }}</td>
+            <td class="px-2 py-2 text-right whitespace-nowrap">{% if tr_mc.rej_pct_gross is not none %}{{ "%.2f"|format(tr_mc.rej_pct_gross) }}%{% else %}—{% endif %}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+{% endif %}{# /by_machine #}
+
 {# ─── Production basis note ──────────────────────────────────────────────────── #}
 <div class="mt-2 mb-6 p-3 rounded-xl border text-[10px] text-gray-500 leading-relaxed"
      style="border-color:rgba(31,56,100,0.12);background:rgba(31,56,100,0.025)">

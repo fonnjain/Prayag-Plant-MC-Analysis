@@ -220,8 +220,10 @@
             style="border-color:rgba(31,56,100,0.14)">
           {{ ki(tb.ideal_min) if tb else "—" }}
         </td>
-        <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-500 italic"
-            style="border-color:rgba(31,56,100,0.14)">—</td>
+        <td class="px-2 py-2 text-right tabular-nums border-r border-b text-gray-600"
+            style="border-color:rgba(31,56,100,0.14)">
+          {{ ki(tb.std_min) if tb and tb.std_min else "—" }}
+        </td>
         <td class="px-2 py-2 text-right border-b text-gray-400 italic"
             style="border-color:rgba(31,56,100,0.14)">—</td>
       </tr>
@@ -262,8 +264,8 @@
             style="border-color:rgba(31,56,100,0.07)">{{ ki(blk.pcs) }}</td>
         <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r"
             style="border-color:rgba(31,56,100,0.07)">{{ ki(blk.ideal_min) }}</td>
-        <td class="px-2 py-1 text-right tabular-nums text-gray-400 italic border-r"
-            style="border-color:rgba(31,56,100,0.07)">—</td>
+        <td class="px-2 py-1 text-right tabular-nums text-gray-600 border-r"
+            style="border-color:rgba(31,56,100,0.07)">{{ ki(blk.std_min) if blk.std_min else "—" }}</td>
         <td class="px-2 py-1 text-right text-gray-400 italic">—</td>
       </tr>
       {% endif %}
@@ -275,10 +277,10 @@
 
 {# ── Footer ───────────────────────────────────────────────────────────────── #}
 <div class="mt-2 text-[10px] text-gray-400 px-1 leading-relaxed">
-  ★ Actual M/C Run Min and Efficiency % require the ANNUAL PTMT Moulding %age in Efficiency
-  workbook (not in Drive). Spec APR: Ideal=891,279 · Actual=918,451 · Eff=97.04% ·
-  MAY: 101.66% · TOTAL: 100.53%.
-  Ideal Min shown here = pcs × cycle time ÷ 60 (formula, verified for PSF-219 / PSF-23 / PSF-314 / PSF-184).
+  ★ Actual M/C Run Min is from Report-9 C11 (pcs × cycle time ÷ 60, verified vs spec: APR C11 sum = 918,451).
+  Efficiency % requires the ANNUAL PTMT Moulding %age in Efficiency workbook (not in Drive) — shown as —.
+  Spec anchors: APR Ideal=891,279 · Actual=918,451 · Eff=97.04% · MAY: 101.66% · TOTAL: 100.53%.
+  Ideal Min = pcs × cycle time ÷ 60 (formula, verified for PSF-219 / PSF-23 / PSF-314 / PSF-184).
 </div>
 
 {% endif %} {# has_data #}

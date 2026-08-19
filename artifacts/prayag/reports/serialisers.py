@@ -1808,12 +1808,8 @@ def serial_ptmt_mould_eff(ym: str) -> _SheetFlagPair:
             "group":    r.get("group",""),
         }
         for ym_k in months:
-            mo_data = None
-            for blk in (r.get("monthly") or []):
-                if isinstance(blk, dict) and blk.get("ym") == ym_k:
-                    mo_data = blk
-                    break
-            row[f"m_{ym_k}"] = _v((mo_data or {}).get("pcs") or (mo_data or {}).get("actual"))
+            mo_data = (r.get("monthly") or {}).get(ym_k)
+            row[f"m_{ym_k}"] = _v((mo_data or {}).get("pcs") if mo_data else None)
         total_blk = r.get("total") or {}
         row["total_pcs"] = _v(total_blk.get("pcs") or total_blk.get("actual"))
         row["total_hrs"] = _v(total_blk.get("hrs") or total_blk.get("hours"))

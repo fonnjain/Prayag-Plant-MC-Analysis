@@ -399,6 +399,65 @@
   </section>
   {% endif %}
 
+  {# ── HOURS-only pivot (mirrors HOURS xlsx tab) ── #}
+  {% if data.section4 and data.section4.machines %}
+  {% set s4m = data.section4 %}
+  <section>
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-lg font-semibold text-gray-800">Moulding M/C 26-27 — Hours by Machine</h2>
+      <span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">mirrors HOURS export tab</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">Machines as rows · months as columns · run hours only</p>
+    <div class="overflow-x-auto rounded border border-gray-200">
+      <table class="text-xs border-collapse" style="width:max-content;min-width:100%">
+        <thead class="bg-gray-50 text-gray-600 text-[10px] tracking-wide">
+          <tr class="border-b border-gray-200">
+            <th class="px-3 py-1.5 text-left sticky left-0 bg-gray-50 z-10 min-w-[72px]">Machine</th>
+            {% for row in s4m.month_rows %}
+            <th class="px-2 py-1.5 text-right border-l border-gray-200">{{ row.month_disp }}</th>
+            {% endfor %}
+            <th class="px-2 py-1.5 text-right border-l border-gray-300 font-semibold">TOTAL</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          <tr class="bg-gray-50 font-semibold border-b-2 border-gray-300">
+            <td class="px-3 py-2 sticky left-0 bg-gray-100 z-10 text-gray-800">TOTAL</td>
+            {% for row in s4m.month_rows %}
+            <td class="px-2 py-2 text-right tabular-nums border-l border-gray-200">
+              {%- set col_hrs = namespace(v=0) %}
+              {%- for mc in s4m.machines %}{% set ch = row.cols[mc] %}{% set hv = pivot_cell(ch, 'hrs') %}{% if hv %}{% set col_hrs.v = col_hrs.v + hv %}{% endif %}{% endfor -%}
+              {{ '{:,.0f}'.format(col_hrs.v) if col_hrs.v else 0 }}
+            </td>
+            {% endfor %}
+            <td class="px-2 py-2 text-right tabular-nums border-l border-gray-300">
+              {%- set grand_h = namespace(v=0) %}
+              {%- for mc in s4m.machines %}{% set ch = s4m.total_cols[mc] %}{% set hv = pivot_cell(ch, 'hrs') %}{% if hv %}{% set grand_h.v = grand_h.v + hv %}{% endif %}{% endfor -%}
+              {{ '{:,.0f}'.format(grand_h.v) if grand_h.v else 0 }}
+            </td>
+          </tr>
+          {% for mc in s4m.machines %}
+          <tr class="hover:bg-gray-50">
+            <td class="px-3 py-1.5 font-medium text-gray-700 sticky left-0 bg-white z-10">{{ mc }}</td>
+            {% for row in s4m.month_rows %}
+            {% set ch = row.cols[mc] %}
+            {% set hrs = pivot_cell(ch, 'hrs') %}
+            <td class="px-2 py-1.5 text-right tabular-nums text-gray-600 border-l border-gray-100">
+              {% if hrs %}{{ '{:,.0f}'.format(hrs) }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+            </td>
+            {% endfor %}
+            <td class="px-2 py-1.5 text-right tabular-nums text-gray-700 border-l border-gray-200 font-medium">
+              {% set th = pivot_cell(s4m.total_cols[mc], 'hrs') %}
+              {% if th %}{{ '{:,.0f}'.format(th) }}{% else %}0{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">Source: MOULDING daily records (Report-12, R-38). Run hours from Report-5 joined via r5_runhours.</p>
+  </section>
+  {% endif %}
+
   {# ── data notes ── #}
   <section class="text-xs text-gray-400 border-t border-gray-100 pt-4 space-y-1">
     <p><strong>Sources (FY26-27):</strong>

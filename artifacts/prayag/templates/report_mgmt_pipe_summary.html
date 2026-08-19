@@ -401,6 +401,73 @@
 </div>
 {% endif %}
 
+{# ─── HOURS-only pivot (mirrors the HOURS xlsx tab) ─────────────────────────── #}
+{% if data.section4 and data.section4.machines %}
+{% set s4h = data.section4 %}
+<div class="mb-6">
+  <div class="flex items-center gap-2 mb-3">
+    <div class="w-1 h-6 rounded-full flex-shrink-0" style="background:#7c3aed"></div>
+    <h3 class="text-sm font-bold" style="color:var(--navy)">HOURS — Run Hours by Machine (Monthly)</h3>
+    <div class="text-xs text-gray-400">Machines as rows · months as columns · mirrors HOURS export tab</div>
+  </div>
+  <div class="kpi-card" style="overflow:hidden">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+        <thead>
+          <tr style="background:rgba(124,58,237,0.06);border-bottom:1px solid rgba(124,58,237,0.20)">
+            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(247,244,255,1);z-index:2;min-width:72px">Machine</th>
+            {% for row in s4h.month_rows %}
+            <th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">{{ row.month_disp }}</th>
+            {% endfor %}
+            <th class="text-right font-semibold px-2 py-1.5 whitespace-nowrap" style="color:var(--navy)">TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="background:rgba(124,58,237,0.07);border-bottom:2px solid rgba(124,58,237,0.20);font-weight:600">
+            <td class="px-2 py-2 whitespace-nowrap"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(238,232,255,1);z-index:1">TOTAL</td>
+            {% for row in s4h.month_rows %}
+            {% set c = row.cols %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap">
+              {%- set mc_hrs_total = namespace(v=0) %}
+              {%- for mc in s4h.machines %}{% set ch = c[mc] %}{% set hv = pivot_cell(ch, 'hrs') %}{% if hv %}{% set mc_hrs_total.v = mc_hrs_total.v + hv %}{% endif %}{% endfor -%}
+              {{ "{:,.0f}".format(mc_hrs_total.v) if mc_hrs_total.v else "—" }}
+            </td>
+            {% endfor %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap">
+              {%- set grand_hrs = namespace(v=0) %}
+              {%- for mc in s4h.machines %}{% set ch = s4h.total_cols[mc] %}{% set hv = pivot_cell(ch, 'hrs') %}{% if hv %}{% set grand_hrs.v = grand_hrs.v + hv %}{% endif %}{% endfor -%}
+              {{ "{:,.0f}".format(grand_hrs.v) if grand_hrs.v else "—" }}
+            </td>
+          </tr>
+          {% for mc in s4h.machines %}
+          {% set mc_total_hrs = namespace(v=0) %}
+          <tr style="border-bottom:1px solid rgba(0,0,0,0.05)">
+            <td class="px-2 py-1.5 whitespace-nowrap font-medium text-gray-600"
+                style="position:sticky;left:0;background:{% if loop.index is odd %}#fff{% else %}rgba(251,249,255,1){% endif %};z-index:1">{{ mc }}</td>
+            {% for row in s4h.month_rows %}
+            {% set c = row.cols[mc] %}
+            {% set hrs = pivot_cell(c, 'hrs') %}
+            {% if hrs %}{% set mc_total_hrs.v = mc_total_hrs.v + hrs %}{% endif %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-600">
+              {% if hrs %}{{ "{:,.0f}".format(hrs) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            {% endfor %}
+            {% set tc = s4h.total_cols[mc] %}
+            <td class="px-2 py-1.5 text-right whitespace-nowrap font-semibold text-gray-700">
+              {% set th = pivot_cell(tc, 'hrs') %}
+              {% if th %}{{ "{:,.0f}".format(th) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ─── Section 5: MONTHWISE ──────────────────────────────────────────────────── #}
 {% if data.section5 %}
 {% set s5 = data.section5 %}
