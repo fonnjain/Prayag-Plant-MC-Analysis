@@ -1422,6 +1422,245 @@ def delete_api_key() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Application users — per-user dashboard authentication and admin management.
+# Passwords are always supplied as hashes by auth.py; this module never accepts
+# or persists a plaintext password.
+# ---------------------------------------------------------------------------
+_USER_TABLE = "app_users"
+_USER_BOOTSTRAP_TABLE = "app_user_bootstrap"
+
+
+def _init_user_tables() -> None:
+    """Create the per-user authentication tables, once per process."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_USER_TABLE} (
+                id            SERIAL PRIMARY KEY,
+                email         TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL DEFAULT 'normal'
+                              CHECK (role IN ('admin', 'normal')),
+                is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS {_USER_BOOTSTRAP_TABLE} (
+                seed_key      TEXT PRIMARY KEY,
+                completed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+        """)
+
+
+def _user_shape(row) -> Dict:
+    """Return a password-safe user record for templates and routes."""
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "role": row["role"],
+        "is_active": bool(row["is_active"]),
+        "created_at": (
+            row["created_at"].strftime("%d-%m-%Y %H:%M")
+            if row.get("created_at") else ""
+        ),
+        "updated_at": (
+            row["updated_at"].strftime("%d-%m-%Y %H:%M")
+            if row.get("updated_at") else ""
+        ),
+    }
+
+
+def seed_initial_users(users: List[Dict], seed_key: str = "initial-admins-v1") -> None:
+    """Create the requested initial accounts exactly once.
+
+    The durable seed marker means a later delete or role change is respected:
+    recurring login attempts never recreate an account the administrator removed.
+    ``users`` must contain password hashes, never plaintext passwords.
+    """
+    if not AVAILABLE:
+        raise StoreError("User management requires the configured Postgres database.")
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT 1 FROM {_USER_BOOTSTRAP_TABLE} WHERE seed_key=%s",
+                (seed_key,),
+            )
+            if cur.fetchone():
+                return
+            for user in users:
+                cur.execute(
+                    f"""INSERT INTO {_USER_TABLE} (email, password_hash, role, is_active)
+                        VALUES (%s, %s, %s, TRUE)
+                        ON CONFLICT (email) DO UPDATE
+                           SET password_hash = EXCLUDED.password_hash,
+                               role = EXCLUDED.role,
+                               is_active = TRUE,
+                               updated_at = now()""",
+                    (user["email"], user["password_hash"], user["role"]),
+                )
+            cur.execute(
+                f"INSERT INTO {_USER_BOOTSTRAP_TABLE} (seed_key) VALUES (%s)",
+                (seed_key,),
+            )
+    except StoreError:
+        raise
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def get_user_auth(email: str) -> Optional[Dict]:
+    """Return an active user's identity plus password hash for authentication."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT id, email, password_hash, role, is_active
+                    FROM {_USER_TABLE} WHERE email=%s""",
+                (email,),
+            )
+            row = cur.fetchone()
+        if not row or not row["is_active"]:
+            return None
+        return dict(row)
+    except Exception:
+        return None
+
+
+def get_user_by_id(user_id: int) -> Optional[Dict]:
+    """Return password-safe metadata for one user, or None."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT id, email, role, is_active, created_at, updated_at
+                    FROM {_USER_TABLE} WHERE id=%s""",
+                (int(user_id),),
+            )
+            row = cur.fetchone()
+        return _user_shape(row) if row else None
+    except Exception:
+        return None
+
+
+def list_users() -> List[Dict]:
+    """List every dashboard account without exposing password hashes."""
+    if not AVAILABLE:
+        return []
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT id, email, role, is_active, created_at, updated_at
+                    FROM {_USER_TABLE} ORDER BY email"""
+            )
+            rows = cur.fetchall()
+        return [_user_shape(row) for row in rows]
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def create_user(email: str, password_hash: str, role: str) -> Dict:
+    """Create one active account and return password-safe metadata."""
+    if role not in ("admin", "normal"):
+        raise StoreError("Role must be admin or normal.")
+    if not AVAILABLE:
+        raise StoreError("User management requires the configured Postgres database.")
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""INSERT INTO {_USER_TABLE} (email, password_hash, role)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, email, role, is_active, created_at, updated_at""",
+                (email, password_hash, role),
+            )
+            row = cur.fetchone()
+        return _user_shape(row)
+    except Exception as exc:
+        message = str(exc)
+        if "unique" in message.lower():
+            raise StoreError("An account with that email already exists.")
+        raise StoreError(message)
+
+
+def set_user_password(user_id: int, password_hash: str) -> bool:
+    """Replace one password hash. Returns False for a missing user."""
+    if not AVAILABLE:
+        raise StoreError("User management requires the configured Postgres database.")
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE {_USER_TABLE}
+                    SET password_hash=%s, updated_at=now() WHERE id=%s""",
+                (password_hash, int(user_id)),
+            )
+            return cur.rowcount == 1
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def set_user_role(user_id: int, role: str) -> bool:
+    """Update a user's role. Returns False for a missing user."""
+    if role not in ("admin", "normal"):
+        raise StoreError("Role must be admin or normal.")
+    if not AVAILABLE:
+        raise StoreError("User management requires the configured Postgres database.")
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE {_USER_TABLE}
+                    SET role=%s, updated_at=now() WHERE id=%s""",
+                (role, int(user_id)),
+            )
+            return cur.rowcount == 1
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def delete_user(user_id: int) -> bool:
+    """Permanently remove an account. Returns False when it does not exist."""
+    if not AVAILABLE:
+        raise StoreError("User management requires the configured Postgres database.")
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {_USER_TABLE} WHERE id=%s", (int(user_id),))
+            return cur.rowcount == 1
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def active_admin_count() -> int:
+    """Number of active admin accounts, used to prevent a lockout."""
+    if not AVAILABLE:
+        return 0
+    try:
+        _init_user_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT COUNT(*) FROM {_USER_TABLE}
+                    WHERE role='admin' AND is_active=TRUE"""
+            )
+            return int(cur.fetchone()[0])
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Known-empty months cache
 #
 # Cold gunicorn workers skip the L2 Postgres sheet_cache when it expires

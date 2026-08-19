@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>User Management — Prayag Analytics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --navy:#1F3864; --terra:#C55A11; }
+    body { background:#f3f4f6; font-family:system-ui,sans-serif; }
+    .card { background:#fff; border-radius:14px; box-shadow:0 1px 6px rgba(0,0,0,.08); }
+    .btn { border-radius:.6rem; font-size:.75rem; font-weight:700; padding:.55rem .75rem; }
+    input, select { font-size:16px; }
+  </style>
+</head>
+<body>
+  <header style="background:var(--navy)" class="shadow-lg">
+    <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+      <a href="/" class="text-white font-bold text-sm">Prayag Analytics</a>
+      <div class="flex items-center gap-3">
+        <span class="text-blue-100 text-xs truncate max-w-40">{{ auth_user }}</span>
+        <a href="/logout" class="text-white text-xs font-semibold">Sign out</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 py-6">
+    <a href="/" class="inline-flex items-center gap-1 text-xs text-gray-500 mb-4">← Back to dashboard</a>
+    <div class="mb-5">
+      <h1 class="text-xl font-bold" style="color:var(--navy)">User Management</h1>
+      <p class="text-sm text-gray-500 mt-1">Create accounts, set permissions, reset passwords, or remove access.</p>
+    </div>
+
+    {% if message %}
+    <div class="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+    {% endif %}
+
+    <section class="card p-5 mb-5">
+      <h2 class="font-bold text-sm mb-1" style="color:var(--navy)">Add user</h2>
+      <p class="text-xs text-gray-500 mb-4">Passwords are stored securely and are never displayed after saving.</p>
+      <form method="post" action="/settings/users/create" class="grid gap-3 sm:grid-cols-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+        <label class="block sm:col-span-2">
+          <span class="block text-xs font-semibold text-gray-600 mb-1">Email</span>
+          <input required type="email" name="email" autocomplete="email" placeholder="name@prayagindia.com"
+                 class="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-700"/>
+        </label>
+        <label class="block">
+          <span class="block text-xs font-semibold text-gray-600 mb-1">Initial password</span>
+          <input required minlength="8" type="password" name="password" autocomplete="new-password"
+                 class="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-blue-700"/>
+        </label>
+        <label class="block">
+          <span class="block text-xs font-semibold text-gray-600 mb-1">Role</span>
+          <select name="role" class="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white outline-none focus:border-blue-700">
+            <option value="normal">Normal user</option>
+            <option value="admin">Administrator</option>
+          </select>
+        </label>
+        <button type="submit" class="btn sm:col-span-2 text-white" style="background:var(--navy)">Add user</button>
+      </form>
+    </section>
+
+    <section class="card overflow-hidden">
+      <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <h2 class="font-bold text-sm" style="color:var(--navy)">Accounts</h2>
+        <span class="text-xs text-gray-400">{{ users|length }} total</span>
+      </div>
+      <div class="divide-y divide-gray-100">
+        {% for user in users %}
+        <article class="p-5">
+          <div class="flex items-start justify-between gap-3 mb-4">
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-gray-800 break-all">{{ user.email }}</div>
+              <div class="flex gap-2 mt-1.5">
+                <span class="rounded-full px-2 py-0.5 text-[11px] font-bold {% if user.role == 'admin' %}bg-orange-100 text-orange-800{% else %}bg-blue-50 text-blue-700{% endif %}">
+                  {{ 'Administrator' if user.role == 'admin' else 'Normal user' }}
+                </span>
+                {% if user.id == current_user_id %}
+                <span class="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">You</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="text-[11px] text-gray-400 text-right flex-shrink-0">Created {{ user.created_at }}</div>
+          </div>
+
+          <div class="grid gap-3 md:grid-cols-3">
+            <form method="post" action="/settings/users/{{ user.id }}/role" class="rounded-xl bg-gray-50 p-3">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+              <label class="block text-[11px] font-bold text-gray-600 mb-1">Permission</label>
+              <div class="flex gap-2">
+                <select name="role" class="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs">
+                  <option value="normal" {% if user.role == 'normal' %}selected{% endif %}>Normal</option>
+                  <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                </select>
+                <button class="btn border border-blue-200 text-blue-800 bg-white" type="submit">Save</button>
+              </div>
+            </form>
+
+            <form method="post" action="/settings/users/{{ user.id }}/password" class="rounded-xl bg-gray-50 p-3">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+              <label class="block text-[11px] font-bold text-gray-600 mb-1">Reset password</label>
+              <div class="flex gap-2">
+                <input required minlength="8" type="password" name="password" autocomplete="new-password"
+                       placeholder="New password" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs"/>
+                <button class="btn border border-blue-200 text-blue-800 bg-white" type="submit">Reset</button>
+              </div>
+            </form>
+
+            <form method="post" action="/settings/users/{{ user.id }}/delete" class="rounded-xl bg-red-50 p-3"
+                  onsubmit="return confirm('Remove {{ user.email }}? They will no longer be able to sign in.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+              <div class="text-[11px] font-bold text-red-700 mb-1">Remove access</div>
+              <button {% if user.id == current_user_id %}disabled{% endif %} class="btn w-full border border-red-200 bg-white text-red-700 disabled:opacity-40" type="submit">Remove user</button>
+            </form>
+          </div>
+        </article>
+        {% else %}
+        <div class="p-5 text-sm text-gray-500">No users found.</div>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -36,7 +36,7 @@
         <circle cx="12" cy="12" r="10"/>
         <line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
       </svg>
-      <span class="text-red-700 text-sm">Incorrect password. Please try again.</span>
+      <span class="text-red-700 text-sm">Invalid email or password. Please try again.</span>
     </div>
     {% endif %}
 
@@ -44,16 +44,17 @@
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
       <form method="post" action="/login" autocomplete="on">
 
-        <!-- Username (accepted but not required today; present for future per-user accounts) -->
+        <!-- Email -->
         <div class="mb-4">
           <label class="block text-xs font-medium text-gray-600 mb-1" for="username">
-            Username <span class="text-gray-400 font-normal">(optional)</span>
+            Email
           </label>
           <input
-            id="username" name="username" type="text"
+            id="username" name="username" type="email"
             autocomplete="username"
-            placeholder="Your name or email"
+            placeholder="you@prayagindia.com"
             value="{{ username or '' }}"
+            required
             class="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm
                    focus:outline-none focus:ring-2 focus:border-transparent"
             style="--tw-ring-color:#1F3864;"

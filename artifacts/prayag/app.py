@@ -85,10 +85,12 @@ app.before_request(auth.gate)
 
 @app.context_processor
 def _inject_auth():
-    """Expose auth state to every template (banner + future per-user UI)."""
+    """Expose authentication state to templates."""
     return {
         "auth_configured": auth.app_password() is not None,
         "auth_user": auth.current_user(),
+        "auth_role": auth.current_user_role(),
+        "auth_is_admin": auth.is_admin(),
     }
 
 
@@ -2771,7 +2773,9 @@ def login():
         identity = auth._verify_credentials(username, password)
         if identity is not None:
             session.clear()
-            session["auth_user"] = identity
+            session["auth_user_id"] = identity["id"]
+            session["auth_user"] = identity["email"]
+            session["auth_role"] = identity["role"]
             # Apply Secure flag dynamically based on whether the request is HTTPS.
             resp = make_response(redirect(url_for("hub")))
             if request.is_secure:
@@ -8146,18 +8150,19 @@ def _settings_pin() -> str:
 def _settings_authed() -> bool:
     """Return True when the current session is authorised to perform key operations.
 
-    If PRAYAG_ADMIN_PIN is not configured the page is considered open (consistent
-    with the rest of the unauthenticated dashboard).  When the PIN *is* configured,
-    the session must carry the ``settings_auth`` token that was set on successful
-    PIN entry.
+    Per-user accounts make API-key operations administrator-only. The legacy PIN
+    remains a second lock for deployments that configure it.
     """
+    if auth.app_password() is not None and store.AVAILABLE and not auth.is_admin():
+        return False
     pin = _settings_pin()
     if not pin:
-        return True  # no PIN configured — open access (same level as the dashboard)
+        return True
     return bool(session.get(_SETTINGS_SESSION_KEY))
 
 
 @app.route("/settings/api-key")
+@auth.admin_required
 def api_key_settings():
     keys = store.list_api_keys_meta()
     new_key = session.pop("new_api_key", None)
@@ -8177,6 +8182,7 @@ def api_key_settings():
 
 
 @app.route("/settings/api-key/unlock", methods=["POST"])
+@auth.admin_required
 def api_key_unlock():
     """Verify the admin PIN and grant session access to key operations."""
     submitted = (request.form.get("pin") or "").strip()
@@ -8188,6 +8194,7 @@ def api_key_unlock():
 
 
 @app.route("/settings/api-key/generate", methods=["POST"])
+@auth.admin_required
 def api_key_generate():
     if not _settings_authed():
         return redirect(url_for("api_key_settings")), 403
@@ -8202,6 +8209,7 @@ def api_key_generate():
 
 
 @app.route("/settings/api-key/delete/<int:key_id>", methods=["POST"])
+@auth.admin_required
 def api_key_delete(key_id: int):
     """Delete a single key by its DB id."""
     if not _settings_authed():
@@ -8211,6 +8219,7 @@ def api_key_delete(key_id: int):
 
 
 @app.route("/settings/api-key/value/<int:key_id>")
+@auth.admin_required
 def api_key_value(key_id: int):
     """JSON endpoint used by the copy-to-clipboard button — returns one key's value."""
     if not _settings_authed():
@@ -8232,6 +8241,116 @@ def api_key_value(key_id: int):
     if not key_val:
         return jsonify({"key": None}), 404
     return jsonify({"key": key_val})
+
+
+# ---------------------------------------------------------------------------
+# User management — database-backed and accessible to administrators only.
+# ---------------------------------------------------------------------------
+
+def _users_redirect(*, message: str = "", error: str = ""):
+    """Return to account management with a short, non-sensitive status message."""
+    args = {}
+    if message:
+        args["message"] = message
+    if error:
+        args["error"] = error
+    return redirect(url_for("user_management", **args))
+
+
+def _user_post_allowed() -> bool:
+    """Validate the per-session CSRF token on every account-changing request."""
+    return auth.valid_csrf(request.form.get("csrf_token", ""))
+
+
+@app.route("/settings/users")
+@auth.admin_required
+def user_management():
+    """List accounts and render admin-only account controls."""
+    return render_template(
+        "user_management.html",
+        users=store.list_users(),
+        csrf_token=auth.csrf_token(),
+        current_user_id=auth.current_user_id(),
+        message=request.args.get("message", ""),
+        error=request.args.get("error", ""),
+    )
+
+
+@app.route("/settings/users/create", methods=["POST"])
+@auth.admin_required
+def user_create():
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    email = auth.normalise_email(request.form.get("email", ""))
+    password = request.form.get("password", "")
+    role = request.form.get("role", "normal")
+    if not email:
+        return _users_redirect(error="Enter a valid email address.")
+    if len(password) < 8:
+        return _users_redirect(error="New passwords must be at least 8 characters.")
+    if role not in ("admin", "normal"):
+        return _users_redirect(error="Choose either Admin or Normal user.")
+    try:
+        store.create_user(email, auth.hash_password(password), role)
+    except store.StoreError as exc:
+        return _users_redirect(error=str(exc))
+    return _users_redirect(message=f"Created {email}.")
+
+
+@app.route("/settings/users/<int:user_id>/password", methods=["POST"])
+@auth.admin_required
+def user_reset_password(user_id: int):
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    password = request.form.get("password", "")
+    if len(password) < 8:
+        return _users_redirect(error="New passwords must be at least 8 characters.")
+    try:
+        changed = store.set_user_password(user_id, auth.hash_password(password))
+    except store.StoreError as exc:
+        return _users_redirect(error=str(exc))
+    if not changed:
+        return _users_redirect(error="That account no longer exists.")
+    return _users_redirect(message="Password reset.")
+
+
+@app.route("/settings/users/<int:user_id>/role", methods=["POST"])
+@auth.admin_required
+def user_change_role(user_id: int):
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    role = request.form.get("role", "")
+    target = store.get_user_by_id(user_id)
+    if not target:
+        return _users_redirect(error="That account no longer exists.")
+    if role not in ("admin", "normal"):
+        return _users_redirect(error="Choose either Admin or Normal user.")
+    if target["role"] == "admin" and role != "admin" and store.active_admin_count() <= 1:
+        return _users_redirect(error="Keep at least one active administrator.")
+    try:
+        store.set_user_role(user_id, role)
+    except store.StoreError as exc:
+        return _users_redirect(error=str(exc))
+    return _users_redirect(message=f"Updated {target['email']} to {role}.")
+
+
+@app.route("/settings/users/<int:user_id>/delete", methods=["POST"])
+@auth.admin_required
+def user_delete(user_id: int):
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    target = store.get_user_by_id(user_id)
+    if not target:
+        return _users_redirect(error="That account no longer exists.")
+    if target["id"] == auth.current_user_id():
+        return _users_redirect(error="You cannot remove the account you are signed in with.")
+    if target["role"] == "admin" and store.active_admin_count() <= 1:
+        return _users_redirect(error="Keep at least one active administrator.")
+    try:
+        store.delete_user(user_id)
+    except store.StoreError as exc:
+        return _users_redirect(error=str(exc))
+    return _users_redirect(message=f"Removed {target['email']}.")
 
 
 # ===========================================================================
