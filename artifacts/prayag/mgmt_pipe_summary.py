@@ -415,6 +415,15 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
                 )
         else:
             awaiting = True  # no file registered yet for this month
+            # A future empty month is expected to await its payroll register.
+            # Surface the gap only once Pipe activity proves that a wages source
+            # should already exist; otherwise every unstarted future month would
+            # produce a misleading warning.
+            if go is not None and paid_hrs is not None:
+                warnings.append(
+                    f"{lbl}: Pipe production ({go:,.0f} kg) and paid hours "
+                    f"({paid_hrs:,.0f}) exist, but no KH-1 payroll source is registered"
+                )
 
         # Derived columns
         devoted_per_person = _safe_div(paid_hrs, labour)
