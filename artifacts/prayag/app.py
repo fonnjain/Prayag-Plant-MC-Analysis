@@ -26,6 +26,7 @@ from sheets import (
     load_report_records, load_compound_data, load_pipe_moulds, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
+    daily_failed_pair_details,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
     load_material_records, load_maintenance_records, load_manpower_records,
     load_yield_records, load_mixer_records, load_toolroom_records,
@@ -277,7 +278,7 @@ def _daily_failed_pairs(reports) -> list[tuple[str, str]]:
 
 def _daily_failed_details(reports) -> list[dict]:
     """Sanitized reason beside each withheld pair for visible partial warnings."""
-    return sheets.daily_failed_pair_details(reports)
+    return daily_failed_pair_details(reports)
 
 
 def _partial_daily_disp(pairs) -> str:
