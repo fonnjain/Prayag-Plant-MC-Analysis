@@ -1,0 +1,87 @@
+# Machine Planning — Configurable Working Days (PLUMBING ONLY)
+
+Read `PRAYAG_RULES.md`.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+# SCOPE — READ THIS FIRST
+
+**This task touches Machine Planning for the PLUMBING segment only. Nothing else. At all.**
+
+**Do NOT touch, under any circumstances:**
+
+- Any of the thirteen management reports, their builders, serialisers, templates or exports
+- `sheets.py`, `parsers.py`, `metrics.py`, `pipe_reconcile.py`, `tank_reconcile.py`
+- `baselines.json`, ideal-hours logic, `APP_DEFAULT_IDEAL_HOURS`, or **any** ideal-hours figure anywhere. **Ideal hours come from the Google Sheets and are not in scope. Do not read them, derive from them, or alter how they are used.**
+- The net/gross helpers (**R-44**), `accum_record_kg`, `_aggregate_good_output`
+- Plant view, machine view, overview, costing, compound, confirmations
+- Any other planning segment — PTMT, Garden, HDPE, Tank, CP or anything else
+
+**`mp_params` is keyed by `(segment, effective_month)`.** Every change must be scoped through that key so no other segment's planning can be affected. If a change cannot be scoped to `segment = "PLUMBING"`, **stop and report rather than widening it.**
+
+If any figure outside Plumbing machine planning moves, **stop immediately**.
+
+---
+
+## Context — why this is being asked
+
+The factory can run continuously. The scheduler currently defaults to **25 days** (`week_days = [6,6,6,7]`), which matches the 500-hour ideal, but production sometimes runs 29–31 days. Varanasi Tank worked two Sundays in July; Kharani Tank worked none. The pattern is not uniform and it is not fixed.
+
+**The 500-hour ideal is a target, not a cap.** Nothing here changes it. This task is only about letting a plan span the days the factory actually intends to run.
+
+---
+
+## THREE CHANGES
+
+### 1. Expose `week_days` so a plan can span the calendar month
+
+`week_days` is a real column (`mp_model.py:117`, `:403`) defaulting to `'[6,6,6,7]'`. The scheduler reads it at `mp_scheduler.py:358`, pads to four weeks, floors each at 1, and applies **no upper bound** — so 30 or 31 days already works. It appears in six templates but **only ever displayed**; there is no route, form or POST handler that sets it.
+
+Add a way to set it for **Plumbing** in the planning settings, alongside the other `mp_params` values. It should:
+
+- Accept a four-week split summing to the days intended for that month
+- Offer a sensible way to select the **full calendar month** (28–31 days depending on the month), since that is the case being asked for
+- Validate: four values, each ≥ 1, summing to no more than the days in that calendar month
+- Default to the existing `[6,6,6,7]` when unset, so behaviour is unchanged until someone sets it
+
+**Write only to `mp_params` where `segment = "PLUMBING"`.**
+
+### 2. Make the corrective re-planner read the same setting
+
+`mp_corrective_replan.py:501–509` hardcodes its own calendar:
+
+```python
+if datetime.date(year, month, d).weekday() < 6   # Mon–Sat
+```
+
+That gives 26–27 days, ignores `week_days` entirely, and makes Sundays **structurally impossible** — yet the plants do work some Sundays. Since `feasible = cap_per_day × working_days_remaining`, plan and re-plan can be built on different month lengths.
+
+Have it read the same `week_days` value the scheduler uses, for Plumbing. Keep the Mon–Sat calendar as the fallback when no setting exists, so nothing changes until `week_days` is set.
+
+### 3. Turn `total_excess_kg` into a message
+
+`total_excess_kg` is computed at `mp_scheduler.py:537` and shown as a red KPI tile plus a PDF line. It says nothing.
+
+When a plan's demand exceeds what the configured days can produce, show a message on the planning result — for example: *"This plan needs more than the configured 25 working days. Consider extending to the full calendar month."*
+
+State the threshold you use and why. **Do not auto-extend the plan** — surface it and let the planner decide.
+
+---
+
+## Validate
+
+- **Nothing changes until `week_days` is set.** With it unset, every Plumbing plan produces byte-identical output to today.
+- Setting a full calendar month produces a plan spanning those days, with weekly capacity apportioning correctly (`wk_cap = monthly_cap × wk_days / total_days`, `mp_scheduler.py:514`).
+- Scheduler and corrective re-planner agree on the month length once set.
+- The excess message fires when demand exceeds configured capacity, and not otherwise.
+- **No other segment's planning changes.** Confirm PTMT, Garden, HDPE, Tank and CP plan runs are byte-identical.
+- **No management report figure moves**: Pipe 1,283,300.15 / 6,507 h · Moulding 366,015.39 · PTMT 524,467.607 · Garden 262,818.23 · HDPE 23,817.24 · Tank litres and both rejection bases. If any moves, **stop** — the change has escaped its scope.
+- No ideal-hours figure changes anywhere.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The settings path added and how it is scoped to Plumbing · the re-planner change and its fallback · the excess threshold and message text · confirmation that unset `week_days` produces identical output · confirmation that no other segment and no management report figure moved.
