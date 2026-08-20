@@ -1,0 +1,104 @@
+# Data API — Three Items for the Consuming Planning App
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+The planning app (`fonnjain/Prayag-pp-ptmt-cp`) consumes `/data-api/v1` for machine-level monitoring. Its screens are blank. **Item 1 is the blocking cause and is one line. Do it first, then the others.**
+
+---
+
+# ITEM 1 — `/data-api/` is caught by the session gate
+
+## Verified in the code
+
+`auth.py:152`:
+```python
+_EXEMPT_PREFIX: tuple = ("/static/",)
+```
+
+`app.py:83` registers `app.before_request(auth.gate)` **globally**. So `gate()` runs on every request, finds `/data-api/v1/...` in neither `_EXEMPT_EXACT` nor `_EXEMPT_PREFIX`, and redirects to `/login` **before Flask reaches the API blueprint**.
+
+The four `@_require_key` decorators in `api.py` (lines 240, 256, 264, 311) therefore **never execute**. No API key has ever been evaluated — the consuming app's key may well be correct.
+
+The gate is inactive when `PRAYAG_APP_PASSWORD` is unset (`auth.py:172`), so this began when password protection was added. The API worked before that.
+
+## The fix
+
+```python
+_EXEMPT_PREFIX: tuple = ("/static/", "/data-api/")
+```
+
+**This does not expose the API.** All four routes already carry `@_require_key`. The change moves `/data-api/*` from **session** auth to the **key** auth written for it. The browser UI stays session-gated exactly as now.
+
+It also restores `/data-api/v1/health` to the unauthenticated state its own docstring describes (`api.py:214`, *"liveness check (no auth)"*) — the existing `/health` exemption is an **exact** match and does not cover it.
+
+## Before you ship it — one safety check
+
+**Confirm `_require_key` fails closed when `PRAYAG_API_KEY` is unset.** If it currently allows a request through when no key is configured, the exemption would open these endpoints in an unconfigured environment. If it does not reject, **fix that in the same change** — a missing server key must produce `401`, never `200`.
+
+Report what `_require_key` does today before changing the exemption.
+
+## Then republish
+
+The fix has no effect until the deployment is rebuilt.
+
+## Verify after republish
+
+```
+GET /data-api/v1/health                          → 200, no key
+GET /data-api/v1/periods       (no key)          → 401   ← NOT 302
+GET /data-api/v1/periods       (valid X-API-Key) → 200
+GET /                          (no session)      → 302 /login   ← unchanged
+GET /management-reports/pipe-summary (no session)→ 302 /login   ← unchanged
+```
+
+**The 401 is the one that matters.** A 302 means the gate is still in front of the key check. Do not compare or print key values — once this is fixed, a 401 *with* a key present indicates a genuine mismatch, which is a separate question.
+
+---
+
+# ITEM 2 — PTMT has no August daily source
+
+Confirmed from `sources.py`:
+
+| Plant | Daily months wired |
+|---|---|
+| PIPE | 17 — 2025-04 → **2026-08** |
+| HDPE | 5 — 2026-04 → **2026-08** |
+| GARDEN_WB | 2026-06 → **2026-08** |
+| **PTMT** | **4 — 2026-04 → 2026-07** |
+| CP | **0** |
+
+So even with item 1 fixed, PTMT August returns empty — a working API returning nothing, which is harder to diagnose than an error.
+
+**Pin the August 2026 PTMT daily source.** This is the recurring registration gap: `ensure_daily_discovery` finds new months but mutates `DAILY_SOURCES` in-process only, so nothing survives a worker restart (**R-12**). Each month needs pinning by hand.
+
+Search by title in the PTMT folder — the file will be named like `5. PTMT Date Sheet & Monthly Report - Aug ' 2026`. **Confirm the ID resolves and the workbook parses before pinning it.**
+
+Then report whether September onward exists yet, and whether `CP` is expected to have daily sources at all.
+
+**Do not change any figure.** Adding August will change PTMT FY-to-date totals — that is expected and correct, not a regression. Report the before and after.
+
+---
+
+# ITEM 3 — Where MOULDING belongs (record only, no code)
+
+**MOULDING has no `files` block in `DAILY_SOURCES`, and that is correct, not a gap.**
+
+Per **R-38**, `_DAILY_LAYOUTS["PIPE"]` holds **two specs against one physical workbook** — `Report-5` → PIPE and `Report-12` → MOULDING — because Injection Moulding runs at KH Plant 1 alongside pipe extrusion. Moulding records are reachable only by loading the `PIPE` key and filtering `r.plant == "MOULDING"`. It will never have its own daily sources.
+
+**On the segment mapping:** because Moulding is physically at KH Plant 1 and read from the PIPE workbook, it groups naturally with **Plumbing** rather than PTMT. The moulding-to-PTMT-fittings association is suggestive naming, not a data relationship.
+
+**But this is a business decision, not ours to settle.** Record the intended mapping in `PRAYAG_RULES` once confirmed, and tell the consuming app's owner. Do not implement a mapping in this repository.
+
+---
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` (**R-41**) · `baselines.json` (**R-16**) · `metrics.py` and the R-44 helpers · `mp_*.py` (**R-20**) · the `_failed_pairs` guard · any report builder or template · the `figures_gated` flag in the summary payload, which the consuming app reads and acts on.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+Item 1: what `_require_key` does when the server key is unset · the exemption change · the four verification results after republish.
+Item 2: the August PTMT file ID, whether it parses, PTMT totals before and after, and the September/CP answer.
+Item 3: confirmation that MOULDING's empty daily map is by design (R-38), and the mapping recorded once the business confirms it.
