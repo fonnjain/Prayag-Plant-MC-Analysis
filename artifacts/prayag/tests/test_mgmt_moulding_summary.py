@@ -21,7 +21,15 @@ ROSTER = [
 ]
 
 
-def _record(period: str, machine: str, *, hours: float, output: float, reject: float = 0.0):
+def _record(
+    period: str,
+    machine: str,
+    *,
+    hours: float,
+    output: float,
+    reject: float = 0.0,
+    is_finishing: bool = False,
+):
     return sheets.Record(
         grain="daily",
         period=period,
@@ -32,6 +40,7 @@ def _record(period: str, machine: str, *, hours: float, output: float, reject: f
         total_count=output,
         reject_count=reject,
         runner_lumps=2.0,
+        is_finishing=is_finishing,
     )
 
 
@@ -66,6 +75,10 @@ def test_builder_uses_daily_records_and_excludes_months_after_selected_cutoff(mo
         _record("2026-06", "MOULDING A05(U-150)", hours=10, output=100),
         _record("2026-07", "MOULDING A05(U-150)", hours=10, output=100),
         _record("2026-08", "MOULDING A05(U-150)", hours=999, output=9_999),
+        _record(
+            "2026-07", "MOULDING A05(U-150)", hours=999, output=9_999,
+            is_finishing=True,
+        ),
     ]
     seen_months = []
     monkeypatch.setattr(sheets, "_get_access_token", lambda: "test-token")
@@ -99,3 +112,36 @@ def test_builder_uses_daily_records_and_excludes_months_after_selected_cutoff(mo
     assert result["section1"]["n_months"] == 4
     assert total["actual_hrs"] == 40
     assert total["output_kg"] == 400
+
+
+def test_gom_excludes_finishing_record_even_when_its_label_maps_to_the_roster(monkeypatch):
+    records = [
+        _record("2026-04", "MOULDING A05(U-150)", hours=10, output=100),
+        _record(
+            "2026-04", "MOULDING A05(U-150)", hours=999, output=9_999,
+            is_finishing=True,
+        ),
+    ]
+    monkeypatch.setattr(sheets, "_get_access_token", lambda: "test-token")
+    monkeypatch.setattr(sheets, "get_daily_records", lambda _months: (records, [], []))
+    monkeypatch.setattr(
+        sheets, "batch_get", lambda *_args, **_kwargs: {gom.SUMMARY_TAB: [[1]]},
+    )
+    monkeypatch.setattr(gom, "_parse_summary_roster", lambda _values: (ROSTER, []))
+    monkeypatch.setattr(
+        gom,
+        "build_moulding_summary",
+        lambda *_args, **_kwargs: {
+            "error": None,
+            "section2": {"fy2627": [], "fy2526": [], "warnings": []},
+        },
+    )
+    gom._cache.clear()
+    try:
+        result = gom.build_gom_summary("2627", through_ym="2026-04")
+    finally:
+        gom._cache.clear()
+
+    total = result["section2"]["total_row"]["total"]
+    assert total["hrs"] == 10
+    assert total["gross_kg"] == 100

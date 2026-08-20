@@ -699,6 +699,7 @@ def build_moulding_summary(
             r for r in records_raw
             if r.plant == "MOULDING"
             and getattr(r, "period", None) in report_yms
+            and not bool(getattr(r, "is_finishing", False))
             and _record_roster_key(r, roster_by_mould)
         ]
         unmapped_active = sorted({

@@ -397,6 +397,7 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             r for r in records_raw
             if r.plant == "MOULDING"
             and getattr(r, "period", None) in report_yms
+            and not bool(getattr(r, "is_finishing", False))
             and _record_roster_key(r, roster_by_mould)
         ]
 
