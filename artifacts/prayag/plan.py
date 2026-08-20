@@ -88,6 +88,13 @@ class MachinePlan:
     # Sorting helper: idle capacity AND non-empty queue AND no red gate
     actionable: bool = False
     as_of_date: str = ""     # snapshot date from PlanRecord header
+    # Partial-source state (serializable for UI/API).  Set True when the daily
+    # production workbook for this plant+month was withheld/failed to load
+    # (present in get_daily_records' _failed_pairs).  When True, machine
+    # production metrics (hours/utilisation/output) are WITHHELD — never derived
+    # from partial records — so a plan built on a gap can never look complete.
+    production_partial: bool = False
+    production_partial_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +623,40 @@ def build_plan(plant: str, month: str) -> Tuple[List[MachinePlan], List[dict]]:
         except Exception:
             mould_stds = []
 
+    # Daily production records.  We MUST inspect the reports payload: when the
+    # requested plant+month workbook was withheld or failed to read, its
+    # (plant, ym) appears in ``_failed_pairs``.  In that case the records we do
+    # get back are partial (or empty), so any machine-production metric derived
+    # from them would understate reality and let a plan look falsely "complete".
+    # We keep whatever records loaded (for roster/run-queue context) but flag
+    # the plant+month as partial and withhold production metrics downstream.
+    production_partial = False
+    production_partial_reason = ""
     try:
-        prod_recs_all, _, _ = sheets.get_daily_records([month])
+        prod_recs_all, _prod_reports, _ = sheets.get_daily_records([month])
         prod_recs = [r for r in prod_recs_all if r.plant == plant]
+        failed_pairs = next(
+            (r["_failed_pairs"] for r in (_prod_reports or [])
+             if isinstance(r, dict) and "_failed_pairs" in r),
+            [],
+        )
+        failed_reasons = next(
+            (r["_failed_pair_reasons"] for r in (_prod_reports or [])
+             if isinstance(r, dict) and "_failed_pair_reasons" in r),
+            {},
+        )
+        for _fp_plant, _fp_ym in failed_pairs:
+            if _fp_plant == plant and _fp_ym == month:
+                production_partial = True
+                production_partial_reason = (
+                    failed_reasons.get(f"{_fp_plant}:{_fp_ym}", "")
+                    or f"{plant} daily ({month}) records were withheld or "
+                       "failed to load — production metrics are unavailable."
+                )
+                break
     except Exception:
         prod_recs = []
+
 
     # ── 2. Build indexes ─────────────────────────────────────────────────
     # Maintenance is a LEFT JOIN index — never used to build the roster.
@@ -630,8 +666,13 @@ def build_plan(plant: str, month: str) -> Tuple[List[MachinePlan], List[dict]]:
     for r in mp_recs:
         mp_idx.setdefault(_norm(r.machine), []).append(r)
 
+    # Machine-level production metrics.  When the daily source for this
+    # plant+month is partial (withheld/failed), we deliberately DO NOT roll up
+    # any production metrics: hours, utilisation and output are held so a plan
+    # built on a gap can never present clean, "complete"-looking numbers.  The
+    # records are still used for the roster and run-queue joins below.
     mach_metrics: Dict[str, object] = {}
-    if prod_recs:
+    if prod_recs and not production_partial:
         mach_metrics = _met.rollup_by_machine(prod_recs)
 
     # PTMT MASTER: lookup index for run-queue joins; NOT added to the roster.
@@ -731,7 +772,7 @@ def build_plan(plant: str, month: str) -> Tuple[List[MachinePlan], List[dict]]:
     # mould_stds names lack the prefix and cause duplicates — excluded.
 
     if not machines:
-        return []
+        return [], plant_alerts
 
     # ── 4. MachinePlan per machine ───────────────────────────────────────
     as_of_global = plan_recs[0].as_of_date if plan_recs else ""
@@ -820,6 +861,8 @@ def build_plan(plant: str, month: str) -> Tuple[List[MachinePlan], List[dict]]:
             output_unit=out_unit,
             actionable=actionable,
             as_of_date=as_of_global,
+            production_partial=production_partial,
+            production_partial_reason=production_partial_reason,
         ))
 
     # Sort: actionable first, then group blocked by bottleneck name, then alpha

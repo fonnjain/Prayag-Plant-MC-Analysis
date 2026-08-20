@@ -195,6 +195,19 @@ June diverges between the two chains (R-24). Label which basis is in use wheneve
 
 ## PART 6 — KNOWN FAILURE MODES
 
+### Failure Mode #19 — A partial daily read can look like a valid low total
+
+**Symptom:** a registered daily workbook opens successfully but yields zero rows,
+or fewer rows than a prior complete read. The dashboard or a management report
+then renders a plausible reduced production total without calling it partial.
+
+**Rule:** daily reads are complete only when they contain at least their stored
+per-plant/month high-water record population. An explicit parser-confirmed idle
+template is the sole valid zero-row result. All other empty/reduced responses
+are withheld, excluded from both caches, surfaced as `_failed_pairs`, and
+retried on the next request. Every consumer of daily facts must carry that
+sentinel to a visible partial-report warning rather than treating it as no data.
+
 1. **Silent column fallback** — bank account as wages, pieces as kg, headcount as wages, kg as litres.
 2. **Annual-vs-daily layer confusion** — reading a derived roll-up as source.
 3. **Tab-name string matching** — `"MC" in "Month Wise M/C"` is False.

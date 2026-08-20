@@ -391,12 +391,19 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             raise RuntimeError("No machine rows found in SUMMARY tab — layout may have changed")
 
         # ── 3. Live records for FY26-27 ──────────────────────────────────────
-        records_raw, _, _ = _sh.get_daily_records(report_yms)
+        records_raw, daily_reports, _ = _sh.get_daily_records(report_yms)
+        failed_pairs = next(
+            (report["_failed_pairs"] for report in daily_reports
+             if isinstance(report, dict) and "_failed_pairs" in report),
+            [],
+        )
+        failed_yms = {ym for plant, ym in failed_pairs if plant in {"PIPE", "MOULDING"}}
         roster_by_mould = _roster_mould_map(roster)
         moulding_records = [
             r for r in records_raw
             if r.plant == "MOULDING"
             and getattr(r, "period", None) in report_yms
+            and getattr(r, "period", None) not in failed_yms
             and not bool(getattr(r, "is_finishing", False))
             and _record_roster_key(r, roster_by_mould)
         ]
@@ -430,6 +437,12 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             "band_order": BAND_ORDER,
             "through_ym": selected_through,
             "report_yms": report_yms,
+            "failed_months": sorted(failed_yms),
+            "warnings": [
+                f"{ym}: daily Moulding source could not be read completely; "
+                "its figures are excluded and this report is partial."
+                for ym in sorted(failed_yms)
+            ],
             "build_time_s": round(time.time() - t0, 2),
         }
 
@@ -449,6 +462,7 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
         }
 
     with _cache_lock:
-        _cache[cache_key] = {"ts": time.time(), "data": data}
+        if not data.get("failed_months"):
+            _cache[cache_key] = {"ts": time.time(), "data": data}
 
     return data

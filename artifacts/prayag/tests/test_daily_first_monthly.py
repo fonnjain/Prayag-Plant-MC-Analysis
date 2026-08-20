@@ -155,8 +155,30 @@ def test_mixed_month_availability_uses_only_daily_months():
         _restore(saved)
 
 
+def test_partial_daily_pair_is_exposed_to_dashboard_context():
+    """A partial source pair is explicit in dashboard data, never silent."""
+    def daily(_months):
+        return (
+            [],
+            [{"_failed_pairs": [("PTMT", "2026-06")]}],
+            ["PTMT daily (2026-06) is incomplete: source population shrank."],
+        )
+
+    saved = _install_stubs(daily, lambda _months: ([], [], []))
+    app.DAILY_SOURCES = {"PTMT": {"files": {"2026-06": "fid-june"}}}
+    try:
+        data = app.get_data({"period": "6"})
+        assert data["partial_daily_pairs"] == [("PTMT", "2026-06")]
+        assert "Incomplete daily source" in data["grain_banner"]
+        assert any("Incomplete daily source read" in w for w in data["validation"]["warnings"])
+        print("PASS: partial daily pair is visible in dashboard context")
+    finally:
+        _restore(saved)
+
+
 if __name__ == "__main__":
     test_monthly_view_sums_daily_not_grid()
     test_total_daily_outage_shows_nothing_not_grid()
     test_mixed_month_availability_uses_only_daily_months()
+    test_partial_daily_pair_is_exposed_to_dashboard_context()
     print("\nAll daily-first monthly/FY regression tests passed.")

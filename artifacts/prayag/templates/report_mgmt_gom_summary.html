@@ -119,6 +119,15 @@
   </div>
   {% else %}
 
+  {% if data.failed_months %}
+  <div data-testid="partial-daily-source-banner" role="alert"
+       class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <strong>Incomplete daily source — this report is partial.</strong>
+    Figures for <span class="font-mono font-semibold">{{ data.failed_months | join(", ") }}</span>
+    are excluded and will be retried; do not treat the displayed totals as complete.
+  </div>
+  {% endif %}
+
   {# ── Basis note ── #}
   <div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 space-y-1">
     <p><strong>Basis note (R-22 — same workbook, two different bases):</strong></p>

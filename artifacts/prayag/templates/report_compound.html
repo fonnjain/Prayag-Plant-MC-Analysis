@@ -121,14 +121,20 @@
   </div>
   <div>
     <div class="text-xs text-gray-500 mb-0.5">Pipe Output</div>
-    <div class="font-bold text-base text-gray-700">{{ kg(pipe_output) }}<span class="text-xs font-normal text-gray-400"> kg</span></div>
+    <div class="font-bold text-base text-gray-700">{% if pipe_output is none %}—{% else %}{{ kg(pipe_output) }}<span class="text-xs font-normal text-gray-400"> kg</span>{% endif %}</div>
   </div>
   <div>
     <div class="text-xs text-gray-500 mb-0.5">Conversion</div>
     <div class="font-bold text-base" style="color:var(--terra)">{% if yield_pct is none %}—{% else %}{{ "%.1f"|format(yield_pct) }}%{% endif %}</div>
   </div>
 </div>
-{% if yield_pct is not none %}
+{% if pipe_partial %}
+<div data-testid="compound-pipe-partial-note" class="text-xs mb-4 -mt-2 px-1" style="color:#854d0e">
+  Pipe output and conversion are temporarily withheld — the Pipe daily source came
+  back incomplete this load, so the yield ratio would be understated. The source
+  will be retried.
+</div>
+{% elif yield_pct is not none %}
 <div class="text-xs text-gray-400 mb-4 -mt-2 px-1">Pipe output is net-of-rejection, so a conversion below 100% is expected.</div>
 {% endif %}
 

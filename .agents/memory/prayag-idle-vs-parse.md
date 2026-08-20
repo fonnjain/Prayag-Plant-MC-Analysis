@@ -85,17 +85,20 @@ burst while a single source read succeeds after a cooldown.
 changing data or treating the month as missing. Do not turn a temporary parse warning
 into an `AWAITING` state.
 
-# A daily pair can report success without being complete
+# A daily source can report success without being complete
 
-The daily loader's failed-pair marker covers thrown pair-level reads, not every
-zero/partial parser outcome. A workbook/tab can therefore yield fewer records
-while the dashboard remains daily-first and displays the lower total as normal.
+Validate the population of each logical plant/report a source emits separately.
+An empty result is legitimate only when that logical output explicitly identifies
+its recognised source layout as idle. Otherwise, a lower population than the
+best complete observation is incomplete and must be withheld; a short-lived
+in-process baseline is still required when durable persistence is unavailable.
 
-**Why:** a transiently incomplete matrix response, a missing expected tab that
-returns a warning, or a cached empty parse does not necessarily raise the pair
-failure used by the UI's source-failure signal.
+**Why:** one workbook can emit more than one logical plant. A growing PIPE
+population can otherwise conceal lost MOULDING rows, producing a plausible but
+wrong Moulding report. A temporary database problem must not make the
+completeness safeguard disappear.
 
-**How to apply:** when a plant population changes unexpectedly, compare requested
-months, configured file IDs, per-month parsed row counts, and source reports
-against the dashboard's post-read rows before changing arithmetic. Never treat an
-empty failed-pair list as proof that every requested source parsed completely.
+**How to apply:** preserve explicit idle markers when adding parsers, and assess
+every emitted output independently. Any dashboard, management report, export,
+or planning consumer of daily records must carry an incomplete-source state
+rather than publish a zero or reduced total.

@@ -28,6 +28,17 @@
   </div>
 </div>
 
+{% if partial_daily_pairs %}
+<div data-testid="manifest-partial-daily-banner" role="alert"
+     class="rounded-xl p-3 mb-4 text-xs"
+     style="background:rgba(200,120,0,0.08);border:1px solid rgba(200,120,0,0.30);color:#854d0e">
+  <strong>Incomplete daily source read — coverage below is partial.</strong>
+  These daily workbooks could not be read this load and are excluded from the
+  counts: {{ partial_daily_disp }}. The source will be retried; do not treat this
+  manifest's coverage as complete for the affected plant-months.
+</div>
+{% endif %}
+
 {# ── Coverage summary bar ── #}
 {% set cov = coverage %}
 {% set n_expected = cov.expected_count | int %}

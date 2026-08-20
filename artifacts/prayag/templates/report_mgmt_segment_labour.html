@@ -29,6 +29,18 @@
 </div>
 {% else %}
 
+{% if data.daily_partial_warnings %}
+<div data-testid="partial-daily-source-banner" role="alert"
+     class="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+  <strong>Incomplete daily source — this report is partial.</strong>
+  <div class="mt-1 text-xs">
+    {% for warning in data.daily_partial_warnings %}
+      <div>{{ warning }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {# ─── Explanation banner ────────────────────────────────────────────────────── #}
 <div class="mb-4 p-3.5 rounded-xl border text-xs leading-snug"
      style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">

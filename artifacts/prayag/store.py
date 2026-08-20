@@ -1175,6 +1175,12 @@ def index_baseline_record(plant: str, reports: List[Dict], file_id: str = "") ->
 _SC_TABLE = "sheet_cache"
 _sc_initialised = False
 
+# High-water record counts for daily source pairs.  A daily workbook may grow
+# while the month is in progress, but a later successful read must never shrink
+# below a previously observed population without being treated as incomplete.
+_DRC_TABLE = "daily_read_counts"
+_drc_initialised = False
+
 
 def _init_sheet_cache() -> None:
     global _sc_initialised
@@ -1265,6 +1271,65 @@ def pg_cache_clear(key: str = "") -> None:
                 cur.execute(f"DELETE FROM {_SC_TABLE}")
     except Exception:
         pass  # degrade silently
+
+
+def _init_daily_read_counts() -> None:
+    global _drc_initialised
+    if _drc_initialised or not AVAILABLE:
+        return
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_DRC_TABLE} (
+                    plant TEXT NOT NULL,
+                    ym TEXT NOT NULL,
+                    record_count INTEGER NOT NULL,
+                    observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (plant, ym)
+                )
+            """)
+        _drc_initialised = True
+    except Exception:
+        pass
+
+
+def daily_read_count(plant: str, ym: str):
+    """Return the largest complete population previously observed for a source pair."""
+    if not AVAILABLE:
+        return None
+    try:
+        _init_daily_read_counts()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT record_count FROM {_DRC_TABLE} WHERE plant = %s AND ym = %s",
+                (plant, ym),
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def remember_daily_read_count(plant: str, ym: str, record_count: int) -> None:
+    """Persist a complete daily-pair high-water mark, never a reduced population."""
+    if not AVAILABLE or record_count <= 0:
+        return
+    try:
+        _init_daily_read_counts()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_DRC_TABLE} (plant, ym, record_count, observed_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (plant, ym) DO UPDATE
+                    SET record_count = GREATEST({_DRC_TABLE}.record_count,
+                                                EXCLUDED.record_count),
+                        observed_at = now()
+                """,
+                (plant, ym, int(record_count)),
+            )
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

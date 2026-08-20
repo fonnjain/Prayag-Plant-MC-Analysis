@@ -43,7 +43,21 @@ _AUX_RE = re.compile(r"GRIND|PULVER|MIXER|SOCKET", re.I)
 # Shared small helpers (kept for compound + ptmt_eff inline generators)
 # ---------------------------------------------------------------------------
 def _daily(ym: str) -> List[Record]:
-    recs, _reports, _warn = sheets.get_daily_records([ym])
+    recs, reports, _warn = sheets.get_daily_records([ym])
+    failed_pairs = next(
+        (report["_failed_pairs"] for report in reports
+         if isinstance(report, dict) and "_failed_pairs" in report),
+        [],
+    )
+    if failed_pairs:
+        missing = ", ".join(
+            f"{sources.PLANT_NAMES.get(plant, plant)} {month_disp(month)}"
+            for plant, month in failed_pairs
+        )
+        raise sheets.SheetReadError(
+            f"Incomplete daily source ({missing}); report export is withheld and "
+            "will be retried rather than publishing reduced figures."
+        )
     return recs
 
 

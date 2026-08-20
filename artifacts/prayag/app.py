@@ -253,6 +253,36 @@ def _latest_production_date(drecs) -> str | None:
     )
 
 
+def _daily_failed_pairs(reports) -> list[tuple[str, str]]:
+    """Extract the ``(plant, ym)`` pairs whose daily workbook read failed or came
+    back incomplete this load, from the sentinel dict ``get_daily_records``
+    appends to its ``reports`` list.
+
+    A NON-empty result means the daily read for this period is PARTIAL: some
+    plant-months are missing from the returned records. Callers that use this for
+    a numerical total must WITHHOLD (or flag) the affected figure rather than
+    silently summing an under-count; diagnostic/status views must surface the
+    partial state explicitly. Returns ``[]`` when the read was complete or the
+    reports were discarded.
+    """
+    return next(
+        (
+            report["_failed_pairs"]
+            for report in (reports or [])
+            if isinstance(report, dict) and "_failed_pairs" in report
+        ),
+        [],
+    )
+
+
+def _partial_daily_disp(pairs) -> str:
+    """Human-readable 'Plant Mon YYYY' list for a set of failed daily pairs."""
+    return ", ".join(
+        f"{PLANT_NAMES.get(plant, plant)} {_month_disp(ym)}"
+        for plant, ym in pairs
+    )
+
+
 def parse_period(args) -> dict:
     """Resolve the requested period to calendar months (the source grain).
 
@@ -526,6 +556,7 @@ def get_data(args):
     grain_banner = pinfo["banner"]
     all_rows = source_reports = recon_warnings = None
     freshness: list = []
+    partial_daily_pairs: list[tuple[str, str]] = []
 
     # The daily files are the SOURCE OF TRUTH for every period. Monthly and FY
     # headline totals are summed from the authoritative daily tabs (one per
@@ -557,6 +588,7 @@ def get_data(args):
             drecs, dreports, dwarn = [], [], []
             daily_err = f"Daily data could not be read: {e}"
         if not daily_err:
+            partial_daily_pairs = _daily_failed_pairs(dreports)
             # Per-plant data freshness: the latest date each plant has REAL daily
             # data (see _has_production — empty in-progress days never count).
             # Surfaced in the completeness panel so laggard plants are visible
@@ -608,6 +640,16 @@ def get_data(args):
             all_rows = win
             source_reports = list(dreports)
             recon_warnings = list(dwarn)
+            if partial_daily_pairs:
+                missing = ", ".join(
+                    f"{PLANT_NAMES.get(plant, plant)} {_month_disp(ym)}"
+                    for plant, ym in partial_daily_pairs
+                )
+                recon_warnings.append(
+                    "Incomplete daily source read: "
+                    f"{missing}. Its figures are excluded from this view and the source "
+                    "will be retried; do not treat the displayed total as complete."
+                )
             daily_used = True
             if not win:
                 latest = _latest_production_date(drecs)
@@ -814,6 +856,16 @@ def get_data(args):
                 note = f"No data yet for {disp}."
             banner = f"{banner} {note}".strip()
 
+    if partial_daily_pairs:
+        missing = ", ".join(
+            f"{PLANT_NAMES.get(plant, plant)} {_month_disp(ym)}"
+            for plant, ym in partial_daily_pairs
+        )
+        banner = (
+            f"{banner} Incomplete daily source: {missing}; its figures are excluded "
+            "and the source will be retried."
+        ).strip()
+
     # ---- Fetch status (stale cache / partial plant recovery) ----
     fs = last_fetch_status()
     if fs.get("stale"):
@@ -843,6 +895,7 @@ def get_data(args):
         "months": months,
         "grain_banner": banner,
         "daily_used": daily_used,
+        "partial_daily_pairs": list(partial_daily_pairs),
         "source_reports": source_reports,
         "plant_filter": plant_filter,
         "segment_filter": segment_filter,
@@ -891,23 +944,32 @@ def _build_freshness() -> dict:
         recs.extend(mrecs)
     except SheetReadError as e:
         read_errors.append(f"monthly grids ({e})")
+    daily_partial_pairs: list = []
     try:
         drecs, _dr, _dw = get_daily_records(months)
         recs.extend(drecs)
+        daily_partial_pairs = _daily_failed_pairs(_dr)
     except SheetReadError as e:
         read_errors.append(f"daily workbooks ({e})")
     out = freshness.build(recs)
     out["demo"] = False
-    # Coverage honesty. "partial" flags only a TOTAL read failure of a category
-    # (every monthly grid, or every daily workbook, raised SheetReadError) — the
-    # affected workbooks keep their last-known state but were not re-checked, so
-    # the panel warns the check was incomplete. A single isolated per-file
-    # failure does NOT raise (get_daily_records recovers the rest); that file
-    # simply drops out of `recs` this load and freshness.build lists it from its
-    # last-known snapshot — already honest, no extra signal needed. We do NOT
-    # treat reader warnings as "partial": get_daily_records always emits the
-    # benign daily-vs-grid reconciliation note, so that would false-alarm.
-    out["partial"] = bool(read_errors)
+    # Coverage honesty. "partial" flags either a TOTAL read failure of a category
+    # (every monthly grid, or every daily workbook, raised SheetReadError) OR an
+    # isolated per-file daily failure surfaced through get_daily_records' failed-
+    # pairs sentinel. An isolated failure does NOT raise (get_daily_records
+    # recovers the rest) and the file drops out of `recs` this load — but that
+    # silently understates coverage, so we now expose the affected plant-months
+    # explicitly (daily_partial_pairs) and mark the check partial rather than
+    # letting freshness.build present the reduced snapshot as complete. We still
+    # do NOT treat benign reader warnings as "partial": get_daily_records always
+    # emits the daily-vs-grid reconciliation note, which would false-alarm.
+    out["daily_partial_pairs"] = [
+        {"plant": plant, "name": PLANT_NAMES.get(plant, plant),
+         "month": ym, "month_disp": _month_disp(ym)}
+        for plant, ym in daily_partial_pairs
+    ]
+    out["daily_partial_disp"] = _partial_daily_disp(daily_partial_pairs)
+    out["partial"] = bool(read_errors) or bool(daily_partial_pairs)
     out["read_errors"] = read_errors
     out["stale_rollups"] = _build_stale_rollup_alerts()
     out["stale_rollup_store_ok"] = store.AVAILABLE
@@ -1658,11 +1720,25 @@ def manifest_view():
     except SheetReadError:
         drecs, dreports = [], []
 
+    # An isolated daily-workbook read failure does NOT raise (the rest still
+    # load) but silently drops that plant-month from the coverage counts below.
+    # Surface the affected pairs explicitly so the manifest — a status view whose
+    # whole job is honest coverage — never presents a partial read as complete.
+    manifest_partial_pairs = _daily_failed_pairs(dreports)
+
     all_records = mrecs + drecs
     all_reports = mreports + dreports
 
     man = manifest_mod.build_manifest(fy_months, all_records, all_reports)
+    # Fold the partial-read state into the fingerprint so a partial load (which
+    # drops plant-months from coverage) can never be served from — or leak into —
+    # a complete-read cache entry, even in the edge case where the reduced
+    # coverage counts happen to coincide.
     fp = manifest_mod.manifest_fingerprint(man)
+    if manifest_partial_pairs:
+        fp = f"{fp}:partial:" + ",".join(
+            f"{plant}:{ym}" for plant, ym in sorted(manifest_partial_pairs)
+        )
 
     # Cache key includes the fingerprint so any change in coverage, schema flags,
     # or parse notes immediately produces a cache miss (no stale counts).
@@ -1735,6 +1811,12 @@ def manifest_view():
         "confirmation": None,
         "grain_banner": None,
         "planning_sources": PLANNING_SOURCES,
+        "partial_daily_pairs": [
+            {"plant": plant, "name": PLANT_NAMES.get(plant, plant),
+             "month": ym, "month_disp": _month_disp(ym)}
+            for plant, ym in manifest_partial_pairs
+        ],
+        "partial_daily_disp": _partial_daily_disp(manifest_partial_pairs),
     }
     _manifest_cache[f"result_{fp}"] = {"ctx": ctx, "ts": now}
     return render_template("manifest.html", **ctx)
@@ -2003,9 +2085,22 @@ def _build_verify(month: str) -> dict:
         daily_rows, daily_reports, _dw = get_daily_records([month])
     except SheetReadError:
         daily_rows, daily_reports = [], []
-    return verify.build_verification(
+    result = verify.build_verification(
         month, monthly_rows, monthly_reports, daily_rows, daily_reports
     )
+    # A partial daily read (an isolated workbook failure that get_daily_records
+    # recovered around) leaves the daily side under-counted, which would make the
+    # daily-vs-summary check look like a false discrepancy. Surface the affected
+    # plant-months explicitly so this verification page — a diagnostic view —
+    # never presents a partial daily read as an authoritative comparison.
+    partial_pairs = _daily_failed_pairs(daily_reports)
+    result["partial_daily_pairs"] = [
+        {"plant": plant, "name": PLANT_NAMES.get(plant, plant),
+         "month": ym, "month_disp": _month_disp(ym)}
+        for plant, ym in partial_pairs
+    ]
+    result["partial_daily_disp"] = _partial_daily_disp(partial_pairs)
+    return result
 
 
 @app.route("/verify")
@@ -2102,14 +2197,26 @@ def _build_ideal_input(month: str, plant_filter: str = "") -> dict:
     comes from the app DB. ``ideal_hours.resolve`` decides the effective figure
     and its source for each machine. Read-only — no figure is mutated here.
     """
+    daily_reports: list = []
     try:
-        daily_rows, _r, _w = get_daily_records([month])
+        daily_rows, daily_reports, _w = get_daily_records([month])
     except SheetReadError:
         daily_rows = []
+    # A partial daily read leaves an affected plant's per-machine baseline
+    # UNDER-summed (some day rows silently missing) — the ideal-hours figure is a
+    # numerical result, so we must NOT present a half-summed baseline as if it
+    # were the machine's real monthly ideal. Drop every affected plant's daily
+    # rows from the aggregation and flag the view partial; the machines still
+    # appear if they carry a manager override (which does not depend on the daily
+    # read), but their sheet baseline is withheld until the source reads cleanly.
+    partial_pairs = _daily_failed_pairs(daily_reports)
+    partial_plants = {plant for plant, _ym in partial_pairs}
     # Aggregate the live baseline per (plant, machine): sum the per-row ideal and
     # run hours, and remember the strongest non-override source seen.
     agg: dict = {}
     for r in daily_rows:
+        if r.plant in partial_plants:
+            continue
         k = (r.plant, r.machine)
         a = agg.setdefault(k, {"sheet": 0.0, "kind": "none", "run": 0.0})
         a["sheet"] += float(r.ideal_hours or 0.0)
@@ -2160,6 +2267,13 @@ def _build_ideal_input(month: str, plant_filter: str = "") -> dict:
         "days": ideal_hours.days_in_month(month),
         "basis": ideal_hours.PIPE_IDEAL_DAYS_BASIS,
         "store_ok": store.AVAILABLE,
+        "partial_daily_pairs": [
+            {"plant": plant, "name": PLANT_NAMES.get(plant, plant),
+             "month": ym, "month_disp": _month_disp(ym)}
+            for plant, ym in partial_pairs
+        ],
+        "partial_daily_disp": _partial_daily_disp(partial_pairs),
+        "partial_daily_plants": sorted(partial_plants),
     }
 
 
@@ -2967,10 +3081,11 @@ def build_state():
     else:
         # --- May data: PIPE, MOULDING, TANK ---
         _rows_may: list = []
+        _reps_may: list = []
         _may_err: str = ""
         _tank_may_n: int = 0
         try:
-            _rows_may, _, _ = get_daily_records(["2026-05"])
+            _rows_may, _reps_may, _ = get_daily_records(["2026-05"])
         except Exception as _e:
             _may_err = str(_e)
 
@@ -2982,6 +3097,10 @@ def build_state():
             _skip(2, "PIPE May monthly view uses daily-only reconciled path",
                   f"May read failed: {_may_err}")
         else:
+            _may_failed = _daily_failed_pairs(_reps_may)
+            # PIPE's workbook emits both PIPE and MOULDING. A failed physical
+            # PIPE pair therefore makes both logical acceptance checks unknown.
+            _may_pipe_partial = ("PIPE", "2026-05") in _may_failed
             # Headline EXCLUDES is_finishing (grinder/pulverizer/socket/mixer
             # auxiliaries are a separate finishing segment, not plant output).
             _pipe_sum  = sum(r.total_count for r in _rows_may
@@ -2989,15 +3108,21 @@ def build_state():
             _mould_sum = sum(r.total_count for r in _rows_may if r.plant == "MOULDING")
             _tank_may_n = sum(1 for r in _rows_may if r.plant == "TANK")
 
-            _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-5 ↔ Report-11 reconciled)",
-                 abs(_pipe_sum - PIPE_MAY_EXP) / PIPE_MAY_EXP <= TOL,
-                 f"{PIPE_MAY_EXP:,} ±0.5%", f"{_pipe_sum:,.0f}",
-                 "reconciliation not live / drift")
+            if _may_pipe_partial:
+                _skip(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,}",
+                      "PIPE daily source is incomplete")
+                _skip(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,}",
+                      "PIPE daily source is incomplete")
+            else:
+                _chk(1, f"PIPE May output ≈ {PIPE_MAY_EXP:,} (Report-5 ↔ Report-11 reconciled)",
+                     abs(_pipe_sum - PIPE_MAY_EXP) / PIPE_MAY_EXP <= TOL,
+                     f"{PIPE_MAY_EXP:,} ±0.5%", f"{_pipe_sum:,.0f}",
+                     "reconciliation not live / drift")
 
-            _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)",
-                 abs(_mould_sum - MOULD_MAY_EXP) / MOULD_MAY_EXP <= TOL,
-                 f"{MOULD_MAY_EXP:,} ±0.5%", f"{_mould_sum:,.0f}",
-                 "Moulding not read from Report-12 / double-count")
+                _chk(3, f"MOULDING May output ≈ {MOULD_MAY_EXP:,} (Report-12 detail rows)",
+                     abs(_mould_sum - MOULD_MAY_EXP) / MOULD_MAY_EXP <= TOL,
+                     f"{MOULD_MAY_EXP:,} ±0.5%", f"{_mould_sum:,.0f}",
+                     "Moulding not read from Report-12 / double-count")
 
             # #2  Monthly May view uses daily-only path (no grid fallback)
             # Verify get_data returns daily_used=True for period=5 AND that
@@ -3017,13 +3142,17 @@ def build_state():
                 _pipe_match = (
                     _pipe_sum > 0 and abs(_gd5_pipe - _pipe_sum) / _pipe_sum <= 0.01
                 )
-                _chk(2,
-                     f"Monthly May view: daily-only path (daily_used=True, "
-                     f"PIPE ≈ {PIPE_MAY_EXP:,.0f} from daily)",
-                     _daily_used5 and _pipe_match,
-                     f"daily_used=True  PIPE≈{_pipe_sum:,.0f}",
-                     f"daily_used={_daily_used5}  PIPE={_gd5_pipe:,.0f}",
-                     "daily_used=False or PIPE figure diverges from daily source")
+                if _may_pipe_partial:
+                    _skip(2, "Monthly May view: daily-only path",
+                          "PIPE daily source is incomplete")
+                else:
+                    _chk(2,
+                         f"Monthly May view: daily-only path (daily_used=True, "
+                         f"PIPE ≈ {PIPE_MAY_EXP:,.0f} from daily)",
+                         _daily_used5 and _pipe_match,
+                         f"daily_used=True  PIPE≈{_pipe_sum:,.0f}",
+                         f"daily_used={_daily_used5}  PIPE={_gd5_pipe:,.0f}",
+                         "daily_used=False or PIPE figure diverges from daily source")
             except Exception as _e2:
                 _skip(2, "Monthly May view: daily-only path",
                       f"get_data error: {_e2}")
@@ -3032,6 +3161,12 @@ def build_state():
             #      Report-5 and Report-11): re-baselined output 175,669 / rej 14,825.
             try:
                 _rows_apr, _reps_apr, _ = get_daily_records(["2026-04"])
+                if ("PIPE", "2026-04") in _daily_failed_pairs(_reps_apr):
+                    _skip(17, "PIPE April reconciliation ground truth",
+                          "PIPE daily source is incomplete")
+                    _skip("17b", "PIPE type split coherence",
+                          "PIPE daily source is incomplete")
+                    raise StopIteration
                 _pipe_apr = sum(r.total_count for r in _rows_apr
                                 if r.plant == "PIPE" and not r.is_finishing)
                 _pipe_apr_rej = sum(r.reject_count for r in _rows_apr
@@ -3069,6 +3204,8 @@ def build_state():
                 else:
                     _skip("17b", "PIPE type split coherence",
                           "no pipe_reconcile audit in April reports")
+            except StopIteration:
+                pass
             except Exception as _e3:
                 _chk(17, "PIPE April reconciliation ground truth", False,
                      "-", f"ERROR: {_e3}", "April read/reconcile failed")
@@ -3111,15 +3248,22 @@ def build_state():
         _scan_err = ""
         for _sym in _recent_months(_cur_ym):
             try:
-                _rows_s, _, _ = get_daily_records([_sym])
+                _rows_s, _reps_s, _ = get_daily_records([_sym])
             except Exception as _e:
                 _scan_err = str(_e)
                 continue
+            _scan_failed = _daily_failed_pairs(_reps_s)
             if _g_month is None:
+                if ("GARDEN", _sym) in _scan_failed:
+                    _scan_err = f"GARDEN daily source incomplete for {_sym}"
+                    continue
                 _n = sum(1 for r in _rows_s if r.plant == "GARDEN")
                 if _n > 0:
                     _g_month, _g_n = _sym, _n
             if _t_month is None:
+                if ("TANK", _sym) in _scan_failed:
+                    _scan_err = f"TANK daily source incomplete for {_sym}"
+                    continue
                 _n = sum(1 for r in _rows_s if r.plant == "TANK")
                 if _n > 0:
                     _t_month, _t_n = _sym, _n
@@ -3228,23 +3372,29 @@ def build_state():
         # guards the offline parser/generator logic from a structurally frozen state.
         PIPE_JUN_EXP     = 170_216   # live R5+R11 date-wise max; measured 2026-07-20
         PIPE_JUN_REJ_EXP = 15_354
+        _jun_pipe_partial = False
         try:
-            _rows_jun, _, _ = get_daily_records(["2026-06"])
-            _pipe_jun     = sum(r.total_count  for r in _rows_jun
-                                if r.plant == "PIPE" and not r.is_finishing)
-            _pipe_jun_rej = sum(r.reject_count for r in _rows_jun
-                                if r.plant == "PIPE" and not r.is_finishing)
-            _jun_ok = (
-                abs(_pipe_jun     - PIPE_JUN_EXP)     / PIPE_JUN_EXP     <= TOL
-                and abs(_pipe_jun_rej - PIPE_JUN_REJ_EXP) / PIPE_JUN_REJ_EXP <= TOL
-            )
-            _chk(20,
-                 f"PIPE June reconciled output ≈ {PIPE_JUN_EXP:,} & rejection ≈ "
-                 f"{PIPE_JUN_REJ_EXP:,} (date-wise max Report-5 ↔ Report-11)",
-                 _jun_ok,
-                 f"out≈{PIPE_JUN_EXP:,} rej≈{PIPE_JUN_REJ_EXP:,} ±0.5%",
-                 f"out={_pipe_jun:,.0f} rej={_pipe_jun_rej:,.0f}",
-                 "reconciliation drift or fresh backfill — re-baseline if coherent")
+            _rows_jun, _reps_jun, _ = get_daily_records(["2026-06"])
+            _jun_pipe_partial = ("PIPE", "2026-06") in _daily_failed_pairs(_reps_jun)
+            if _jun_pipe_partial:
+                _skip(20, "PIPE June reconciled output & rejection",
+                      "PIPE daily source is incomplete")
+            else:
+                _pipe_jun     = sum(r.total_count  for r in _rows_jun
+                                    if r.plant == "PIPE" and not r.is_finishing)
+                _pipe_jun_rej = sum(r.reject_count for r in _rows_jun
+                                    if r.plant == "PIPE" and not r.is_finishing)
+                _jun_ok = (
+                    abs(_pipe_jun     - PIPE_JUN_EXP)     / PIPE_JUN_EXP     <= TOL
+                    and abs(_pipe_jun_rej - PIPE_JUN_REJ_EXP) / PIPE_JUN_REJ_EXP <= TOL
+                )
+                _chk(20,
+                     f"PIPE June reconciled output ≈ {PIPE_JUN_EXP:,} & rejection ≈ "
+                     f"{PIPE_JUN_REJ_EXP:,} (date-wise max Report-5 ↔ Report-11)",
+                     _jun_ok,
+                     f"out≈{PIPE_JUN_EXP:,} rej≈{PIPE_JUN_REJ_EXP:,} ±0.5%",
+                     f"out={_pipe_jun:,.0f} rej={_pipe_jun_rej:,.0f}",
+                     "reconciliation drift or fresh backfill — re-baseline if coherent")
         except Exception as _e6:
             _chk(20, "PIPE June reconciled output & rejection", False,
                  "-", f"ERROR: {_e6}", "June read/reconcile failed")
@@ -3257,6 +3407,10 @@ def build_state():
         # drift this, not merely the oracle's mid-month snapshot.
         MOULD_JUN_EXP = 97_007   # post-June-30 backfill; oracle acceptance target was 89,100
         try:
+            if _jun_pipe_partial:
+                _skip(21, "MOULDING June output",
+                      "PIPE daily source is incomplete")
+                raise StopIteration
             _mould_jun = sum(r.total_count for r in _rows_jun if r.plant == "MOULDING")
             _chk(21,
                  f"MOULDING June output ≈ {MOULD_JUN_EXP:,} (Report-12, post-backfill baseline;"
@@ -3264,6 +3418,8 @@ def build_state():
                  abs(_mould_jun - MOULD_JUN_EXP) / MOULD_JUN_EXP <= TOL,
                  f"{MOULD_JUN_EXP:,} ±0.5%", f"{_mould_jun:,.0f}",
                  "Moulding not read from Report-12 / double-count / backfill")
+        except StopIteration:
+            pass
         except Exception as _e7:
             _chk(21, "MOULDING June output", False,
                  "-", f"ERROR: {_e7}", "June Moulding read failed")
@@ -4805,11 +4961,25 @@ def report_compound_compilation():
     # under 100% is expected). Suppressed in a window view (pipe output below is
     # whole-month, so the ratio against a windowed "given" would be misleading).
     pipe_output = None
+    pipe_partial = False
     if not window:
         try:
-            drecs = get_daily_records(data["months"])[0] if data["months"] else []
-            pipe_output = sum(r.total_count for r in drecs
-                              if r.plant == "PIPE" and not getattr(r, "is_finishing", False))
+            drecs, dreports, _ = (
+                get_daily_records(data["months"]) if data["months"] else ([], [], [])
+            )
+            # The yield ratio divides PIPE extruded output by compound given. If
+            # the PIPE daily read came back partial, the numerator is silently
+            # under-counted — which would make yield look artificially low. Withhold
+            # both pipe_output and the derived yield rather than publish a wrong
+            # number, and let the template say the figure is temporarily unavailable.
+            pipe_partial = any(
+                plant == "PIPE" for plant, _ym in _daily_failed_pairs(dreports)
+            )
+            if not pipe_partial:
+                pipe_output = sum(
+                    r.total_count for r in drecs
+                    if r.plant == "PIPE" and not getattr(r, "is_finishing", False)
+                )
         except SheetReadError:
             pipe_output = None
     yield_pct = None
@@ -4839,6 +5009,7 @@ def report_compound_compilation():
     return render_template("report_compound.html",
         comp=comp, validation=validation, mover=mover,
         pipe_output=pipe_output, yield_pct=yield_pct,
+        pipe_partial=pipe_partial,
         trend_labels=_safe_json(trend_labels),
         trend_given=_safe_json(trend_given),
         trend_loss=_safe_json(trend_loss),
@@ -4877,11 +5048,23 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
     #   secondary_counts["rej_base_kg"]   — base-body  rejection in kg
     # These are already-computed figures; this block only aggregates them for
     # display.  No new numbers are produced (R-07).
+    _daily_reports: list = []
     try:
-        _daily_all, _, _ = get_daily_records(list(wanted))
+        _daily_all, _daily_reports, _ = get_daily_records(list(wanted))
     except Exception:
         _daily_all = []
-    _tank_daily = [r for r in _daily_all if r.plant == plant and r.period in wanted]
+    # If this tank plant's daily read came back partial, the kg and rejection
+    # totals below would be silently under-summed. These are numerical figures, so
+    # withhold them (leave the daily-derived block empty and flag the view partial)
+    # rather than publish an under-count; the annual-summary Ltr production still
+    # renders from load_report_records, which is unaffected.
+    _tank_partial = any(
+        p == plant for p, _ym in _daily_failed_pairs(_daily_reports)
+    )
+    _tank_daily = (
+        [] if _tank_partial
+        else [r for r in _daily_all if r.plant == plant and r.period in wanted]
+    )
 
     _d_ltr_m   : dict = defaultdict(float)
     _d_kg_m    : dict = defaultdict(float)
@@ -4949,6 +5132,10 @@ def _tank_location_report(family: str, plant: str, location: str, title: str):
         monthly_rej_ltr=monthly_rej_ltr,
         monthly_rej_kg=monthly_rej_kg,
         item_kg=_item_kg_out,
+        tank_daily_partial=_tank_partial,
+        tank_daily_partial_disp=_partial_daily_disp(
+            [(p, ym) for p, ym in _daily_failed_pairs(_daily_reports) if p == plant]
+        ),
         today_disp=_fmt(_today()), last_synced=_sync_ctx(),
     )
 
@@ -5037,7 +5224,8 @@ def labour_view():
     months = pinfo["months"]
 
     # --- Section A: production run hours per plant ---
-    rows, _, _ = get_daily_records(months)
+    rows, daily_reports, _ = get_daily_records(months)
+    partial_daily_pairs = _daily_failed_pairs(daily_reports)
     by_plant = rollup_by_plant(rows)
 
     _PLANT_ORDER = ["PIPE", "MOULDING", "PTMT", "HDPE", "GARDEN", "TANK",
@@ -5075,6 +5263,7 @@ def labour_view():
         manual=manual,
         period=period_arg,
         period_label=pinfo["label"],
+        partial_daily_pairs=partial_daily_pairs,
         today_disp=_fmt(_today()),
         last_synced=_sync_ctx(),
     )
@@ -5400,6 +5589,17 @@ def _unit_prod(months: list) -> dict:
         rows, _r, _w = get_daily_records(list(months))
     except SheetReadError:
         return {}
+    # A partial daily read under-counts an affected (month, unit) bucket, which
+    # would INFLATE the per-kg power cost derived from it (cost ÷ production). This
+    # is a numerical result feeding a cost figure, so withhold every affected
+    # (month, unit): a plant-month that failed to read taints its unit's total for
+    # that month, and we drop that bucket entirely rather than publish a wrong
+    # per-kg cost. The cost then shows as awaiting/uncomputable — never fabricated.
+    tainted: set = set()
+    for plant, ym in _daily_failed_pairs(_r):
+        uk = _SEG_PLANT_TO_UNIT.get(plant)
+        if uk:
+            tainted.add((ym, uk))
     out: dict = {}
     mset = set(months)
     for r in rows:
@@ -5410,6 +5610,8 @@ def _unit_prod(months: list) -> dict:
             continue
         m = (r.period or r.date or "")[:7]
         if m not in mset:
+            continue
+        if (m, uk) in tainted:
             continue
         d = out.setdefault((m, uk), {})
         uom = (r.unit or "kg")

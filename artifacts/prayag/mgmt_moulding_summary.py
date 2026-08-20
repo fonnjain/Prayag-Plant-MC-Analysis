@@ -694,11 +694,20 @@ def build_moulding_summary(
         # Report-12 is the production source; Report-5 supplies its joined
         # run-hours.  The annual grid is layout/verification only.
         records_raw, daily_reports, _ = _sh.get_daily_records(report_yms)
+        failed_pairs = next(
+            (report["_failed_pairs"] for report in daily_reports
+             if isinstance(report, dict) and "_failed_pairs" in report),
+            [],
+        )
+        # Moulding is emitted by the PIPE workbook, so PIPE failures withhold
+        # Moulding facts for the same month too.
+        failed_yms = {ym for plant, ym in failed_pairs if plant in {"PIPE", "MOULDING"}}
         roster_by_mould = _roster_mould_map(roster)
         moulding_records = [
             r for r in records_raw
             if r.plant == "MOULDING"
             and getattr(r, "period", None) in report_yms
+            and getattr(r, "period", None) not in failed_yms
             and not bool(getattr(r, "is_finishing", False))
             and _record_roster_key(r, roster_by_mould)
         ]
@@ -727,6 +736,11 @@ def build_moulding_summary(
 
         # ── 6. Section 2 FY25-26: closed annual from SUMMARY-1 tab (R-03) ───
         s2_warnings: list[str] = []
+        for ym in sorted(failed_yms):
+            s2_warnings.append(
+                f"{ym}: daily Moulding source could not be read completely; "
+                "its figures are excluded and this report is partial."
+            )
         if unmapped_active:
             s2_warnings.append(
                 "Daily Moulding record(s) with output/hours did not map to the "
@@ -781,6 +795,7 @@ def build_moulding_summary(
             "section4":  section4,
             "through_ym": selected_through,
             "report_yms": report_yms,
+            "failed_months": sorted(failed_yms),
             "build_time_s": round(time.time() - t0, 2),
         }
 
@@ -803,6 +818,7 @@ def build_moulding_summary(
         }
 
     with _cache_lock:
-        _cache[cache_key] = {"ts": time.time(), "data": data}
+        if not data.get("failed_months"):
+            _cache[cache_key] = {"ts": time.time(), "data": data}
 
     return data

@@ -1177,8 +1177,11 @@ def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> di
         logger.exception("build_pipe_summary: unexpected error")
         return _error_result(fy, str(exc))
 
-    with _cache_lock:
-        _cache[cache_key] = (time.monotonic(), data)
+    # A partial daily read is deliberately not sticky. The next request must
+    # return to the daily source so recovered records can be published.
+    if not data["failed_months"]:
+        with _cache_lock:
+            _cache[cache_key] = (time.monotonic(), data)
 
     return data
 

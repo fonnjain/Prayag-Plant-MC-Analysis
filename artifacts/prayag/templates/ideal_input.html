@@ -18,6 +18,18 @@
     </p>
   </div>
 
+  {% if partial_daily_pairs %}
+  <div data-testid="ideal-partial-daily-banner" role="alert"
+       class="mb-3 px-3 py-2 rounded-lg text-sm border"
+       style="background:rgba(200,120,0,0.08);border-color:rgba(200,120,0,0.30);color:#854d0e">
+    <strong>Incomplete daily source read — some baselines are withheld.</strong>
+    The daily workbooks for {{ partial_daily_disp }} could not be read this load,
+    so those plants' sheet baselines are hidden rather than shown half-summed.
+    Any override values still appear (they don't depend on the daily read). The
+    source will be retried.
+  </div>
+  {% endif %}
+
   <!-- Flash message -->
   {% if input_msg %}
   <div class="mb-3 px-3 py-2 rounded-lg text-sm border"

@@ -202,6 +202,35 @@ def test_failed_daily_pipe_month_is_visible_and_not_counted_complete(monkeypatch
     )
 
 
+def test_partial_pipe_summary_is_not_cached_and_retries_daily_source(monkeypatch):
+    """A withheld PIPE month cannot remain in the ten-minute report cache."""
+    daily_record = _pipe_record("2026-04", hours=10, output=100)
+    calls = 0
+
+    def partial_daily(_months):
+        nonlocal calls
+        calls += 1
+        return (
+            [daily_record],
+            [{"_failed_pairs": [("PIPE", "2026-05")]}],
+            [],
+        )
+
+    _stub_pipe_builder_sources(monkeypatch, ([], [], []))
+    monkeypatch.setattr(sheets, "get_daily_records", partial_daily)
+    pipe_summary._cache.clear()
+
+    try:
+        first = pipe_summary.build_pipe_summary("2627")
+        second = pipe_summary.build_pipe_summary("2627")
+    finally:
+        pipe_summary._cache.clear()
+
+    assert first["failed_months"] == ["2026-05"]
+    assert second["failed_months"] == ["2026-05"]
+    assert calls == 2
+
+
 def test_builder_ignores_records_without_a_recognisable_reporting_month(monkeypatch):
     april = _pipe_record("2026-04", hours=10, output=100)
     no_period = _pipe_record(None, hours=5, output=50)

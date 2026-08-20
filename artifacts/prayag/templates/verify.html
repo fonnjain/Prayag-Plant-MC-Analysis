@@ -42,6 +42,18 @@
      class="bg-navy text-white text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap">Download CSV</a>
 </form>
 
+{% if result.partial_daily_pairs %}
+<div data-testid="verify-partial-daily-banner" role="alert"
+     class="rounded-xl p-3 mb-3 text-xs"
+     style="background:rgba(200,120,0,0.08);border:1px solid rgba(200,120,0,0.30);color:#854d0e">
+  <strong>Incomplete daily source read — daily comparison is partial.</strong>
+  These daily workbooks could not be read this load: {{ result.partial_daily_disp }}.
+  The daily-vs-summary checks below understate the daily side for the affected
+  plant-months; a discrepancy there may be a read gap, not a data error. The
+  source will be retried.
+</div>
+{% endif %}
+
 {% if verify_msg %}
 <div class="mb-3 rounded-lg p-2.5 bg-blue-50 border border-blue-200 text-navy text-xs">{{ verify_msg }}</div>
 {% endif %}

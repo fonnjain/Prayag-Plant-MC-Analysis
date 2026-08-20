@@ -313,13 +313,33 @@ BUILDERS = {"HDPE": build_hdpe, "MOULDING": build_moulding, "PTMT": build_ptmt, 
 
 def main():
     months = sorted(set(PLANT_MONTH.values()), reverse=True)
-    recs, _reports, warns = sheets.get_daily_records(months)
+    recs, reports, warns = sheets.get_daily_records(months)
+    failed_pairs = next(
+        (report["_failed_pairs"] for report in reports
+         if isinstance(report, dict) and "_failed_pairs" in report),
+        [],
+    )
+
+    def _withheld(plant: str, ym: str) -> bool:
+        # Moulding is emitted by the PIPE workbook; a failed PIPE pair means
+        # Moulding's calculation workbook would be incomplete too.
+        return (
+            (plant, ym) in failed_pairs
+            or (plant == "MOULDING" and ("PIPE", ym) in failed_pairs)
+        )
+
     for w in warns:
         print("WARN:", w)
     out_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "exports"))
     os.makedirs(out_dir, exist_ok=True)
     saved = []
     for plant, ym in PLANT_MONTH.items():
+        if _withheld(plant, ym):
+            print(
+                f"WITHHELD: {plant} {ym} daily source is incomplete; "
+                "no calculation workbook was produced."
+            )
+            continue
         pr = [r for r in recs if r.plant == plant and (r.date or r.period)[:7] == ym]
         unit = ""
         for r in pr:

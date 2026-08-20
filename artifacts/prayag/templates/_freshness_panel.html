@@ -17,8 +17,11 @@
   </p>
 
   {% if fr and fr.partial %}
-  <div class="text-[11px] text-amber-800 bg-amber-50 rounded-lg p-2 mb-3 leading-relaxed">
+  <div data-testid="freshness-partial-notice" class="text-[11px] text-amber-800 bg-amber-50 rounded-lg p-2 mb-3 leading-relaxed">
     Partial check — some sources couldn't be read this time, so they show their last known state and weren't re-checked.
+    {% if fr.daily_partial_disp %}
+    <span class="block mt-1 font-semibold">Excluded daily sources this load: {{ fr.daily_partial_disp }}.</span>
+    {% endif %}
   </div>
   {% endif %}
 

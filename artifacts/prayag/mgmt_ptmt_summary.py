@@ -133,7 +133,17 @@ def _build_month_row(ym: str, fy: str, abbr: str) -> dict:
     Record.runner_lumps combines runner produce and lumps — they are not
     separately available in the daily pipeline.
     """
-    all_records, _, _ = _sh().get_daily_records([ym])
+    all_records, reports, _ = _sh().get_daily_records([ym])
+    failed_pairs = next(
+        (report["_failed_pairs"] for report in reports
+         if isinstance(report, dict) and "_failed_pairs" in report),
+        [],
+    )
+    if ("PTMT", ym) in failed_pairs:
+        return {
+            "ym": ym, "abbr": abbr, "disp": _FY_DISP[fy][abbr],
+            "has_data": False, "partial_source": True,
+        }
 
     # Records already have r.segment and r.is_finishing set by the PTMT
     # parser (sheets.py:2468-2471). Exclude grinding (is_finishing=True).
@@ -231,6 +241,7 @@ def build_ptmt_summary(fy: str = "2627") -> dict:
 
     data_rows = [r for r in rows if r["has_data"]]
     has_data  = bool(data_rows)
+    failed_months = [r["ym"] for r in rows if r.get("partial_source")]
 
     total: Optional[dict] = None
     if has_data:
@@ -308,6 +319,12 @@ def build_ptmt_summary(fy: str = "2627") -> dict:
         "has_data":        has_data,
         "sheet_total_bugs": sheet_total_bugs,
         "r24_notes":       _PTMT_R24_NOTES,
+        "failed_months":   failed_months,
+        "warnings": [
+            f"{ym}: PTMT daily source could not be read completely; its figures "
+            "are excluded and this report is partial."
+            for ym in failed_months
+        ],
         # Per-KG Labour Cost TOTAL note
         "cost_per_kg_note": (
             "Sheet TOTAL 3.53 — derivation unclear: "
@@ -318,7 +335,7 @@ def build_ptmt_summary(fy: str = "2627") -> dict:
     }
 
     with _cache_lock:
-        if not any(r.get("has_data") is False for r in data_rows):
+        if not failed_months:
             _cache[cache_key] = {"data": result, "_ts": time.time()}
 
     return result

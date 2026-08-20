@@ -67,6 +67,10 @@ class SheetReadError(RuntimeError):
     """Raised when a real Google Sheet is configured but cannot be read."""
 
 
+class DailyReadIncompleteError(SheetReadError):
+    """A registered daily workbook returned a suspiciously reduced population."""
+
+
 def _connector_available() -> bool:
     host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
     has_token = bool(os.environ.get("REPL_IDENTITY") or os.environ.get("WEB_REPL_RENEWAL"))
@@ -1428,6 +1432,9 @@ def load_pipe_moulds(ym: Optional[str]) -> dict:
 # still collapsing duplicate concurrent fetches of the SAME key.
 _daily_key_locks: dict = {}
 _daily_locks_guard = threading.Lock()
+# L1 fallback for completeness baselines. Postgres makes the mark durable across
+# workers, but the classifier must remain safe during a database outage too.
+_daily_highwater_counts: dict[tuple[str, str], int] = {}
 
 
 def _daily_key_lock(key) -> threading.Lock:
@@ -1437,6 +1444,85 @@ def _daily_key_lock(key) -> threading.Lock:
           lock = threading.Lock()
           _daily_key_locks[key] = lock
       return lock
+
+
+def _daily_logical_populations(results) -> dict[str, dict]:
+    """Count each logical plant emitted by one physical workbook independently."""
+    populations: dict[str, dict] = {}
+    for recs, report in results or []:
+        emit = (
+            report.get("plant") or report.get("emit")
+            if isinstance(report, dict) else None
+        )
+        if not emit and recs:
+            emit = getattr(recs[0], "plant", None)
+        if not emit:
+            continue
+        item = populations.setdefault(
+            emit, {"count": 0, "confirmed_idle": True, "has_report": False},
+        )
+        item["count"] += len(recs or [])
+        item["has_report"] = True
+        item["confirmed_idle"] = item["confirmed_idle"] and bool(
+            isinstance(report, dict)
+            and (report.get("empty_source") or report.get("idle_source"))
+        )
+    return populations
+
+
+def _daily_count_scope(emit: str) -> str:
+    # Keep logical-plant baselines distinct from pre-v3 physical-workbook rows.
+    return f"emit:{emit}"
+
+
+def _daily_highwater(emit: str, ym: str) -> Optional[int]:
+    key = (emit, ym)
+    local = _daily_highwater_counts.get(key)
+    persisted = _store.daily_read_count(_daily_count_scope(emit), ym)
+    if local is None:
+        return persisted
+    if persisted is None:
+        return local
+    return max(local, persisted)
+
+
+def _daily_pair_incomplete_reason(plant: str, ym: str, results) -> Optional[str]:
+    """Classify a daily pair before it is allowed into either cache.
+
+    A recognised but empty template is a legitimate idle month. Every other
+    zero-row result is incomplete, and a population may never shrink below its
+    prior complete high-water mark without being withheld and retried.
+    """
+    populations = _daily_logical_populations(results)
+    if not populations:
+        return "the registered source returned no production records"
+    reasons: list[str] = []
+    for emit, population in populations.items():
+        count = population["count"]
+        if count == 0:
+            if population["confirmed_idle"]:
+                continue
+            reasons.append(f"{emit} returned no production records")
+            continue
+        previous = _daily_highwater(emit, ym)
+        if previous is not None and count < previous:
+            reasons.append(
+                f"{emit} returned {count:,} records, below its prior complete "
+                f"population of {previous:,}"
+            )
+    if reasons:
+        return "; ".join(reasons)
+    return None
+
+
+def _remember_complete_daily_pair(plant: str, ym: str, results) -> None:
+    for emit, population in _daily_logical_populations(results).items():
+        count = population["count"]
+        if not count:
+            continue
+        key = (emit, ym)
+        _daily_highwater_counts[key] = max(_daily_highwater_counts.get(key, 0), count)
+        _store.remember_daily_read_count(_daily_count_scope(emit), ym, count)
 
 
 def _load_daily_cached(plant: str, ym: str, token: str):
@@ -1451,45 +1537,47 @@ def _load_daily_cached(plant: str, ym: str, token: str):
   key = (plant, ym)
   cached = _daily_cache.get(key)
   if cached and time.time() - cached[0] < _DATA_TTL:
-      return cached[1]
-  pg_key = f"daily_{plant}_{ym}"
+      if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
+          return cached[1]
+      _daily_cache.pop(key, None)
+  # v3 deliberately ignores pre-logical-emitter cache payloads. Those values have
+  # no verified population baseline and could be the very partial data this
+  # guard is intended to prevent from being published.
+  pg_key = f"daily_v3_{plant}_{ym}"
   with _daily_key_lock(key):
       # Re-check L1 — another thread may have filled it while we waited.
       cached = _daily_cache.get(key)
       if cached and time.time() - cached[0] < _DATA_TTL:
-          return cached[1]
+          if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
+              return cached[1]
+          _daily_cache.pop(key, None)
       # L2: shared Postgres cache — avoids re-fetching across workers.
       try:
           pg_hit = _store.pg_cache_read(pg_key, _DATA_TTL)
           if pg_hit is not None:
-              _daily_cache[key] = (time.time(), pg_hit)
-              return pg_hit
-      except Exception:
-          pass
-      # L2b: known-empty months (24 h TTL, longer than pg_cache).
-      # A plant-month confirmed empty in the last 24 h skips the L3 Sheets
-      # read entirely — saving quota for months that never have production.
-      try:
-          if _store.is_known_empty(plant, ym):
-              _daily_cache[key] = (time.time(), [])
-              return []
+              if not _daily_pair_incomplete_reason(plant, ym, pg_hit):
+                  _daily_cache[key] = (time.time(), pg_hit)
+                  _remember_complete_daily_pair(plant, ym, pg_hit)
+                  return pg_hit
+              # Remove only the invalid pair then retry the live source; never
+              # clear the broader shared cache as part of completeness recovery.
+              _store.pg_cache_clear(pg_key)
       except Exception:
           pass
       # L3: live Sheets read.
       results = _load_daily(plant, ym, token)
+      reason = _daily_pair_incomplete_reason(plant, ym, results)
+      if reason:
+          raise DailyReadIncompleteError(
+              f"{sources.PLANT_NAMES.get(plant, plant)} daily ({ym}) is incomplete: "
+              f"{reason}. Its figures are withheld and will be retried."
+          )
       _daily_cache[key] = (time.time(), results)
       _mark_synced()
+      _remember_complete_daily_pair(plant, ym, results)
       # Populate Postgres so sibling workers skip the Sheets trip.
       try:
           _store.pg_cache_write(pg_key, results)
-      except Exception:
-          pass
-      # Mark genuinely empty (plant, ym) pairs so future cold starts avoid L3.
-      # "Empty" means _load_daily returned no (record, report) tuples at all,
-      # not an EMPTY_SOURCES short-circuit (those never reach here).
-      try:
-          if not results:
-              _store.mark_empty_month(plant, ym)
       except Exception:
           pass
       return results
@@ -2002,6 +2090,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           f"{emit} {ym}: the machine tabs could not be parsed "
           "(date/output layout not recognised)."
       )
+      report["idle_source"] = any_header
   elif rh_tab and runhours_found:
       report["warning"] = (
           f"{emit} {ym}: output read from the per-machine tabs; run hours joined "
@@ -2237,6 +2326,7 @@ def _emit_tank(emit: str, ym: str, file_id: str, spec: dict, token: str,
           f"{emit} {ym}: the production report could not be parsed "
           "(layout not recognised)."
       )
+      report["idle_source"] = _has_date_header(values)
   else:
       union_total = recon_audit["union_hrs_total"]
       if union_total > 0:
@@ -2481,6 +2571,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
           f"{emit} {ym}: the daily report could not be parsed "
           "(date/output layout not recognised)."
       )
+      report["idle_source"] = _matrix_has_dates(values)
       report["record_count"] = 0
       return raw, report
 
@@ -2784,6 +2875,7 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
   ]
   by_pair: dict = {}
   failed_pairs: List[Tuple[str, str]] = []
+  failed_reasons: dict[Tuple[str, str], str] = {}
   if pairs:
       max_workers = min(len(pairs), 8)
       with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -2794,19 +2886,28 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
           for fut, pair in futures.items():
               try:
                   by_pair[pair] = fut.result()
-              except SheetReadError:
+              except SheetReadError as exc:
                   # One workbook failing (e.g. a transient 429 on a cold,
                   # multi-month read) must NOT nuke the whole period and force a
                   # fall-back to the summary grid. Record the gap as an honest
                   # warning and keep every workbook that did load. We only raise
                   # below if NOTHING loaded at all.
                   failed_pairs.append(pair)
-  if failed_pairs and not by_pair:
+                  failed_reasons[pair] = str(exc)
+  all_failures_are_incomplete = bool(failed_pairs) and all(
+      "is incomplete:" in failed_reasons.get(pair, "")
+      for pair in failed_pairs
+  )
+  if failed_pairs and not by_pair and not all_failures_are_incomplete:
       raise SheetReadError(
           "Couldn't read any daily workbook for this period "
           "(Google Sheets is throttling or unavailable). Please try again."
       )
   for plant, ym in failed_pairs:
+      reason = failed_reasons.get((plant, ym), "")
+      if "is incomplete:" in reason:
+          warnings.append(reason)
+          continue
       warnings.append(
           f"{sources.PLANT_NAMES.get(plant, plant)} daily ({ym}) couldn't be read this "
           "time (Google Sheets throttled or unavailable) — its figures are "
@@ -2819,7 +2920,13 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
   # that need it extract it with:
   #   next((r["_failed_pairs"] for r in reports if "_failed_pairs" in r), [])
   if failed_pairs:
-      reports.append({"_failed_pairs": list(failed_pairs)})
+      reports.append({
+          "_failed_pairs": list(failed_pairs),
+          "_failed_pair_reasons": {
+              f"{plant}:{ym}": failed_reasons.get((plant, ym), "")
+              for plant, ym in failed_pairs
+          },
+      })
 
   for pair in pairs:
       results = by_pair.get(pair, [])

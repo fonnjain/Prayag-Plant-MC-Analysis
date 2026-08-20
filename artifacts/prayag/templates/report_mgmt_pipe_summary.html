@@ -84,6 +84,16 @@
   </div>
 </div>
 
+{% if data.failed_months %}
+<div data-testid="partial-daily-source-banner" role="alert"
+     class="rounded-xl p-3 mb-4 text-xs"
+     style="background:rgba(200,120,0,0.08);border:1px solid rgba(200,120,0,0.30);color:#854d0e">
+  <strong>Incomplete daily source — this report is partial.</strong>
+  {{ data.failed_months|join(", ") }} could not be read completely. Its figures
+  are excluded and will be retried; do not treat these totals as complete.
+</div>
+{% endif %}
+
 {% if data.error %}
 <div class="kpi-card p-4 flex items-start gap-3">
   <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="var(--terra)" stroke-width="2" class="flex-shrink-0 mt-0.5">

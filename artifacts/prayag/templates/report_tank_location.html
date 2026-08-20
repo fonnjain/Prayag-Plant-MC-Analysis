@@ -24,6 +24,18 @@
   </div>
   {% endif %}
 
+  {% if tank_daily_partial %}
+  <div data-testid="tank-partial-daily-banner" role="alert"
+       class="rounded-xl px-3 py-2 mb-3 text-xs"
+       style="background:rgba(200,120,0,0.08);border:1px solid rgba(200,120,0,0.30);color:#854d0e">
+    <strong>Incomplete daily source read — kg and rejection figures withheld.</strong>
+    The daily workbook{% if tank_daily_partial_disp %} for {{ tank_daily_partial_disp }}{% endif %}
+    could not be read this load, so the kilogram output and rejection totals are
+    hidden rather than shown under-counted. The annual-summary production (Ltr) by
+    item below is unaffected. The source will be retried.
+  </div>
+  {% endif %}
+
   {% if validation %}
   <div class="rounded-xl px-3 py-2 mb-3 text-xs flex items-start gap-2"
        style="background:rgba(31,56,100,0.06);color:var(--navy)">

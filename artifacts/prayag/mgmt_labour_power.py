@@ -648,6 +648,19 @@ def _report_yms(fy: str, through_ym: Optional[str] = None) -> list[str]:
     return full_yms
 
 
+class _SegmentProdKg(dict):
+    """{segment: {ym: float|None}} plus the daily (plant, ym) pairs that failed.
+
+    The failed pairs let the caller emit partial-source warnings and refuse to
+    cache a report built from an incomplete read, without changing the plain
+    mapping shape that ``_enrich_rows`` consumes.
+    """
+
+    def __init__(self, *args, failed_pairs: list | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failed_pairs = list(failed_pairs or [])
+
+
 def get_segment_prod_kg(
     fy: str = "2627", through_ym: Optional[str] = None
 ) -> dict:
@@ -666,24 +679,52 @@ def get_segment_prod_kg(
     fy_ym = _FY_YM.get(fy, _FY_YM["2627"])
     all_yms = _report_yms(fy, through_ym)
 
-    # Collect per-segment per-month from daily records (one call per month)
+    # Plant → segment reverse map (one plant can only belong to one segment here).
+    plant_to_seg: dict[str, str] = {
+        plant: seg for seg, plants in _SEG_PLANTS.items() for plant in plants
+    }
+
+    # Collect per-segment per-month from daily records (one call per month).
+    # Track (plant, ym) pairs whose daily read came back incomplete so their
+    # figures can be WITHHELD rather than shown as a plausible smaller total
+    # (R-06 Failure Mode #9).  A partial month must never look like a real dip.
     raw: dict[str, dict[str, float]] = {s: {} for s in _SEG_PLANTS}
+    failed_pairs: set[tuple[str, str]] = set()   # (plant, ym) for our segments
+    failed_seg_ym: set[tuple[str, str]] = set()  # (segment_name, ym) to withhold
     for ym in all_yms:
         try:
-            month_recs, _, _ = _sheets.get_daily_records([ym])
+            month_recs, month_reports, _ = _sheets.get_daily_records([ym])
         except Exception as exc:
             logger.warning("get_segment_prod_kg(%s): get_daily_records failed: %s", ym, exc)
-            month_recs = []
+            month_recs, month_reports = [], []
+        # Extract failed (plant, ym) pairs surfaced by the sentinel dict that
+        # get_daily_records appends to reports; keep only plants we source here.
+        month_failed = next(
+            (report["_failed_pairs"] for report in month_reports
+             if isinstance(report, dict) and "_failed_pairs" in report),
+            [],
+        )
+        for plant, fym in month_failed:
+            seg = plant_to_seg.get(plant)
+            if seg is not None:
+                failed_pairs.add((plant, fym))
+                failed_seg_ym.add((seg, fym))
         monthly = accumulate_monthly(month_recs, _SEG_PLANTS)
         for seg, kg in monthly.items():
             if kg > 0:
                 raw[seg][ym] = raw[seg].get(ym, 0.0) + kg
 
-    # Convert to {seg: {ym: float|None}} — zero means no records → show blank
+    # Convert to {seg: {ym: float|None}} — zero means no records → show blank.
+    # Withheld (seg, ym) pairs are forced to None: we have no complete figure,
+    # so any accumulated partial total is dropped to avoid a confident-but-wrong
+    # number in the per-unit tables.
     result: dict[str, dict[str, Optional[float]]] = {}
     for seg in _SEG_PLANTS:
-        result[seg] = {ym: (raw[seg][ym] if raw[seg].get(ym, 0.0) > 0 else None)
-                       for ym in all_yms}
+        result[seg] = {
+            ym: (None if (seg, ym) in failed_seg_ym
+                 else (raw[seg][ym] if raw[seg].get(ym, 0.0) > 0 else None))
+            for ym in all_yms
+        }
 
     # Plumbing: costing module gross production (pipe kg + fitting kg from R-12)
     try:
@@ -707,7 +748,7 @@ def get_segment_prod_kg(
     for seg in ("CP", "Hardware", "Sink"):
         result[seg] = {ym: None for ym in all_yms}
 
-    return result
+    return _SegmentProdKg(result, failed_pairs=sorted(failed_pairs))
 
 
 # ── Row enrichment ─────────────────────────────────────────────────────────────
@@ -935,6 +976,18 @@ def build_mgmt_report_data(
         if hit and now - hit[0] < _CACHE_TTL:
             return hit[1]
         data = _do_build(fy, through_ym)
+        # Do NOT cache a result built from partial reads — some (plant, ym)
+        # pairs failed and their figures are withheld.  Skipping the cache lets
+        # the next request retry fresh (R-06 Failure Mode #9); once every pair
+        # succeeds the result is cached normally.
+        if data.get("daily_partial_warnings"):
+            logger.warning(
+                "build_mgmt_report_data(%s, %s): skipping cache — %d partial "
+                "warning(s): %s",
+                fy, through_ym, len(data["daily_partial_warnings"]),
+                data["daily_partial_warnings"],
+            )
+            return data
         _cache[cache_key] = (now, data)
     return data
 
@@ -970,6 +1023,8 @@ def _do_build(fy: str, through_ym: Optional[str] = None) -> dict:
     except Exception as exc:
         logger.warning("build_mgmt_report_data: get_segment_prod_kg failed: %s", exc)
         seg_kg = {}
+    # Part-A per-unit production figures withheld for an incomplete daily read.
+    prod_failed_pairs = list(getattr(seg_kg, "failed_pairs", []))
 
     # 3. Enrich and assemble per unit
     units = []
@@ -995,10 +1050,22 @@ def _do_build(fy: str, through_ym: Optional[str] = None) -> dict:
     try:
         report_yms = _report_yms(fy, through_ym)
         sgr = _load_part_b_daily_totals(fy, report_yms)
+        daily_partial_warnings = getattr(sgr, "partial_warnings", [])
         _warn_zero_segments(sgr, report_yms)
     except Exception as exc:
         logger.warning("_do_build: could not accumulate seg_gross_reject: %s", exc)
-        sgr = {}
+        sgr, daily_partial_warnings = {}, []
+
+    # Fold Part-A (per-unit production) failures into the same warning list so
+    # the banner covers every section built from an incomplete daily read.
+    part_a_warnings = [
+        f"{plant} {ym}: daily source could not be read completely; its per-unit "
+        "production figure is withheld and this report is partial."
+        for plant, ym in prod_failed_pairs
+    ]
+    for warning in part_a_warnings:
+        if warning not in daily_partial_warnings:
+            daily_partial_warnings.append(warning)
 
     ideal_power_sec  = _build_ideal_cost_section(sgr, fy, "power")
     ideal_labour_sec = _build_ideal_cost_section(sgr, fy, "labour")
@@ -1012,6 +1079,7 @@ def _do_build(fy: str, through_ym: Optional[str] = None) -> dict:
         "ideal_power_sec":   ideal_power_sec,
         "ideal_labour_sec":  ideal_labour_sec,
         "reject_prod_sec":   reject_prod_sec,
+        "daily_partial_warnings": daily_partial_warnings,
     }
 
 
@@ -1112,12 +1180,36 @@ def _accumulate_seg_gross_reject(
     return data
 
 
+class _PartBDailyTotals(dict):
+    """Daily Part-B facts plus non-row metadata without polluting segment keys."""
+
+    def __init__(self, *args, partial_warnings: list[str] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.partial_warnings = partial_warnings or []
+
+
 def _load_part_b_daily_totals(fy: str, report_yms: list[str]) -> dict:
     """Load and classify the daily facts used by all Report 1 Part-B sections."""
     import sheets as _sheets
     from mgmt_pipe_summary import _is_primary_pipe_record
 
-    records, _, _ = _sheets.get_daily_records(report_yms)
+    records, reports, _ = _sheets.get_daily_records(report_yms)
+    failed_pairs = next(
+        (report["_failed_pairs"] for report in reports
+         if isinstance(report, dict) and "_failed_pairs" in report),
+        [],
+    )
+    failed_by_plant = {(plant, ym) for plant, ym in failed_pairs}
+
+    def _withheld(record) -> bool:
+        plant = getattr(record, "plant", "")
+        ym = _daily_part_b_month(record)
+        # PIPE workbooks also emit Moulding; withholding either source role is
+        # safer than reporting a plausible but reduced combined figure.
+        return (
+            (plant, ym) in failed_by_plant
+            or (plant == "MOULDING" and ("PIPE", ym) in failed_by_plant)
+        )
     relevant = {
         "PIPE", "MOULDING", "GARDEN", "GARDEN_WB", "HDPE",
         "TANK", "TANK_VN", "TANK_WB", "PTMT",
@@ -1130,10 +1222,20 @@ def _load_part_b_daily_totals(fy: str, report_yms: list[str]) -> dict:
             continue
         if _daily_part_b_month(record) not in report_yms:
             continue
+        if _withheld(record):
+            continue
         if getattr(record, "plant", None) == "PIPE" and not _is_primary_pipe_record(record):
             continue
         scoped.append(record)
-    return _accumulate_seg_gross_reject(scoped, fy, report_yms)
+    warnings = [
+        f"{plant} {ym}: daily source could not be read completely; its figures "
+        "are excluded from Part B and this report is partial."
+        for plant, ym in sorted(failed_by_plant)
+    ]
+    return _PartBDailyTotals(
+        _accumulate_seg_gross_reject(scoped, fy, report_yms),
+        partial_warnings=warnings,
+    )
 
 
 def _warn_zero_segments(sgr: dict, all_yms: list) -> None:
