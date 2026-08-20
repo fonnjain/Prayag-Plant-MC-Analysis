@@ -1,0 +1,93 @@
+# Cardinal Rule Audit — Re-run After Remediation (STRICTLY READ-ONLY)
+
+Read `PRAYAG_RULES.md`. **Change nothing.** No Build mode, no restart, no publish, no Sheets writes (**R-21**), no cache clearing (**R-34**). If you find a violation, **report it — do not fix it** (**R-30**).
+
+This repeats the earlier audit. Its purpose is to confirm the three violations are cleared **and to check that fixing them did not introduce new ones.**
+
+---
+
+## Part 1 — The three known violations
+
+For each, state whether it is **cleared**, **partially cleared**, or **still present**, and show the code path that proves it.
+
+**1. Pipe M/C Summary.** `build_pipe_summary()` was calling `get_records()` (annual grid), bypassing the R5↔R11 reconciliation. Confirm FY26-27 output, rejection and hours now come from `get_daily_records()`, and that `pipe_reconcile.reconcile()` is applied before aggregation.
+
+**2. Moulding and GOM.** Both were calling `get_records()` for MOULDING. Confirm output and rejection now come from Report-12 daily records and hours from the Report-5 join, and that GOM inherits Moulding's corrected result rather than reading annual records of its own.
+
+**3. Report 1 Part B.** Rejection & Production, Ideal Power Cost and Ideal Labour Cost were building Pipe, Fittings, Garden and HDPE from `get_records()`. Confirm all six segments now come from daily records.
+
+**Then:** does **any** builder still call `get_records()` for a displayed FY26-27 figure? List every remaining caller and what it uses the result for. Comparison and reconciliation reads are legitimate — say which each is.
+
+---
+
+## Part 2 — New violations introduced by the fixes
+
+The remediation touched source paths, label handling, period grain and FY windowing across four builders. Check what that may have disturbed.
+
+**Label normalizer.** Pipe's normalizer turned any trailing digit into `M/C-n`, so `PIPE Grinder-1` became `M/C-1`. It now requires an explicit `M/C` token, plus an `is_finishing` guard. Confirm:
+- No finishing record can reach a primary-machine rollup in **any** report.
+- Moulding and GOM use a stricter helper — confirm they also apply the `is_finishing` guard, not just safe label matching. Grinder and Pulverizer rows carry zero this window, so safety cannot be inferred from the totals.
+
+**Period grain.** Report-11-only records stored `period=<full date>` instead of the month, which caused a valid 858 kg June row to be dropped. Confirm the grain is now monthly everywhere, and that no other loader has the same defect.
+
+**FY windowing.** A cutoff month was added to Pipe, Moulding and GOM. Confirm it excludes August without excluding anything within April–July, and that page and export pass the same month.
+
+**The net/gross contract.** `accum_record_kg()` is now plant-aware: Garden, Garden WB and HDPE treat `total_count` as net; PTMT subtracts rejection. Confirm the same rule is applied consistently by Part B and by each report's own builder — and report **any place that still applies one blanket rule to all plants.**
+
+---
+
+## Part 3 — Prove five figures end to end
+
+Show the full chain, source cell to screen, for each:
+
+- **Pipe 1,283,300.15 kg** — Report-5 1,277,974.20 + the 858 kg June R-11-only row + 4,467.95 of matched-date R-11 maxima
+- **Pipe 6,507 h** — per machine, matching Report-5's own TOTAL rows
+- **Moulding 366,015.39 kg / 35,972 h** — Report-12 output with Report-5 hours joined
+- **Garden 262,818.23 kg** — block-tab net including Garden WB, no double subtraction
+- **HDPE 23,817.24 kg** — MACHINE block tabs, July 22,448.04
+
+If any cannot be traced end to end, that is the finding.
+
+---
+
+## Part 4 — The traps, re-checked
+
+Re-run the six from the first audit, briefly:
+
+1. `ANNUAL_SOURCES` used for a displayed FY26-27 figure
+2. UNIT roll-up rows supplying a segment's wages or headcount (**R-11**)
+3. `parse_ideal_labour_rates()` still reading only the TOTAL row (**R-40**)
+4. Hardcoded literals — classify each as comparison reference or shadowing a live value
+5. Acceptance targets as fallbacks — grep production code for `1283300`, `1277971`, `366015`, `537109`, `524465`, `262818`, `23817`, `6507`, `35972`
+6. Export path — every `serial_*` calling its builder; `gen_compound` and `gen_ptmt_eff` still standalone
+
+---
+
+## Part 5 — Known and accepted, confirm still true
+
+These are correct and must not have changed:
+
+- **R-03 closed-year reads** — Pipe M/C 25-26, Moulding SUMMARY-1, GOM inherited block, Pipe Moulds per-material FY25-26 tabs. All clearly labelled as read, not recomputed.
+- **Divergence flags** display a source figure beside ours without deriving ours from it: R-23, R-24, R-26, R-42, R-43.
+- **The two legitimate reconciliations** are between primary live sources, not verification sheets: Pipe R5↔R11 and Tank Daily Report↔PROD. REPORT, both date-wise maxima.
+- **Broken sources** are computed around, not inherited: UNIT-1's `#REF!`, HDPE's unmaintained daily-report tab, Kharani's incomplete annual.
+
+---
+
+## Also report
+
+**The shared metrics engine** still applies `good_count = total_count − reject_count` to all plants, understating Garden by 5,259.50 kg and HDPE by 3,902.00 kg wherever it is used. This is **known and scoped as separate work** — do not fix it. Confirm its current reach: which pages, rollups and API responses carry the understated figure today.
+
+---
+
+## Report back
+
+1. The three violations: cleared / partial / still present, with the proving path.
+2. Every remaining `get_records()` caller and what it feeds.
+3. New violations from Part 2, if any.
+4. The five end-to-end chains.
+5. The six traps.
+6. Part 5 confirmations.
+7. **A plain list of violations found**, ordered by how much a reader would be misled. If none, say what you searched, so the absence means something.
+
+Then confirm: **no files changed, no Sheets writes, no cache cleared, no restart or publish.**
