@@ -274,6 +274,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-05": "1T1M5MT47P3D4wCwi7tX7KcL_sHVtx43NSuXFDP9Oq78",
           "2026-06": "1nEDFjrVu6pnNkzZ9tJhvGvBDMUHjLStcc0RP2uHig4g",
           "2026-07": "1AjMLfcBkI0rGY8JdYP3MO8Ocn8lO-HIpol1tHgvK9O8",
+           "2026-08": "1Dom4NFnlVbmA1cWFSmZtRw13IKGsqOJbO-rx2s0FLv8",
       },
   },
   "GARDEN": {

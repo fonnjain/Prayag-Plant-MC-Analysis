@@ -9,7 +9,8 @@ gate and login/logout routes are exercised through Flask's test client.
 Test matrix (per spec):
   1. Gate inactive when PRAYAG_APP_PASSWORD is unset
   2. Gate active when PRAYAG_APP_PASSWORD is set
-  3. Exempt paths (/login, /logout, /health, /static/) reachable unauthenticated
+   3. Exempt paths (/login, /logout, /health, /static/) reachable unauthenticated
+   3a. /data-api/ bypasses session auth and enforces API-key auth
   4. POST to a mutating route is blocked (redirected) pre-auth
   5. Correct password sets session["auth_user"]
   6. Wrong password does NOT set session["auth_user"]
@@ -125,6 +126,34 @@ def test_logout_exempt_unauthenticated(client_with_pw):
     # /logout redirects to /login — that's fine, it must not 403/500
     assert resp.status_code in (301, 302)
     print("PASS: /logout reachable unauthenticated")
+
+
+def test_data_api_bypasses_session_gate_but_requires_a_key(client_with_pw, monkeypatch):
+    """/data-api/ must reach its key guard, while browser routes remain session-gated."""
+    import api as apimod
+
+    monkeypatch.setattr(apimod, "_configured_keys", lambda: ["api-test-key"])
+    monkeypatch.setattr(apimod, "months_with_data", lambda: ["2026-08"])
+
+    health = client_with_pw.get("/data-api/v1/health")
+    assert health.status_code == 200
+
+    missing = client_with_pw.get("/data-api/v1/periods")
+    assert missing.status_code == 401
+    assert missing.get_json()["error"] == "unauthorized"
+    assert "/login" not in missing.headers.get("Location", "")
+
+    valid = client_with_pw.get(
+        "/data-api/v1/periods",
+        headers={"X-API-Key": "api-test-key"},
+    )
+    assert valid.status_code == 200
+    assert valid.get_json()["months_with_data"] == ["2026-08"]
+
+    browser = client_with_pw.get("/")
+    assert browser.status_code in (301, 302)
+    assert "/login" in browser.headers.get("Location", "")
+    print("PASS: data API uses key auth; browser UI remains session-gated")
 
 
 # ---------------------------------------------------------------------------

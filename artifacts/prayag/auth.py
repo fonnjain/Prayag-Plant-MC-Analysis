@@ -150,7 +150,7 @@ def admin_required(view):
 
 # These paths are always reachable, regardless of auth state.
 _EXEMPT_EXACT: frozenset = frozenset({"/login", "/logout", "/health"})
-_EXEMPT_PREFIX: tuple = ("/static/",)
+_EXEMPT_PREFIX: tuple = ("/static/", "/data-api/")
 
 
 def _is_exempt(path: str) -> bool:

@@ -12,6 +12,13 @@ if PRAYAG_DIR not in sys.path:
 import sheets
 
 
+def test_ptmt_august_2026_daily_source_is_pinned():
+    """R-12: a discovered source must be pinned to survive worker restarts."""
+    assert sheets.sources.DAILY_SOURCES["PTMT"]["files"]["2026-08"] == (
+        "1Dom4NFnlVbmA1cWFSmZtRw13IKGsqOJbO-rx2s0FLv8"
+    )
+
+
 def test_daily_records_can_limit_reads_to_requested_source_workbooks(monkeypatch):
     calls = []
     monkeypatch.setattr(sheets, "is_demo_mode", lambda: False)
