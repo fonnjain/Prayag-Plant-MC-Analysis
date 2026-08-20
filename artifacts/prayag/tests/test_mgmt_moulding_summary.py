@@ -82,10 +82,15 @@ def test_builder_uses_daily_records_and_excludes_months_after_selected_cutoff(mo
     ]
     seen_months = []
     monkeypatch.setattr(sheets, "_get_access_token", lambda: "test-token")
+    seen_sources = []
     monkeypatch.setattr(
         sheets,
         "get_daily_records",
-        lambda months: (seen_months.append(months) or (records, [], [])),
+        lambda months, *, source_plants=None: (
+            seen_months.append(months),
+            seen_sources.append(source_plants),
+            (records, [], []),
+        )[-1],
     )
     monkeypatch.setattr(
         sheets,
@@ -108,6 +113,7 @@ def test_builder_uses_daily_records_and_excludes_months_after_selected_cutoff(mo
 
     total = next(row for row in result["section1"]["rows"] if row["is_total"])
     assert seen_months == [["2026-04", "2026-05", "2026-06", "2026-07"]]
+    assert seen_sources == [{"PIPE"}]
     assert result["through_ym"] == "2026-07"
     assert result["section1"]["n_months"] == 4
     assert total["actual_hrs"] == 40

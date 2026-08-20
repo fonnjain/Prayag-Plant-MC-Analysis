@@ -21,7 +21,7 @@ import urllib.error
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 logger = logging.getLogger("prayag.sheets")
 
@@ -2850,8 +2850,18 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
   return out
 
 
-def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]:
-  """True day-level Records for ``months`` across all daily-capable plants."""
+def get_daily_records(
+    months: List[str],
+    *,
+    source_plants: Optional[Iterable[str]] = None,
+) -> Tuple[List[Record], List[dict], List[str]]:
+  """True day-level Records for ``months``.
+
+  ``source_plants`` scopes the physical daily workbooks to read.  It is useful
+  for report builders whose figures come from one known source workbook (for
+  example, Moulding is emitted by the PIPE workbook).  When omitted, the
+  existing all-daily-plants behavior is preserved.
+  """
   if is_demo_mode():
       recs = _demo_records_for_months(months)
       return recs, _demo_reports(), []
@@ -2871,9 +2881,14 @@ def get_daily_records(months: List[str]) -> Tuple[List[Record], List[dict], List
   # concurrently. _load_daily_cached collapses duplicate concurrent fetches of
   # the same key under a per-key lock; results are reassembled in the original
   # (plant, ym) order below so warnings/reports stay deterministic.
+  wanted_sources = set(source_plants) if source_plants is not None else None
+  daily_plants = [
+      plant for plant in _daily_plants()
+      if wanted_sources is None or plant in wanted_sources
+  ]
   pairs = [
       (plant, ym)
-      for plant in _daily_plants()
+      for plant in daily_plants
       for ym in months
       if ym in sources.DAILY_SOURCES[plant]["files"]
   ]

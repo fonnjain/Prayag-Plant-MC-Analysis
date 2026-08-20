@@ -147,7 +147,15 @@ def test_moulding_fixture_pins_daily_output_and_report5_hours(monkeypatch):
         )
     ]
     monkeypatch.setattr(sheets, "_get_access_token", lambda: "fixture-token")
-    monkeypatch.setattr(sheets, "get_daily_records", lambda _months: (records, [], []))
+    seen_sources = []
+    monkeypatch.setattr(
+        sheets,
+        "get_daily_records",
+        lambda _months, *, source_plants=None: (
+            seen_sources.append(source_plants),
+            (records, [], []),
+        )[-1],
+    )
     monkeypatch.setattr(
         sheets,
         "get_records",
@@ -169,6 +177,7 @@ def test_moulding_fixture_pins_daily_output_and_report5_hours(monkeypatch):
     finally:
         moulding._cache.clear()
 
+    assert seen_sources == [{"PIPE"}]
     total = next(row for row in result["section2"]["fy2627"] if row["is_total"])
     assert total["output_kg"] == MOULDING_KG
     assert total["actual_hrs"] == MOULDING_HOURS

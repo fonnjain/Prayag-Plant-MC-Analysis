@@ -693,7 +693,12 @@ def build_moulding_summary(
         # ── 3. Authoritative daily records for the selected FY window ────────
         # Report-12 is the production source; Report-5 supplies its joined
         # run-hours.  The annual grid is layout/verification only.
-        records_raw, daily_reports, _ = _sh.get_daily_records(report_yms)
+        # Moulding records are emitted by the PIPE workbook's Report-12 tab.
+        # Do not fan out to unrelated plants here: it delays this interactive
+        # report and raises the chance of Google Sheets throttling.
+        records_raw, daily_reports, _ = _sh.get_daily_records(
+            report_yms, source_plants={"PIPE"}
+        )
         failed_pairs = next(
             (report["_failed_pairs"] for report in daily_reports
              if isinstance(report, dict) and "_failed_pairs" in report),
