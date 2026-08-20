@@ -5,19 +5,30 @@
 
 {# ─── Macros MUST be defined before first use (Jinja2 does not hoist macros) ─── #}
 {% macro render_mc_table(rows) %}
-<table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+<table style="width:100%;table-layout:fixed;font-size:11px;border-collapse:collapse">
+  <colgroup>
+    <col style="width:14%">
+    <col style="width:13%">
+    <col style="width:10%">
+    <col style="width:10%">
+    <col style="width:14%">
+    <col style="width:11%">
+    <col style="width:10%">
+    <col style="width:9%">
+    <col style="width:9%">
+  </colgroup>
   <thead>
     <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.15)">
-      <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
-          style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;min-width:70px">Machine</th>
-      <th class="text-left font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Pipe Type</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Ideal<br>Hours</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual<br>Hours</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Output<br>(KG)</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Ideal Rate<br>(KG/Hr)</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Avg/Hr<br>(KG)</th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Util %<br><span class="font-normal text-[9px] text-gray-400">(vs 500 hrs/mo<br>— sheet assumption)</span></th>
-      <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Output<br>Eff. %</th>
+      <th class="text-left font-semibold px-2 py-2"
+          style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;white-space:normal;line-height:1.15">Machine</th>
+      <th class="text-left font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Pipe Type</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Ideal<br>Hours</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Actual<br>Hours</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Actual Output<br>(KG)</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Ideal Rate<br>(KG/Hr)</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Avg/Hr<br>(KG)</th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Util %<br><span class="font-normal text-[9px] text-gray-400">(vs 500 hrs/mo<br>— sheet assumption)</span></th>
+      <th class="text-right font-semibold px-2 py-2" style="color:var(--navy);white-space:normal;line-height:1.15">Output<br>Eff. %</th>
     </tr>
   </thead>
   <tbody>
@@ -125,11 +136,22 @@
 
   <div class="kpi-card" style="overflow:hidden">
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-      <table style="width:max-content;min-width:100%;font-size:11px;border-collapse:collapse">
+      <table style="width:100%;table-layout:fixed;font-size:11px;border-collapse:collapse">
+        <colgroup>
+          <col style="width:8%">
+          <col style="width:11%">
+          <col style="width:11%">
+          <col style="width:10%">
+          <col style="width:14%">
+          <col style="width:12%">
+          <col style="width:11%">
+          <col style="width:11%">
+          <col style="width:12%">
+        </colgroup>
         <thead>
           <tr style="background:rgba(31,56,100,0.06);border-bottom:1px solid rgba(31,56,100,0.15)">
-            <th class="text-left font-semibold px-2 py-2 whitespace-nowrap"
-                style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;min-width:80px">Month</th>
+            <th class="text-left font-semibold px-2 py-2"
+                style="color:var(--navy);position:sticky;left:0;background:rgba(245,247,251,1);z-index:2;white-space:normal;line-height:1.15">Month</th>
             <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">M/C Run<br>Hours</th>
             <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Actual Output<br>with Rej. (KG)</th>
             <th class="text-right font-semibold px-2 py-2 whitespace-nowrap" style="color:var(--navy)">Labour<br>(Persons)</th>
@@ -146,12 +168,6 @@
             <td class="px-2 py-2"
                 style="color:var(--navy);position:sticky;left:0;background:rgba(236,240,248,1);z-index:1">
               <div class="whitespace-nowrap">TOTAL</div>
-              {% if tr.awaiting %}
-              <div class="text-[9px] font-normal leading-tight" style="color:#c57a00">
-                Partial payroll through {{ tr.parsed_wage_months|join(", ") }} ·
-                awaiting {{ tr.awaiting_months|join(", ") }}
-              </div>
-              {% endif %}
             </td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.run_hrs) if tr.run_hrs is not none else "—" }}</td>
             <td class="px-2 py-2 text-right whitespace-nowrap">{{ "{:,.0f}".format(tr.gross_output_kg) if tr.gross_output_kg is not none else "—" }}</td>
@@ -174,18 +190,16 @@
             <td class="px-2 py-1.5 text-right whitespace-nowrap" colspan="4">
               <span class="text-[10px] italic font-medium" style="color:#c57a00">AWAITING</span>
               {% if row.wages_source %}
-              <a class="block text-[9px] font-normal underline" style="color:#a05000"
-                 href="{{ row.wages_source.url }}" target="_blank" rel="noopener"
-                 title="{{ row.wages_source.file_id }}">Registered KH-1 payroll could not be parsed</a>
+               <span class="block text-[9px] font-normal" style="color:#a05000"
+                     title="{{ row.wages_source.file_id }}">Registered KH-1 payroll could not be parsed</span>
               {% endif %}
             </td>
             {% else %}
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">
               {% if row.wages is not none %}{{ "{:,.0f}".format(row.wages) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
               {% if row.wages_source %}
-              <a class="block text-[9px] font-normal underline" style="color:#65758f"
-                 href="{{ row.wages_source.url }}" target="_blank" rel="noopener"
-                 title="{{ row.wages_source.file_id }}">{{ row.wages_source.label }}</a>
+               <span class="block text-[9px] font-normal" style="color:#65758f"
+                     title="{{ row.wages_source.file_id }}">{{ row.wages_source.label }}</span>
               {% endif %}
             </td>
             <td class="px-2 py-1.5 text-right whitespace-nowrap text-gray-700">{% if row.devoted_per_person is not none %}{{ "%.1f"|format(row.devoted_per_person) }}{% else %}<span class="text-gray-300">—</span>{% endif %}</td>
@@ -201,10 +215,17 @@
          style="border-color:rgba(0,0,0,0.06);background:rgba(249,250,252,1)">
       Run Hours + Output from daily records (plant=PIPE, gross = good + rejected) ·
       Labour &amp; Paid Hours from Employee Data Details DASHBOARD tab (PIPELINE row) ·
-      Wages from monthly KH-1 payroll workbooks (CPVC / PIPELINE filter; linked below each loaded wage) ·
+      Wages from monthly KH-1 payroll workbooks (CPVC / PIPELINE filter; source name shown as a tooltip in the Paid Wages cell) ·
       <span style="color:#c57a00">AWAITING</span> = wages source is unavailable or could not be parsed ·
       partial-total cost rates use only successfully parsed payroll months
     </div>
+    {% if tr.awaiting %}
+    <div data-testid="partial-payroll-note" class="mt-2 px-3 py-2 rounded-lg border text-[10px] leading-snug"
+         style="border-color:rgba(197,122,0,0.25);background:rgba(197,122,0,0.05);color:#a05000">
+      Partial payroll through {{ tr.parsed_wage_months|join(", ") }} ·
+      awaiting {{ tr.awaiting_months|join(", ") }}
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -226,7 +247,7 @@
     {% endfor %}
   </div>
   {% endif %}
-  <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+  <div class="space-y-4">
     {% if data.section2.fy2627 %}
     <div>
       <div class="text-xs font-semibold mb-1.5 px-1" style="color:var(--navy)">
@@ -254,7 +275,8 @@
     </div>
     {% else %}
     <div class="kpi-card p-4 flex items-center gap-2 text-xs text-gray-400">
-      FY25-26 comparison data not available — check Pipe M/C 25-26 tab
+      FY25-26 comparison is temporarily unavailable because the source tab could not be read on this request.
+      No substitute figures are shown; retry when the source is available.
     </div>
     {% endif %}
   </div>
