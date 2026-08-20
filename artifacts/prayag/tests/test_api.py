@@ -168,6 +168,31 @@ def test_records_serialization(monkeypatch):
     print("PASS: /records returns raw rows with provenance and unit fields")
 
 
+def test_ptmt_summary_labels_source_gross_total_without_changing_it(monkeypatch):
+    """PTMT API consumers can distinguish source-gross from good/net output."""
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+    ptmt = Record(
+        grain="daily", period="2026-07", date="2026-07-01",
+        plant="PTMT", machine="PTMT M/C-1",
+        total_count=105.0, reject_count=5.0,
+    )
+    data = _fake_data()
+    data["rows"] = [ptmt]
+    data["all_rows"] = [ptmt]
+    data["overall"] = compute_metrics([ptmt])
+    data["plant_filter"] = "PTMT"
+
+    body = _client(lambda _args: data).get(
+        "/data-api/v1/summary", headers={"X-API-Key": "sekret-123"},
+    ).get_json()
+    summary = body["by_plant"]["PTMT"]
+    assert summary["total_count"] == 105.0
+    assert summary["total_count_basis"] == "gross"
+    assert summary["good_count"] == 100.0
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))

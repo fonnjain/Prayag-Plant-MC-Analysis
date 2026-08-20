@@ -84,3 +84,18 @@ burst while a single source read succeeds after a cooldown.
 **How to apply:** retain the source registration and retry after backoff before
 changing data or treating the month as missing. Do not turn a temporary parse warning
 into an `AWAITING` state.
+
+# A daily pair can report success without being complete
+
+The daily loader's failed-pair marker covers thrown pair-level reads, not every
+zero/partial parser outcome. A workbook/tab can therefore yield fewer records
+while the dashboard remains daily-first and displays the lower total as normal.
+
+**Why:** a transiently incomplete matrix response, a missing expected tab that
+returns a warning, or a cached empty parse does not necessarily raise the pair
+failure used by the UI's source-failure signal.
+
+**How to apply:** when a plant population changes unexpectedly, compare requested
+months, configured file IDs, per-month parsed row counts, and source reports
+against the dashboard's post-read rows before changing arithmetic. Never treat an
+empty failed-pair list as proof that every requested source parsed completely.

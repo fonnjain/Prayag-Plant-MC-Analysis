@@ -170,8 +170,8 @@ June diverges between the two chains (R-24). Label which basis is in use wheneve
 **R-44 · Output basis is a `Record` contract, never an inferred arithmetic shortcut.**
 - `Garden`, `Garden_WB`, `HDPE`, `Pipe`, `Moulding`, and Tank variants default to **net** `total_count`; `PTMT` defaults to **gross**. An unknown plant stays unknown rather than receiving a silent transform.
 - `net = gross − rejection` and `gross = net + rejection` are permitted only when the output and rejection have the **same unit**. Tank primary litres and kilogram rejection are separate facts under R-09, so neither may be derived from the other.
-- `good_count` is always net output. OEE quality is always **net ÷ gross**. The rejection percentage keeps its source denominator (including Tank's explicit denominator) and is not rewritten from the output-basis helpers.
-- PTMT management reporting starts from gross Report-5 output and subtracts rejection exactly once; it also excludes finishing/grinding under R-22.
+- `good_count` is always net output. For PTMT-style matrices, combine compatible output and rejection at the **machine-month** grain and only then clamp non-negative: the monthly rejection is booked on a low-output daily row. OEE quality is always **net ÷ gross**. The rejection percentage keeps its source denominator (including Tank's explicit denominator) and is not rewritten from the output-basis helpers.
+- PTMT management reporting starts from gross Report-5 output and subtracts rejection exactly once; it also excludes finishing/grinding under R-22. The dashboard/API keeps `total_count` as **source gross** and labels it `total_count_basis="gross"`; `good_count` is the separately exposed PTMT net production figure.
 
 ---
 

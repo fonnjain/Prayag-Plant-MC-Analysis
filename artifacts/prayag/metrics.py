@@ -61,11 +61,46 @@ def _can_combine_rejection(record) -> bool:
 
 
 def net_output(record) -> float:
-    """Return good/net output without subtracting a rejection in another unit."""
+    """Return this row's net-output contribution without cross-unit subtraction.
+
+    A daily matrix can book an entire month's rejection on one low-output date.
+    This helper deliberately does *not* clamp that row to zero: callers that
+    roll records up must clamp after compatible output and rejection have been
+    aggregated at their real machine-month grain.
+    """
     total = float(getattr(record, "total_count", 0.0) or 0.0)
     if output_basis(record) == OUTPUT_BASIS_GROSS and _can_combine_rejection(record):
-        return max(0.0, total - float(getattr(record, "reject_count", 0.0) or 0.0))
+        return total - float(getattr(record, "reject_count", 0.0) or 0.0)
     return total
+
+
+def _aggregate_good_output(rows) -> float:
+    """Return net output with the non-negative guard applied per machine-month.
+
+    PTMT's wide daily matrix stores rejection as a monthly value on a final-day
+    row. That row can legitimately have less output than the booked rejection,
+    so clamping every daily ``net_output`` silently drops real rejection. We
+    instead combine compatible gross-basis output and rejection for each
+    plant/machine/month/unit, then clamp that aggregate. Net-basis records and
+    cross-unit rejection keep their source output untouched.
+    """
+    direct_total = 0.0
+    gross_groups: dict[tuple[str, str, str, str], list[float]] = {}
+    for r in rows:
+        if output_basis(r) != OUTPUT_BASIS_GROSS or not _can_combine_rejection(r):
+            direct_total += net_output(r)
+            continue
+        period = str(getattr(r, "period", "") or getattr(r, "date", ""))[:7]
+        key = (
+            str(getattr(r, "plant", "") or ""),
+            str(getattr(r, "machine", "") or ""),
+            period,
+            str(getattr(r, "unit", "") or "").strip().lower(),
+        )
+        bucket = gross_groups.setdefault(key, [0.0, 0.0])
+        bucket[0] += float(getattr(r, "total_count", 0.0) or 0.0)
+        bucket[1] += float(getattr(r, "reject_count", 0.0) or 0.0)
+    return direct_total + sum(max(0.0, total - reject) for total, reject in gross_groups.values())
 
 
 def gross_output(record) -> float:
@@ -202,6 +237,10 @@ class MetricsResult:
 
     # Counts
     total_count: float = 0.0
+    # Basis of total_count for this rollup: "net", "gross", "mixed", or
+    # "unknown". It lets API consumers distinguish PTMT's source-gross total
+    # from the separate net/good management headline.
+    total_count_basis: str = OUTPUT_BASIS_UNKNOWN
     reject_count: float = 0.0
     good_count: float = 0.0
     runner_lumps: float = 0.0
@@ -379,6 +418,7 @@ class MetricsResult:
             "ideal_hours": round(self.ideal_hours, 1),
             "ideal_output": round(self.ideal_output, 2),
             "total_count": round(self.total_count, 2),
+            "total_count_basis": self.total_count_basis,
             "unit": self.unit,
             "reject_unit": self.reject_unit,
             "output_by_unit": {k: round(v, 2) for k, v in self.output_by_unit.items()},
@@ -520,7 +560,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
                 mc_eff_run += r.actual_hours
                 mc_eff_den += _imh
 
-    m.good_count = sum(net_output(r) for r in prod_rows)
+    m.good_count = _aggregate_good_output(prod_rows)
     m.run_time = m.actual_hours * 60.0
     m.shift_len_min = m.ideal_hours * 60.0
 
@@ -529,6 +569,11 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
     # per-unit split instead of one number.
     _units = {u for u in m.output_by_unit}
     m.unit = next(iter(_units)) if len(_units) == 1 else ""
+    _bases = {output_basis(r) for r in prod_rows}
+    m.total_count_basis = (
+        next(iter(_bases)) if len(_bases) == 1
+        else "mixed" if _bases else OUTPUT_BASIS_UNKNOWN
+    )
 
     m.utilisation = _safe_div(util_run, util_ideal)
     m.output_efficiency = _safe_div(eff_out, m.ideal_output)
@@ -576,13 +621,12 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
 
         weighted_ideal = 0.0
         oee_total = 0.0
-        oee_good = 0.0
         for r in oee_rows:
             row_ppt = r.shift_len_min - r.planned_stops_min
             row_run = max(row_ppt - r.downtime_min, 0.0)
             weighted_ideal += row_run * r.ideal_rate
             oee_total += gross_output(r)
-            oee_good += net_output(r)
+        oee_good = _aggregate_good_output(oee_rows)
         ideal_theoretical = weighted_ideal / 60.0
         m.performance_raw = _safe_div(oee_total, ideal_theoretical)
         m.performance = min(m.performance_raw, 1.0)

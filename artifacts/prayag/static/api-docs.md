@@ -157,7 +157,9 @@ Computed headline metrics for a period. Same figures the dashboard displays — 
 | `output_efficiency` | `number \| null` | Actual output ÷ ideal output |
 | `mc_efficiency` | `number \| null` | Actual run hours ÷ Report-5 col-M ideal month hours |
 | `rejection_pct` | `number \| null` | Rejection ÷ total output |
-| `total_count` | `number` | Total output (unit is per-plant — do not sum across plants) |
+| `total_count` | `number` | Source output (unit is per-plant — do not sum across plants). Read `total_count_basis` before interpreting it. |
+| `total_count_basis` | `"net" \| "gross" \| "mixed" \| "unknown"` | Whether `total_count` is source net/good output, source gross output before rejection, a mixed rollup, or not documented. PTMT is `gross`; its separate management headline uses `good_count`/net output. |
+| `good_count` | `number` | Net/good output after compatible rejection has been deducted at the machine-month aggregate grain. |
 | `actual_hours` | `number` | Run hours logged |
 | `ideal_hours` | `number` | Planned hours (denominator for utilisation) |
 | `output_by_unit` | `object` | Output broken out by unit (kg / Ltr / pcs) |
@@ -166,6 +168,7 @@ Computed headline metrics for a period. Same figures the dashboard displays — 
 | `eff_available` | `bool` | False when no ideal-output baseline |
 
 > **Important:** Never sum `total_count` across plants — units differ (MOULDING = kg, TANK = Ltr). Use `output_by_unit` for cross-plant aggregation.  
+> **PTMT:** `total_count` is the source-gross production figure; `good_count` is the comparable net production figure used by the PTMT management headline. Both are exposed explicitly and neither is substituted for the other.
 > A ratio without a real baseline is always `null`, never `0`.
 
 **Confirmation block**

@@ -282,6 +282,59 @@ def test_gross_basis_output_and_oee_quality_fixture():
     assert result.rejection_pct == pytest.approx(5.0 / 105.0)
 
 
+def test_ptmt_monthly_rejection_is_clamped_after_daily_aggregation():
+    """PTMT's monthly reject can exceed a final day's individual output."""
+    monthly = (
+        ("2026-04", 105_180.026, 5_917.270),
+        ("2026-05", 111_991.783, 7_262.313),
+        ("2026-06", 156_977.278, 9_141.315),
+        ("2026-07", 183_114.974, 10_475.556),
+    )
+    rows = []
+    for period, gross, reject in monthly:
+        # The matrix's productive dates and final reject-only date share one
+        # machine-month; per-row clamping would discard every rejection here.
+        rows.extend((
+            Record(
+                grain="daily", period=period, date=f"{period}-01",
+                plant="PTMT", machine="PTMT M/C-1",
+                total_count=gross, reject_count=0.0,
+            ),
+            Record(
+                grain="daily", period=period, date=f"{period}-30",
+                plant="PTMT", machine="PTMT M/C-1",
+                total_count=0.0, reject_count=reject,
+            ),
+        ))
+
+    assert net_output(rows[1]) == pytest.approx(-5_917.270)
+    result = compute_metrics(rows)
+    assert result.total_count == pytest.approx(557_264.061)
+    assert result.good_count == pytest.approx(524_467.607)
+    assert result.total_count_basis == "gross"
+
+
+def test_non_ptmt_net_basis_production_contracts_are_unchanged():
+    """Existing live-source totals stay net even when their rows carry rejection."""
+    expected = {
+        "GARDEN": 262_818.23,
+        "HDPE": 23_817.24,
+        "PIPE": 1_283_300.15,
+        "MOULDING": 366_015.39,
+    }
+    for plant, production in expected.items():
+        result = compute_metrics([
+            Record(
+                grain="daily", period="2026-07", date="2026-07-01",
+                plant=plant, machine="M/C-1",
+                total_count=production, reject_count=123.45,
+            ),
+        ])
+        assert result.total_count == pytest.approx(production)
+        assert result.good_count == pytest.approx(production)
+        assert result.total_count_basis == "net"
+
+
 def test_unit_mismatch_never_combines_tank_rejection_fixture():
     """R-09: Tank primary litres cannot be combined with kg rejection."""
     tank = _oee_record(
