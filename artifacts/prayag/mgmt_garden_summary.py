@@ -359,7 +359,9 @@ def _do_build(fy: str) -> dict:
 
     # Daily records — Garden KH + WB
     try:
-        daily_all, _daily_reports, _ = _sh.get_daily_records(all_yms)
+        daily_all, _daily_reports, _ = _sh.get_daily_records(
+            all_yms, source_plants={"GARDEN", "GARDEN_WB"}
+        )
     except Exception as exc:
         raise RuntimeError(f"Could not load daily Garden records: {exc}") from exc
 

@@ -436,7 +436,9 @@ def _do_build(plant: str, fy: str) -> dict:
 
     # ── Daily records (all plants; filter in accumulator) ─────────────────────
     try:
-        daily_all, _daily_reports, _ = _sh.get_daily_records(all_yms)
+        daily_all, _daily_reports, _ = _sh.get_daily_records(
+            all_yms, source_plants={"TANK", "TANK_VN", "TANK_WB"}
+        )
     except Exception as exc:
         raise RuntimeError(f"Could not load daily Tank records: {exc}") from exc
 

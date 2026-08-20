@@ -391,7 +391,9 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             raise RuntimeError("No machine rows found in SUMMARY tab — layout may have changed")
 
         # ── 3. Live records for FY26-27 ──────────────────────────────────────
-        records_raw, daily_reports, _ = _sh.get_daily_records(report_yms)
+        records_raw, daily_reports, _ = _sh.get_daily_records(
+            report_yms, source_plants={"PIPE"}
+        )
         failed_pairs = next(
             (report["_failed_pairs"] for report in daily_reports
              if isinstance(report, dict) and "_failed_pairs" in report),

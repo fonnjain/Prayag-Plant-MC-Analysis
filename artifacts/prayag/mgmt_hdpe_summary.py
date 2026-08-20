@@ -385,7 +385,9 @@ def _do_build(fy: str) -> dict:
 
     # Daily records — plant=HDPE (block tabs + DR matrix join for run hours/rejection)
     try:
-        daily_all, _daily_reports, _ = _sh.get_daily_records(all_yms)
+        daily_all, _daily_reports, _ = _sh.get_daily_records(
+            all_yms, source_plants={"HDPE"}
+        )
     except Exception as exc:
         raise RuntimeError(f"Could not load daily HDPE records: {exc}") from exc
 

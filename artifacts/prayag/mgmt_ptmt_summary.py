@@ -133,7 +133,9 @@ def _build_month_row(ym: str, fy: str, abbr: str) -> dict:
     Record.runner_lumps combines runner produce and lumps — they are not
     separately available in the daily pipeline.
     """
-    all_records, reports, _ = _sh().get_daily_records([ym])
+    all_records, reports, _ = _sh().get_daily_records(
+        [ym], source_plants={"PTMT"}
+    )
     failed_pairs = next(
         (report["_failed_pairs"] for report in reports
          if isinstance(report, dict) and "_failed_pairs" in report),

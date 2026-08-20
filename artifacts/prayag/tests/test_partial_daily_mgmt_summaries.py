@@ -60,7 +60,9 @@ class TestGardenPartial:
         recs = [_rec("GARDEN", "2026-04", total_count=1000.0, reject_count=10.0)]
         monkeypatch.setattr(
             sheets, "get_daily_records",
-            lambda yms: (recs, _reports_with_failed([("GARDEN", "2026-05")]), []),
+            lambda yms, **_kwargs: (
+                recs, _reports_with_failed([("GARDEN", "2026-05")]), []
+            ),
         )
         monkeypatch.setattr(sheets, "_get_access_token", lambda: "tok")
         monkeypatch.setattr(mlp, "load_segment_tabs", lambda fy, tok: {})
@@ -79,7 +81,9 @@ class TestGardenPartial:
         recs = [_rec("GARDEN", "2026-04", total_count=1000.0)]
         monkeypatch.setattr(
             sheets, "get_daily_records",
-            lambda yms: (recs, _reports_with_failed([("PTMT", "2026-05")]), []),
+            lambda yms, **_kwargs: (
+                recs, _reports_with_failed([("PTMT", "2026-05")]), []
+            ),
         )
         monkeypatch.setattr(sheets, "_get_access_token", lambda: "tok")
         monkeypatch.setattr(mlp, "load_segment_tabs", lambda fy, tok: {})
@@ -105,7 +109,9 @@ class TestTankPartial:
         ]
         monkeypatch.setattr(
             sheets, "get_daily_records",
-            lambda yms: (recs, _reports_with_failed([("TANK", "2026-06")]), []),
+            lambda yms, **_kwargs: (
+                recs, _reports_with_failed([("TANK", "2026-06")]), []
+            ),
         )
         monkeypatch.setattr(sheets, "load_report_records", lambda fam: [])
 
@@ -124,7 +130,9 @@ class TestTankPartial:
         ]
         monkeypatch.setattr(
             sheets, "get_daily_records",
-            lambda yms: (recs, _reports_with_failed([("TANK_VN", "2026-06")]), []),
+            lambda yms, **_kwargs: (
+                recs, _reports_with_failed([("TANK_VN", "2026-06")]), []
+            ),
         )
         monkeypatch.setattr(sheets, "load_report_records", lambda fam: [])
 

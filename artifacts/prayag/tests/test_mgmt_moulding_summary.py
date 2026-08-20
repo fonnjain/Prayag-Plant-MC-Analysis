@@ -154,7 +154,9 @@ def test_gom_excludes_finishing_record_even_when_its_label_maps_to_the_roster(mo
         ),
     ]
     monkeypatch.setattr(sheets, "_get_access_token", lambda: "test-token")
-    monkeypatch.setattr(sheets, "get_daily_records", lambda _months: (records, [], []))
+    monkeypatch.setattr(
+        sheets, "get_daily_records", lambda _months, **_kwargs: (records, [], [])
+    )
     monkeypatch.setattr(
         sheets, "batch_get", lambda *_args, **_kwargs: {gom.SUMMARY_TAB: [[1]]},
     )
