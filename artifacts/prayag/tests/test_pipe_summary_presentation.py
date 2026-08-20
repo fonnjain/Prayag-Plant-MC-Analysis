@@ -36,7 +36,14 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
         file_id="payroll-apr-file",
         label="KH-1 payroll · CPVC / PIPELINE",
     )
-    def month_row(month_disp: str, run_hrs: int, gross_output_kg: int) -> NS:
+    def month_row(
+        month_disp: str,
+        run_hrs: int,
+        gross_output_kg: int,
+        *,
+        awaiting: bool = False,
+        source=wages_source,
+    ) -> NS:
         return NS(
             month_disp=month_disp,
             run_hrs=run_hrs,
@@ -47,8 +54,8 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
             devoted_per_person=300.1,
             per_hour_cost=63.1,
             per_kg_cost=2.48,
-            awaiting=False,
-            wages_source=wages_source,
+            awaiting=awaiting,
+            wages_source=source,
         )
     total_row = NS(
         run_hrs=7_754,
@@ -66,17 +73,30 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
     data = NS(
         fy_label="FY 2026-27",
         build_time_s=0.1,
-        failed_months=[],
+        failed_months=["2026-05", "2026-06"],
         error=None,
         section1=NS(
             warnings=[],
             total_row=total_row,
             month_rows=[
                 month_row("APR'26", 833, 190_494),
-                month_row("MAY'26", 1_832, 344_000),
+                month_row("MAY'26", 1_832, 344_000, awaiting=True),
                 month_row("JUN'26", 1_008, 183_635),
-                month_row("JUL'26", 2_834, 565_171),
-                month_row("AUG'26", 1_247, 239_941),
+                month_row("JUL'26", 2_834, 565_171, awaiting=True),
+                month_row("AUG'26", 1_247, 239_941, source=None, awaiting=True),
+                NS(
+                    month_disp="SEP'26",
+                    run_hrs=None,
+                    gross_output_kg=None,
+                    labour=None,
+                    paid_hrs=None,
+                    wages=None,
+                    devoted_per_person=None,
+                    per_hour_cost=None,
+                    per_kg_cost=None,
+                    awaiting=False,
+                    wages_source=None,
+                ),
             ],
         ),
         section2=NS(
@@ -89,6 +109,9 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
         ),
         section3=None,
         section4=None,
+        report_yms=[
+            "2026-04", "2026-05", "2026-06", "2026-07", "2026-08",
+        ],
     )
 
     with appmod.app.test_request_context("/management-reports/pipe-summary"):
@@ -100,8 +123,15 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
         )
 
     assert payroll_url not in html
-    assert "KH-1 payroll · CPVC / PIPELINE" in html
+    assert "KH-1 payroll · CPVC / PIPELINE" not in html
+    assert "Payroll provenance: wages come from the registered monthly KH-1 payroll workbooks" in html
     assert 'data-testid="partial-payroll-note"' in html
+    assert 'data-testid="payroll-parse-footnote"' in html
+    assert "UNAVAILABLE<sup>†</sup>" in html
+    assert "AWAITING" in html
+    assert "a registered KH-1 payroll workbook could not be parsed" in html
+    assert "TOTAL" in html
+    assert "<span class=\"text-[10px] font-medium text-gray-500\">(partial)</span>" in html
     assert "Partial payroll through APR&#39;26, MAY&#39;26, JUN&#39;26, JUL&#39;26" in html
     for figure in (
         "7,754", "1,523,241", "128", "37,619",
@@ -111,5 +141,6 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
         assert figure in html
     assert html.count("table-layout:fixed") >= 2
     assert 'class="space-y-4"' in html
+    assert '<tr class="opacity-50"' in html
     assert "temporarily unavailable because the source tab could not be read" in html
     assert "Google Sheets API error (429)" in html
