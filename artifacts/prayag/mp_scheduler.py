@@ -140,6 +140,39 @@ class _WorkItem:
         return (w, -self.remaining_hrs, self.item_code)
 
 
+LEGACY_WORKING_DAYS = 25
+
+
+@dataclasses.dataclass(frozen=True)
+class _ScheduleCapacity:
+    """One shared calendar/capacity derivation for both schedulers."""
+
+    week_days: Tuple[int, int, int, int]
+    total_days: int
+    calendar_days: int
+    configured: bool
+    effective_month: str
+
+    @staticmethod
+    def _full_day_hours(machine_params: dict) -> float:
+        return 2.0 * float(machine_params.get("hours_per_shift") or 10.0)
+
+    def schedulable_days(self, machine_params: dict, days: Optional[int] = None) -> int:
+        target_days = self.total_days if days is None else days
+        if not self.configured:
+            return target_days
+        base = float(machine_params.get("capacity_hrs_month") or 500.0)
+        scaled_hours = base * target_days / LEGACY_WORKING_DAYS
+        full_day_hours = self._full_day_hours(machine_params)
+        return min(target_days, int((scaled_hours + 1e-9) // full_day_hours))
+
+    def monthly_capacity(self, machine_params: dict, days: Optional[int] = None) -> float:
+        base = float(machine_params.get("capacity_hrs_month") or 500.0)
+        if not self.configured:
+            return base
+        return self.schedulable_days(machine_params, days) * self._full_day_hours(machine_params)
+
+
 def _week_days_for_schedule(segment: str, params_row: Optional[object]) -> List[int]:
     """Read a safe four-week split without changing legacy non-Plumbing behavior."""
     if params_row:
@@ -157,40 +190,111 @@ def _week_days_for_schedule(segment: str, params_row: Optional[object]) -> List[
     return [max(1, d) for d in week_days[:4]]
 
 
+def _derive_schedule_capacity(
+    segment: str,
+    params_row: Optional[object],
+    effective_month: str,
+) -> _ScheduleCapacity:
+    week_days = tuple(_week_days_for_schedule(segment, params_row))
+    configured = bool(
+        segment == "PLUMBING"
+        and params_row
+        and getattr(params_row, "week_days_configured", False)
+    )
+    try:
+        year_s, month_s = effective_month.split("-", 1)
+        calendar_days = calendar.monthrange(int(year_s), int(month_s))[1]
+    except (TypeError, ValueError):
+        calendar_days = sum(week_days)
+    return _ScheduleCapacity(
+        week_days=week_days,
+        total_days=sum(week_days),
+        calendar_days=calendar_days,
+        configured=configured,
+        effective_month=effective_month,
+    )
+
+
 def _capacity_advisory(
     unfinished: List[UnfinishedItem],
     mc_params: Dict[str, dict],
-    effective_month: str,
-    week_days: List[int],
-    segment: str,
-    working_days_configured: bool,
+    capacity: _ScheduleCapacity,
+    downtime_records: Optional[list],
 ) -> Optional[dict]:
     """Describe unplaced capacity-limited demand without changing allocation."""
-    if segment != "PLUMBING" or not working_days_configured:
+    if not capacity.configured:
         return None
+    capacity_limited = [
+        item for item in unfinished
+        if not item.downtime_reason and item.remaining_kg > 0
+    ]
     remaining_kg = round(sum(
         max(0.0, float(item.remaining_kg or 0.0))
-        for item in unfinished
-        if not item.downtime_reason
+        for item in capacity_limited
     ), 1)
     if remaining_kg <= 0:
         return None
-    try:
-        year_s, month_s = effective_month.split("-", 1)
-        days_in_month = calendar.monthrange(int(year_s), int(month_s))[1]
-    except (TypeError, ValueError):
+    extension_days = range(capacity.total_days + 1, capacity.calendar_days + 1)
+    if not extension_days:
         return None
-    configured_days = sum(week_days)
-    additional_hours = max(0, days_in_month - configured_days) * sum(
-        2.0 * float(params.get("hours_per_shift") or 10.0)
-        for params in mc_params.values()
+    down_days = _build_down_days(
+        downtime_records or [], mc_params, capacity.effective_month, capacity.calendar_days
     )
+    capable_machines = {
+        machine
+        for item in capacity_limited
+        for machine in item.capable_machines
+        if machine in mc_params
+    }
+    additional_hours = 0.0
+    for machine in capable_machines:
+        params = mc_params[machine]
+        available_extension_days = sum(
+            1 for day in extension_days
+            if day not in down_days.get(machine, set())
+        )
+        shift_hours = available_extension_days * 2.0 * float(
+            params.get("hours_per_shift") or 10.0
+        )
+        capacity_gain = max(
+            0.0,
+            capacity.monthly_capacity(params, capacity.calendar_days)
+            - capacity.monthly_capacity(params, capacity.total_days),
+        )
+        additional_hours += min(capacity_gain, shift_hours)
+    if additional_hours <= 0:
+        return None
     return {
         "remaining_kg": remaining_kg,
-        "configured_days": configured_days,
-        "calendar_days": days_in_month,
+        "configured_days": capacity.total_days,
+        "calendar_days": capacity.calendar_days,
         "additional_hours": round(additional_hours, 1),
     }
+
+
+def _configured_capacity_plan(
+    mc_params: Dict[str, dict],
+    capacity: _ScheduleCapacity,
+    down_days: Dict[str, Set[int]],
+) -> Tuple[Dict[str, Set[int]], Dict[Tuple[str, int], float]]:
+    """Allocate the shared configured capacity budget to actual schedulable days."""
+    allowed_days: Dict[str, Set[int]] = {}
+    weekly_capacity: Dict[Tuple[str, int], float] = defaultdict(float)
+    day_to_week = [
+        week
+        for week, count in enumerate(capacity.week_days, start=1)
+        for _ in range(count)
+    ]
+    for machine, params in mc_params.items():
+        budget_days = capacity.schedulable_days(params)
+        usable_days: Set[int] = set()
+        for day, week in enumerate(day_to_week, start=1):
+            if day in down_days.get(machine, set()) or len(usable_days) >= budget_days:
+                continue
+            usable_days.add(day)
+            weekly_capacity[(machine, week)] += capacity._full_day_hours(params)
+        allowed_days[machine] = usable_days
+    return allowed_days, dict(weekly_capacity)
 
 
 # ── Day-level scheduler ───────────────────────────────────────────────────────
@@ -418,13 +522,9 @@ def run_shift_schedule(
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
     else:
         min_run_block = 2.0
-    week_days = _week_days_for_schedule(segment, params_row)
-    working_days_configured = bool(
-        segment == "PLUMBING"
-        and params_row
-        and getattr(params_row, "week_days_configured", False)
-    )
-    total_days = sum(week_days)
+    capacity = _derive_schedule_capacity(segment, params_row, effective_month)
+    week_days = list(capacity.week_days)
+    total_days = capacity.total_days
 
     # ── Load machine configs ──────────────────────────────────────────────────
     mc_rows = _mp.get_machines(segment, effective_month, kind="extrusion")
@@ -432,9 +532,6 @@ def run_shift_schedule(
 
     def _hps(r: dict) -> float:
         return float(r.get("hours_per_shift") or 10.0)
-
-    def _cap(r: dict) -> float:
-        return float(r.get("capacity_hrs_month") or 500.0)
 
     # ── Build demand_map: item_code → DemandItem ──────────────────────────────
     demand_map = {d.item_code: d for d in demand_items}
@@ -488,6 +585,9 @@ def run_shift_schedule(
     idle_by_mc: Dict[str, float] = defaultdict(float)
     excess_kg_by_mc: Dict[str, float] = defaultdict(float)
     changeovers_by_mc_week: Dict[Tuple[str, int], int] = defaultdict(int)
+    configured_days, configured_weekly_capacity = _configured_capacity_plan(
+        mc_params, capacity, down_days
+    )
 
     for day_idx, week in enumerate(day_to_week, start=1):
         for mc in machines:
@@ -507,6 +607,22 @@ def run_shift_schedule(
                     planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
                 ))
                 downtime_hours_lost_total += 2 * hps
+                continue
+            if capacity.configured and day_idx not in configured_days.get(mc, set()):
+                full_day_hrs = 2.0 * hps
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="DAY",
+                    item_code="", raw_code="", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0,
+                    is_idle=True,
+                ))
+                blocks.append(ShiftBlock(
+                    week=week, day=day_idx, machine=mc, shift="NIGHT",
+                    item_code="", raw_code="", material="",
+                    planned_hours=hps, excess_hours=0.0, origin_week=0,
+                    is_idle=True,
+                ))
+                idle_by_mc[mc] += full_day_hrs
                 continue
             _schedule_machine_day(
                 machine=mc,
@@ -565,10 +681,13 @@ def run_shift_schedule(
     for mc in machines:
         if mc not in mc_params:
             continue
-        monthly_cap = _cap(mc_params[mc])
         for wk in range(1, 5):
             wk_days = week_days[wk - 1]
-            wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
+            if capacity.configured:
+                wk_cap = configured_weekly_capacity.get((mc, wk), 0.0)
+            else:
+                monthly_cap = capacity.monthly_capacity(mc_params[mc])
+                wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
             sched = round(sched_by_mc_wk.get((mc, wk), 0.0), 2)
             idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)  # approximate
             util = round(sched / wk_cap * 100, 1) if wk_cap > 0 else 0.0
@@ -586,8 +705,10 @@ def run_shift_schedule(
             ))
 
     # ── Aggregate totals ──────────────────────────────────────────────────────
-    total_cap = sum(
-        _cap(p) for p in mc_params.values()
+    total_cap = (
+        sum(configured_weekly_capacity.values())
+        if capacity.configured
+        else sum(capacity.monthly_capacity(p) for p in mc_params.values())
     )
     total_sched = sum(r.scheduled_hrs for r in weekly_fill)
     total_idle = sum(idle_by_mc.values())
@@ -613,8 +734,7 @@ def run_shift_schedule(
         downtime_machine_days=downtime_machine_days_count,
         downtime_hours_lost=round(downtime_hours_lost_total, 1),
         capacity_advisory=_capacity_advisory(
-            unfinished, mc_params, effective_month, week_days, segment,
-            working_days_configured,
+            unfinished, mc_params, capacity, downtime_records,
         ),
     )
 
@@ -644,13 +764,9 @@ def run_fitting_schedule(
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
     else:
         min_run_block = 2.0
-    week_days = _week_days_for_schedule(segment, params_row)
-    working_days_configured = bool(
-        segment == "PLUMBING"
-        and params_row
-        and getattr(params_row, "week_days_configured", False)
-    )
-    total_days = sum(week_days)
+    capacity = _derive_schedule_capacity(segment, params_row, effective_month)
+    week_days = list(capacity.week_days)
+    total_days = capacity.total_days
 
     # ── Load moulding machine configs ─────────────────────────────────────────
     mc_rows = _mp.get_machines(segment, effective_month, kind="moulding")
@@ -658,9 +774,6 @@ def run_fitting_schedule(
 
     def _hps(r: dict) -> float:
         return float(r.get("hours_per_shift") or 10.0)
-
-    def _cap(r: dict) -> float:
-        return float(r.get("capacity_hrs_month") or 500.0)
 
     # ── Build work items from fitting engine output ────────────────────────────
     # rate_kg_per_hr = material_kg / machine_hrs so that remaining_kg tracks
@@ -711,11 +824,16 @@ def run_fitting_schedule(
     changeovers_by_mc_week: Dict[Tuple[str, int], int] = defaultdict(int)
 
     # ── Per-machine capacity budget (hard constraint) ─────────────────────────
-    # capacity_hrs_month is the declared capacity ceiling; once used up the
-    # machine idles for the rest of the month regardless of remaining work days.
-    # This guarantees weekly_fill.scheduled_hrs ≤ weekly_fill.capacity_hrs for
-    # every row, which is required for the Machine Load tab assertion to hold.
-    cap_remaining: Dict[str, float] = {mc: _cap(mc_params[mc]) for mc in machines}
+    # Explicit Plumbing calendars use the shared day-level plan. Legacy fitting
+    # schedules retain their original declared-hours budget byte-for-byte.
+    configured_days, configured_weekly_capacity = _configured_capacity_plan(
+        mc_params, capacity, down_days
+    )
+    cap_remaining: Dict[str, float] = (
+        {mc: capacity.monthly_capacity(mc_params[mc]) for mc in machines}
+        if not capacity.configured
+        else {}
+    )
 
     for day_idx, week in enumerate(day_to_week, start=1):
         for mc in machines:
@@ -736,14 +854,14 @@ def run_fitting_schedule(
                 downtime_hours_lost_total += 2 * hps
                 continue
 
-            # Capacity-budget gate: if this machine has less declared capacity
-            # remaining than a full day's production (2 shifts × hps), idle it.
-            # _schedule_machine_day always fills both shifts, so we must ensure
-            # the full day's output fits in the budget before scheduling.
-            # This guarantees weekly_fill.scheduled_hrs ≤ weekly_fill.capacity_hrs,
-            # which is required for the Machine Load tab assertion to hold.
             full_day_hrs = 2.0 * hps
-            if cap_remaining.get(mc, 0.0) < full_day_hrs - 1e-6:
+            if (
+                capacity.configured
+                and day_idx not in configured_days.get(mc, set())
+            ) or (
+                not capacity.configured
+                and cap_remaining.get(mc, 0.0) < full_day_hrs - 1e-6
+            ):
                 blocks.append(ShiftBlock(
                     week=week, day=day_idx, machine=mc, shift="DAY",
                     item_code="", raw_code="", material="",
@@ -770,13 +888,15 @@ def run_fitting_schedule(
                 excess_kg_by_mc=excess_kg_by_mc,
                 changeovers_by_mc_week=changeovers_by_mc_week,
             )
-            # Subtract actual production hours placed this day from the budget.
-            prod_this_day = sum(
-                b.planned_hours - b.excess_hours
-                for b in blocks[blocks_before:]
-                if not b.is_idle
-            )
-            cap_remaining[mc] = max(0.0, cap_remaining[mc] - prod_this_day)
+            if not capacity.configured:
+                # Subtract actual production hours placed this day from the
+                # legacy fitting capacity budget.
+                prod_this_day = sum(
+                    b.planned_hours - b.excess_hours
+                    for b in blocks[blocks_before:]
+                    if not b.is_idle
+                )
+                cap_remaining[mc] = max(0.0, cap_remaining[mc] - prod_this_day)
 
     # ── Unfinished items ──────────────────────────────────────────────────────
     all_down_machines: Set[str] = {
@@ -819,10 +939,13 @@ def run_fitting_schedule(
     for mc in machines:
         if mc not in mc_params:
             continue
-        monthly_cap = _cap(mc_params[mc])
         for wk in range(1, 5):
             wk_days = week_days[wk - 1]
-            wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
+            if capacity.configured:
+                wk_cap = configured_weekly_capacity.get((mc, wk), 0.0)
+            else:
+                monthly_cap = capacity.monthly_capacity(mc_params[mc])
+                wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
             sched = round(sched_by_mc_wk.get((mc, wk), 0.0), 2)
             idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)
             util = round(sched / wk_cap * 100, 1) if wk_cap > 0 else 0.0
@@ -840,7 +963,11 @@ def run_fitting_schedule(
             ))
 
     # ── Aggregate totals ──────────────────────────────────────────────────────
-    total_cap = sum(_cap(p) for p in mc_params.values())
+    total_cap = (
+        sum(configured_weekly_capacity.values())
+        if capacity.configured
+        else sum(capacity.monthly_capacity(p) for p in mc_params.values())
+    )
     total_sched = sum(r.scheduled_hrs for r in weekly_fill)
     total_idle = sum(idle_by_mc.values())
     total_excess_kg = sum(excess_kg_by_mc.values())
@@ -865,7 +992,6 @@ def run_fitting_schedule(
         downtime_machine_days=downtime_machine_days_count,
         downtime_hours_lost=round(downtime_hours_lost_total, 1),
         capacity_advisory=_capacity_advisory(
-            unfinished, mc_params, effective_month, week_days, segment,
-            working_days_configured,
+            unfinished, mc_params, capacity, downtime_records,
         ),
     )
