@@ -13,4 +13,4 @@ For an explicitly saved split, the declared machine capacity is a legacy 25-day 
 
 **Why:** A fractional scaled hour budget cannot be scheduled by a whole-shift planner, and prorating it independently can show weekly utilisation over 100%.
 
-**How to apply:** Only explicitly configured Plumbing schedules use this capacity plan. Extension advice may count only the non-downtime extra days of machines capable of the unfinished items, capped by the same effective-capacity gain.
+**How to apply:** Only explicitly configured Plumbing schedules use this capacity plan. Off-capacity and downtime blocks are never idle capacity; weekly idle must be summed from capacity-eligible blank-idle blocks. Extension advice may count only the non-downtime extra days of machines capable of the unfinished items, capped by the same effective-capacity gain.

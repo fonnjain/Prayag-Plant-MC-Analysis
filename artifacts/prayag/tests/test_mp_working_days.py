@@ -96,8 +96,13 @@ def _fitting_schedule(
 
 def _assert_schedule_respects_reported_capacity(result):
     assert result.total_scheduled_hrs <= result.total_capacity_hrs
+    assert result.total_scheduled_hrs + result.total_idle_hrs <= result.total_capacity_hrs
     assert all(
         row.scheduled_hrs <= row.capacity_hrs
+        for row in result.weekly_fill
+    )
+    assert all(
+        row.scheduled_hrs + row.idle_hrs <= row.capacity_hrs
         for row in result.weekly_fill
     )
 

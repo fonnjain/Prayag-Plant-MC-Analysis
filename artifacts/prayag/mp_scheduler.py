@@ -297,6 +297,15 @@ def _configured_capacity_plan(
     return allowed_days, dict(weekly_capacity)
 
 
+def _configured_idle_by_week(blocks: List[ShiftBlock]) -> Dict[Tuple[str, int], float]:
+    """Count idle hours from capacity-eligible blocks, never OFF or DOWN days."""
+    idle: Dict[Tuple[str, int], float] = defaultdict(float)
+    for block in blocks:
+        if block.is_idle and block.item_code == "":
+            idle[(block.machine, block.week)] += block.planned_hours
+    return dict(idle)
+
+
 # ── Day-level scheduler ───────────────────────────────────────────────────────
 
 def _schedule_machine_day(
@@ -609,20 +618,18 @@ def run_shift_schedule(
                 downtime_hours_lost_total += 2 * hps
                 continue
             if capacity.configured and day_idx not in configured_days.get(mc, set()):
-                full_day_hrs = 2.0 * hps
                 blocks.append(ShiftBlock(
                     week=week, day=day_idx, machine=mc, shift="DAY",
-                    item_code="", raw_code="", material="",
+                    item_code="OFF", raw_code="OFF", material="",
                     planned_hours=hps, excess_hours=0.0, origin_week=0,
                     is_idle=True,
                 ))
                 blocks.append(ShiftBlock(
                     week=week, day=day_idx, machine=mc, shift="NIGHT",
-                    item_code="", raw_code="", material="",
+                    item_code="OFF", raw_code="OFF", material="",
                     planned_hours=hps, excess_hours=0.0, origin_week=0,
                     is_idle=True,
                 ))
-                idle_by_mc[mc] += full_day_hrs
                 continue
             _schedule_machine_day(
                 machine=mc,
@@ -678,6 +685,7 @@ def run_shift_schedule(
         origin_by_mc_wk[key][b.origin_week] += hrs
 
     weekly_fill: List[WeekFillRow] = []
+    configured_idle = _configured_idle_by_week(blocks) if capacity.configured else {}
     for mc in machines:
         if mc not in mc_params:
             continue
@@ -685,11 +693,12 @@ def run_shift_schedule(
             wk_days = week_days[wk - 1]
             if capacity.configured:
                 wk_cap = configured_weekly_capacity.get((mc, wk), 0.0)
+                idle = round(configured_idle.get((mc, wk), 0.0), 2)
             else:
                 monthly_cap = capacity.monthly_capacity(mc_params[mc])
                 wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
+                idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)
             sched = round(sched_by_mc_wk.get((mc, wk), 0.0), 2)
-            idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)  # approximate
             util = round(sched / wk_cap * 100, 1) if wk_cap > 0 else 0.0
             ob = {ow: round(h, 2) for ow, h in origin_by_mc_wk.get((mc, wk), {}).items()}
             weekly_fill.append(WeekFillRow(
@@ -711,7 +720,11 @@ def run_shift_schedule(
         else sum(capacity.monthly_capacity(p) for p in mc_params.values())
     )
     total_sched = sum(r.scheduled_hrs for r in weekly_fill)
-    total_idle = sum(idle_by_mc.values())
+    total_idle = (
+        sum(configured_idle.values())
+        if capacity.configured
+        else sum(idle_by_mc.values())
+    )
     total_excess_kg = sum(excess_kg_by_mc.values())
     total_changeovers = sum(changeovers_by_mc_week.values())
 
@@ -864,15 +877,28 @@ def run_fitting_schedule(
             ):
                 blocks.append(ShiftBlock(
                     week=week, day=day_idx, machine=mc, shift="DAY",
-                    item_code="", raw_code="", material="",
+                    item_code=(
+                        "OFF" if capacity.configured else ""
+                    ),
+                    raw_code=(
+                        "OFF" if capacity.configured else ""
+                    ),
+                    material="",
                     planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
                 ))
                 blocks.append(ShiftBlock(
                     week=week, day=day_idx, machine=mc, shift="NIGHT",
-                    item_code="", raw_code="", material="",
+                    item_code=(
+                        "OFF" if capacity.configured else ""
+                    ),
+                    raw_code=(
+                        "OFF" if capacity.configured else ""
+                    ),
+                    material="",
                     planned_hours=hps, excess_hours=0.0, origin_week=0, is_idle=True,
                 ))
-                idle_by_mc[mc] += 2 * hps
+                if not capacity.configured:
+                    idle_by_mc[mc] += 2 * hps
                 continue
 
             blocks_before = len(blocks)
@@ -936,6 +962,7 @@ def run_fitting_schedule(
         origin_by_mc_wk[key][b.origin_week] += hrs
 
     weekly_fill: List[WeekFillRow] = []
+    configured_idle = _configured_idle_by_week(blocks) if capacity.configured else {}
     for mc in machines:
         if mc not in mc_params:
             continue
@@ -943,11 +970,12 @@ def run_fitting_schedule(
             wk_days = week_days[wk - 1]
             if capacity.configured:
                 wk_cap = configured_weekly_capacity.get((mc, wk), 0.0)
+                idle = round(configured_idle.get((mc, wk), 0.0), 2)
             else:
                 monthly_cap = capacity.monthly_capacity(mc_params[mc])
                 wk_cap = round(monthly_cap * wk_days / total_days, 2) if total_days > 0 else 0.0
+                idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)
             sched = round(sched_by_mc_wk.get((mc, wk), 0.0), 2)
-            idle = round(idle_by_mc.get(mc, 0.0) * wk_days / total_days, 2)
             util = round(sched / wk_cap * 100, 1) if wk_cap > 0 else 0.0
             ob = {ow: round(h, 2) for ow, h in origin_by_mc_wk.get((mc, wk), {}).items()}
             weekly_fill.append(WeekFillRow(
@@ -969,7 +997,11 @@ def run_fitting_schedule(
         else sum(capacity.monthly_capacity(p) for p in mc_params.values())
     )
     total_sched = sum(r.scheduled_hrs for r in weekly_fill)
-    total_idle = sum(idle_by_mc.values())
+    total_idle = (
+        sum(configured_idle.values())
+        if capacity.configured
+        else sum(idle_by_mc.values())
+    )
     total_excess_kg = sum(excess_kg_by_mc.values())
     total_changeovers = sum(changeovers_by_mc_week.values())
 
