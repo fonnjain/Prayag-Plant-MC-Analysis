@@ -1,0 +1,71 @@
+# Pipe M/C Summary — Why Data Is Missing (READ-ONLY DIAGNOSTIC)
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Change nothing.** No Build mode, no restart, no publish, no Sheets writes (**R-21**), **no cache clearing** (**R-34** — the cache state is evidence). If you find the cause, **report it — do not fix it** (**R-28**, **R-30**).
+
+**This is not a presentation task.** The layout work is done. Three separate things are genuinely failing to read, and the page is correctly reporting all three. Find out why.
+
+---
+
+## What the page currently shows
+
+| Month | Run hours | Output | Wages | Cost columns |
+|---|---:|---:|---|---|
+| APR'26 | 833 | 190,494 | `UNAVAILABLE` | — |
+| **MAY'26** | **—** | **—** | `UNAVAILABLE` | — |
+| JUN'26 | 1,008 | 183,635 | `UNAVAILABLE` | — |
+| JUL'26 | 2,834 | 565,171 | `UNAVAILABLE` | — |
+| AUG'26 | 1,247 | 239,941 | `AWAITING` | — |
+| **TOTAL (partial)** | **5,922** | **1,179,241** | | |
+
+Production is arriving for four of five months. Everything else is missing.
+
+---
+
+## 1 — May's PIPE daily workbook will not read
+
+The guard reports it correctly (*"MAY: PIPE daily workbook (2026-05) could not be read"*), so May is excluded rather than shown as zero. That is right. But the read keeps failing across sessions.
+
+Report:
+
+- The file ID pinned for `PIPE` `2026-05` in `sources.py`, and whether it still resolves in Drive — **title, owner, modified date**.
+- The **exact** failure: a 429, a 404, a permission error, or the **#174 completeness classifier** (population below its stored high-water mark). These need different responses, and the builder currently discards the reason.
+- Whether it fails **every** time. Attempt three separate reads and report each result.
+- Whether **APR, JUN, JUL and AUG** read cleanly from the same folder in the same session.
+
+**If May fails while its neighbours succeed in the same session, the file is the problem — not throttling.**
+
+## 2 — Payroll parse failures on APR, MAY, JUN and JUL
+
+All four registered KH-1 payroll workbooks report *"could not be parsed"*. Their IDs are pinned, so they resolve — **the failure is in parsing, not fetching.**
+
+Report:
+
+- What the parser expects, and what it actually finds. **Print the header row of one failing workbook.**
+- Whether it is the same failure across all four, or four different ones.
+- **JUL parsed successfully at ₹6,19,455 when it was first registered.** If the same file now fails, either the workbook changed or the parser did. **This is the most important question here** — a month that worked and now does not is a regression, not a gap. Check the workbook's modified date against when it last parsed.
+
+## 3 — The DASHBOARD tab 429
+
+*"DASHBOARD tab read failed: Google Sheets API error (429)."* This removes **Labour** and **Paid Hours** from every month, which then blanks every cost column.
+
+Report whether it is transient throttling that clears on retry, or persistent. Try it three times, spaced out.
+
+---
+
+## Also report
+
+**Are these three related?** A heavily throttled session could produce all three symptoms at once. If every read in one session is slow or failing, that is one problem wearing three faces — and the session build time (previously observed at ~51 s) is a clue.
+
+Distinguish clearly between: *transient throttling*, *a changed or broken source file*, and *a parser that no longer matches its source*. Those need different fixes, and guessing wrong wastes a cycle.
+
+---
+
+## Do not change in this pass
+
+Any parsing, sourcing, guard or presentation logic · `pipe_reconcile.py` (**R-15**) · `metrics.py` and the R-44 helpers · `baselines.json` (**R-16**) · `mp_*.py` (**R-20**) · the `_failed_pairs` guard and its trigger conditions · `auth.py`.
+
+## Report back
+
+For each of the three: the exact failure, whether it reproduces, and which of the three categories above it falls into. Then say whether they share one cause. **Recommend a fix; do not implement it.**
