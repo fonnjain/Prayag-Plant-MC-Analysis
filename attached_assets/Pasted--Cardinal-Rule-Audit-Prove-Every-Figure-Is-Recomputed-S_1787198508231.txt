@@ -1,0 +1,85 @@
+# Cardinal Rule Audit — Prove Every Figure Is Recomputed (STRICTLY READ-ONLY)
+
+Read `PRAYAG_RULES.md`. **Change nothing.** No Build mode, no restart, no publish, no Sheets writes (**R-21**), no cache clearing (**R-34**). If you find a violation, **report it — do not fix it** (**R-30**).
+
+---
+
+## The rule being audited
+
+> Every figure in every report is computed by the application from live source cells. No figure is ever taken from an annual summary, from a previously generated report, or from a parallel report maintained in Google Sheets. Those sources exist for **verification only**.
+>
+> One exception (**R-03**): FY2025-26 and earlier are closed and may be read as-is, because no live source remains to recompute from.
+
+The purpose of this audit is not to confirm the rule is a good idea. It is to find **every place the app currently breaks it**, and every place it *appears* to follow it but does not.
+
+**Assume violations exist.** Two have already been found and fixed — headcount read from the annual UNIT tabs, and wages read from a UNIT roll-up row rather than a per-segment tab. Both looked correct until traced. Search in that spirit.
+
+---
+
+## Q1 — Trace every displayed figure to its source
+
+For each of the thirteen management reports, and for the plant, machine and costing pages, produce a table:
+
+```
+Report | Section | Column | Source module + function | Source workbook + tab | Recomputed or read?
+```
+
+**"Recomputed"** means the app sums or derives it from daily/monthly entry cells.
+**"Read"** means it takes a value another sheet already computed.
+
+Mark every **Read** row. For each, state whether it is:
+- **R-03 legitimate** — FY2025-26 or earlier, closed year;
+- **a standard** — a business-supplied rate such as ideal kg/hr or ideal ₹/kg, which is an input not an output;
+- **a comparison figure** — held only to display a divergence beside our own; or
+- **a violation** — a live FY2026-27 figure we present as ours.
+
+## Q2 — The specific traps
+
+Report explicitly on each. These are the shapes that have already caught us:
+
+1. **Anything reading `ANNUAL_SOURCES` for a displayed FY26-27 figure.** That path exists for cross-checking. Which builders call `get_records()` (annual-grain) rather than `get_daily_records()`, and what do they display from it?
+2. **UNIT roll-up rows.** UNIT-1/2/3 aggregate several segments; UNIT-3's `TOTAL` column is **headcount**, not wages. Is any segment figure sourced from a UNIT row rather than its dedicated per-segment tab (**R-11**)?
+3. **`parse_ideal_labour_rates()`** reads only the TOTAL row deliberately (**R-40**) because the month rows use a piece count. Confirm nothing else reads those month rows.
+4. **Hardcoded literals in templates or builders** that duplicate a live figure. Reports 4 and 5 were de-literalled; several remain by design as *comparison* figures (₹4,26,164, ₹547.78, the Fittings 13,40,117 piece count). List every numeric literal, and say which are comparison references and which shadow a live value.
+5. **Acceptance targets used as fallbacks.** Does any code path substitute a known-good figure when a computation returns nothing? Search for the acceptance numbers themselves appearing in non-test code: 1277971 · 366015 · 537109 · 524465 · 138052 · 232528 · 23817 · 6507 · 35972.
+6. **The export path.** Does every `serial_*` call its `mgmt_*` builder, or does any recompute independently? `gen_compound` and `gen_ptmt_eff` were on an inline path — report their current state. A download that derives its own figures can drift from the page.
+
+## Q3 — Where the rule is correctly applied, prove it
+
+For four figures, show the full chain from source cell to screen — the workbook, the tab, the columns summed, the arithmetic, and the displayed result:
+
+- **PIPE 1,277,971 kg** (the R5↔R11 date-wise max)
+- **Garden rejection 5,259.50 kg** (Daily Report join plus synthetic rejection-only dates)
+- **Tank VN July 232 run hours** (the R-39 union)
+- **PTMT 524,465 kg daily basis** (Report-5 with grinding excluded, **R-22**)
+
+If any cannot be traced end to end, that itself is the finding.
+
+## Q4 — Verification material must not leak into figures
+
+The annual summaries and the parallel Google Sheets are for checking, not input. Confirm:
+
+- Divergence flags (R-23, R-24, R-26, R-42, R-43) **display** a source figure beside ours without our figure being derived from it.
+- No reconciliation adjusts our value to close a gap.
+- Where a source sheet is broken — UNIT-1's `#REF!`, HDPE's unmaintained daily-report tab, Kharani's incomplete annual — we compute our own and flag the difference, rather than inheriting the blank or the zero.
+
+## Q5 — The closed-year exception
+
+**R-03** permits reading FY2025-26 as-is. Confirm it is scoped tightly:
+
+- Which reports read FY25-26 data, and is every such read confined to a clearly labelled prior-year block?
+- Is any FY26-27 figure derived from, adjusted by, or defaulted to a FY25-26 value?
+- Are the prior-year blocks labelled on the page and in the download, so a reader knows which is recomputed and which is read?
+
+---
+
+## Report back
+
+1. The full source-trace table, with every **Read** row classified.
+2. Each of the six traps in Q2, answered separately.
+3. The four end-to-end chains from Q3.
+4. Any place a verification source influences a computed figure.
+5. The R-03 scope check.
+6. **A plain list of violations found**, ordered by how much a reader would be misled. If none, say so — but say what you searched, so the absence means something.
+
+Then confirm: **no files changed, no Sheets writes, no cache cleared, no restart or publish.**
