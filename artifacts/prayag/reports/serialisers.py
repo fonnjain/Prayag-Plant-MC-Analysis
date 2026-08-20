@@ -126,7 +126,7 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
         build_mgmt_report_data, _IDEAL_COST_SEGS,
     )
     fy = _fy_from_ym(ym)
-    d = build_mgmt_report_data(fy)
+    d = build_mgmt_report_data(fy, through_ym=ym)
     if d.get("error"):
         return _build_failed(d["error"])
     flags: List[Flag] = []

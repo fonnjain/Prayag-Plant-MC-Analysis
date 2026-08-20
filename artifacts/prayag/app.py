@@ -1042,6 +1042,14 @@ def refresh():
     except Exception:  # noqa: BLE001 — best-effort, never block a refresh
         pass
     clear_caches()
+    # Report 1 keeps a small presentation cache above the shared Sheets cache.
+    # Clear it too, otherwise a manual refresh can keep its daily Part-B figures
+    # stale until that report cache expires.
+    try:
+        import mgmt_labour_power as _mlp
+        _mlp.invalidate_cache()
+    except Exception:  # noqa: BLE001 — refresh must always return to the user
+        pass
     return redirect(_safe_next(request.args.get("next", "/")))
 
 
@@ -3465,7 +3473,7 @@ def management_reports_index():
                 rpt["ai_url"] = f"/reports/{ai_id}?period={ym}"
             # Management Report 1 has a full web view — surface it as a button
             if rpt["id"] == "segment_labour":
-                rpt["view_url"] = "/management-reports/segment-labour"
+                rpt["view_url"] = f"/management-reports/segment-labour?month={ym}"
             if rpt["id"] == "pipe":
                 rpt["view_url"] = f"/management-reports/pipe-summary?month={ym}"
             if rpt["id"] == "moulding":
@@ -3600,11 +3608,16 @@ def mgmt_segment_labour_view():
       * per-kg metrics            — computed: wages ÷ our production
     """
     import mgmt_labour_power as _mlp
+    from reports import period as _rperiod
 
-    fy = request.args.get("fy", "2627")
-    if fy not in _mlp._FY_YM:  # restrict to FY maps we actually define
-        fy = "2627"
-    data = _mlp.build_mgmt_report_data(fy)
+    through_ym = _rperiod.resolve_month(request.args.get("month"))
+    fy = request.args.get("fy")
+    if not fy and through_ym:
+        year, month = int(through_ym[:4]), int(through_ym[5:7])
+        start_year = year if month >= 4 else year - 1
+        fy = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+    fy = fy or "2627"
+    data = _mlp.build_mgmt_report_data(fy, through_ym=through_ym)
     return render_template(
         "report_mgmt_segment_labour.html",
         data=data,

@@ -139,12 +139,6 @@ _IDEAL_LABOUR_RATE: dict[str, float] = {
 }
 _IDEAL_COST_SEGS = ["Pipe", "Fittings", "Garden", "HDPE", "Tank", "PTMT"]
 
-# Plants whose records come entirely from daily workbooks (no ANNUAL_SOURCES entry).
-# Used in _do_build to supplement get_records() output so that segments with no
-# annual family workbook (PTMT, Tank) are not silently zero in the Part-B sections.
-_DAILY_ONLY_PLANTS: frozenset = frozenset({"PTMT", "TANK", "TANK_VN", "TANK_WB"})
-
-
 # ── Cell value helpers ─────────────────────────────────────────────────────────
 
 def _num(v) -> Optional[float]:
@@ -635,7 +629,18 @@ def accumulate_monthly(records, seg_plants: dict) -> dict:
     return totals
 
 
-def get_segment_prod_kg(fy: str = "2627") -> dict:
+def _report_yms(fy: str, through_ym: Optional[str] = None) -> list[str]:
+    """Return the FY months through an optional selected reporting month."""
+    fy_ym = _FY_YM.get(fy, _FY_YM["2627"])
+    full_yms = [fy_ym[lbl] for lbl in MONTH_LABELS]
+    if through_ym in full_yms:
+        return [ym for ym in full_yms if ym <= through_ym]
+    return full_yms
+
+
+def get_segment_prod_kg(
+    fy: str = "2627", through_ym: Optional[str] = None
+) -> dict:
     """Return {segment_name: {ym: float|None}} for every segment.
 
     Plumbing comes from the costing module (gross: pipe + fitting from R-12).
@@ -648,7 +653,7 @@ def get_segment_prod_kg(fy: str = "2627") -> dict:
     import sheets as _sheets
 
     fy_ym = _FY_YM.get(fy, _FY_YM["2627"])
-    all_yms = [fy_ym[lbl] for lbl in MONTH_LABELS]
+    all_yms = _report_yms(fy, through_ym)
 
     # Collect per-segment per-month from daily records (one call per month)
     raw: dict[str, dict[str, float]] = {s: {} for s in _SEG_PLANTS}
@@ -859,14 +864,16 @@ _EXTRA_KEYS = [
 
 # ── In-process cache ───────────────────────────────────────────────────────────
 
-_cache: dict = {}            # fy -> (ts, data_dict)
+_cache: dict = {}            # (fy, through_ym) -> (ts, data_dict)
 _cache_lock = threading.Lock()
 _CACHE_TTL  = 900.0          # 15 minutes
 
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def build_mgmt_report_data(fy: str = "2627") -> dict:
+def build_mgmt_report_data(
+    fy: str = "2627", through_ym: Optional[str] = None
+) -> dict:
     """Build the full data structure for the management report web view.
 
     Returns:
@@ -895,22 +902,33 @@ def build_mgmt_report_data(fy: str = "2627") -> dict:
       }
     Cached for 15 minutes; call ``invalidate_cache`` to force a reload.
     """
+    if fy not in _FY_YM:
+        fy_label = f"FY20{fy[:2]}-{fy[2:]}" if re.fullmatch(r"\d{4}", fy) else f"FY{fy}"
+        return {
+            "units": [], "fy": fy, "fy_label": fy_label,
+            "error": (
+                f"Report 1 live production is currently available for FY2026-27 "
+                f"only; {fy_label} cannot be shown from the FY2026-27 sources."
+            ),
+        }
+
     now = time.time()
-    hit = _cache.get(fy)
+    cache_key = (fy, through_ym)
+    hit = _cache.get(cache_key)
     if hit and now - hit[0] < _CACHE_TTL:
         return hit[1]
 
     with _cache_lock:
         now = time.time()
-        hit = _cache.get(fy)
+        hit = _cache.get(cache_key)
         if hit and now - hit[0] < _CACHE_TTL:
             return hit[1]
-        data = _do_build(fy)
-        _cache[fy] = (now, data)
+        data = _do_build(fy, through_ym)
+        _cache[cache_key] = (now, data)
     return data
 
 
-def _do_build(fy: str) -> dict:
+def _do_build(fy: str, through_ym: Optional[str] = None) -> dict:
     import sheets as _sheets
 
     fy_label = {"2627": "FY2026-27", "2526": "FY2025-26"}.get(fy, f"FY{fy[:2]}-{fy[2:]}")
@@ -937,7 +955,7 @@ def _do_build(fy: str) -> dict:
 
     # 2. Load production kg from our own sources
     try:
-        seg_kg = get_segment_prod_kg(fy)
+        seg_kg = get_segment_prod_kg(fy, through_ym=through_ym)
     except Exception as exc:
         logger.warning("build_mgmt_report_data: get_segment_prod_kg failed: %s", exc)
         seg_kg = {}
@@ -960,44 +978,13 @@ def _do_build(fy: str) -> dict:
     # 4. Build the four Part-B additional sections
     combined_wages = _build_combined_wages(units)
 
-    # Fetch records once (cached in sheets module)
+    # Fetch the authoritative daily production once for every Part-B section.
+    # The annual grid provides report layout and verification only; it must never
+    # feed FY26-27 production, rejection, or ideal-cost denominators.
     try:
-        import sheets as _sh_recs
-        fy_ym_map = _FY_YM.get(fy, _FY_YM["2627"])
-        all_yms   = list(fy_ym_map.values())
-
-        # Annual-source records: Pipe / Fittings / Garden / HDPE come from the
-        # monthly-grain live payload (ANNUAL_SOURCES workbooks).  These four
-        # segments reconcile against the summary grid; do not replace them.
-        all_recs, _, _ = _sh_recs.get_records(all_yms)
-
-        # Supplement: PTMT and Tank have no annual workbook so they are absent
-        # from the payload above.  Pull from the per-month daily workbooks and
-        # keep only the plants not already covered by ANNUAL_SOURCES — this
-        # prevents Pipe / Fittings / Garden / HDPE from being double-counted.
-        try:
-            daily_all, _, _ = _sh_recs.get_daily_records(all_yms)
-            # R-22: exclude grinding/regrind lines (is_finishing=True) — these are
-            # finishing throughput, not new production, and must never inflate the
-            # plant headline.  is_finishing is set by the PTMT daily parser for all
-            # GRINDER-* machines (sources.PTMT_FINISHING_GROUP).
-            daily_supp = [
-                r for r in daily_all
-                if r.plant in _DAILY_ONLY_PLANTS
-                and not getattr(r, "is_finishing", False)
-            ]
-            all_recs = list(all_recs) + daily_supp
-            logger.debug(
-                "_do_build: supplemented %d daily records for PTMT/Tank",
-                len(daily_supp),
-            )
-        except Exception as exc_d:
-            logger.warning(
-                "_do_build: daily supplement for PTMT/Tank failed: %s", exc_d
-            )
-
-        sgr = _accumulate_seg_gross_reject(all_recs, fy)
-        _warn_zero_segments(sgr, all_yms)
+        report_yms = _report_yms(fy, through_ym)
+        sgr = _load_part_b_daily_totals(fy, report_yms)
+        _warn_zero_segments(sgr, report_yms)
     except Exception as exc:
         logger.warning("_do_build: could not accumulate seg_gross_reject: %s", exc)
         sgr = {}
@@ -1008,6 +995,8 @@ def _do_build(fy: str) -> dict:
 
     return {
         "units": units, "fy": fy, "fy_label": fy_label, "error": None,
+        "through_ym": through_ym if through_ym in _report_yms(fy) else None,
+        "report_yms": _report_yms(fy, through_ym),
         "combined_wages":    combined_wages,
         "ideal_power_sec":   ideal_power_sec,
         "ideal_labour_sec":  ideal_labour_sec,
@@ -1045,8 +1034,19 @@ def _blank_seg(unit: str, seg: str, fy: str) -> dict:
 
 # ── Additional section builders (Parts B) ─────────────────────────────────────
 
-def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
-    """Accumulate net production and reject kg per segment per ym from records.
+def _daily_part_b_month(record) -> Optional[str]:
+    """Return a daily record's FY month, including legacy Report-11 rows."""
+    if getattr(record, "plant", None) == "PIPE":
+        from mgmt_pipe_summary import _record_month
+        return _record_month(record)
+    period = str(getattr(record, "period", "") or "")
+    return period if re.fullmatch(r"\d{4}-\d{2}", period) else None
+
+
+def _accumulate_seg_gross_reject(
+    records: list, fy: str = "2627", report_yms: Optional[list[str]] = None
+) -> dict:
+    """Accumulate daily net production and reject kg per segment per month.
 
     Returns {seg_key: {ym: {"net": float, "reject": float}}}
     seg keys: "Pipe", "Fittings", "Garden", "HDPE", "Tank", "PTMT"
@@ -1055,7 +1055,7 @@ def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
     "Production (Kgs)" column in the REJECTION & PRODUCTION tab).
     "reject" = reject_count.
     """
-    all_yms = list(_FY_YM.get(fy, _FY_YM["2627"]).values())
+    all_yms = report_yms or _report_yms(fy)
     zero = lambda: {"net": 0.0, "reject": 0.0}
 
     data: dict = {
@@ -1072,23 +1072,23 @@ def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
         "PTMT":       "PTMT",
     }
 
-    # PTMT daily records have total_count = GROSS (including rejection), unlike
-    # ANNUAL_SOURCES records (PIPE/MOULDING/GARDEN/HDPE) where total_count = NET.
-    # Use the same gross→net conversion as accum_record_kg / get_segment_prod_kg.
-    _gross_plants = frozenset({"PTMT"})
+    # Daily production values are already net for Pipe, Moulding, Garden, and
+    # HDPE; their rejection is a separate fact. PTMT is the exception: its
+    # daily matrix total is gross, so its net is total_count − rejection.
+    _daily_gross_plants = frozenset({"PTMT"})
 
     for r in records:
         seg = _plant_map.get(r.plant)
         if not seg:
             continue
-        ym = getattr(r, "period", None)
+        ym = _daily_part_b_month(r)
         if not ym or ym not in data.get(seg, {}):
             continue
         if seg == "Tank":
             kg = float((r.secondary_counts or {}).get("kg") or 0.0)
             data[seg][ym]["net"] += kg
-        elif r.plant in _gross_plants:
-            # Daily matrix records: total_count = gross; net = gross − reject
+        elif r.plant in _daily_gross_plants:
+            # Daily matrix records: total_count = gross; net = gross − reject.
             gross = float(r.total_count or 0.0)
             rej   = float(r.reject_count or 0.0)
             data[seg][ym]["net"]    += max(0.0, gross - rej)
@@ -1099,6 +1099,30 @@ def _accumulate_seg_gross_reject(records: list, fy: str = "2627") -> dict:
             data[seg][ym]["net"]    += net
             data[seg][ym]["reject"] += rej
     return data
+
+
+def _load_part_b_daily_totals(fy: str, report_yms: list[str]) -> dict:
+    """Load and classify the daily facts used by all Report 1 Part-B sections."""
+    import sheets as _sheets
+    from mgmt_pipe_summary import _is_primary_pipe_record
+
+    records, _, _ = _sheets.get_daily_records(report_yms)
+    relevant = {
+        "PIPE", "MOULDING", "GARDEN", "GARDEN_WB", "HDPE",
+        "TANK", "TANK_VN", "TANK_WB", "PTMT",
+    }
+    scoped = []
+    for record in records:
+        if getattr(record, "plant", None) not in relevant:
+            continue
+        if getattr(record, "is_finishing", False):
+            continue
+        if _daily_part_b_month(record) not in report_yms:
+            continue
+        if getattr(record, "plant", None) == "PIPE" and not _is_primary_pipe_record(record):
+            continue
+        scoped.append(record)
+    return _accumulate_seg_gross_reject(scoped, fy, report_yms)
 
 
 def _warn_zero_segments(sgr: dict, all_yms: list) -> None:
@@ -1266,7 +1290,8 @@ def _build_reject_prod_section(
     return {"segs": segs, "months": month_rows, "total_row": {"segs": total_segs}}
 
 
-def invalidate_cache(fy: str = "2627") -> None:
-    """Evict the cached report data so the next request re-reads from Sheets."""
+def invalidate_cache(fy: Optional[str] = None) -> None:
+    """Evict report data for one FY, or every FY when called without one."""
     with _cache_lock:
-        _cache.pop(fy, None)
+        for cache_key in [key for key in _cache if fy is None or key[0] == fy]:
+            _cache.pop(cache_key, None)

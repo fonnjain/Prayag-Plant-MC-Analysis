@@ -10,6 +10,7 @@ These tests are self-contained (no Sheets calls, no Flask context).
 """
 import sys
 import os
+from types import SimpleNamespace
 
 # Allow importing from the prayag app directory without installing it
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -158,6 +159,147 @@ class TestAccumulateMonthly:
         records = [_R("PTMT", total_count=100_000.0, reject_count=738.0)]
         result = mlp.accumulate_monthly(records, mlp._SEG_PLANTS)
         assert result["PTMT"] == pytest_approx(99_262.0)
+
+
+# ── Report 1 Part B daily production path ─────────────────────────────────────
+
+def _daily_record(
+    plant, period="2026-04", total_count=0.0, reject_count=0.0,
+    secondary_counts=None, machine="", is_finishing=False,
+):
+    return SimpleNamespace(
+        plant=plant,
+        period=period,
+        total_count=float(total_count),
+        reject_count=float(reject_count),
+        secondary_counts=secondary_counts or {},
+        machine=machine,
+        is_finishing=is_finishing,
+    )
+
+
+class TestPartBDailyFacts:
+    """Report 1 Part B uses daily facts, with each plant's documented basis."""
+
+    def test_daily_loader_uses_primary_pipe_and_plant_specific_net_basis(
+        self, monkeypatch,
+    ):
+        import sheets
+
+        records = [
+            # Pipe / Moulding daily production is already net; rejection is
+            # separate and gets added back exactly once for ideal-cost gross.
+            _daily_record("PIPE", total_count=100, reject_count=10,
+                          machine="PIPE M/C - 1"),
+            _daily_record("MOULDING", total_count=120, reject_count=12),
+            # Garden / HDPE are already net; PTMT daily matrix total is gross.
+            _daily_record("GARDEN", total_count=100, reject_count=10),
+            _daily_record("HDPE", total_count=200, reject_count=20),
+            _daily_record("PTMT", total_count=300, reject_count=30),
+            # Tank must retain its dedicated kg measurement rather than litres.
+            _daily_record("TANK", total_count=9_999, reject_count=99,
+                          secondary_counts={"kg": 50}),
+            # Neither finishing nor a non-extrusion Pipe machine is production.
+            _daily_record("PIPE", total_count=1_000, reject_count=100,
+                          machine="PIPE Grinder-1", is_finishing=True),
+            _daily_record("PIPE", total_count=2_000, reject_count=200,
+                          machine="PIPE Auxiliary-2"),
+        ]
+        calls = []
+        monkeypatch.setattr(
+            sheets, "get_daily_records",
+            lambda yms: (calls.append(list(yms)) or (records, [], [])),
+        )
+        monkeypatch.setattr(
+            sheets, "get_records",
+            lambda _yms: (_ for _ in ()).throw(
+                AssertionError("Part B must not read annual summary records")
+            ),
+        )
+
+        totals = mlp._load_part_b_daily_totals("2627", ["2026-04"])
+
+        assert calls == [["2026-04"]]
+        assert totals["Pipe"]["2026-04"] == {"net": 100.0, "reject": 10.0}
+        assert totals["Fittings"]["2026-04"] == {"net": 120.0, "reject": 12.0}
+        assert totals["Garden"]["2026-04"] == {"net": 100.0, "reject": 10.0}
+        assert totals["HDPE"]["2026-04"] == {"net": 200.0, "reject": 20.0}
+        assert totals["PTMT"]["2026-04"] == {"net": 270.0, "reject": 30.0}
+        assert totals["Tank"]["2026-04"] == {"net": 50.0, "reject": 0.0}
+
+        ideal = mlp._build_ideal_cost_section(totals, "2627", "power")
+        april = ideal["months"][0]["segs"]
+        assert april["Pipe"]["net"] == 110.0
+        assert april["Fittings"]["net"] == 132.0
+        assert april["Garden"]["net"] == 110.0
+        assert april["HDPE"]["net"] == 220.0
+
+    def test_daily_loader_respects_selected_reporting_window(self, monkeypatch):
+        import sheets
+
+        april = _daily_record(
+            "PIPE", total_count=100, machine="PIPE M/C - 1",
+        )
+        august = _daily_record(
+            "PIPE", period="2026-08", total_count=999, machine="PIPE M/C - 1",
+        )
+        calls = []
+        monkeypatch.setattr(
+            sheets, "get_daily_records",
+            lambda yms: (calls.append(list(yms)) or ([april, august], [], [])),
+        )
+
+        totals = mlp._load_part_b_daily_totals("2627", ["2026-04"])
+
+        assert calls == [["2026-04"]]
+        assert totals["Pipe"]["2026-04"]["net"] == 100.0
+        assert "2026-08" not in totals["Pipe"]
+
+    def test_segment_labour_export_passes_its_selected_month_to_builder(
+        self, monkeypatch,
+    ):
+        from reports import serialisers
+
+        calls = []
+        monkeypatch.setattr(
+            mlp, "build_mgmt_report_data",
+            lambda fy, through_ym=None: (
+                calls.append((fy, through_ym)) or {"error": "test only"}
+            ),
+        )
+
+        serialisers.serial_segment_labour("2026-07")
+
+        assert calls == [("2627", "2026-07")]
+
+    def test_invalidating_one_fy_clears_each_selected_month_variant(self):
+        mlp._cache.clear()
+        mlp._cache[("2627", "2026-07")] = (0.0, {})
+        mlp._cache[("2627", None)] = (0.0, {})
+        mlp._cache[("2526", "2025-07")] = (0.0, {})
+
+        mlp.invalidate_cache("2627")
+
+        assert ("2627", "2026-07") not in mlp._cache
+        assert ("2627", None) not in mlp._cache
+        assert ("2526", "2025-07") in mlp._cache
+        mlp._cache.clear()
+
+    def test_invalidating_without_fy_clears_every_report_variant(self):
+        mlp._cache.clear()
+        mlp._cache[("2627", "2026-07")] = (0.0, {})
+        mlp._cache[("2526", "2025-07")] = (0.0, {})
+
+        mlp.invalidate_cache()
+
+        assert mlp._cache == {}
+
+    def test_unsupported_fy_fails_instead_of_falling_back_to_2627(self):
+        result = mlp.build_mgmt_report_data("2526", through_ym="2025-07")
+
+        assert result["fy"] == "2526"
+        assert result["units"] == []
+        assert "FY2025-26" in result["error"]
 
 
 # ── per-kg computation helpers ────────────────────────────────────────────────
