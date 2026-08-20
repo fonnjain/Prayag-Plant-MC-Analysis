@@ -1212,6 +1212,7 @@ def get_records(months: List[str]) -> Tuple[List[Record], List[dict], List[str]]
 _daily_cache: dict = {}          # (plant, ym) -> (ts, [(records, report), ...])
 _index_cache: dict = {}          # file_id -> (ts, [index report dicts])
 _seg_labour_cache: dict = {}     # file_id -> {rows, title, fy, tabs}
+_CLOSED_SOURCE_TTL = 7 * 24 * 60 * 60
 
 # Report-only annual sources (REPORT_SOURCES) loaded on-demand by /reports/*.
 # Kept OFF the main dashboard critical path so the cold "/" load stays fast.
@@ -1451,6 +1452,17 @@ def _daily_key_lock(key) -> threading.Lock:
       return lock
 
 
+def _daily_cache_ttl(ym: str) -> float:
+    """Use the long shared cache only for a calendar month that has closed.
+
+    This is deliberately evaluated per source month rather than per report: one
+    report can contain immutable history alongside a current month that must
+    continue using the normal short-lived cache.
+    """
+    import datetime
+    return _CLOSED_SOURCE_TTL if ym < datetime.date.today().strftime("%Y-%m") else _DATA_TTL
+
+
 def _daily_logical_populations(results) -> dict[str, dict]:
     """Count each logical plant emitted by one physical workbook independently."""
     populations: dict[str, dict] = {}
@@ -1540,8 +1552,9 @@ def _load_daily_cached(plant: str, ym: str, token: str):
     L3 – Google Sheets live read  (slow, 5-30 s per workbook)
   """
   key = (plant, ym)
+  ttl = _daily_cache_ttl(ym)
   cached = _daily_cache.get(key)
-  if cached and time.time() - cached[0] < _DATA_TTL:
+  if cached and time.time() - cached[0] < ttl:
       if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
           return cached[1]
       _daily_cache.pop(key, None)
@@ -1552,13 +1565,13 @@ def _load_daily_cached(plant: str, ym: str, token: str):
   with _daily_key_lock(key):
       # Re-check L1 — another thread may have filled it while we waited.
       cached = _daily_cache.get(key)
-      if cached and time.time() - cached[0] < _DATA_TTL:
+      if cached and time.time() - cached[0] < ttl:
           if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
               return cached[1]
           _daily_cache.pop(key, None)
       # L2: shared Postgres cache — avoids re-fetching across workers.
       try:
-          pg_hit = _store.pg_cache_read(pg_key, _DATA_TTL)
+          pg_hit = _store.pg_cache_read(pg_key, ttl)
           if pg_hit is not None:
               if not _daily_pair_incomplete_reason(plant, ym, pg_hit):
                   _daily_cache[key] = (time.time(), pg_hit)
@@ -3650,13 +3663,20 @@ def load_ptmt_report9(ym: str) -> dict:
     import parsers as _par
     EMPTY = {"available": False, "total_pcs": 0.0, "moulds": {}, "ym": ym}
     now = time.time()
+    ttl = _daily_cache_ttl(ym)
+    pg_key = f"ptmt-report9:{ym}"
     c = _ptmt_r9_cache.get(ym)
-    if c and now - c[0] < _PLANNING_TTL:
+    if c and now - c[0] < ttl:
         return c[1]
     with _ptmt_r9_lock:
         c = _ptmt_r9_cache.get(ym)
-        if c and now - c[0] < _PLANNING_TTL:
+        if c and now - c[0] < ttl:
             return c[1]
+        if ttl == _CLOSED_SOURCE_TTL:
+            pg_hit = _store.pg_cache_read(pg_key, ttl)
+            if pg_hit and pg_hit.get("available"):
+                _ptmt_r9_cache[ym] = (now, pg_hit)
+                return pg_hit
         token = _get_access_token()
         if not token:
             raise SheetReadError("Google Sheets connection not authorized.")
@@ -3668,7 +3688,12 @@ def load_ptmt_report9(ym: str) -> dict:
                 result = _par.parse_ptmt_report9(vals, ym)
             except Exception:
                 pass
-        _ptmt_r9_cache[ym] = (now, result)
+        # A failed/unparseable Report-9 must retry; only a complete successful
+        # source participates in either the local or shared closed-month cache.
+        if result.get("available"):
+            _ptmt_r9_cache[ym] = (now, result)
+            if ttl == _CLOSED_SOURCE_TTL:
+                _store.pg_cache_write(pg_key, result)
         return result
 
 
@@ -4353,7 +4378,7 @@ def load_pipe_moulds_fy(fy: str = "2627") -> dict:
 
 _pipe_mould_annual_cache: dict = {}
 _pipe_mould_annual_lock = threading.Lock()
-_PIPE_MOULD_ANNUAL_TTL = 3600  # 1 hour (rarely changes)
+_PIPE_MOULD_ANNUAL_TTL = _CLOSED_SOURCE_TTL
 
 
 def load_pipe_moulds_annual_2526() -> dict:
@@ -4367,6 +4392,7 @@ def load_pipe_moulds_annual_2526() -> dict:
     that ran).
     """
     now = time.time()
+    pg_key = "pipe-moulds-annual:2526"
     c = _pipe_mould_annual_cache.get("2526")
     if c and now - c[0] < _PIPE_MOULD_ANNUAL_TTL:
         return c[1]
@@ -4374,6 +4400,10 @@ def load_pipe_moulds_annual_2526() -> dict:
         c = _pipe_mould_annual_cache.get("2526")
         if c and now - c[0] < _PIPE_MOULD_ANNUAL_TTL:
             return c[1]
+        pg_hit = _store.pg_cache_read(pg_key, _PIPE_MOULD_ANNUAL_TTL)
+        if pg_hit is not None:
+            _pipe_mould_annual_cache["2526"] = (now, pg_hit)
+            return pg_hit
 
         EMPTY = {
             "available": False, "fy": "2526", "file_id": _PIPE_MOULD_ANNUAL_2526_FID,
@@ -4425,5 +4455,7 @@ def load_pipe_moulds_annual_2526() -> dict:
             "grand_hrs": grand_hrs,
             "grand_n_run": grand_n_run,
         }
-        _pipe_mould_annual_cache["2526"] = (now, out)
+        if out["available"]:
+            _pipe_mould_annual_cache["2526"] = (now, out)
+            _store.pg_cache_write(pg_key, out)
         return out

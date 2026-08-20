@@ -1,0 +1,37 @@
+Read PRAYAG_RULES.md. Extend the closed-source caching pattern across the app.
+
+Pipe now builds in 13.87s complete. Moulding fails with "Google Sheets API error (429)" after
+4.19s and renders nothing. The caching fix was applied to Pipe only; every other report still
+competes for the same quota.
+
+=== 1. REPORT FIRST, before changing anything ===
+For EACH of the thirteen management reports plus the plant, machine, overview and costing pages:
+ a. How many Sheets calls does one cold load make?
+ b. Which are for CLOSED sources whose figures can never change — FY25-26 comparison tabs
+    (R-03), closed-month payroll, closed-month daily workbooks?
+ c. What TTL applies to each today?
+Give it as a table. That tells us where the volume actually is.
+
+Also answer: is the app using a service account or a shared user OAuth token? If shared, every
+report load, background refresh and diagnostic competes for one quota, and caching only reduces
+the pressure rather than removing it.
+
+=== 2. THEN extend the same pattern ===
+Apply the closed-source caching already proven on Pipe:
+ - closed months and finalised FY25-26 sources -> long shared cache (7 days)
+ - current and future months -> existing short TTL
+ - NEVER cache a failed or unparseable read — that rule is what makes the long TTL safe
+Same treatment, every report. Do not invent a second mechanism.
+
+=== 3. Moulding renders a hard error where Pipe degrades gracefully ===
+Pipe shows a partial-source banner and the months it did read. Moulding shows only
+"Error: Google Sheets API error (429)" with no content.
+Report why they differ, and make the behaviour consistent: a transient read failure should
+degrade to partial with a visible reason, not a blank error page.
+
+=== VALIDATE ===
+Build times before and after for every report. Figures unchanged everywhere:
+Pipe 7,754 / 1,523,241 / Rs 19,18,982 · Moulding 366,015.39 / 35,972 h · PTMT 524,467.607 ·
+Garden 262,818.23 · HDPE 23,817.24 · Tank litres and both rejection bases.
+Partial results still uncached and visibly partial.
+No figure may move. If any does, STOP.

@@ -107,7 +107,7 @@
   </div>
   {% endif %}
 
-  {% if data.error %}
+  {% if data.error and not data.failed_months %}
   <div class="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700">
     <strong>Error:</strong> {{ data.error }}
   </div>

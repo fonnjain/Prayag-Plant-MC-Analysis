@@ -666,11 +666,13 @@ def build_moulding_summary(
     t0 = time.time()
 
     import sheets as _sh
-    token = _sh._get_access_token()
 
     fy_label = f"FY 20{fy[:2]}-{fy[2:]}"
 
     try:
+        token = _sh._get_access_token()
+        if not token:
+            raise RuntimeError("Google Sheets connection is unavailable")
         # ── 1. Fetch SUMMARY and SUMMARY-1 tabs ──────────────────────────────
         matrices = _sh.batch_get(
             MOULDING_WB_FILE_ID,
@@ -810,19 +812,33 @@ def build_moulding_summary(
 
     except Exception as exc:
         logger.exception("build_moulding_summary failed: %s", exc)
+        # A transient source failure must use the same honest partial-report
+        # contract as the daily pipeline.  Do not expose provider text or cache
+        # this result: all selected months are withheld until the source reads.
+        failed_details = [
+            _sh._daily_failure_detail("PIPE", ym, str(exc))
+            for ym in report_yms
+        ]
         data = {
             "fy":       fy,
             "fy_label": fy_label,
-            "error":    str(exc),
+            "error":    None,
             "roster_warnings": [],
             "section1": {"rows": [], "warnings": [], "n_months": 0},
             "section2": {
                 "fy2627": [], "fy2627_label": "",
                 "fy2526": [], "fy2526_label": "",
-                "warnings": [],
+                "warnings": [
+                    "Moulding source could not be read; figures are withheld "
+                    "until it can be read completely."
+                ],
             },
             "section3": {"machines": []},
             "section4": {"machines": [], "mc_bands": {}, "month_rows": [], "total_cols": {}},
+            "through_ym": selected_through,
+            "report_yms": report_yms,
+            "failed_months": list(report_yms),
+            "failed_month_details": failed_details,
             "build_time_s": round(time.time() - t0, 2),
         }
 

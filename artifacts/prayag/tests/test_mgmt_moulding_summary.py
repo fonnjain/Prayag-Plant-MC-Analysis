@@ -120,6 +120,31 @@ def test_builder_uses_daily_records_and_excludes_months_after_selected_cutoff(mo
     assert total["output_kg"] == 400
 
 
+def test_source_429_returns_sanitized_partial_result_and_is_not_cached(monkeypatch):
+    calls = {"batch": 0}
+    monkeypatch.setattr(sheets, "_get_access_token", lambda: "test-token")
+
+    def fail_batch(*_args, **_kwargs):
+        calls["batch"] += 1
+        raise RuntimeError("Google Sheets API error (429) for secret-spreadsheet-id")
+
+    monkeypatch.setattr(sheets, "batch_get", fail_batch)
+    moulding._cache.clear()
+    try:
+        first = moulding.build_moulding_summary("2627", through_ym="2026-04")
+        second = moulding.build_moulding_summary("2627", through_ym="2026-04")
+    finally:
+        moulding._cache.clear()
+
+    assert first["error"] is None
+    assert first["failed_months"] == ["2026-04"]
+    assert first["failed_month_details"][0]["reason"] == "rate limited"
+    assert "429" not in first["failed_month_details"][0]["tooltip"]
+    assert "secret-spreadsheet-id" not in str(first)
+    assert first["section2"]["warnings"]
+    assert calls["batch"] == 2
+
+
 def test_gom_excludes_finishing_record_even_when_its_label_maps_to_the_roster(monkeypatch):
     records = [
         _record("2026-04", "MOULDING A05(U-150)", hours=10, output=100),
