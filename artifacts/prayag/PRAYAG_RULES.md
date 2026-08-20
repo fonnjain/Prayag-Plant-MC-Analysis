@@ -142,15 +142,17 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 
 | Segment | APR | MAY | JUN | JUL | Total |
 |---|---|---|---|---|---|
-| **PIPE** (gross) | 190,494 | 344,000 | 178,782 | 564,695 | 1,277,971 kg / 6,507 h |
-| **MOULDING** | 89,152 | 75,771 | 97,007 | 104,086 | 366,015 kg / rej ~1.0% |
+| **PIPE** (Report-5 verification) | 190,494 | 344,000 | 178,782 | 564,695 | 1,277,971 kg / 6,507 h — verification-only; superseded for the headline by Report-5↔Report-11 reconciliation |
+| **PIPE** (daily Report-5↔Report-11, authoritative) | — | — | — | — | **1,283,300.15 kg / 6,507 h** |
+| **MOULDING** (daily Report-12 + Report-5 hours, authoritative) | 89,152 | 75,771 | 97,007 | 104,086 | **366,015.39 kg / 35,972 h** |
 | **PTMT** Nett — *annual basis* | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / 6.14% |
 | **PTMT** Nett — *daily/Report-5 basis* | 99,262 | 104,729 | **147,835** | 172,639 | **524,465** kg |
 | **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 68,390 in-sheet | 232,528 kg — **KH only** |
 | **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h — **KH only** |
 | **GARDEN KH rejection** | 1,191 | n/a | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** |
 | **GARDEN_WB** | — | — | 22,152.8 | 6,457.4 | plant started June |
-| **HDPE** | 0 | 1,369.20 | 0 | **22,448.04** | Jul = M/C-1 21,931.28 + M/C-2 516.76 |
+| **GARDEN + GARDEN_WB** (daily block tabs, authoritative management total) | — | — | — | — | **262,818.23 kg** |
+| **HDPE** (daily machine blocks, authoritative) | 0 | 1,369.20 | 0 | **22,448.04** | **23,817.24 kg**; Jul = M/C-1 21,931.28 + M/C-2 516.76 |
 | **TANK** (annual) | 636,250 | 1,582,500 | 2,596,600 | 1,995,500 | 6,810,850 Ltr |
 | **TANK daily** | | KH 846,600 | VN 533,500 · KH 1,419,500 | VN 565,500 · WB 1,702,000 | VN 1,854,250 · WB 4,595,500 · KH 3,619,600 |
 | **TANK VN hours** (R-39 union) | 76 | 196 | 208 | 232 | WB Apr 100 |
@@ -164,6 +166,12 @@ June diverges between the two chains (R-24). Label which basis is in use wheneve
 **Tank rejection, both bases (VN July):** litres **5,500 Ltr / 0.97%** (capacity) · kilograms **449.30 kg / 3.09%** (material). The plant reports the kilogram basis. Show both, labelled.
 
 **Production basis:** all production pages use **net**; the costing module uses **gross**, matching the workbook note *"Production in KG has Rejection included."*
+
+**R-44 · Output basis is a `Record` contract, never an inferred arithmetic shortcut.**
+- `Garden`, `Garden_WB`, `HDPE`, `Pipe`, `Moulding`, and Tank variants default to **net** `total_count`; `PTMT` defaults to **gross**. An unknown plant stays unknown rather than receiving a silent transform.
+- `net = gross − rejection` and `gross = net + rejection` are permitted only when the output and rejection have the **same unit**. Tank primary litres and kilogram rejection are separate facts under R-09, so neither may be derived from the other.
+- `good_count` is always net output. OEE quality is always **net ÷ gross**. The rejection percentage keeps its source denominator (including Tank's explicit denominator) and is not rewritten from the output-basis helpers.
+- PTMT management reporting starts from gross Report-5 output and subtracts rejection exactly once; it also excludes finishing/grinding under R-22.
 
 ---
 
