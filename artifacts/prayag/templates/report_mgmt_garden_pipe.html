@@ -33,19 +33,39 @@
 
 {# ─── Failed-months banner (R-06 Failure Mode #9) ────────────────────────────── #}
 {% if data.failed_months %}
+{% set open_month_details = data.failed_month_details | selectattr('is_current_month') | list %}
+{% set source_failure_details = data.failed_month_details | rejectattr('is_current_month') | list %}
+{% if open_month_details %}
+<div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
+     style="background:rgba(31,56,100,0.04);border-color:rgba(31,56,100,0.18)">
+  <div class="font-semibold mb-1 text-gray-700">
+    Current month still open — registered source data is still being entered
+  </div>
+  <div class="text-gray-600">
+    {% for failure in open_month_details %}
+      <span class="font-mono font-medium" title="{{ failure.tooltip }}">{{ failure.label }}</span>{% if not loop.last %}; {% endif %}
+    {% endfor %}.
+    Its provisional figures are withheld until a complete source read returns.
+    This result is <span class="font-semibold">not cached</span> and will refresh as the month fills in.
+  </div>
+</div>
+{% endif %}
+
+{% if source_failure_details %}
 <div class="mb-4 px-3 py-2.5 rounded-xl border text-[11px] leading-snug"
      style="background:rgba(180,80,0,0.06);border-color:rgba(180,80,0,0.42)">
   <div class="font-semibold mb-1" style="color:#b85000">
-    ⚠ Source data unavailable — {{ data.failed_months | length }} month{{ 's' if data.failed_months | length != 1 else '' }} could not be loaded
+    ⚠ Source data unavailable — {{ source_failure_details | length }} month{{ 's' if source_failure_details | length != 1 else '' }} could not be loaded
   </div>
   <div class="text-gray-700">
-    {% for failure in data.failed_month_details %}
+    {% for failure in source_failure_details %}
       <span class="font-mono font-medium" title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
     {% endfor %}.
     Figures for these months may be missing or understated.
     This result is <span class="font-semibold">not cached</span> — reload the page in a moment to retry.
   </div>
 </div>
+{% endif %}
 {% endif %}
 
 {# ─── R-23 banner ────────────────────────────────────────────────────────────── #}

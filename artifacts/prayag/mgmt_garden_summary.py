@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -375,6 +376,9 @@ def _do_build(fy: str) -> dict:
     failed_month_details = _sh.daily_failed_pair_details(
         _daily_reports, plants={"GARDEN", "GARDEN_WB"}
     )
+    current_ym = datetime.date.today().strftime("%Y-%m")
+    for detail in failed_month_details:
+        detail["is_current_month"] = detail.get("ym") == current_ym
 
     kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net, kh_by_machine = \
         _accumulate_garden(daily_all)
