@@ -3467,7 +3467,7 @@ def management_reports_index():
             if rpt["id"] == "segment_labour":
                 rpt["view_url"] = "/management-reports/segment-labour"
             if rpt["id"] == "pipe":
-                rpt["view_url"] = "/management-reports/pipe-summary"
+                rpt["view_url"] = f"/management-reports/pipe-summary?month={ym}"
             if rpt["id"] == "moulding":
                 rpt["view_url"] = "/management-reports/moulding-summary"
             if rpt["id"] == "gom":
@@ -3629,7 +3629,7 @@ def mgmt_pipe_summary_view():
     fy = request.args.get("fy", "2627")
     if fy not in _mps._FY_YM:
         fy = "2627"
-    data = _mps.build_pipe_summary(fy)
+    data = _mps.build_pipe_summary(fy, through_ym=request.args.get("month"))
     return render_template(
         "report_mgmt_pipe_summary.html",
         data=data,

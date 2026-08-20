@@ -57,6 +57,13 @@ _FY_LABEL: dict[str, str] = {
     "2526": "FY 2025–26",
 }
 
+# Management reports are published only through a reviewed month.  A download
+# explicitly selects its own month; the direct page uses this approved default
+# until the next period is ready to publish.
+PIPE_REPORT_DEFAULT_THROUGH: dict[str, str] = {
+    "2627": "2026-07",
+}
+
 # ── Source file IDs ────────────────────────────────────────────────────────────
 
 # Pipe M/C workbook — HOURS tab (FY26-27) and Pipe M/C 25-26 tab (FY25-26)
@@ -166,21 +173,51 @@ def _extract_month_lbl(s: str) -> Optional[str]:
     return m.group(1).upper() if m else None
 
 
-_MC_NUM_RE = re.compile(r"(\d+)$")
+_PRIMARY_MC_RE = re.compile(r"\bM\s*/?\s*C\s*[-–]?\s*(\d+)\b", re.I)
 
 
 def _norm_machine(raw: str) -> str:
     """Normalise a machine label to canonical form "M/C-N".
 
     Handles record labels like "PIPE M/C - 1", "M/C-1", "M/C - 1", etc.
-    Extracts the trailing digit(s) and returns "M/C-<N>".
-    Returns the uppercased original if no digit is found.
+    Only an explicit M/C token is accepted.  A trailing digit alone is not a
+    machine identity: ``PIPE Grinder-1`` must never become ``M/C-1``.
+    Returns the uppercased original if no M/C token is found.
     """
     s = _norm(raw)
-    m = _MC_NUM_RE.search(s)
+    m = _PRIMARY_MC_RE.search(s)
     if m:
         return f"M/C-{m.group(1)}"
     return s
+
+
+def _record_month(record) -> Optional[str]:
+    """Return a record's monthly reporting key.
+
+    Report-11-only rows are daily-grain records.  New rows are emitted with a
+    monthly ``period``, but accepting an ISO date here also keeps a warm cache
+    containing pre-fix rows from silently dropping valid production.
+    """
+    period = str(getattr(record, "period", "") or "")
+    if re.fullmatch(r"\d{4}-\d{2}", period):
+        return period
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", period):
+        return period[:7]
+    return None
+
+
+def _is_primary_pipe_record(record) -> bool:
+    """Whether a record belongs to the Pipe extrusion M/C report.
+
+    Finishing is an explicit parser classification and always wins over a
+    machine-looking label.  The strict normalizer is a second guard against
+    labels such as Grinder-1 and Pulverizer-2 being attributed to extruders.
+    """
+    return (
+        getattr(record, "plant", None) == "PIPE"
+        and not bool(getattr(record, "is_finishing", False))
+        and _norm_machine(getattr(record, "machine", "") or "") in MACHINE_ORDER
+    )
 
 
 # ── DASHBOARD tab parser ───────────────────────────────────────────────────────
@@ -345,7 +382,13 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
 
 # ── Section 1: monthly summary ─────────────────────────────────────────────────
 
-def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) -> dict:
+def _build_section1(
+    fy: str,
+    records,
+    dashboard: dict[str, dict],
+    token: str,
+    active_yms: Optional[set[str]] = None,
+) -> dict:
     """Build Section 1 (SUMMARY) monthly rows and a TOTAL row.
 
     Parameters
@@ -370,9 +413,9 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
     gross_output: dict[str, float] = {}  # {ym: kg}
 
     for r in records:
-        if r.plant != "PIPE":
+        if not _is_primary_pipe_record(r):
             continue
-        ym = getattr(r, "period", None)
+        ym = _record_month(r)
         if not ym:
             continue
         run_hrs[ym]      = run_hrs.get(ym, 0.0) + float(r.actual_hours or 0.0)
@@ -386,21 +429,24 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
     for lbl in MONTH_LABELS:
         ym        = fy_ym.get(lbl)
         month_disp = fy_disp.get(lbl, lbl)
+        in_scope = active_yms is None or ym in active_yms
 
-        rh = run_hrs.get(ym, 0.0) or None
-        go = gross_output.get(ym, 0.0) or None
+        rh = (run_hrs.get(ym, 0.0) or None) if in_scope else None
+        go = (gross_output.get(ym, 0.0) or None) if in_scope else None
 
         # Labour + paid hours from DASHBOARD PIPELINE row
-        db = dashboard.get(lbl, {})
+        db = dashboard.get(lbl, {}) if in_scope else {}
         labour    = db.get("labour")
         paid_hrs  = db.get("paid_hrs")
 
         # Wages from KH-1
         wages    = None
         awaiting = False
-        fid = wages_src.get(ym)
+        fid = wages_src.get(ym) if in_scope else None
         wages_source = None
-        if fid:
+        if not in_scope:
+            awaiting = False
+        elif fid:
             wages = _read_pipeline_wages(ym, fid, token)
             wages_source = {
                 "file_id": fid,
@@ -510,7 +556,7 @@ def _build_section2_fy2627(records, n_months: int) -> list:
     mc_output: dict[str, float] = {}
 
     for r in records:
-        if r.plant != "PIPE":
+        if not _is_primary_pipe_record(r):
             continue
         mc = _norm_machine(r.machine or "")
         if not mc:
@@ -747,9 +793,9 @@ def _mc_monthly(records, fy: str) -> dict[str, dict[str, dict]]:
     mc_set = {_norm_machine(mc): mc for mc in MACHINE_ORDER}
 
     for r in records:
-        if r.plant != "PIPE":
+        if not _is_primary_pipe_record(r):
             continue
-        ym = getattr(r, "period", None)
+        ym = _record_month(r)
         if not ym or ym not in all_yms:
             continue
         raw_mc  = r.machine or ""
@@ -777,6 +823,8 @@ def _build_section3_material(pipe_records, n_months: int) -> dict:
     """
     mc_data: dict[str, dict] = {}    # {mc: {hrs, output}}
     for r in pipe_records:
+        if not _is_primary_pipe_record(r):
+            continue
         mc = _norm_machine(r.machine or "")
         if mc not in {_norm_machine(m) for m in MACHINE_ORDER}:
             continue
@@ -949,7 +997,7 @@ def _build_section6_per_machine(pipe_records, fy: str, n_months: int) -> dict:
 
 # ── Top-level builder ──────────────────────────────────────────────────────────
 
-def build_pipe_summary(fy: str = "2627") -> dict:
+def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dict:
     """Build all data for the Pipe M/C Summary management page.
 
     Returns a dict consumed by ``report_mgmt_pipe_summary.html``::
@@ -977,9 +1025,17 @@ def build_pipe_summary(fy: str = "2627") -> dict:
     if fy not in _FY_YM:
         fy = "2627"
 
+    fy_ym = _FY_YM[fy]
+    full_yms = [fy_ym[lbl] for lbl in MONTH_LABELS]
+    selected_through = through_ym or PIPE_REPORT_DEFAULT_THROUGH.get(fy)
+    if selected_through not in full_yms:
+        selected_through = PIPE_REPORT_DEFAULT_THROUGH.get(fy, full_yms[-1])
+    report_yms = [ym for ym in full_yms if ym <= selected_through]
+
     # Serve from cache if fresh
+    cache_key = (fy, selected_through)
     with _cache_lock:
-        cached = _cache.get(fy)
+        cached = _cache.get(cache_key)
         if cached:
             ts, data = cached
             if time.monotonic() - ts < _CACHE_TTL:
@@ -993,15 +1049,12 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         if not token:
             return _error_result(fy, "Could not obtain Google access token")
 
-        fy_ym = _FY_YM[fy]
-        all_yms = [fy_ym[lbl] for lbl in MONTH_LABELS]
-
-        # ── Fetch PIPE records for the whole FY ──────────────────────────────
+        # ── Fetch PIPE records for the selected reporting window ────────────
         # PIPE daily records already apply the Report-5 ↔ Report-11 date-wise
         # reconciliation.  The annual grid is a verification source only and
         # must not feed this management report.
         try:
-            records, daily_reports, _ = _sh.get_daily_records(all_yms)
+            records, daily_reports, _ = _sh.get_daily_records(report_yms)
         except Exception as exc:
             logger.exception("build_pipe_summary: get_daily_records failed")
             return _error_result(fy, f"Could not load PIPE production records: {exc}")
@@ -1009,11 +1062,12 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         all_pipe_records = [r for r in records if r.plant == "PIPE"]
         pipe_records = [
             r for r in all_pipe_records
-            if getattr(r, "period", None) in all_yms
+            if _is_primary_pipe_record(r) and _record_month(r) in report_yms
         ]
-        out_of_scope_pipe_records = [
+        finishing_records = [
             r for r in all_pipe_records
-            if getattr(r, "period", None) not in all_yms
+            if bool(getattr(r, "is_finishing", False))
+            and _record_month(r) in report_yms
         ]
         failed_pairs = next(
             (report["_failed_pairs"] for report in daily_reports
@@ -1026,7 +1080,7 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         yms_with_data = {getattr(r, "period", None) for r in pipe_records
                          if getattr(r, "period", None)}
         n_months = max(1, len([
-            ym for ym in all_yms
+            ym for ym in report_yms
             if ym in yms_with_data and ym not in failed_yms
         ]))
 
@@ -1061,13 +1115,15 @@ def build_pipe_summary(fy: str = "2627") -> dict:
             logger.warning("build_pipe_summary: mc2526 failed: %s", exc)
 
         # ── Section 1 ─────────────────────────────────────────────────────────
-        s1 = _build_section1(fy, pipe_records, dashboard, token)
+        s1 = _build_section1(
+            fy, pipe_records, dashboard, token, active_yms=set(report_yms)
+        )
         if dash_warning:
             s1["warnings"].insert(0, dash_warning)
-        if out_of_scope_pipe_records:
+        if finishing_records:
             s1["warnings"].append(
-                f"{len(out_of_scope_pipe_records)} PIPE daily record(s) without "
-                f"a month in FY {fy} were excluded from this report."
+                f"{len(finishing_records)} finishing PIPE record(s) were excluded "
+                "from the primary extrusion M/C report."
             )
         for lbl in MONTH_LABELS:
             ym = fy_ym[lbl]
@@ -1098,7 +1154,11 @@ def build_pipe_summary(fy: str = "2627") -> dict:
             "section2": {
                 "fy2627":       mc2627_rows,
                 "fy2526":       mc2526_rows,
-                "fy2627_label": _FY_LABEL.get("2627", "FY 2026–27"),
+                "fy2627_label": (
+                    f"{_FY_DISP[fy][MONTH_LABELS[0]]} – "
+                    f"{_FY_DISP[fy][next(lbl for lbl in MONTH_LABELS if fy_ym[lbl] == selected_through)]} "
+                    f"({_FY_LABEL.get(fy, f'FY {fy}')})"
+                ),
                 "fy2526_label": _FY_LABEL.get("2526", "FY 2025–26"),
                 "n_months":     n_months,
                 "warnings":     s2_warnings,
@@ -1108,6 +1168,8 @@ def build_pipe_summary(fy: str = "2627") -> dict:
             "section5":  s5,
             "section6":  s6,
             "failed_months": sorted(failed_yms),
+            "through_ym": selected_through,
+            "report_yms": report_yms,
             "build_time_s": round(time.monotonic() - t0, 2),
         }
 
@@ -1116,7 +1178,7 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         return _error_result(fy, str(exc))
 
     with _cache_lock:
-        _cache[fy] = (time.monotonic(), data)
+        _cache[cache_key] = (time.monotonic(), data)
 
     return data
 

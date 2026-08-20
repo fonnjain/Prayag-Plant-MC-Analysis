@@ -525,7 +525,7 @@ def serial_segment_labour(ym: str) -> _SheetFlagPair:
 def serial_pipe(ym: str) -> _SheetFlagPair:
     from mgmt_pipe_summary import build_pipe_summary
     fy = _fy_from_ym(ym)
-    d = build_pipe_summary(fy)
+    d = build_pipe_summary(fy, through_ym=ym)
     if d.get("error"):
         return _build_failed(d["error"])
     flags: List[Flag] = []

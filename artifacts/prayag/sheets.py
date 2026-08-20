@@ -2405,7 +2405,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
               lbl = label_for.get(k, f"PIPE M/C-{k}")
               if raw:
                   newr = dataclasses.replace(
-                      raw[0], machine=lbl, date=date, period=date,
+                    raw[0], machine=lbl, date=date, period=ym,
                       actual_hours=0.0, total_count=c["out"],
                       reject_count=c["rej"], ideal_hours=0.0,
                       ideal_output=0.0, material="",
@@ -2413,7 +2413,7 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
                   )
               else:
                   newr = Record(
-                      grain="daily", period=date, date=date, plant=emit,
+                    grain="daily", period=ym, date=date, plant=emit,
                       segment=seg, machine=lbl, unit=unit,
                       total_count=c["out"], reject_count=c["rej"],
                       source_file=file_id, source_tab=r11_tab,

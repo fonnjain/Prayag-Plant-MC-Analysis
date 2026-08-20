@@ -24,6 +24,7 @@ def _pipe_record(
     output: float,
     reject: float = 0.0,
     machine: str = "PIPE M/C - 1",
+    is_finishing: bool = False,
 ):
     return SimpleNamespace(
         plant="PIPE",
@@ -32,6 +33,7 @@ def _pipe_record(
         total_count=output,
         reject_count=reject,
         machine=machine,
+        is_finishing=is_finishing,
     )
 
 
@@ -200,7 +202,7 @@ def test_failed_daily_pipe_month_is_visible_and_not_counted_complete(monkeypatch
     )
 
 
-def test_builder_excludes_daily_pipe_records_outside_the_selected_fy(monkeypatch):
+def test_builder_ignores_records_without_a_recognisable_reporting_month(monkeypatch):
     april = _pipe_record("2026-04", hours=10, output=100)
     no_period = _pipe_record(None, hours=5, output=50)
     _stub_pipe_builder_sources(monkeypatch, ([april, no_period], [], []))
@@ -213,8 +215,54 @@ def test_builder_excludes_daily_pipe_records_outside_the_selected_fy(monkeypatch
 
     assert result["section1"]["total_row"]["gross_output_kg"] == 100
     assert result["section2"]["fy2627"][-1]["actual_out_kg"] == 100
-    assert any(
-        "1 PIPE daily record(s) without a month in FY 2627 were excluded"
-        in warning
-        for warning in result["section1"]["warnings"]
+
+
+def test_pipe_machine_normalizer_requires_an_explicit_mc_label():
+    """A trailing auxiliary number is not an extrusion machine identifier."""
+    assert pipe_summary._norm_machine("PIPE M/C - 4") == "M/C-4"
+    assert pipe_summary._norm_machine("PIPE Grinder-1") == "PIPE GRINDER-1"
+    assert pipe_summary._norm_machine("PIPE Pulverizer-2") == "PIPE PULVERIZER-2"
+
+
+def test_builder_excludes_finishing_includes_r11_only_and_stops_at_selected_month(
+    monkeypatch,
+):
+    """Primary Pipe totals use Apr–Jul extrusion rows plus valid R11-only output."""
+    primary = [
+        _pipe_record("2026-04", hours=10, output=100, machine="PIPE M/C - 1"),
+        _pipe_record("2026-05", hours=10, output=100, machine="PIPE M/C - 2"),
+        _pipe_record("2026-06", hours=10, output=100, machine="PIPE M/C - 3"),
+        _pipe_record("2026-07", hours=10, output=100, machine="PIPE M/C - 4"),
+    ]
+    finishing = _pipe_record(
+        "2026-06", hours=99, output=9_999, machine="PIPE Grinder-1",
+        is_finishing=True,
     )
+    # This represents a warm pre-fix cache row.  The loader now writes 2026-06,
+    # and the builder keeps the real June production even if this legacy shape
+    # is encountered.
+    r11_only = _pipe_record(
+        "2026-06-20", hours=0, output=808, reject=50, machine="PIPE M/C - 5",
+    )
+    august = _pipe_record("2026-08", hours=100, output=10_000, machine="PIPE M/C - 1")
+    _stub_pipe_builder_sources(
+        monkeypatch, (primary + [finishing, r11_only, august], [], [])
+    )
+    pipe_summary._cache.clear()
+
+    try:
+        result = pipe_summary.build_pipe_summary("2627", through_ym="2026-07")
+    finally:
+        pipe_summary._cache.clear()
+
+    total = result["section2"]["fy2627"][-1]
+    material = result["section3"]["total_row"]
+    assert result["through_ym"] == "2026-07"
+    assert result["section2"]["n_months"] == 4
+    assert total["actual_hrs"] == 40
+    assert total["actual_out_kg"] == 1_258  # 4 × 100 + restored R11-only gross 858
+    assert material["hrs"] == 40
+    assert material["ideal_out"] == 11_000  # 10×120 + 10×280 + 10×320 + 10×380
+    assert result["section1"]["total_row"]["gross_output_kg"] == 1_258
+    assert any("finishing PIPE record(s) were excluded" in w
+               for w in result["section1"]["warnings"])
