@@ -1,0 +1,44 @@
+Read PRAYAG_RULES.md. Two changes from the throttling diagnostic. Both are about how transient
+failures are handled, not about any source or figure.
+
+No figure may change. No Sheets writes (R-21). No cache clearing (R-34).
+
+=== 1. Carry the per-pair failure reason through to the page ===
+The loader already captures it — failed_reasons at sheets.py:2896 — but the builder discards it
+and emits a generic "could not be read". That is why the May failure could not be classified
+after the fact and needed a full investigation to rule out a broken workbook.
+
+Surface the reason alongside the failed month. The four cases need to be distinguishable:
+  429 / rate limited      -> transient, will clear
+  timeout                 -> transient, will clear
+  permission / 404        -> the file or its sharing changed
+  completeness classifier -> population below its high-water mark; the workbook may have changed
+
+Keep it short in the cell or warning; the detail can sit in a tooltip. Do NOT print file IDs in
+visible text — that was fixed in the presentation round.
+
+Apply wherever _failed_pairs is already consumed: the eight builders plus app.py's get_data
+path. Do not widen it further.
+
+=== 2. Pace the Pipe Summary's external fan-out ===
+One page load fires: several daily PIPE workbooks, the DASHBOARD tab, the FY25-26 comparison
+tab, and four separate payroll workbooks. That fan-out caused the ~51s build and the 429 burst
+that hit several reads at once.
+
+Add bounded retry with backoff for transient 429 and timeout only. Constraints:
+ - a bounded number of attempts, then give up and report partial — never retry indefinitely
+ - do NOT retry permission, 404, or completeness failures; those will not clear
+ - a partial result must still be uncached and visibly partial (R-06, R-07, Failure Mode #9).
+   That behaviour is correct today and must not change.
+ - report the retry policy you choose and why
+
+Before implementing, report whether the reads can be paced or batched rather than only retried —
+fewer calls would be better than more attempts at the same number.
+
+=== VALIDATE ===
+Load Pipe Summary after a cooldown and confirm all five months plus DASHBOARD and payroll
+appear: APR 833/190,494 · MAY (expect ~1,832/344,000) · JUN 1,008/183,635 · JUL 2,834/565,171 ·
+AUG 1,247/239,941. Payroll APR 4,73,293 · MAY 3,58,685 · JUN 4,67,549 · JUL 6,19,455.
+Report the build time before and after pacing.
+No other report changes. Do not touch the May source pin or the payroll parser — both are
+healthy.

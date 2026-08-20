@@ -48,7 +48,9 @@
      class="mb-4 rounded-xl border px-3 py-2.5 text-[11px] leading-snug"
      style="background:rgba(200,120,0,0.08);border-color:rgba(200,120,0,0.35);color:#854d0e">
   <strong>Incomplete daily source — this report is partial.</strong>
-  Figures for <span class="font-mono font-semibold">{{ data.failed_months | join(", ") }}</span>
+  {% for failure in data.failed_month_details %}
+    <span class="font-mono font-semibold" title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
+  {% endfor %}
   are excluded and will be retried; do not treat the displayed totals as complete.
 </div>
 {% endif %}

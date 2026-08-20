@@ -707,6 +707,9 @@ def build_moulding_summary(
         # Moulding is emitted by the PIPE workbook, so PIPE failures withhold
         # Moulding facts for the same month too.
         failed_yms = {ym for plant, ym in failed_pairs if plant in {"PIPE", "MOULDING"}}
+        failed_month_details = _sh.daily_failed_pair_details(
+            daily_reports, plants={"PIPE", "MOULDING"}
+        )
         roster_by_mould = _roster_mould_map(roster)
         moulding_records = [
             r for r in records_raw
@@ -801,6 +804,7 @@ def build_moulding_summary(
             "through_ym": selected_through,
             "report_yms": report_yms,
             "failed_months": sorted(failed_yms),
+            "failed_month_details": failed_month_details,
             "build_time_s": round(time.time() - t0, 2),
         }
 

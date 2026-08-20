@@ -39,8 +39,9 @@
     ⚠ Source data unavailable — {{ data.failed_months | length }} month{{ 's' if data.failed_months | length != 1 else '' }} could not be loaded
   </div>
   <div class="text-gray-700">
-    Daily workbook read failed (Google Sheets throttled or unavailable) for:
-    <span class="font-mono font-medium">{{ data.failed_months | join(", ") }}</span>.
+    {% for failure in data.failed_month_details %}
+      <span class="font-mono font-medium" title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
+    {% endfor %}.
     Figures for these months may be missing or understated.
     This result is <span class="font-semibold">not cached</span> — reload the page in a moment to retry.
   </div>

@@ -275,6 +275,11 @@ def _daily_failed_pairs(reports) -> list[tuple[str, str]]:
     )
 
 
+def _daily_failed_details(reports) -> list[dict]:
+    """Sanitized reason beside each withheld pair for visible partial warnings."""
+    return sheets.daily_failed_pair_details(reports)
+
+
 def _partial_daily_disp(pairs) -> str:
     """Human-readable 'Plant Mon YYYY' list for a set of failed daily pairs."""
     return ", ".join(
@@ -557,6 +562,7 @@ def get_data(args):
     all_rows = source_reports = recon_warnings = None
     freshness: list = []
     partial_daily_pairs: list[tuple[str, str]] = []
+    partial_daily_details: list[dict] = []
 
     # The daily files are the SOURCE OF TRUTH for every period. Monthly and FY
     # headline totals are summed from the authoritative daily tabs (one per
@@ -589,6 +595,7 @@ def get_data(args):
             daily_err = f"Daily data could not be read: {e}"
         if not daily_err:
             partial_daily_pairs = _daily_failed_pairs(dreports)
+            partial_daily_details = _daily_failed_details(dreports)
             # Per-plant data freshness: the latest date each plant has REAL daily
             # data (see _has_production — empty in-progress days never count).
             # Surfaced in the completeness panel so laggard plants are visible
@@ -641,9 +648,9 @@ def get_data(args):
             source_reports = list(dreports)
             recon_warnings = list(dwarn)
             if partial_daily_pairs:
-                missing = ", ".join(
-                    f"{PLANT_NAMES.get(plant, plant)} {_month_disp(ym)}"
-                    for plant, ym in partial_daily_pairs
+                missing = "; ".join(
+                    f"{detail['label']} — {detail['reason']}"
+                    for detail in partial_daily_details
                 )
                 recon_warnings.append(
                     "Incomplete daily source read: "
@@ -857,9 +864,9 @@ def get_data(args):
             banner = f"{banner} {note}".strip()
 
     if partial_daily_pairs:
-        missing = ", ".join(
-            f"{PLANT_NAMES.get(plant, plant)} {_month_disp(ym)}"
-            for plant, ym in partial_daily_pairs
+        missing = "; ".join(
+            f"{detail['label']} — {detail['reason']}"
+            for detail in partial_daily_details
         )
         banner = (
             f"{banner} Incomplete daily source: {missing}; its figures are excluded "

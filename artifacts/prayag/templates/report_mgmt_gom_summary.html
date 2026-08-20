@@ -123,7 +123,9 @@
   <div data-testid="partial-daily-source-banner" role="alert"
        class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
     <strong>Incomplete daily source — this report is partial.</strong>
-    Figures for <span class="font-mono font-semibold">{{ data.failed_months | join(", ") }}</span>
+    {% for failure in data.failed_month_details %}
+      <span class="font-mono font-semibold" title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
+    {% endfor %}
     are excluded and will be retried; do not treat the displayed totals as complete.
   </div>
   {% endif %}

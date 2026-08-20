@@ -1054,7 +1054,19 @@ def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> di
         # reconciliation.  The annual grid is a verification source only and
         # must not feed this management report.
         try:
-            records, daily_reports, _ = _sh.get_daily_records(report_yms)
+            # This report only consumes PIPE records. Restricting the physical
+            # daily fetch avoids unrelated plant workbooks multiplying the
+            # cold-load Sheets fan-out.
+            try:
+                records, daily_reports, _ = _sh.get_daily_records(
+                    report_yms, source_plants={"PIPE"}
+                )
+            except TypeError as exc:
+                # Older focused test doubles expose the original one-argument
+                # function. Production always takes the scoped route above.
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                records, daily_reports, _ = _sh.get_daily_records(report_yms)
         except Exception as exc:
             logger.exception("build_pipe_summary: get_daily_records failed")
             return _error_result(fy, f"Could not load PIPE production records: {exc}")
@@ -1075,6 +1087,9 @@ def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> di
             [],
         )
         failed_yms = {ym for plant, ym in failed_pairs if plant == "PIPE"}
+        failed_month_details = _sh.daily_failed_pair_details(
+            daily_reports, plants={"PIPE"}
+        )
 
         # ── n_months: count months with any PIPE data ─────────────────────────
         yms_with_data = {getattr(r, "period", None) for r in pipe_records
@@ -1168,6 +1183,7 @@ def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> di
             "section5":  s5,
             "section6":  s6,
             "failed_months": sorted(failed_yms),
+            "failed_month_details": failed_month_details,
             "through_ym": selected_through,
             "report_yms": report_yms,
             "build_time_s": round(time.monotonic() - t0, 2),

@@ -398,6 +398,9 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             [],
         )
         failed_yms = {ym for plant, ym in failed_pairs if plant in {"PIPE", "MOULDING"}}
+        failed_month_details = _sh.daily_failed_pair_details(
+            daily_reports, plants={"PIPE", "MOULDING"}
+        )
         roster_by_mould = _roster_mould_map(roster)
         moulding_records = [
             r for r in records_raw
@@ -438,6 +441,7 @@ def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dic
             "through_ym": selected_through,
             "report_yms": report_yms,
             "failed_months": sorted(failed_yms),
+            "failed_month_details": failed_month_details,
             "warnings": [
                 f"{ym}: daily Moulding source could not be read completely; "
                 "its figures are excluded and this report is partial."

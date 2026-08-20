@@ -140,9 +140,11 @@ def _build_month_row(ym: str, fy: str, abbr: str) -> dict:
         [],
     )
     if ("PTMT", ym) in failed_pairs:
+        failure_details = _sh().daily_failed_pair_details(reports, plants={"PTMT"})
         return {
             "ym": ym, "abbr": abbr, "disp": _FY_DISP[fy][abbr],
             "has_data": False, "partial_source": True,
+            "partial_reason": failure_details[0] if failure_details else None,
         }
 
     # Records already have r.segment and r.is_finishing set by the PTMT
@@ -242,6 +244,10 @@ def build_ptmt_summary(fy: str = "2627") -> dict:
     data_rows = [r for r in rows if r["has_data"]]
     has_data  = bool(data_rows)
     failed_months = [r["ym"] for r in rows if r.get("partial_source")]
+    failed_month_details = [
+        r["partial_reason"] for r in rows
+        if r.get("partial_source") and r.get("partial_reason")
+    ]
 
     total: Optional[dict] = None
     if has_data:
@@ -320,6 +326,7 @@ def build_ptmt_summary(fy: str = "2627") -> dict:
         "sheet_total_bugs": sheet_total_bugs,
         "r24_notes":       _PTMT_R24_NOTES,
         "failed_months":   failed_months,
+        "failed_month_details": failed_month_details,
         "warnings": [
             f"{ym}: PTMT daily source could not be read completely; its figures "
             "are excluded and this report is partial."

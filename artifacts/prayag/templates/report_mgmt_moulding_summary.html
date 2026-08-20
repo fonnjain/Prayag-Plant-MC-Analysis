@@ -96,6 +96,17 @@
     </div>
   </div>
 
+  {% if data.failed_months %}
+  <div data-testid="partial-daily-source-banner" role="alert"
+       class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <strong>Incomplete daily source — this report is partial.</strong>
+    {% for failure in data.failed_month_details %}
+      <span title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
+    {% endfor %}.
+    Figures for these months are excluded and will be retried.
+  </div>
+  {% endif %}
+
   {% if data.error %}
   <div class="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700">
     <strong>Error:</strong> {{ data.error }}

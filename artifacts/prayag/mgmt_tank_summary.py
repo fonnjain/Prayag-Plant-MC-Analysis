@@ -449,6 +449,9 @@ def _do_build(plant: str, fy: str) -> dict:
         [],
     )
     failed_yms: set = {ym for p, ym in _failed_pairs if p == plant}
+    failed_month_details = _sh.daily_failed_pair_details(
+        _daily_reports, plants={plant}
+    )
 
     by_type, by_size, code_map, unmapped = _accumulate_tank(daily_all, plant)
 
@@ -536,6 +539,7 @@ def _do_build(plant: str, fy: str) -> dict:
         # Template renders "source unavailable" cells; result is NOT cached so the
         # next request retries fresh (R-06 Failure Mode #9).
         "failed_months": sorted(failed_yms),
+        "failed_month_details": failed_month_details,
         "error":         None,
     }
 

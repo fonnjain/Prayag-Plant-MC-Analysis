@@ -100,8 +100,10 @@
      class="rounded-xl p-3 mb-4 text-xs"
      style="background:rgba(200,120,0,0.08);border:1px solid rgba(200,120,0,0.30);color:#854d0e">
   <strong>Incomplete daily source — this report is partial.</strong>
-  {{ data.failed_months|join(", ") }} could not be read completely. Its figures
-  are excluded and will be retried; do not treat these totals as complete.
+  {% for failure in data.failed_month_details %}
+    <span title="{{ failure.tooltip }}">{{ failure.ym }} — {{ failure.reason }}</span>{% if not loop.last %}; {% endif %}
+  {% endfor %}.
+  Its figures are excluded; do not treat these totals as complete.
 </div>
 {% endif %}
 

@@ -370,6 +370,9 @@ def _do_build(fy: str) -> dict:
         [],
     )
     failed_yms = sorted({ym for p, ym in _failed_pairs if p in {"GARDEN", "GARDEN_WB"}})
+    failed_month_details = _sh.daily_failed_pair_details(
+        _daily_reports, plants={"GARDEN", "GARDEN_WB"}
+    )
 
     kh_net, kh_reject, kh_run_hrs, wb_net, wb_reject, kh_dr_net, kh_by_machine = \
         _accumulate_garden(daily_all)
@@ -396,6 +399,7 @@ def _do_build(fy: str) -> dict:
         # Months whose daily read failed — result is not cached so next request
         # retries (R-06 Failure Mode #9).
         "failed_months": failed_yms,
+        "failed_month_details": failed_month_details,
         "error":    None,
     }
 

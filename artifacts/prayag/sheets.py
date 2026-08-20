@@ -714,19 +714,20 @@ def _vanished_reports(plant: str, ym: str, vanished_fid: str) -> List[Tuple[List
 # ---------------------------------------------------------------------------
 # Dashboard page loads must remain responsive even when a workbook is unavailable.
 # Individual daily workbooks already degrade to an explicit partial-data warning, so
-# waiting four 30-second attempts only turns one bad source into a frozen page.
-_API_MAX_RETRIES = 2    # total attempts on a throttle/transient error
+# retries are deliberately small and are reserved for a proven transient failure.
+_API_MAX_RETRIES = 3    # total attempts on 429 / timeout only
 _API_REQUEST_TIMEOUT_SECONDS = 12
+_DAILY_READ_MAX_WORKERS = 3
 
 
 def _api_get(url: str, token: str) -> dict:
-    """GET a Google Sheets API endpoint, retrying transient throttle errors.
+    """GET a Google Sheets API endpoint, retrying only 429s and timeouts.
 
-    Reads are fanned out across threads (see _load_live_monthly /
-    get_daily_records), so a burst can briefly exceed Google's per-user read
-    quota and come back 429 (or a transient 5xx). Those are retried with
-    exponential backoff (honouring a Retry-After header when present) instead of
-    failing the whole load. 401/403/404 are permanent and surface immediately.
+    Daily workbook loading is paced below to avoid a quota burst. A 429 or a
+    connection timeout can still occur, so it receives at most two short,
+    exponential waits (one then two seconds, plus tiny jitter). Permission,
+    404, server, parser, and completeness failures surface immediately: retrying
+    those would only delay an honest partial-result warning.
     """
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     for attempt in range(_API_MAX_RETRIES):
@@ -741,7 +742,7 @@ def _api_get(url: str, token: str) -> dict:
                     "The Google account doesn't have access to a configured "
                     "spreadsheet, or the connection needs to be re-authorized."
                 ) from e
-            if e.code in (429, 500, 503) and attempt < _API_MAX_RETRIES - 1:
+            if e.code == 429 and attempt < _API_MAX_RETRIES - 1:
                 retry_after = e.headers.get("Retry-After") if e.headers else None
                 try:
                     delay = float(retry_after) if retry_after else 0.0
@@ -2850,6 +2851,67 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
   return out
 
 
+def _daily_failure_detail(plant: str, ym: str, raw_reason: str) -> dict:
+  """Return safe, user-facing diagnostics for one withheld daily workbook.
+
+  The raw exception stays available to backend callers in ``_failed_pair_reasons``
+  for debugging. Pages receive this sanitized form instead, so they can explain
+  the state without exposing a configured spreadsheet ID or connector detail.
+  """
+  raw = str(raw_reason or "")
+  lower = raw.lower()
+  if "is incomplete:" in lower:
+      reason = "source population is below its high-water mark"
+      tooltip = "The workbook may have changed; its figures are withheld until a complete read returns."
+      category = "incomplete"
+  elif "429" in lower or "rate limit" in lower or "throttl" in lower:
+      reason = "rate limited"
+      tooltip = "Google Sheets temporarily limited this read; it will be retried on the next request."
+      category = "rate_limited"
+  elif "timeout" in lower or "timed out" in lower or "dropped" in lower or "couldn't reach" in lower:
+      reason = "timed out"
+      tooltip = "The Google Sheets connection was temporary unavailable; it will be retried on the next request."
+      category = "timeout"
+  elif "404" in lower or "not found" in lower or "access" in lower or "permission" in lower or "authoriz" in lower:
+      reason = "source access changed"
+      tooltip = "The file or its sharing may have changed; this needs source access to be checked."
+      category = "source_access"
+  else:
+      reason = "temporarily unavailable"
+      tooltip = "This daily source could not be read this time; it will be retried on the next request."
+      category = "transient"
+  return {
+      "plant": plant,
+      "ym": ym,
+      "label": f"{sources.PLANT_NAMES.get(plant, plant)} {ym}",
+      "reason": reason,
+      "tooltip": tooltip,
+      "category": category,
+  }
+
+
+def daily_failed_pair_details(reports, *, plants: Optional[Iterable[str]] = None) -> List[dict]:
+  """Extract sanitized, deterministic daily-failure detail from report sentinels."""
+  plant_filter = set(plants) if plants is not None else None
+  for report in reports or []:
+      if not isinstance(report, dict) or "_failed_pairs" not in report:
+          continue
+      raw_reasons = report.get("_failed_pair_reasons") or {}
+      stored = report.get("_failed_pair_details") or {}
+      details: List[dict] = []
+      for plant, ym in report["_failed_pairs"]:
+          if plant_filter is not None and plant not in plant_filter:
+              continue
+          detail = stored.get(f"{plant}:{ym}")
+          if not detail:
+              detail = _daily_failure_detail(
+                  plant, ym, raw_reasons.get(f"{plant}:{ym}", "")
+              )
+          details.append(dict(detail))
+      return details
+  return []
+
+
 def get_daily_records(
     months: List[str],
     *,
@@ -2896,7 +2958,10 @@ def get_daily_records(
   failed_pairs: List[Tuple[str, str]] = []
   failed_reasons: dict[Tuple[str, str], str] = {}
   if pairs:
-      max_workers = min(len(pairs), 8)
+      # Each task can fan out into several Sheets REST calls (tab listing plus
+      # report tabs). Three concurrent workbooks keeps a multi-month report from
+      # producing the 429 burst observed at eight, while preserving parallelism.
+      max_workers = min(len(pairs), _DAILY_READ_MAX_WORKERS)
       with ThreadPoolExecutor(max_workers=max_workers) as pool:
           futures = {
               pool.submit(_load_daily_cached, plant, ym, token): (plant, ym)
@@ -2923,14 +2988,10 @@ def get_daily_records(
           "(Google Sheets is throttling or unavailable). Please try again."
       )
   for plant, ym in failed_pairs:
-      reason = failed_reasons.get((plant, ym), "")
-      if "is incomplete:" in reason:
-          warnings.append(reason)
-          continue
+      failure = _daily_failure_detail(plant, ym, failed_reasons.get((plant, ym), ""))
       warnings.append(
-          f"{sources.PLANT_NAMES.get(plant, plant)} daily ({ym}) couldn't be read this "
-          "time (Google Sheets throttled or unavailable) — its figures are "
-          "temporarily missing from this view. Try Refresh in a moment."
+          f"{failure['label']}: {failure['reason']}. "
+          f"{failure['tooltip']}"
       )
 
   # Surface the failed-pair list to management-report builders via a sentinel
@@ -2943,6 +3004,12 @@ def get_daily_records(
           "_failed_pairs": list(failed_pairs),
           "_failed_pair_reasons": {
               f"{plant}:{ym}": failed_reasons.get((plant, ym), "")
+              for plant, ym in failed_pairs
+          },
+          "_failed_pair_details": {
+              f"{plant}:{ym}": _daily_failure_detail(
+                  plant, ym, failed_reasons.get((plant, ym), "")
+              )
               for plant, ym in failed_pairs
           },
       })
