@@ -1,0 +1,88 @@
+# Cardinal Rule Remediation — Three Reports Reading Annual Sources
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+The audit found that `get_records()` is **not** a daily loader — it reads `_live_payload()`, built from `sources.ANNUAL_SOURCES`. Three reports therefore present **annual summary figures as though recomputed**, and because the serialisers correctly call the same builders, the violation is in the downloads too.
+
+**Do these in order. Report after each. Do not start the next until the previous one's figures are confirmed.**
+
+The most important instruction across all three: **when the recomputed figure differs from what the report shows today, that difference is the point.** Do not adjust anything to preserve the current number (**R-30**).
+
+---
+
+# TASK 1 — Pipe M/C Summary
+
+**The violation.** `mgmt_pipe_summary.build_pipe_summary()` calls `get_records()`, so FY26-27 output, rejection and run hours come from the Pipe annual monthly grid. This **bypasses the R5↔R11 date-wise-max reconciliation entirely** — the reconciliation exists, is correct, and does not feed this report.
+
+**The fix.** Source FY26-27 production, rejection and run hours from `get_daily_records()`, which emits records already corrected by `pipe_reconcile.reconcile()` (**R-15** — do not modify that module).
+
+### What must not change
+- **Labour, paid hours and wages** already come from live operational inputs — the Employee `DASHBOARD` PIPELINE row and the KH-1 monthly payroll `CPVC / PIPELINE` entries. Leave them alone. July wages ₹6,19,455 must still render.
+- **The FY25-26 comparison block** is a legitimate closed-year read (**R-03**). Leave it, and keep it labelled.
+
+### Validate
+- FY26-27 output, rejection and hours now trace to Report-5 ↔ Report-11 daily records.
+- **Report the recomputed totals against the current 6,507 h / 1,277,971 kg.** If they differ, that is expected and correct — report the difference, do not close it.
+- The R-27 zero/partial-match join warning still fires where R-11 labels do not resolve.
+- Page and download show the same figures.
+
+---
+
+# TASK 2 — Moulding M/C Summary and Group of Moulding
+
+**The violation.** `mgmt_moulding_summary.build_moulding_summary()` calls `get_records()` for MOULDING. `mgmt_gom_summary` both reuses that result **and** separately calls `get_records()`. Both reports state they recompute from Report-12 and Report-5; neither does.
+
+**The fix.** Source FY26-27 from `get_daily_records()`: **output and rejection from Report-12**, **run hours joined from Report-5** (**R-19**). GOM inherits the corrected Moulding result rather than reading annual records of its own.
+
+### Watch two things
+- **GOM imports eleven symbols from `mgmt_moulding_summary`**, including `build_moulding_summary` and `_parse_summary_roster`. This is the project's only inter-builder dependency, and a signature change here has already broken GOM once. Audit that import list as part of the change.
+- **`BAND_ORDER` is shared by object identity** between the two modules. Keep it shared — do not copy it. The stray-band warning must keep firing on the source's `'4'` value.
+
+### What must not change
+- The **FY25-26 band block** is a legitimate closed-year read (**R-03**), labelled "closed annual · not recomputed". Leave it.
+- The machine roster read from the SUMMARY tab is **metadata**, not an output figure. Leave it.
+- GOM's `Avg. Per Output on Hours` divergence flag (ours vs the sheet's sum-of-averages 76.10) must survive.
+
+### Validate
+- **Report the recomputed totals against the current 366,015 kg / 35,972 h / ~1.0% rejection and GOM's 66.61%.** Differences are expected — report them.
+- The 27-machine and 6-band structure still renders on both reports, page and download.
+
+---
+
+# TASK 3 — Report 1, Part B only
+
+**The violation.** `mgmt_labour_power._do_build()` builds the **Rejection & Production**, **Ideal Power Cost** and **Ideal Labour Cost** sections for Pipe, Fittings, Garden and HDPE from `get_records()`.
+
+**Critically, the main report is already correct** — segment production uses `get_segment_prod_kg()`, and PTMT and Tank were already supplemented from `get_daily_records()`. Only these three benchmark sections inherit the annual path.
+
+**The fix.** Extend the existing supplemental daily read to cover Pipe, Fittings, Garden and HDPE, so all six segments in those sections come from daily records. The pattern already exists — it was added for PTMT and Tank.
+
+### What must not change
+- **Segment wages, headcount and paid hours** come from the dedicated per-segment tabs (`CP`, `PTMT`, `Hardware`, `Sink`, `Plumbing`, `TANK`, `Garden Pipe`, `HDPE Pipe`) — never a UNIT roll-up (**R-11**). The audit confirmed this is correct today. Leave it.
+- **`parse_ideal_labour_rates()` reads only the TOTAL row** (**R-40**), because the month rows carry a Fittings piece count. Do not touch it.
+- **Grinding stays excluded** from PTMT headline output (**R-22**).
+- Every flag stays: **R-43** Fittings piece count, **R-24** PTMT June, **R-42** Garden and HDPE wages, and the gross/net basis labels.
+
+### Validate
+- All six segments in the three Part-B sections trace to daily records.
+- **Report the recomputed figures against the current Fittings 366,016 and PTMT 524,465.**
+- Ideal Power and Ideal Labour still apply the per-segment ₹/kg standards to **our** kg.
+- Garden wages still read ₹2,67,003 + ₹50,547 from the Segment Cost workbook.
+
+---
+
+## Applies to all three
+
+- **No page/download drift** — the serialisers call the same builders, so both must move together.
+- Existing flags, `AWAITING SOURCE DATA`, `n/a`, `IDLE` and `⚠ unavailable` all survive as text.
+- The `_failed_pairs` guard must still prevent a partial read from producing a clean-looking file.
+- **Do not touch:** `pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` / R-39 (**R-41**) · `baselines.json` (**R-16**) · `parse_mc_detail` (**R-17**) · `segments: []` on `segment_cost`/`utilisation` (**R-18**) · `mp_*.py` (**R-20**) · `auth.py`.
+- No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## After all three land
+
+Re-run the Cardinal Rule audit and confirm the three violations are cleared. Then update `PRAYAG_RULES` Part 4 with whatever the recomputed acceptance figures turn out to be — **the current numbers came from the annual path and may not survive.**
+
+## Report back, per task
+
+The source path before and after · the recomputed figures against the current ones, with differences reported not closed · confirmation that the excluded items above are untouched · page and download agreeing.

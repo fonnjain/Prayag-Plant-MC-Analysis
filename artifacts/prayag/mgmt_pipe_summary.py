@@ -350,7 +350,7 @@ def _build_section1(fy: str, records, dashboard: dict[str, dict], token: str) ->
 
     Parameters
     ----------
-    records     : list of Record from sheets.get_records() filtered to PIPE plant
+    records     : list of daily Record values filtered to PIPE plant
     dashboard   : {month_label: {"paid_hrs": float|None, "labour": float|None}}
     token       : Google OAuth token
 
@@ -971,6 +971,7 @@ def build_pipe_summary(fy: str = "2627") -> dict:
                 "n_months": int,   # months of FY data available
             },
             "build_time_s": float,
+            "failed_months": [str, ...],
         }
     """
     if fy not in _FY_YM:
@@ -996,18 +997,38 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         all_yms = [fy_ym[lbl] for lbl in MONTH_LABELS]
 
         # ── Fetch PIPE records for the whole FY ──────────────────────────────
+        # PIPE daily records already apply the Report-5 ↔ Report-11 date-wise
+        # reconciliation.  The annual grid is a verification source only and
+        # must not feed this management report.
         try:
-            records, _, _ = _sh.get_records(all_yms)
+            records, daily_reports, _ = _sh.get_daily_records(all_yms)
         except Exception as exc:
-            logger.exception("build_pipe_summary: get_records failed")
+            logger.exception("build_pipe_summary: get_daily_records failed")
             return _error_result(fy, f"Could not load PIPE production records: {exc}")
 
-        pipe_records = [r for r in records if r.plant == "PIPE"]
+        all_pipe_records = [r for r in records if r.plant == "PIPE"]
+        pipe_records = [
+            r for r in all_pipe_records
+            if getattr(r, "period", None) in all_yms
+        ]
+        out_of_scope_pipe_records = [
+            r for r in all_pipe_records
+            if getattr(r, "period", None) not in all_yms
+        ]
+        failed_pairs = next(
+            (report["_failed_pairs"] for report in daily_reports
+             if isinstance(report, dict) and "_failed_pairs" in report),
+            [],
+        )
+        failed_yms = {ym for plant, ym in failed_pairs if plant == "PIPE"}
 
         # ── n_months: count months with any PIPE data ─────────────────────────
         yms_with_data = {getattr(r, "period", None) for r in pipe_records
                          if getattr(r, "period", None)}
-        n_months = max(1, len([ym for ym in all_yms if ym in yms_with_data]))
+        n_months = max(1, len([
+            ym for ym in all_yms
+            if ym in yms_with_data and ym not in failed_yms
+        ]))
 
         # ── DASHBOARD tab (Employee Data Details) ─────────────────────────────
         dashboard: dict[str, dict] = {}
@@ -1043,6 +1064,18 @@ def build_pipe_summary(fy: str = "2627") -> dict:
         s1 = _build_section1(fy, pipe_records, dashboard, token)
         if dash_warning:
             s1["warnings"].insert(0, dash_warning)
+        if out_of_scope_pipe_records:
+            s1["warnings"].append(
+                f"{len(out_of_scope_pipe_records)} PIPE daily record(s) without "
+                f"a month in FY {fy} were excluded from this report."
+            )
+        for lbl in MONTH_LABELS:
+            ym = fy_ym[lbl]
+            if ym in failed_yms:
+                s1["warnings"].append(
+                    f"{lbl}: PIPE daily workbook ({ym}) could not be read; "
+                    "its figures are excluded and this report is partial."
+                )
 
         # ── Section 2 ─────────────────────────────────────────────────────────
         mc2627_rows = _build_section2_fy2627(pipe_records, n_months)
@@ -1074,6 +1107,7 @@ def build_pipe_summary(fy: str = "2627") -> dict:
             "section4":  s4,
             "section5":  s5,
             "section6":  s6,
+            "failed_months": sorted(failed_yms),
             "build_time_s": round(time.monotonic() - t0, 2),
         }
 
