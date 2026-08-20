@@ -1,0 +1,88 @@
+# Pipe M/C Summary — Presentation, Round 2
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+# SCOPE
+
+**Presentation, structure and display only.**
+
+**Do NOT change:** any figure, any calculation, any builder logic, data sourcing, the Cardinal Rule, the `_failed_pairs` guard, the export, any other report, or machine planning.
+
+Every number must be identical before and after. If any figure moves, **stop**.
+
+**The last round worked** — both tables now fit their columns without horizontal scrolling, and SUMMARY-1 uses the full width with the comparison stacked below. Keep all of that.
+
+---
+
+## Note first: "data is not coming" is not a layout problem
+
+The page shows:
+
+> ⚠ *MAY: PIPE daily workbook (2026-05) could not be read; its figures are excluded and this report is partial.*
+> ⚠ *JUN: PIPE daily workbook (2026-06) could not be read…*
+
+That is the failed-read guard working correctly on another partial source read — the same behaviour that was verified as working last week. **Do not change that logic.** Everything below is about how it is *presented*.
+
+---
+
+## 1 — The payroll link is still rendering in a cell
+
+`JUN'26` shows **`KH-1 payroll · CPVC / PIPELINE`** inside the Paid Wages cell, styled as a link.
+
+The previous round was supposed to remove this — it appears the text became a tooltip but is still rendering visibly in the cell. **Remove it from the cell entirely.** Provenance belongs in the section note beneath the table, not in a data row.
+
+## 2 — A long error message is crammed into the narrowest column
+
+`APR`, `MAY`, `JUL` and `AUG` show, in the Per KG Labour Cost column:
+
+> *AWAITING*
+> *Registered KH-1 payroll could not be parsed*
+
+That sentence is wrapping inside the report's narrowest column and pushing row heights out.
+
+**Move the explanation to a footnote below the table**, keyed by a marker. Keep only the short state word in the cell.
+
+## 3 — Two different states are both shown as "AWAITING"
+
+These mean different things and currently look identical:
+
+- **AUG'26** — no payroll workbook registered yet. Genuinely awaiting.
+- **APR / MAY / JUL** — a workbook *is* registered but could not be parsed. That is a **failure**, not a wait.
+
+Use distinct labels so a reader can tell them apart — for example `AWAITING` versus `UNAVAILABLE`, with the reason in the footnote. Presentation only; do not change how either state is determined.
+
+## 4 — The partial TOTAL row reads as a normal total
+
+`TOTAL 4,081 h / 805,112 kg` covers only JUL and AUG, because APR, MAY and JUN failed to read. The warnings above explain it, but the row itself renders as an ordinary total — and it will be screenshotted, quoted and read without them.
+
+**Mark it visibly as partial** — a `(partial)` suffix, muted styling, or similar — so the number carries its own caveat. Do not change the figure.
+
+---
+
+## Also worth doing
+
+**The twelve-month table is mostly empty.** `SEP'26` through `MAR'27` render as full rows of dashes. The source workbook does show all twelve months, so keeping them is defensible — but consider a lighter treatment for future months so the populated rows stand out. **Your call; if you keep all twelve, say why.**
+
+**Fix the truncated banner.** Above the partial-payroll note there is a clipped line ending *"…the Paid Wages only 'AWAITING' — wages source or column can not be parsed - partial total cost rates are only successfully parsed payroll months"*. It is cut off and hard to read. Rewrite it as one clear sentence.
+
+---
+
+## Validate
+
+- Every figure identical: TOTAL 4,081 / 805,112 · JUL 2,834 / 565,171 · AUG 1,247 / 239,941 · Paid Wages 467,549 · SUMMARY-1 per-machine values and Util/Eff percentages all unchanged.
+- No payroll link or link-styled text renders in any table cell.
+- Column widths and the full-width SUMMARY-1 layout from the last round are preserved.
+- All warnings still render — relocated or reworded, never removed.
+- **No other report changes.** The export is untouched.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `metrics.py` and the R-44 helpers · `baselines.json` (**R-16**) · `mp_*.py` (**R-20**) · the `_failed_pairs` guard and its warning logic · `auth.py` · any builder arithmetic.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The four fixes as rendered · the decision on future months · confirmation that every figure is unchanged and no other report moved.
