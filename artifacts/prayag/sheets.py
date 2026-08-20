@@ -712,7 +712,11 @@ def _vanished_reports(plant: str, ym: str, vanished_fid: str) -> List[Tuple[List
 # ---------------------------------------------------------------------------
 # Generic Sheets REST helpers
 # ---------------------------------------------------------------------------
-_API_MAX_RETRIES = 4    # total attempts on a throttle/transient error
+# Dashboard page loads must remain responsive even when a workbook is unavailable.
+# Individual daily workbooks already degrade to an explicit partial-data warning, so
+# waiting four 30-second attempts only turns one bad source into a frozen page.
+_API_MAX_RETRIES = 2    # total attempts on a throttle/transient error
+_API_REQUEST_TIMEOUT_SECONDS = 12
 
 
 def _api_get(url: str, token: str) -> dict:
@@ -727,7 +731,7 @@ def _api_get(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     for attempt in range(_API_MAX_RETRIES):
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=_API_REQUEST_TIMEOUT_SECONDS) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
             if e.code == 404:

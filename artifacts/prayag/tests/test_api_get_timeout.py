@@ -20,7 +20,7 @@ import sheets
 
 def _patch_urlopen(exc, calls):
     def fake_urlopen(req, timeout=None):
-        calls.append(1)
+        calls.append(timeout)
         raise exc
     return fake_urlopen
 
@@ -41,6 +41,7 @@ def test_raw_timeout_is_wrapped_and_retried():
         assert len(calls) == sheets._API_MAX_RETRIES, (
             f"transient timeout must be retried {sheets._API_MAX_RETRIES}x, "
             f"got {len(calls)}")
+        assert calls == [sheets._API_REQUEST_TIMEOUT_SECONDS] * sheets._API_MAX_RETRIES
     finally:
         urllib.request.urlopen = orig
         sheets.time.sleep = orig_sleep
