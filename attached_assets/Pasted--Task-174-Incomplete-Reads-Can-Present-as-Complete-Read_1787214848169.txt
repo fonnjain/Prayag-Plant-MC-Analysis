@@ -1,0 +1,99 @@
+# Task #174 — Incomplete Reads Can Present as Complete
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis` (at `33f837f`).
+
+**Diagnose the open question first, then fix.** Two gaps are already confirmed from the code — you do not need to rediscover them.
+
+---
+
+## The evidence
+
+Two reads in one session, **no cache clear between them**, same window:
+
+| Read path | PTMT rows | Non-finishing total |
+|---|---:|---:|
+| via `get_data` (dashboard) | 3,968 | 400,286.78 kg |
+| direct daily-source read | **5,351** | **557,264.06 kg** |
+
+**1,383 records and ~157,000 kg apart**, with nothing marking the first as incomplete. It returned a smaller, entirely plausible figure. This is very likely what produced the historic **628,620.752 kg** PTMT reading.
+
+**This is not PTMT-specific.** `get_data` loads every plant through the same path.
+
+---
+
+## Gap 1 (confirmed) — the guard exists, most consumers ignore it
+
+`_failed_pairs` is produced at `sheets.py:2822` and consumed by **four** builders: Garden, HDPE, Pipe, Tank.
+
+**It is not consumed by:**
+`mgmt_moulding_summary` · `mgmt_gom_summary` · `mgmt_ptmt_summary` · `mgmt_labour_power` · `mgmt_pipe_moulds_summary` · `mgmt_ptmt_mould_eff`
+
+**And `app.py` does not consume it at all** — so the dashboard path (plant view, machine view, overview, report detail) has no partial-read protection.
+
+## Gap 2 (confirmed) — it only fires on an exception
+
+`sheets.py:2797`:
+
+```python
+except SheetReadError:
+    failed_pairs.append(pair)
+```
+
+A pair that returns **successfully with zero or fewer records than expected** never enters the list. That is precisely the case here: a read that neither threw nor returned everything.
+
+**So the guard did not fire because it cannot fire on a silent partial.** That answers the question before it is asked.
+
+---
+
+## STEP 1 — One thing still to establish
+
+Everything above is confirmed. What is not known is **why** the two reads differed.
+
+Report:
+1. Which `(plant, ym)` pairs did each path resolve? Print both lists.
+2. Did `get_data` receive fewer pairs, or the same pairs with fewer records each?
+3. Can the L1 in-process cache serve a partially-populated result? A stale slot has already produced two false findings in this project — the PTMT hours "missing from live HTML", and the Tank cold-cache incident.
+4. Is there any path where a `(plant, ym)` with a registered source returns an empty list **without** raising `SheetReadError`?
+
+**Report before fixing.** Do not clear caches — the cache state is evidence (**R-34**).
+
+---
+
+## STEP 2 — Fix
+
+**(a) Widen what counts as a failure.** A registered `(plant, ym)` that returns **zero records, or fewer than a previous successful read for the same pair**, must enter `failed_pairs` alongside the exception case. *"We could not read it"* and *"there was no production"* must never render the same way (**R-06**, **R-07**, Failure Mode #9).
+
+Distinguish carefully: a month with a registered source and genuinely no production is legitimate — HDPE April and June are real idle months. The signal is **a source that is registered and returns nothing where it previously returned rows**.
+
+**(b) Consume it everywhere.** Extend the existing pattern to the six builders that lack it, and to `app.py`'s `get_data` path so the dashboard, plant view, machine view and overview all surface it. Use the same sentinel; do not invent a second mechanism.
+
+**(c) Never cache a partial.** A result assembled from any failed or partial read must not be written to cache, so the next request retries.
+
+### Validate
+
+- Force a partial read: the affected plant shows a warning, not a smaller total.
+- Force a genuinely idle month: renders as zero **without** a warning. The two must be distinguishable.
+- Partial results are not cached; the next request retries.
+- **No figure moves on a complete read:** Pipe 1,283,300.15 / 6,507 h · Moulding 366,015.39 / 35,972 h · PTMT 524,467.607 net / 557,264.061 gross · Garden 262,818.23 · HDPE 23,817.24 · Tank litres and both rejection bases. If any moves, **stop**.
+- Add a fixture: a loader returning a partial population produces a flagged result, never a clean total.
+
+---
+
+## Why this matters beyond the symptom
+
+The acceptance fixtures committed in `b09a165` pin five figures **offline with mocked loaders**, so they pass regardless of what a live read returns. They verify the arithmetic, not that the arithmetic saw every row. Until a partial read is detectable, a live figure cannot be trusted just because its fixture passes.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` / R-39 (**R-41**) · `baselines.json` (**R-16**) · `mp_*.py` (**R-20**) · the R-44 net/gross helpers and `_aggregate_good_output()` · `auth.py`.
+
+No Sheets writes (**R-21**). **No cache clearing** (**R-34**).
+
+## Also add to the rulebook
+
+**Failure Mode #19 — a partial read reports success.** Two reads in one session returned 3,968 and 5,351 rows for the same window with no cache clear, and nothing marked the smaller one as incomplete. The 628,620.752 kg PTMT reading, and the grinding theory built on it, were both artefacts of comparing figures from different snapshots. **Before concluding a figure is wrong, confirm both readings came from the same record population.**
+
+## Report back
+
+Step 1: the four answers, before any change.
+Step 2: the widened failure condition, the six builders and `app.py` now consuming it, the forced partial-read and idle-month demonstrations, and confirmation that no figure moved on a complete read.
