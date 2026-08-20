@@ -1,0 +1,85 @@
+# Pipe M/C Summary — Presentation and Format Only
+
+Read `PRAYAG_RULES.md`.
+
+Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+---
+
+# SCOPE — READ FIRST
+
+**This is a presentation and layout task. Nothing else.**
+
+**Do NOT change:**
+- Any figure, any calculation, any builder logic
+- Anything relating to the **Cardinal Rule** or where data is sourced from
+- `sheets.py`, `parsers.py`, `metrics.py`, `pipe_reconcile.py`, `mgmt_pipe_summary.py` **calculations**
+- Any other report, page or segment
+- Machine planning
+
+**Every number on the page must be identical before and after.** If any figure moves, **stop**.
+
+Templates and styling only.
+
+---
+
+## Problem 1 — Google Sheets links in the Paid Wages column
+
+Each month row carries a visible link reading `KH-1 payroll ·` in the Paid Wages area. These are cut off at the table edge and, per the review, **are not wanted**.
+
+**Remove the links from the table cells.** The payroll workbook is the source and that provenance is worth keeping — but it belongs in the section note or a tooltip, not as a clickable link inside a data row.
+
+## Problem 2 — the SUMMARY table runs off the right edge
+
+The `SUMMARY — Monthly Labour & Output` table is cut off. Visible: Month, M/C Run Hours, Actual Output with Rej. (KG), Labour (Persons), Actual Paid Hours. **Not visible at all:** Paid Wages, Paid Hours Devoted by Per Person, Per Hour Cost on Paid Hours, Per KG Labour Cost.
+
+The cause is the **Month column being far too wide** — it is being stretched by the long orange note on the TOTAL row:
+
+> *Partial payroll through APR'26, MAY'26, JUN'26, JUL'26 · awaiting AUG'26*
+
+**Fix:**
+- Move that note **out of the TOTAL row cell** — put it beneath the table or in the section header, where it does not drive column width.
+- Constrain the Month column to its content width.
+- Make all nine columns fit without horizontal scrolling at normal window width. Right-align numerics, keep Month left-aligned.
+
+## Problem 3 — SUMMARY-1 is squeezed by the comparison panel
+
+The FY25-26 panel occupies roughly a third of the width, so the main table shows only Machine, Pipe Type, Ideal Hours, Actual Hours and Actual Output — with a horizontal scrollbar hiding Ideal Output, Avg Per Output on Hours, M/C Utilisation % and Output Efficiency %.
+
+**Fix:** give the main table the full width and place the FY25-26 comparison **below** it rather than beside it. All nine columns must be visible without scrolling.
+
+---
+
+## Note on "2025-26 data is not coming"
+
+The screenshot shows the reason:
+
+> ⚠ *Pipe M/C 25-26 tab read failed: Google Sheets API error (429).*
+
+That is a **transient rate-limit**, and the panel handling it correctly — *"FY25-26 comparison data not available — check Pipe M/C 25-26 tab"* is the failed-read guard working as designed, not a bug.
+
+**Do not change that logic.** But two presentation improvements are in scope:
+
+- Make it clearer this is a temporary read failure rather than absent data — the current wording reads like the tab is missing.
+- If a retry is already available, surface it. If not, say so; **do not build one** in this pass.
+
+---
+
+## Validate
+
+- **Every figure identical.** TOTAL 7,754 h / 1,523,241 kg / 128 labour / 37,619 paid hours; APR 833 / 190,494; MAY 1,832 / 344,000; JUN 1,008 / 183,635; JUL 2,834 / 565,171; AUG 1,247 / 239,941. SUMMARY-1 per-machine values and the 22,500 / 7,754 / 1,523,241 TOTAL all unchanged.
+- No payroll link renders inside any table cell.
+- Both tables show every column without horizontal scrolling.
+- The finishing-records warning, the partial-payroll note and the FY25-26 message all still render — relocated, not removed.
+- **No other report changes.** Confirm Moulding, GOM, Garden, HDPE and Tank pages are untouched.
+- The `.xlsx` export is unaffected — this is page layout only. Confirm its tab count and figures are unchanged.
+
+## Do not touch
+
+`pipe_reconcile.py` (**R-15**) · `tank_reconcile.py` (**R-41**) · `baselines.json` (**R-16**) · `metrics.py` and the R-44 helpers · `mp_*.py` (**R-20**) · the `_failed_pairs` guard · `auth.py` · any builder's arithmetic.
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The three layout fixes as rendered · confirmation that every figure listed above is unchanged · confirmation that no other report moved and the export is unaffected.
