@@ -757,7 +757,7 @@ def serial_pipe(ym: str) -> _SheetFlagPair:
 def serial_moulding(ym: str) -> _SheetFlagPair:
     from mgmt_moulding_summary import build_moulding_summary
     fy = _fy_from_ym(ym)
-    d = build_moulding_summary(fy)
+    d = build_moulding_summary(fy, through_ym=ym)
     if d.get("error"):
         return _build_failed(d["error"])
     flags: List[Flag] = []
@@ -909,7 +909,7 @@ def serial_moulding(ym: str) -> _SheetFlagPair:
 def serial_gom(ym: str) -> _SheetFlagPair:
     from mgmt_gom_summary import build_gom_summary
     fy = _fy_from_ym(ym)
-    d = build_gom_summary(fy)
+    d = build_gom_summary(fy, through_ym=ym)
     if d.get("error"):
         return _build_failed(d["error"])
     flags: List[Flag] = []

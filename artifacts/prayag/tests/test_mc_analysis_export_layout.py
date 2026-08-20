@@ -83,7 +83,9 @@ def test_gom_export_keeps_both_fys_and_month_value_triplets(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(mgmt_gom_summary, "build_gom_summary", lambda fy: payload)
+    monkeypatch.setattr(
+        mgmt_gom_summary, "build_gom_summary", lambda fy, **_kwargs: payload
+    )
 
     sheets, _ = serialisers.serial_gom("2026-05")
 
@@ -136,7 +138,9 @@ def test_pipe_mc_wise_export_keeps_hours_and_output_pairs(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(mgmt_pipe_summary, "build_pipe_summary", lambda fy: payload)
+    monkeypatch.setattr(
+        mgmt_pipe_summary, "build_pipe_summary", lambda fy, **_kwargs: payload
+    )
 
     sheets, _ = serialisers.serial_pipe("2026-05")
 
@@ -168,7 +172,11 @@ def test_moulding_mc_wise_export_adds_complete_machine_pivot(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(mgmt_moulding_summary, "build_moulding_summary", lambda fy: payload)
+    monkeypatch.setattr(
+        mgmt_moulding_summary,
+        "build_moulding_summary",
+        lambda fy, **_kwargs: payload,
+    )
 
     sheets, _ = serialisers.serial_moulding("2026-05")
 

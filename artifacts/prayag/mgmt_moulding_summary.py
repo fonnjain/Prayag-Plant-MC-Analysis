@@ -53,6 +53,12 @@ _FY_YM = {
     ],
 }
 
+# Management reports are published only through a reviewed month.  Exports pass
+# an explicit selected month; the direct page uses this approved default.
+MOULDING_REPORT_DEFAULT_THROUGH = {
+    "2627": "2026-07",
+}
+
 # ── In-process cache (10-minute TTL) ─────────────────────────────────────────
 _cache: dict = {}
 _cache_lock = threading.Lock()
@@ -83,6 +89,45 @@ def _mc_key(raw: str) -> str:
 
 def _norm(s) -> str:
     return re.sub(r"\s+", " ", str(s or "").upper().strip())
+
+
+def _mould_id_key(raw: str) -> str:
+    """Stable key for a mould ID in either roster or daily Report-12 labels."""
+    value = _norm(raw)
+    value = re.sub(r"^MOULDING\s+", "", value)
+    return re.sub(r"\s+", "", value)
+
+
+def _roster_mould_map(roster: list[dict]) -> dict[str, str]:
+    """Map roster mould IDs (A05(U-150)) to their global M/C identifiers."""
+    return {
+        _mould_id_key(entry.get("mould_id", "")): entry["mc_key"]
+        for entry in roster
+        if _mould_id_key(entry.get("mould_id", ""))
+    }
+
+
+def _record_roster_key(record, roster_by_mould: dict[str, str]) -> Optional[str]:
+    """Resolve a daily record to the roster's global M/C key.
+
+    Daily Report-12 calls a machine by its mould ID (for example,
+    ``MOULDING A05(U-150)``), while the management workbook labels the same
+    asset as ``M/C - 7``.  Annual/grid records may already carry an M/C label,
+    so preserve that as a compatibility fallback.
+    """
+    for raw in (getattr(record, "mould", ""), getattr(record, "machine", "")):
+        mapped = roster_by_mould.get(_mould_id_key(raw))
+        if mapped:
+            return mapped
+    key = _mc_key(getattr(record, "machine", "") or "")
+    return key if key in set(roster_by_mould.values()) else None
+
+
+def _record_band(record) -> str:
+    """Derive tonnage from the populated mould field or the daily machine label."""
+    return _mould_to_band(
+        getattr(record, "mould", "") or getattr(record, "machine", "")
+    )
 
 
 def _num(v) -> Optional[float]:
@@ -264,11 +309,14 @@ def _build_section1(records: list, n_months: int, roster: list[dict]) -> dict:
     Utilisation = actual_hours / ideal_hours × 100 — NOT capped (M/C-4 > 100%).
     """
     # Accumulate from records
+    roster_by_mould = _roster_mould_map(roster)
     mc_acc: dict = {}
     for r in records:
         if r.plant != "MOULDING":
             continue
-        key = _mc_key(r.machine or "")
+        key = _record_roster_key(r, roster_by_mould)
+        if not key:
+            continue
         if key not in mc_acc:
             mc_acc[key] = {"hrs": 0.0, "out": 0.0, "rej": 0.0, "runner": 0.0}
         mc_acc[key]["hrs"]    += float(r.actual_hours  or 0.0)
@@ -355,7 +403,7 @@ def _build_section2_fy2627(
     for r in records:
         if r.plant != "MOULDING":
             continue
-        band = _mould_to_band(r.mould or "")
+        band = _record_band(r)
         derived.append(dataclasses.replace(r, tonnage_band=band))
 
     band_results = rollup_by_tonnage_band(derived)
@@ -473,6 +521,7 @@ def _mc_monthly_moulding(records, fy: str, roster: list) -> dict:
     fy_ym_d = _FY_YM_DICT.get(fy, _FY_YM_DICT["2627"])
     all_yms = set(fy_ym_d.values())
     mc_keys = {item["mc_key"] for item in roster}
+    roster_by_mould = _roster_mould_map(roster)
 
     result: dict = {}
     for mc_key in mc_keys:
@@ -485,7 +534,7 @@ def _mc_monthly_moulding(records, fy: str, roster: list) -> dict:
         ym = getattr(r, "period", None)
         if not ym or ym not in all_yms:
             continue
-        mk = _mc_key(r.machine or "")
+        mk = _record_roster_key(r, roster_by_mould)
         if mk not in result:
             continue
         result[mk][ym]["hrs"]       += float(r.actual_hours or 0.0)
@@ -586,7 +635,9 @@ def _build_section4_mould_pivot(moulding_records, n_months: int, roster: list, f
 
 # ── Top-level builder ─────────────────────────────────────────────────────────
 
-def build_moulding_summary(fy: str = "2627") -> dict:
+def build_moulding_summary(
+    fy: str = "2627", through_ym: Optional[str] = None
+) -> dict:
     """Build the full Moulding M/C Summary report data dict.
 
     Cached in-process for CACHE_TTL seconds.  Returns:
@@ -601,7 +652,12 @@ def build_moulding_summary(fy: str = "2627") -> dict:
         'build_time_s': float,
     }
     """
-    cache_key = f"moulding_summary_{fy}"
+    fy_yms = _FY_YM.get(fy, _FY_YM["2627"])
+    selected_through = through_ym or MOULDING_REPORT_DEFAULT_THROUGH.get(fy)
+    if selected_through not in fy_yms:
+        selected_through = MOULDING_REPORT_DEFAULT_THROUGH.get(fy, fy_yms[-1])
+    report_yms = [ym for ym in fy_yms if ym <= selected_through]
+    cache_key = f"moulding_summary_{fy}_{selected_through}"
     with _cache_lock:
         entry = _cache.get(cache_key)
         if entry and (time.time() - entry["ts"]) < _CACHE_TTL:
@@ -612,7 +668,6 @@ def build_moulding_summary(fy: str = "2627") -> dict:
     import sheets as _sh
     token = _sh._get_access_token()
 
-    fy_yms  = _FY_YM.get(fy, _FY_YM["2627"])
     fy_label = f"FY 20{fy[:2]}-{fy[2:]}"
 
     try:
@@ -635,12 +690,31 @@ def build_moulding_summary(fy: str = "2627") -> dict:
                 "No machine rows found in SUMMARY tab — layout may have changed"
             )
 
-        # ── 3. Live records for FY26-27 ──────────────────────────────────────
-        # Only fetch periods that actually exist in the FY; skip future months
-        records_raw, _, _ = _sh.get_records(fy_yms)
-        moulding_records = [r for r in records_raw if r.plant == "MOULDING"]
+        # ── 3. Authoritative daily records for the selected FY window ────────
+        # Report-12 is the production source; Report-5 supplies its joined
+        # run-hours.  The annual grid is layout/verification only.
+        records_raw, daily_reports, _ = _sh.get_daily_records(report_yms)
+        roster_by_mould = _roster_mould_map(roster)
+        moulding_records = [
+            r for r in records_raw
+            if r.plant == "MOULDING"
+            and getattr(r, "period", None) in report_yms
+            and _record_roster_key(r, roster_by_mould)
+        ]
+        unmapped_active = sorted({
+            str(getattr(r, "machine", "") or "")
+            for r in records_raw
+            if r.plant == "MOULDING"
+            and getattr(r, "period", None) in report_yms
+            and not _record_roster_key(r, roster_by_mould)
+            and (
+                float(getattr(r, "actual_hours", 0.0) or 0.0) != 0.0
+                or float(getattr(r, "total_count", 0.0) or 0.0) != 0.0
+                or float(getattr(r, "reject_count", 0.0) or 0.0) != 0.0
+            )
+        })
 
-        # n_months = distinct periods with any MOULDING data (excludes future)
+        # n_months = distinct selected months with any Moulding data.
         active_periods = sorted({r.period for r in moulding_records if r.period})
         n_months = max(len(active_periods), 1)
 
@@ -652,6 +726,11 @@ def build_moulding_summary(fy: str = "2627") -> dict:
 
         # ── 6. Section 2 FY25-26: closed annual from SUMMARY-1 tab (R-03) ───
         s2_warnings: list[str] = []
+        if unmapped_active:
+            s2_warnings.append(
+                "Daily Moulding record(s) with output/hours did not map to the "
+                f"SUMMARY roster and were excluded: {', '.join(unmapped_active)}"
+            )
         s1_blocks = _parse_s1_tab(summary1_vals)
 
         block_2526 = s1_blocks.get("2526")
@@ -699,6 +778,8 @@ def build_moulding_summary(fy: str = "2627") -> dict:
             },
             "section3":  section3,
             "section4":  section4,
+            "through_ym": selected_through,
+            "report_yms": report_yms,
             "build_time_s": round(time.time() - t0, 2),
         }
 

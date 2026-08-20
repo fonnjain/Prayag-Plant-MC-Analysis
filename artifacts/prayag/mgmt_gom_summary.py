@@ -65,7 +65,10 @@ from mgmt_moulding_summary import (
     SUMMARY_TAB,
     IDEAL_HRS_PER_MC_PER_MONTH,
     _FY_YM,
+    MOULDING_REPORT_DEFAULT_THROUGH,
     _parse_summary_roster,
+    _record_roster_key,
+    _roster_mould_map,
     build_moulding_summary,
 )
 
@@ -118,7 +121,7 @@ def _build_section2(
     for r in records:
         if r.plant != "MOULDING":
             continue
-        band = _mould_to_band(r.mould or "")
+        band = _mould_to_band(r.mould or r.machine or "")
         if band not in acc:
             continue
         ym = r.period
@@ -221,13 +224,14 @@ def _build_section3(
 
     # Build global-mc_key → roster entry lookup
     mc_entry: dict[str, dict] = {e["mc_key"]: e for e in roster}
+    roster_by_mould = _roster_mould_map(roster)
 
     # Accumulate per (global mc_key, ym)
     acc: dict[str, dict[str, dict]] = {}
     for r in records:
         if r.plant != "MOULDING":
             continue
-        key = _mc_key(r.machine or "")
+        key = _record_roster_key(r, roster_by_mould)
         if key not in mc_entry:
             continue
         ym = r.period
@@ -310,7 +314,7 @@ def _build_section3(
 
 # ── Top-level builder ─────────────────────────────────────────────────────────
 
-def build_gom_summary(fy: str = "2627") -> dict:
+def build_gom_summary(fy: str = "2627", through_ym: Optional[str] = None) -> dict:
     """Build the full Group-of-Moulding Summary report data dict.
 
     Cached in-process for CACHE_TTL seconds.  Returns:
@@ -329,7 +333,8 @@ def build_gom_summary(fy: str = "2627") -> dict:
         'build_time_s': float,
     }
     """
-    cache_key = f"gom_summary_{fy}"
+    selected_through = through_ym or MOULDING_REPORT_DEFAULT_THROUGH.get(fy)
+    cache_key = f"gom_summary_{fy}_{selected_through}"
     with _cache_lock:
         entry = _cache.get(cache_key)
         if entry and (time.time() - entry["ts"]) < _CACHE_TTL:
@@ -341,13 +346,16 @@ def build_gom_summary(fy: str = "2627") -> dict:
     token = _sh._get_access_token()
 
     fy_yms   = _FY_YM.get(fy, _FY_YM["2627"])
+    if selected_through not in fy_yms:
+        selected_through = MOULDING_REPORT_DEFAULT_THROUGH.get(fy, fy_yms[-1])
+    report_yms = [ym for ym in fy_yms if ym <= selected_through]
     fy_label = f"FY 20{fy[:2]}-{fy[2:]}"
 
     try:
         # ── 1. Section 1: reuse (B) builder ──────────────────────────────────
         # build_moulding_summary returns {section2: {fy2627: [...], ...}};
         # that is our SUMMARY tab equivalent (band-level YoY, NET basis).
-        moulding_data = build_moulding_summary(fy)
+        moulding_data = build_moulding_summary(fy, through_ym=selected_through)
         if moulding_data.get("error"):
             raise RuntimeError(
                 f"(B) builder error (section1 unavailable): {moulding_data['error']}"
@@ -383,8 +391,14 @@ def build_gom_summary(fy: str = "2627") -> dict:
             raise RuntimeError("No machine rows found in SUMMARY tab — layout may have changed")
 
         # ── 3. Live records for FY26-27 ──────────────────────────────────────
-        records_raw, _, _ = _sh.get_records(fy_yms)
-        moulding_records  = [r for r in records_raw if r.plant == "MOULDING"]
+        records_raw, _, _ = _sh.get_daily_records(report_yms)
+        roster_by_mould = _roster_mould_map(roster)
+        moulding_records = [
+            r for r in records_raw
+            if r.plant == "MOULDING"
+            and getattr(r, "period", None) in report_yms
+            and _record_roster_key(r, roster_by_mould)
+        ]
 
         active_months = sorted({r.period for r in moulding_records if r.period})
         if not active_months:
@@ -413,6 +427,8 @@ def build_gom_summary(fy: str = "2627") -> dict:
             "section2":  s2,         # SUMMARY-1 equivalent — GROSS basis, band × month
             "section3":  s3,         # band tabs — GROSS basis, machine × month
             "band_order": BAND_ORDER,
+            "through_ym": selected_through,
+            "report_yms": report_yms,
             "build_time_s": round(time.time() - t0, 2),
         }
 

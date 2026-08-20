@@ -3469,9 +3469,9 @@ def management_reports_index():
             if rpt["id"] == "pipe":
                 rpt["view_url"] = f"/management-reports/pipe-summary?month={ym}"
             if rpt["id"] == "moulding":
-                rpt["view_url"] = "/management-reports/moulding-summary"
+                rpt["view_url"] = f"/management-reports/moulding-summary?month={ym}"
             if rpt["id"] == "gom":
-                rpt["view_url"] = "/management-reports/gom-summary"
+                rpt["view_url"] = f"/management-reports/gom-summary?month={ym}"
             if rpt["id"] == "garden":
                 rpt["view_url"] = "/management-reports/garden-pipe-summary"
             if rpt["id"] == "hdpe":
@@ -3655,7 +3655,7 @@ def mgmt_gom_summary_view():
     fy = request.args.get("fy", "2627")
     if fy not in _mgs._FY_YM:
         fy = "2627"
-    data = _mgs.build_gom_summary(fy)
+    data = _mgs.build_gom_summary(fy, through_ym=request.args.get("month"))
     return render_template(
         "report_mgmt_gom_summary.html",
         data=data,
@@ -3738,7 +3738,7 @@ def mgmt_moulding_summary_view():
     fy = request.args.get("fy", "2627")
     if fy not in _mms._FY_YM:
         fy = "2627"
-    data = _mms.build_moulding_summary(fy)
+    data = _mms.build_moulding_summary(fy, through_ym=request.args.get("month"))
     return render_template(
         "report_mgmt_moulding_summary.html",
         data=data,
