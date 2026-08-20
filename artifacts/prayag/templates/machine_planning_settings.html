@@ -306,6 +306,46 @@
   </div>
 </div>
 
+<!-- ════ SECTION 1c: PLUMBING WORKING DAYS ═════════════════════════════════ -->
+<div class="section-card" id="sec-working-days" style="margin-top:.75rem;">
+  <div class="section-header">
+    <div>
+      <span class="section-title">📅 Plumbing Working Days</span>
+      <span class="meta-chip" style="margin-left:.4rem;">
+        {{ 'Saved split' if working_days_configured else 'Mon–Sat fallback until saved' }}
+      </span>
+    </div>
+  </div>
+  <div class="section-body">
+    <p style="font-size:.78rem;color:#4b5563;margin:.05rem 0 .7rem;">
+      Set the four schedule-week day counts for one Plumbing month. The total must be no more
+      than that month’s calendar days. A full-calendar choice schedules every date; it does not
+      alter ideal hours or extend a plan automatically.
+    </p>
+    <div style="display:flex;gap:.55rem;align-items:end;flex-wrap:wrap;">
+      <label style="display:grid;gap:.2rem;font-size:.73rem;font-weight:700;color:#374151;">
+        Month
+        <input id="wd-month" type="month" value="{{ effective_month }}"
+               onchange="workingDaysMonthChanged()"
+               style="padding:.35rem .45rem;border:1px solid #d1d5db;border-radius:.35rem;">
+      </label>
+      {% for day in working_week_days %}
+      <label style="display:grid;gap:.2rem;font-size:.73rem;font-weight:700;color:#374151;">
+        Week {{ loop.index }}
+        <input id="wd-week-{{ loop.index }}" type="number" min="1" step="1" value="{{ day }}"
+               style="width:5rem;padding:.35rem .45rem;border:1px solid #d1d5db;border-radius:.35rem;">
+      </label>
+      {% endfor %}
+      <button class="action-btn btn-secondary" type="button" onclick="useFullCalendarMonth()">Use full calendar month</button>
+      <button class="action-btn btn-primary" type="button" onclick="saveWorkingDays()" {% if not db_available %}disabled{% endif %}>Save working days</button>
+    </div>
+    <div id="wd-help" style="font-size:.72rem;color:#6b7280;margin-top:.55rem;">
+      {{ effective_month }} has {{ working_days_in_month }} calendar days. Selected total:
+      <strong id="wd-total">{{ working_week_days | sum }}</strong> days.
+    </div>
+  </div>
+</div>
+
 {% set breakdown_open  = downtime_open | selectattr('kind','equalto','breakdown')   | list %}
 {% set maintenance_open = downtime_open | selectattr('kind','equalto','maintenance') | list %}
 {% set breakdown_hist  = all_downtime_records | selectattr('kind','equalto','breakdown')   | list %}
@@ -808,6 +848,66 @@ function showToast(msg, isErr) {
   el.textContent = msg;
   document.getElementById('toast-box').appendChild(el);
   setTimeout(() => el.remove(), 3000);
+}
+
+function workingDaysInMonth(month) {
+  const parts = (month || '').split('-');
+  if (parts.length !== 2) return 0;
+  const year = Number(parts[0]), mon = Number(parts[1]);
+  if (!Number.isInteger(year) || !Number.isInteger(mon) || mon < 1 || mon > 12) return 0;
+  return new Date(Date.UTC(year, mon, 0)).getUTCDate();
+}
+
+function workingDaysValues() {
+  return [1, 2, 3, 4].map((week) => Number(document.getElementById('wd-week-' + week).value));
+}
+
+function updateWorkingDaysHelp() {
+  const month = document.getElementById('wd-month').value;
+  const values = workingDaysValues();
+  const total = values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+  const days = workingDaysInMonth(month);
+  document.getElementById('wd-help').innerHTML =
+    `${month || 'Selected month'} has ${days || '—'} calendar days. Selected total: <strong id="wd-total">${total}</strong> days.`;
+}
+
+function workingDaysMonthChanged() {
+  updateWorkingDaysHelp();
+}
+
+function useFullCalendarMonth() {
+  const days = workingDaysInMonth(document.getElementById('wd-month').value);
+  if (!days) { showToast('Choose a valid month first', true); return; }
+  [1, 2, 3, 4].forEach((week, index) => {
+    document.getElementById('wd-week-' + week).value = index < 3 ? 7 : days - 21;
+  });
+  updateWorkingDaysHelp();
+}
+
+async function saveWorkingDays() {
+  const month = document.getElementById('wd-month').value;
+  const week_days = workingDaysValues();
+  const days = workingDaysInMonth(month);
+  if (!days) { showToast('Choose a valid month', true); return; }
+  if (week_days.some((value) => !Number.isInteger(value) || value < 1)) {
+    showToast('Enter four positive whole-day values', true); return;
+  }
+  if (week_days.reduce((sum, value) => sum + value, 0) > days) {
+    showToast('Working days cannot exceed ' + days + ' calendar days', true); return;
+  }
+  try {
+    const r = await fetch('/machine-planning/settings/working-days', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({effective_month: month, week_days}),
+    });
+    const j = await r.json();
+    if (!j.ok) { showToast('Error: ' + (j.error || 'could not save working days'), true); return; }
+    showToast('Working days saved for ' + month, false);
+    setTimeout(() => location.assign('/machine-planning/settings?tab=plumbing&month=' + encodeURIComponent(month)), 500);
+  } catch (e) {
+    showToast('Network error', true);
+  }
 }
 
 /* ── Rejection recompute ──────────────────────────────────────────────── */

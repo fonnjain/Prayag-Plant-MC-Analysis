@@ -4478,6 +4478,7 @@ def planning_corrective_replan():
     default_month = all_months[0] if all_months else "2026-08"
     month  = request.args.get("month", default_month)
     as_of  = request.args.get("as_of", _today())
+    configured_week_days = _mp_model.configured_week_days(_MP_SEGMENT, month)
 
     # ── Load planning demand (Report-1) ──────────────────────────────────────
     try:
@@ -4504,6 +4505,7 @@ def planning_corrective_replan():
             r12_values = actuals["r12"],
             as_of_date = as_of,
             file_id    = actuals.get("file_id", ""),
+            configured_week_days=configured_week_days,
         )
     except Exception as exc:
         app.logger.error("corrective_replan: compute failed: %s", exc, exc_info=True)
@@ -6202,9 +6204,17 @@ def mp_settings_view():
     tab = request.args.get("tab", "plumbing")
 
     available_months = _mp_model.get_available_months(_MP_SEGMENT)
-    em = _mp_seed.current_month()
+    default_month = _mp_seed.current_month()
+    requested_month = request.args.get("month", default_month)
+    try:
+        _mp_model.calendar_days_in_month(requested_month)
+        em = requested_month
+    except _mp_model.MpModelError:
+        em = default_month
     if not available_months:
         available_months = [em]
+    elif em not in available_months:
+        available_months = sorted(set(available_months + [em]), reverse=True)
 
     fy_groups, effective_fy, all_month_opts = _mp_fy_selectors(available_months, em)
 
@@ -6272,6 +6282,9 @@ def mp_settings_view():
         _mc_stats.values(),
         key=lambda x: ({"Extrusion": 0, "Moulding": 1}.get(x["mc_type"], 2), x["machine"])
     )
+    configured_week_days = _mp_model.configured_week_days(_MP_SEGMENT, em)
+    working_week_days = configured_week_days or list(_mp_model.DEFAULT_WEEK_DAYS)
+    working_days_in_month = _mp_model.calendar_days_in_month(em)
 
     return render_template(
         "machine_planning_settings.html",
@@ -6302,6 +6315,9 @@ def mp_settings_view():
         machine_roster_note=_roster_note,
         machine_status_summary=machine_status_summary,
         today_iso=today_iso,
+        working_week_days=working_week_days,
+        working_days_configured=bool(configured_week_days),
+        working_days_in_month=working_days_in_month,
     )
 
 
@@ -6575,10 +6591,13 @@ def mp_save_params():
     except (KeyError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     try:
+        existing = _mp_model.get_params(_MP_SEGMENT, em)
         _mp_model.upsert_params(_mp_model.MpParams(
             segment=_MP_SEGMENT, waste_pct=waste,
             pulverizer_pct=pulv, effective_month=em,
             min_run_block_hours=minblock,
+            week_days=(existing.week_days if existing else "[6,6,6,7]"),
+            week_days_configured=(existing.week_days_configured if existing else False),
             cpvc_mat_rate=cpvc_r, upvc_mat_rate=upvc_r,
             swr_mat_rate=swr_r,   agri_mat_rate=agri_r,
             rag_amber_pct=rag_amber, rag_red_pct=rag_red,
@@ -6586,6 +6605,33 @@ def mp_save_params():
         ))
         return jsonify({"ok": True})
     except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/machine-planning/settings/working-days", methods=["POST"])
+def mp_save_working_days():
+    """Save a Plumbing-only four-week working-day split for one calendar month."""
+    data = request.get_json(force=True) or {}
+    em = str(data.get("effective_month", "") or "").strip()
+    try:
+        week_days = _mp_model.validate_week_days(data.get("week_days"), em)
+        existing = _mp_model.get_params(_MP_SEGMENT, em)
+        params = dataclasses.replace(
+            existing or _mp_model.MpParams(segment=_MP_SEGMENT, effective_month=em),
+            week_days=json.dumps(week_days, separators=(",", ":")),
+            week_days_configured=True,
+        )
+        _mp_model.upsert_params(params)
+        return jsonify({
+            "ok": True,
+            "effective_month": em,
+            "week_days": week_days,
+            "calendar_days": _mp_model.calendar_days_in_month(em),
+        })
+    except _mp_model.MpModelError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        app.logger.error("mp_save_working_days: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -8275,6 +8321,7 @@ def mp_frozen_run_report(run_id: int, report_id: str):
                 month=month, plan_recs=plan_recs,
                 r11_values=actuals["r11"], r12_values=actuals["r12"],
                 as_of_date=_today(), file_id=actuals.get("file_id", ""),
+                configured_week_days=_mp_model.configured_week_days(_MP_SEGMENT, month),
             )
             xlsx_b = _mcr_run.corrective_replan_bytes(cr_result)
             fname  = f"corrective_replan_{month}.xlsx"

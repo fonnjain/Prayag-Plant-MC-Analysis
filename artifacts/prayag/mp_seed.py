@@ -1223,9 +1223,12 @@ def seed_params(effective_month: str = "") -> dict:
       Material fallback rates: CPVC 145.6, UPVC 250, SWR 295, AGRI 300 kg/hr
     """
     em = effective_month or current_month()
+    existing = mp_model.get_params(SEGMENT, em)
     mp_model.upsert_params(MpParams(
         segment=SEGMENT, waste_pct=4.0, pulverizer_pct=25.0, effective_month=em,
         min_run_block_hours=2.0,
+        week_days=(existing.week_days if existing else "[6,6,6,7]"),
+        week_days_configured=(existing.week_days_configured if existing else False),
         cpvc_mat_rate=_PIPE_MAT_DEFAULTS["CPVC"],
         upvc_mat_rate=_PIPE_MAT_DEFAULTS["UPVC"],
         swr_mat_rate=_PIPE_MAT_DEFAULTS["SWR"],

@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import json
+import calendar
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -84,9 +85,15 @@ class ScheduleResult:
     params_used: dict
     downtime_machine_days: int = 0    # total machine-days lost to downtime
     downtime_hours_lost: float = 0.0  # machine-hours lost to downtime
+    capacity_advisory: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        return dataclasses.asdict(self)
+        result = dataclasses.asdict(self)
+        # Keep old pending/frozen payloads byte-shape compatible until a
+        # Plumbing calendar has explicitly been configured.
+        if result["capacity_advisory"] is None:
+            result.pop("capacity_advisory")
+        return result
 
     @staticmethod
     def from_dict(d: dict) -> "ScheduleResult":
@@ -112,6 +119,7 @@ class ScheduleResult:
             params_used=d.get("params_used", {}),
             downtime_machine_days=d.get("downtime_machine_days", 0),
             downtime_hours_lost=d.get("downtime_hours_lost", 0.0),
+            capacity_advisory=d.get("capacity_advisory"),
         )
 
 
@@ -130,6 +138,59 @@ class _WorkItem:
     def sort_key(self) -> Tuple:
         w = self.first_requested_week if self.first_requested_week > 0 else 1
         return (w, -self.remaining_hrs, self.item_code)
+
+
+def _week_days_for_schedule(segment: str, params_row: Optional[object]) -> List[int]:
+    """Read a safe four-week split without changing legacy non-Plumbing behavior."""
+    if params_row:
+        week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
+        if segment == "PLUMBING" and not getattr(params_row, "week_days_configured", False):
+            week_days_str = "[6,6,6,7]"
+    else:
+        week_days_str = "[6,6,6,7]"
+    try:
+        week_days: List[int] = json.loads(week_days_str)
+    except Exception:
+        week_days = [6, 6, 6, 7]
+    while len(week_days) < 4:
+        week_days.append(7)
+    return [max(1, d) for d in week_days[:4]]
+
+
+def _capacity_advisory(
+    unfinished: List[UnfinishedItem],
+    mc_params: Dict[str, dict],
+    effective_month: str,
+    week_days: List[int],
+    segment: str,
+    working_days_configured: bool,
+) -> Optional[dict]:
+    """Describe unplaced capacity-limited demand without changing allocation."""
+    if segment != "PLUMBING" or not working_days_configured:
+        return None
+    remaining_kg = round(sum(
+        max(0.0, float(item.remaining_kg or 0.0))
+        for item in unfinished
+        if not item.downtime_reason
+    ), 1)
+    if remaining_kg <= 0:
+        return None
+    try:
+        year_s, month_s = effective_month.split("-", 1)
+        days_in_month = calendar.monthrange(int(year_s), int(month_s))[1]
+    except (TypeError, ValueError):
+        return None
+    configured_days = sum(week_days)
+    additional_hours = max(0, days_in_month - configured_days) * sum(
+        2.0 * float(params.get("hours_per_shift") or 10.0)
+        for params in mc_params.values()
+    )
+    return {
+        "remaining_kg": remaining_kg,
+        "configured_days": configured_days,
+        "calendar_days": days_in_month,
+        "additional_hours": round(additional_hours, 1),
+    }
 
 
 # ── Day-level scheduler ───────────────────────────────────────────────────────
@@ -355,18 +416,14 @@ def run_shift_schedule(
     params_row = _mp.get_params(segment, effective_month)
     if params_row:
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
-        week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
     else:
         min_run_block = 2.0
-        week_days_str = "[6,6,6,7]"
-
-    try:
-        week_days: List[int] = json.loads(week_days_str)
-    except Exception:
-        week_days = [6, 6, 6, 7]
-    while len(week_days) < 4:
-        week_days.append(7)
-    week_days = [max(1, d) for d in week_days[:4]]
+    week_days = _week_days_for_schedule(segment, params_row)
+    working_days_configured = bool(
+        segment == "PLUMBING"
+        and params_row
+        and getattr(params_row, "week_days_configured", False)
+    )
     total_days = sum(week_days)
 
     # ── Load machine configs ──────────────────────────────────────────────────
@@ -555,6 +612,10 @@ def run_shift_schedule(
         },
         downtime_machine_days=downtime_machine_days_count,
         downtime_hours_lost=round(downtime_hours_lost_total, 1),
+        capacity_advisory=_capacity_advisory(
+            unfinished, mc_params, effective_month, week_days, segment,
+            working_days_configured,
+        ),
     )
 
 
@@ -581,18 +642,14 @@ def run_fitting_schedule(
     params_row = _mp.get_params(segment, effective_month)
     if params_row:
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
-        week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
     else:
         min_run_block = 2.0
-        week_days_str = "[6,6,6,7]"
-
-    try:
-        week_days: List[int] = json.loads(week_days_str)
-    except Exception:
-        week_days = [6, 6, 6, 7]
-    while len(week_days) < 4:
-        week_days.append(7)
-    week_days = [max(1, d) for d in week_days[:4]]
+    week_days = _week_days_for_schedule(segment, params_row)
+    working_days_configured = bool(
+        segment == "PLUMBING"
+        and params_row
+        and getattr(params_row, "week_days_configured", False)
+    )
     total_days = sum(week_days)
 
     # ── Load moulding machine configs ─────────────────────────────────────────
@@ -807,4 +864,8 @@ def run_fitting_schedule(
         },
         downtime_machine_days=downtime_machine_days_count,
         downtime_hours_lost=round(downtime_hours_lost_total, 1),
+        capacity_advisory=_capacity_advisory(
+            unfinished, mc_params, effective_month, week_days, segment,
+            working_days_configured,
+        ),
     )

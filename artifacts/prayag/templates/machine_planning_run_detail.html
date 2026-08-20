@@ -827,6 +827,16 @@
     </div>
 
     {% if schedule_result.unfinished %}
+    {% if schedule_result.capacity_advisory %}
+    <div style="margin-top:.65rem;background:#fff7ed;border:1px solid #fdba74;border-radius:.45rem;
+                padding:.5rem .65rem;font-size:.75rem;color:#9a3412;">
+      <strong>Capacity-limited demand:</strong>
+      {{ "{:,.0f}".format(schedule_result.capacity_advisory.remaining_kg) }} kg could not be placed within the configured
+      {{ schedule_result.capacity_advisory.configured_days }} working days. Extending to the full calendar month
+      ({{ schedule_result.capacity_advisory.calendar_days }} days) would add
+      {{ "{:,.0f}".format(schedule_result.capacity_advisory.additional_hours) }} machine-hours.
+    </div>
+    {% endif %}
     <details style="margin-top:.65rem;">
       <summary style="font-size:.75rem;font-weight:700;color:#991b1b;cursor:pointer;">
         ⚠️ {{ schedule_result.unfinished | length }} item{{ 's' if (schedule_result.unfinished | length) > 1 else '' }}

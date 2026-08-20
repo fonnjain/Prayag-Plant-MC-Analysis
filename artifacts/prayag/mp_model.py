@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import json
+import calendar
 import datetime
 import dataclasses
 from typing import Any, Dict, List, Optional
@@ -115,6 +116,9 @@ class MpParams:
     min_run_block_hours: float = 2.0
     night_changeover_allowed: bool = False
     week_days: str = "[6,6,6,7]"
+    # Distinguishes legacy/default [6,6,6,7] rows from a split a planner saved.
+    # Corrective re-planning retains its Mon–Sat calendar until this is true.
+    week_days_configured: bool = False
     cpvc_mat_rate: float = 0.0   # 0 = compute from seeded items
     upvc_mat_rate: float = 0.0
     swr_mat_rate: float = 0.0
@@ -401,6 +405,7 @@ ALTER TABLE mp_machine  ADD COLUMN IF NOT EXISTS working_days_month   INT     NO
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS min_run_block_hours  NUMERIC NOT NULL DEFAULT 5;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS night_changeover_allowed BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS week_days            TEXT NOT NULL DEFAULT '[6,6,6,7]';
+ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS week_days_configured BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS cpvc_mat_rate NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS upvc_mat_rate NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE mp_params   ADD COLUMN IF NOT EXISTS swr_mat_rate  NUMERIC NOT NULL DEFAULT 0;
@@ -700,10 +705,11 @@ def upsert_params(row: MpParams) -> int:
         INSERT INTO mp_params
             (segment, waste_pct, pulverizer_pct, effective_month,
              min_run_block_hours, night_changeover_allowed, week_days,
+              week_days_configured,
              cpvc_mat_rate, upvc_mat_rate, swr_mat_rate, agri_mat_rate,
              rag_amber_pct, rag_red_pct, hours_dev_pct,
              updated_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
         ON CONFLICT ON CONSTRAINT mp_params_natural
         DO UPDATE SET
             waste_pct               = EXCLUDED.waste_pct,
@@ -711,6 +717,7 @@ def upsert_params(row: MpParams) -> int:
             min_run_block_hours     = EXCLUDED.min_run_block_hours,
             night_changeover_allowed= EXCLUDED.night_changeover_allowed,
             week_days               = EXCLUDED.week_days,
+            week_days_configured    = EXCLUDED.week_days_configured,
             cpvc_mat_rate           = EXCLUDED.cpvc_mat_rate,
             upvc_mat_rate           = EXCLUDED.upvc_mat_rate,
             swr_mat_rate            = EXCLUDED.swr_mat_rate,
@@ -725,6 +732,7 @@ def upsert_params(row: MpParams) -> int:
             cur.execute(sql, (
                 row.segment, row.waste_pct, row.pulverizer_pct, row.effective_month,
                 row.min_run_block_hours, row.night_changeover_allowed, row.week_days,
+                row.week_days_configured,
                 row.cpvc_mat_rate, row.upvc_mat_rate, row.swr_mat_rate, row.agri_mat_rate,
                 row.rag_amber_pct, row.rag_red_pct, row.hours_dev_pct,
             ))
@@ -892,6 +900,7 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
             min_run_block_hours=float(row["min_run_block_hours"]) if row.get("min_run_block_hours") is not None else 2.0,
             night_changeover_allowed=bool(row.get("night_changeover_allowed", False)),
             week_days=str(row.get("week_days") or "[6,6,6,7]"),
+            week_days_configured=bool(row.get("week_days_configured", False)),
             cpvc_mat_rate=float(row["cpvc_mat_rate"]) if row.get("cpvc_mat_rate") is not None else 0.0,
             upvc_mat_rate=float(row["upvc_mat_rate"]) if row.get("upvc_mat_rate") is not None else 0.0,
             swr_mat_rate=float(row["swr_mat_rate"])  if row.get("swr_mat_rate")  is not None else 0.0,
@@ -901,6 +910,47 @@ def get_params(segment: str, effective_month: str) -> Optional[MpParams]:
             hours_dev_pct=float(row["hours_dev_pct"]) if row.get("hours_dev_pct") is not None else 15.0,
         )
     except Exception:
+        return None
+
+
+DEFAULT_WEEK_DAYS: List[int] = [6, 6, 6, 7]
+
+
+def calendar_days_in_month(effective_month: str) -> int:
+    """Return the number of calendar days in a YYYY-MM planning month."""
+    try:
+        year_s, month_s = effective_month.split("-", 1)
+        year, month = int(year_s), int(month_s)
+        if f"{year:04d}-{month:02d}" != effective_month:
+            raise ValueError
+        return calendar.monthrange(year, month)[1]
+    except (TypeError, ValueError):
+        raise MpModelError("effective_month must be in YYYY-MM format")
+
+
+def validate_week_days(value: Any, effective_month: str) -> List[int]:
+    """Validate the four Plumbing working-day buckets for a calendar month."""
+    if not isinstance(value, list) or len(value) != 4:
+        raise MpModelError("Enter exactly four weekly working-day values.")
+    if any(isinstance(day, bool) or not isinstance(day, int) or day < 1 for day in value):
+        raise MpModelError("Each weekly working-day value must be a positive whole number.")
+    if sum(value) > calendar_days_in_month(effective_month):
+        raise MpModelError(
+            f"Working days cannot exceed the {calendar_days_in_month(effective_month)} calendar days in {effective_month}."
+        )
+    return list(value)
+
+
+def configured_week_days(segment: str, effective_month: str) -> Optional[List[int]]:
+    """Return an explicitly saved Plumbing split, otherwise None for legacy fallback."""
+    if segment != "PLUMBING":
+        return None
+    row = get_params(segment, effective_month)
+    if not row or not row.week_days_configured:
+        return None
+    try:
+        return validate_week_days(json.loads(row.week_days), effective_month)
+    except (json.JSONDecodeError, MpModelError, TypeError):
         return None
 
 

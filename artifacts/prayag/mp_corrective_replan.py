@@ -508,12 +508,24 @@ def _working_days_in_month(year: int, month: int) -> List[datetime.date]:
     ]
 
 
-def _count_working_days(year: int, month: int, as_of: datetime.date) -> Tuple[int, int, int]:
+def _count_working_days(
+    year: int,
+    month: int,
+    as_of: datetime.date,
+    configured_week_days: Optional[List[int]] = None,
+) -> Tuple[int, int, int]:
     """Return (total, elapsed, remaining) Mon–Sat working days.
 
     *elapsed* = working days strictly before *as_of* (i.e. completed days).
     *remaining* = working days from *as_of* inclusive to month end.
     """
+    if configured_week_days is not None:
+        total = sum(configured_week_days)
+        _, calendar_days = calendar.monthrange(year, month)
+        completed_calendar_days = min(calendar_days, max(0, (as_of - datetime.date(year, month, 1)).days))
+        elapsed = (total * completed_calendar_days) // calendar_days
+        return total, elapsed, total - elapsed
+
     all_wd = _working_days_in_month(year, month)
     elapsed   = sum(1 for d in all_wd if d < as_of)
     remaining = sum(1 for d in all_wd if d >= as_of)
@@ -532,6 +544,7 @@ def compute_corrective_replan(
     as_of_date: str,                       # 'YYYY-MM-DD'
     file_id: str = "",
     cap_feasible_by_cat: Optional[Dict[str, float]] = None,
+    configured_week_days: Optional[List[int]] = None,
     # ^ If the Capacity-Feasible Plan has been run for this month, pass a dict
     #   {category_label → feasible_pcs} here.  Used as a fallback display figure
     #   for "not started" categories and shown alongside the pace projection.
@@ -555,6 +568,8 @@ def compute_corrective_replan(
     as_of_date         : today's date ('YYYY-MM-DD')
     file_id            : source Google Sheets file ID (for provenance)
     cap_feasible_by_cat: optional {category → feasible pcs} from capacity plan
+    configured_week_days: explicitly saved Plumbing week-day buckets. When
+                          absent, retain the historical Mon–Sat calendar.
 
     INVARIANTS enforced (warn on violation, never raise)
     ----------------------------------------------------
@@ -566,7 +581,9 @@ def compute_corrective_replan(
     mnum  = int(month[5:7])
     as_of = datetime.date.fromisoformat(as_of_date)
 
-    wd_total, wd_elapsed, wd_remaining = _count_working_days(year, mnum, as_of)
+    wd_total, wd_elapsed, wd_remaining = _count_working_days(
+        year, mnum, as_of, configured_week_days=configured_week_days
+    )
 
     # --- Parse daily actuals ------------------------------------------------
     r11_daily              = _parse_r11_daily_pcs(r11_values, year, mnum)
