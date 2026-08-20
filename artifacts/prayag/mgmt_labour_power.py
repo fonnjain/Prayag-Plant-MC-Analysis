@@ -18,7 +18,8 @@ Sources:
     are UNIT-level only and show — in this view).
   production (kg) — our own recomputed daily records + costing module.
   per-kg metrics — computed: wages ÷ our_prod_kg, JVVL ÷ our_prod_kg.
-    production basis is nett (total − reject) for PTMT / Garden / HDPE,
+    production basis is plant-aware: PTMT is total − reject; Garden / HDPE,
+    Pipe / Fittings total_count is already net,
     secondary_counts['kg'] for Tank, gross pipe+fitting for Plumbing.
 
 Do-not-touch list (PRAYAG_RULES): costing_labour.py · costing_power.py ·
@@ -599,15 +600,19 @@ def accum_record_kg(r, seg: str) -> float:
 
     For Tank the authoritative kg figure comes from secondary_counts['kg']
     (a separate kg-specific measurement independent of the primary litre unit).
-    For all other plant-backed segments nett = total_count − reject_count
-    (gross output minus rejected material) following the canonical metrics model.
-    reject_count is in the same unit as total_count for PTMT / Garden / HDPE.
+    PTMT daily total_count is gross, so its net contribution is
+    total_count − reject_count.  Garden / Garden WB / HDPE and Pipe / Fittings
+    daily total_count is already net block-tab output; rejection is a separate
+    fact and must not be subtracted again.
     """
     if seg == "Tank":
         return float((r.secondary_counts or {}).get("kg") or 0.0)
-    gross  = float(r.total_count or 0.0)
-    reject = float(getattr(r, "reject_count", 0.0) or 0.0)
-    return max(0.0, gross - reject)
+    total = float(r.total_count or 0.0)
+    plant = str(getattr(r, "plant", "") or "").upper()
+    if plant == "PTMT" or seg == "PTMT":
+        reject = float(getattr(r, "reject_count", 0.0) or 0.0)
+        return max(0.0, total - reject)
+    return total
 
 
 def accumulate_monthly(records, seg_plants: dict) -> dict:
@@ -623,6 +628,11 @@ def accumulate_monthly(records, seg_plants: dict) -> dict:
     """
     totals: dict[str, float] = {seg: 0.0 for seg in seg_plants}
     for r in records:
+        # Match the Part-B production scope: finishing/regrind throughput is not
+        # new segment production and must not make the card denominator diverge
+        # from Rejection & Production.
+        if getattr(r, "is_finishing", False):
+            continue
         for seg, plants in seg_plants.items():
             if r.plant in plants:
                 totals[seg] += accum_record_kg(r, seg)
@@ -644,8 +654,9 @@ def get_segment_prod_kg(
     """Return {segment_name: {ym: float|None}} for every segment.
 
     Plumbing comes from the costing module (gross: pipe + fitting from R-12).
-    PTMT / Garden Pipe / HDPE Pipe use nett kg = total_count − reject_count
-    from daily production records (canonical metrics definition; R-19).
+    PTMT uses nett kg = total_count − reject_count from daily production
+    records. Garden Pipe, HDPE Pipe, and the Pipe/Fittings daily sources carry
+    net total_count values already; rejection is not subtracted here.
     Tank uses secondary_counts['kg'] which is already a direct kg measurement.
     Segments with no data source (CP / Hardware / Sink) always return None.
     Months with no records return None (never zero — R-07/R-08).

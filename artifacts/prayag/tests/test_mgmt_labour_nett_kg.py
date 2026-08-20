@@ -40,20 +40,27 @@ class TestAccumRecordKg:
         r = _R("PTMT", total_count=10_000.0, reject_count=500.0)
         assert mlp.accum_record_kg(r, "PTMT") == 9_500.0
 
-    def test_garden_nett_subtracts_reject(self):
-        """Garden Pipe nett = total_count − reject_count."""
+    def test_garden_total_count_is_already_net(self):
+        """Garden block-tab output is net; rejection is not subtracted again."""
         r = _R("GARDEN", total_count=5_000.0, reject_count=200.0)
-        assert mlp.accum_record_kg(r, "Garden Pipe") == 4_800.0
+        assert mlp.accum_record_kg(r, "Garden Pipe") == 5_000.0
 
     def test_garden_wb_nett(self):
-        """GARDEN_WB also subtracts reject under the Garden Pipe segment."""
+        """GARDEN_WB block-tab output is also already net."""
         r = _R("GARDEN_WB", total_count=3_000.0, reject_count=100.0)
-        assert mlp.accum_record_kg(r, "Garden Pipe") == 2_900.0
+        assert mlp.accum_record_kg(r, "Garden Pipe") == 3_000.0
 
-    def test_hdpe_nett_subtracts_reject(self):
-        """HDPE nett = total_count − reject_count."""
+    def test_hdpe_total_count_is_already_net(self):
+        """HDPE machine block-tab output is net; rejection stays separate."""
         r = _R("HDPE", total_count=8_000.0, reject_count=400.0)
-        assert mlp.accum_record_kg(r, "HDPE Pipe") == 7_600.0
+        assert mlp.accum_record_kg(r, "HDPE Pipe") == 8_000.0
+
+    def test_pipe_and_fittings_total_count_is_already_net(self):
+        """Pipe and Moulding/Fittings output is net before separate rejection."""
+        pipe = _R("PIPE", total_count=8_000.0, reject_count=400.0)
+        fittings = _R("MOULDING", total_count=6_000.0, reject_count=300.0)
+        assert mlp.accum_record_kg(pipe, "Pipe") == 8_000.0
+        assert mlp.accum_record_kg(fittings, "Fittings") == 6_000.0
 
     def test_nett_never_goes_negative(self):
         """Nett is clamped at 0 if reject exceeds total (data anomaly guard)."""
@@ -123,8 +130,8 @@ class TestAccumulateMonthly:
         ]
         result = mlp.accumulate_monthly(records, mlp._SEG_PLANTS)
         assert result["PTMT"]        == 90.0
-        assert result["Garden Pipe"] == 180.0
-        assert result["HDPE Pipe"]   == 270.0
+        assert result["Garden Pipe"] == 200.0
+        assert result["HDPE Pipe"]   == 300.0
         assert result["Tank"]        == 50.0
 
     def test_irrelevant_plants_ignored(self):
@@ -146,7 +153,7 @@ class TestAccumulateMonthly:
             _R("GARDEN_WB", total_count=500.0,  reject_count=25.0),
         ]
         result = mlp.accumulate_monthly(records, mlp._SEG_PLANTS)
-        assert result["Garden Pipe"] == pytest_approx(1_425.0)
+        assert result["Garden Pipe"] == pytest_approx(1_500.0)
 
     def test_ptmt_fy_total_example(self):
         """Acceptance figure from spec: PTMT FY ≈ 537,109 kg.
@@ -254,6 +261,40 @@ class TestPartBDailyFacts:
         assert calls == [["2026-04"]]
         assert totals["Pipe"]["2026-04"]["net"] == 100.0
         assert "2026-08" not in totals["Pipe"]
+
+    def test_production_cards_match_part_b_net_for_garden_and_hdpe(
+        self, monkeypatch,
+    ):
+        """R-22: card denominators and Part B R&P share plant-aware net facts."""
+        import costing_model
+        import sheets
+
+        records = [
+            _daily_record("GARDEN", total_count=100, reject_count=10),
+            _daily_record("GARDEN_WB", total_count=50, reject_count=0),
+            _daily_record("HDPE", total_count=200, reject_count=20),
+            _daily_record("PTMT", total_count=300, reject_count=30),
+            _daily_record(
+                "GARDEN", total_count=9_999, reject_count=999,
+                is_finishing=True,
+            ),
+        ]
+        monkeypatch.setattr(
+            sheets, "get_daily_records", lambda _yms: (records, [], []),
+        )
+        monkeypatch.setattr(
+            costing_model, "get_labour_monthly", lambda *_args: [],
+        )
+
+        cards = mlp.get_segment_prod_kg("2627", through_ym="2026-04")
+        part_b = mlp._load_part_b_daily_totals("2627", ["2026-04"])
+
+        assert cards["Garden Pipe"]["2026-04"] == 150.0
+        assert cards["Garden Pipe"]["2026-04"] == part_b["Garden"]["2026-04"]["net"]
+        assert cards["HDPE Pipe"]["2026-04"] == 200.0
+        assert cards["HDPE Pipe"]["2026-04"] == part_b["HDPE"]["2026-04"]["net"]
+        # PTMT's different source contract remains unchanged.
+        assert cards["PTMT"]["2026-04"] == 270.0
 
     def test_segment_labour_export_passes_its_selected_month_to_builder(
         self, monkeypatch,
