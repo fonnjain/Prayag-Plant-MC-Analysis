@@ -20,6 +20,62 @@ import math
 import ideal_hours
 
 
+OUTPUT_BASIS_NET = "net"
+OUTPUT_BASIS_GROSS = "gross"
+OUTPUT_BASIS_UNKNOWN = "unknown"
+
+# Every listed plant's live source contract has been verified against its parser
+# and management report.  Unknown plants remain unknown rather than silently
+# receiving a net/gross transform.
+_OUTPUT_BASIS_BY_PLANT = {
+    "GARDEN": OUTPUT_BASIS_NET,
+    "GARDEN_WB": OUTPUT_BASIS_NET,
+    "HDPE": OUTPUT_BASIS_NET,
+    "MOULDING": OUTPUT_BASIS_NET,
+    "PIPE": OUTPUT_BASIS_NET,
+    "PTMT": OUTPUT_BASIS_GROSS,
+    "TANK": OUTPUT_BASIS_NET,
+    "TANK_VN": OUTPUT_BASIS_NET,
+    "TANK_WB": OUTPUT_BASIS_NET,
+}
+
+
+def _plant_output_basis(plant: str) -> str:
+    """Return the documented output basis without guessing for unknown plants."""
+    return _OUTPUT_BASIS_BY_PLANT.get(str(plant or "").strip().upper(), OUTPUT_BASIS_UNKNOWN)
+
+
+def output_basis(record) -> str:
+    """Return a Record's output basis, safely supporting pre-field L2 pickles."""
+    basis = str(getattr(record, "output_basis", "") or "").strip().lower()
+    if basis in (OUTPUT_BASIS_NET, OUTPUT_BASIS_GROSS):
+        return basis
+    return _plant_output_basis(getattr(record, "plant", ""))
+
+
+def _can_combine_rejection(record) -> bool:
+    """True only when production and rejection are in the same known unit."""
+    output_unit = str(getattr(record, "unit", "") or "").strip().lower()
+    reject_unit = str(getattr(record, "reject_unit", "") or "").strip().lower()
+    return not output_unit or not reject_unit or output_unit == reject_unit
+
+
+def net_output(record) -> float:
+    """Return good/net output without subtracting a rejection in another unit."""
+    total = float(getattr(record, "total_count", 0.0) or 0.0)
+    if output_basis(record) == OUTPUT_BASIS_GROSS and _can_combine_rejection(record):
+        return max(0.0, total - float(getattr(record, "reject_count", 0.0) or 0.0))
+    return total
+
+
+def gross_output(record) -> float:
+    """Return gross output without combining a rejection in another unit."""
+    total = float(getattr(record, "total_count", 0.0) or 0.0)
+    if output_basis(record) == OUTPUT_BASIS_NET and _can_combine_rejection(record):
+        return total + float(getattr(record, "reject_count", 0.0) or 0.0)
+    return total
+
+
 @dataclass
 class Record:
     # --- identity / dimensions ---
@@ -45,6 +101,11 @@ class Record:
     reject_count: float = 0.0
     reject_unit: str = ""          # if set, reject_count is in this unit (not ``unit``)
     reject_denominator: float = 0.0  # denominator for rejection_pct when reject_unit ≠ unit
+    # Contract for ``total_count``: net/good output or gross output before
+    # rejection.  Set at Record construction from the plant contract unless an
+    # ingestion source supplies it explicitly.  ``output_basis()`` below still
+    # handles old L2-cached Records that predate this field.
+    output_basis: str = ""
     runner_lumps: float = 0.0
     planned_output: float = 0.0
     ideal_output: float = 0.0     # monthly: ideal output for the period
@@ -105,6 +166,12 @@ class Record:
                                     # (e.g. GARDEN MACHINE n block tabs). Causes
                                     # rejection_pct to be suppressed rather than shown
                                     # as a false 0% ("not captured" ≠ "no rejection").
+
+    def __post_init__(self):
+        if str(self.output_basis or "").strip().lower() not in (
+            OUTPUT_BASIS_NET, OUTPUT_BASIS_GROSS,
+        ):
+            self.output_basis = _plant_output_basis(self.plant)
 
 
 # Backwards-compatible alias for older call sites / demo data.
@@ -453,7 +520,7 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
                 mc_eff_run += r.actual_hours
                 mc_eff_den += _imh
 
-    m.good_count = m.total_count - m.reject_count
+    m.good_count = sum(net_output(r) for r in prod_rows)
     m.run_time = m.actual_hours * 60.0
     m.shift_len_min = m.ideal_hours * 60.0
 
@@ -514,8 +581,8 @@ def compute_metrics(rows: List[Record]) -> MetricsResult:
             row_ppt = r.shift_len_min - r.planned_stops_min
             row_run = max(row_ppt - r.downtime_min, 0.0)
             weighted_ideal += row_run * r.ideal_rate
-            oee_total += r.total_count
-            oee_good += (r.total_count - r.reject_count)
+            oee_total += gross_output(r)
+            oee_good += net_output(r)
         ideal_theoretical = weighted_ideal / 60.0
         m.performance_raw = _safe_div(oee_total, ideal_theoretical)
         m.performance = min(m.performance_raw, 1.0)

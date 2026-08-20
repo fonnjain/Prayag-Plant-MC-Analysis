@@ -18,6 +18,7 @@ if PRAYAG_DIR not in sys.path:
 import mgmt_labour_power as labour_power
 import mgmt_moulding_summary as moulding
 import mgmt_pipe_summary as pipe_summary
+from metrics import Record, compute_metrics, gross_output, net_output
 import pipe_reconcile
 import sheets
 
@@ -232,3 +233,61 @@ def test_garden_and_hdpe_fixture_pins_card_and_part_b_net_totals(monkeypatch):
     assert cards["HDPE Pipe"]["2026-07"] == pytest.approx(
         HDPE_JULY_MC1_KG + HDPE_JULY_MC2_KG, abs=0.000001,
     )
+
+
+def _oee_record(plant, total_count, reject_count, *, unit="kg", reject_unit=""):
+    """One complete shift-log row so the OEE quality path is exercised offline."""
+    return Record(
+        grain="daily",
+        period="2026-07",
+        date="2026-07-01",
+        plant=plant,
+        machine="M/C-1",
+        unit=unit,
+        total_count=total_count,
+        reject_count=reject_count,
+        reject_unit=reject_unit,
+        has_oee=True,
+        shift_len_min=60.0,
+        ideal_rate=200.0,
+    )
+
+
+def test_net_basis_output_and_oee_quality_fixture():
+    """Garden output is net: quality must be net/gross, never a false 100%."""
+    garden = _oee_record("GARDEN", total_count=100.0, reject_count=5.0)
+
+    assert garden.output_basis == "net"
+    assert net_output(garden) == 100.0
+    assert gross_output(garden) == 105.0
+
+    result = compute_metrics([garden])
+    assert result.good_count == 100.0
+    assert result.quality == pytest.approx(100.0 / 105.0)
+    # R-28 scope: rejection percentage remains reject / source total_count.
+    assert result.rejection_pct == pytest.approx(5.0 / 100.0)
+
+
+def test_gross_basis_output_and_oee_quality_fixture():
+    """PTMT output is gross: quality must be net/gross from the same contract."""
+    ptmt = _oee_record("PTMT", total_count=105.0, reject_count=5.0)
+
+    assert ptmt.output_basis == "gross"
+    assert net_output(ptmt) == 100.0
+    assert gross_output(ptmt) == 105.0
+
+    result = compute_metrics([ptmt])
+    assert result.good_count == 100.0
+    assert result.quality == pytest.approx(100.0 / 105.0)
+    assert result.rejection_pct == pytest.approx(5.0 / 105.0)
+
+
+def test_unit_mismatch_never_combines_tank_rejection_fixture():
+    """R-09: Tank primary litres cannot be combined with kg rejection."""
+    tank = _oee_record(
+        "TANK", total_count=100.0, reject_count=5.0,
+        unit="Ltr", reject_unit="kg",
+    )
+
+    assert net_output(tank) == 100.0
+    assert gross_output(tank) == 100.0
