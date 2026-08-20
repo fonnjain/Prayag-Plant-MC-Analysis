@@ -1,0 +1,38 @@
+Read PRAYAG_RULES.md. Read-only diagnostic. Change nothing.
+No Sheets writes (R-21), no cache clearing (R-34) — the cache state is evidence.
+
+The whole app is slow, not just management reports. Those were fixed by closed-source caching
+and scoping (Pipe 51s -> 6s). The other pages may be slow for the same reason or a different
+one. Measure before concluding.
+
+=== 1. MEASURE ===
+Load each page cold and warm, and report both times:
+  /                      /plant              /machine           /performance (overview)
+  /reports               /reports/<detail>   /costing           /costing-analysis
+  /planning              /machine-planning   /management-reports (index)
+  /confirmation          /manifest           /verify             /data-health
+Report the slowest five with their times.
+
+=== 2. FOR EACH SLOW PAGE, FIND WHERE THE TIME GOES ===
+ a. How many Sheets calls does it make? Which plants and months?
+ b. Does it call get_daily_records WITHOUT a source_plants filter? Garden was loading 31
+    workbook pairs to render 7 before it was scoped. Report every unscoped caller.
+ c. Is the closed-month 7-day cache applying, or is it re-reading closed months every load?
+ d. Is time going to Sheets at all, or to something else — Postgres queries, N+1 loops,
+    template rendering, JSON serialisation of large payloads?
+Be specific: "8 seconds in Sheets, 2 in Postgres, 1 rendering" is useful; "it is slow" is not.
+
+=== 3. SHARED PATHS ===
+get_data() feeds plant, machine and overview. Report what it loads and whether it is scoped to
+what the caller needs. If it always loads every plant regardless of the filter applied, that is
+the same defect Garden had, on the most-used pages in the app.
+
+=== 4. NON-SHEETS COSTS ===
+ - Postgres: any query without an index on a large table? mp_* and cache tables especially.
+ - Is any page serialising a very large payload to JSON per request?
+ - Is the L1 in-process cache being used, or bypassed?
+
+=== REPORT ===
+The timing table, the slowest five with their breakdown, every unscoped get_daily_records
+caller, and a ranked list of what to fix first by time saved per unit of risk.
+Recommend; do not implement.
