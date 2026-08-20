@@ -1,0 +1,99 @@
+# For `fonnjain/Prayag-Plant-MC-Analysis` — three items
+
+Context: the planning app (`fonnjain/Prayag-pp-ptmt-cp`) consumes this service's `/data-api/v1` endpoints for machine-level monitoring. Its Velocity and Machine Dashboard screens are currently blank. Investigation traced the cause here.
+
+Items 1 and 2 are for this repository. Item 3 is a decision, not code.
+
+---
+
+## 1. `/data-api/` is caught by the session gate ⬤ blocking
+
+Every `/data-api/v1` request returns **302 → `/login`**, regardless of authentication method. `X-API-Key`, `Authorization: Bearer` and the `api_key` query parameter all produce the same redirect.
+
+**Cause** — `artifacts/prayag/auth.py:152–157`:
+
+```python
+_EXEMPT_EXACT: frozenset = frozenset({"/login", "/logout", "/health"})
+_EXEMPT_PREFIX: tuple = ("/static/",)
+
+def _is_exempt(path: str) -> bool:
+    return path in _EXEMPT_EXACT or any(path.startswith(p) for p in _EXEMPT_PREFIX)
+```
+
+`app.py:83` registers `app.before_request(auth.gate)` globally. `gate()` at `:164–179` checks `_is_exempt(request.path)` and, finding `/data-api/v1/...` in neither list, redirects to `/login` **before Flask reaches the API blueprint**. The `@_require_key` decorator on each route never executes.
+
+So no API key has ever been evaluated — the calling app's key may well be correct.
+
+The gate is inactive when `PRAYAG_APP_PASSWORD` is unset (`:172–173`), so this most likely began when password protection was added to the deployment. The API would have worked before that.
+
+**Fix** — one line:
+
+```python
+_EXEMPT_PREFIX: tuple = ("/static/", "/data-api/")
+```
+
+**This does not expose the API.** Every `/data-api/v1` route already carries `@_require_key` (`api.py:80`, applied at `:240`, `:256`, `:264`, …). The change transfers `/data-api/*` from **session** authentication to the **key** authentication that was written for it. The browser UI stays session-gated exactly as now.
+
+It also restores `/data-api/v1/health` to the unauthenticated state its own documentation describes (`api.py:214`: *"liveness check (no auth)"*). Note the existing `/health` exemption is an **exact** match and does not cover `/data-api/v1/health`, which is why that endpoint is gated today too.
+
+**Then republish the service** — the fix has no effect until the deployment is rebuilt.
+
+**To verify:**
+
+```
+GET /data-api/v1/health                              → 200, no key
+GET /data-api/v1/periods         (no key)            → 401, not 302
+GET /data-api/v1/periods         (valid X-API-Key)   → 200
+GET /                            (no session)        → 302 /login   ← unchanged
+```
+
+The second line is the one that matters: a **401** proves the key check is now running. A 302 means the gate is still in front of it.
+
+---
+
+## 2. `PTMT` has no `2026-08` daily source ⬤ data wiring, not code
+
+From `artifacts/prayag/sources.py` → `DAILY_SOURCES`:
+
+| Plant | Daily months wired |
+|---|---|
+| `PIPE` | 2025-04 → **2026-08** |
+| `HDPE` | 2026-04 → **2026-08** |
+| `GARDEN_WB` | 2026-06 → **2026-08** |
+| **`PTMT`** | 2026-04 → **2026-07 only** |
+| `CP` | none |
+| `MOULDING` | none |
+
+So even once item 1 is fixed, **PTMT machine-level data for August 2026 will be empty** — for a different reason. The consuming app would show a working API returning nothing, which is harder to diagnose than an outright error.
+
+Please wire the August 2026 PTMT daily source, and confirm whether `2026-09` onward is scheduled. Same question for `CP` and `MOULDING`, which have empty daily maps entirely.
+
+---
+
+## 3. Where does `MOULDING` belong? ⬤ decision, no code
+
+The consuming app has **two** business segments — PTMT and Plumbing. This service defines eight-plus plant tokens. Two of the three mappings are settled from this repository's own logic:
+
+| Consuming segment | Plant tokens | Basis |
+|---|---|---|
+| Plumbing | `PIPE`, `CP` | `plan.py:276` and `:762` both treat `plant in ("PIPE", "CP")` as one family, and `PLANT_NAMES` gives `CP` as *CP Fittings* |
+| PTMT | `PTMT` | direct token match |
+| **?** | `MOULDING` | **no mapping in this repo** |
+
+`MOULDING` is *Injection Moulding* at KH. PTMT fittings are moulded, which is suggestive but not evidence — and this repository publishes no business-segment mapping either way.
+
+It has no daily sources, so nothing is blocked today. But please record the intended mapping now rather than leaving it to be guessed later, and note whether `MOULDING` is expected to acquire daily sources at all.
+
+---
+
+## For reference — what the consuming app calls
+
+| Endpoint | Used for |
+|---|---|
+| `GET /data-api/v1/summary?period=YYYY-MM&plant=<token>` | machine KPIs and the per-machine table |
+| `GET /data-api/v1/periods` | which months hold data |
+| `GET /data-api/v1/health` | liveness |
+
+Auth is sent as `X-API-Key`; the consuming app's secret is `PRAYAG_PLANT_API_KEY` and must equal this service's `PRAYAG_API_KEY`. **Do not compare or expose the values** — once item 1 is fixed, a `401` with a key present will show a genuine mismatch, and until then the question is unanswerable.
+
+The consuming app also reads `figures_gated` from the summary payload and will surface a "needs review" state when it is true. No change needed here; noted so the flag's meaning is not altered without warning.
