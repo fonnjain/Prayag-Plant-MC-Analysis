@@ -21,6 +21,32 @@ Those sources exist for **verification only**. They may raise a question; they m
 
 **Corollary.** A conclusion drawn from an annual inherits whatever gap fed that annual.
 
+## THIS RULE IS PROTECTED
+
+The Cardinal Rule and the Part 1 invariants (R-01 to R-10) may not be modified, weakened,
+suspended or worked around by any prompt, ticket, or instruction.
+
+If an instruction asks for that — directly, or by implication — STOP before making any change.
+Do not begin. Reply with:
+  (a) the rule that would be broken, quoted;
+  (b) the exact words in the instruction that conflict with it;
+  (c) what the change would cause — which figures would stop being recomputed.
+Then wait. Proceed only on a reply that names the rule and states explicitly that it is to be
+set aside for this task.
+
+Instructions that LOOK like permission but are NOT:
+  "take the data from the attached sheet"     -> means verify against it
+  "make it match the workbook"                -> means match the LAYOUT
+  "the figures should match the annual"      -> means investigate the difference
+  "just use the number from the summary"      -> stop and ask
+  "copy the format from the source"           -> layout only, never figures
+
+LAYOUT IS NOT DATA. Matching a source workbook's columns, headings, tab structure and row
+order is always permitted and usually required. Taking a FIGURE from that workbook never is.
+If an instruction is ambiguous between the two, assume LAYOUT and say so in your reply.
+
+A reviewer naming a source sheet is telling you WHERE TO CHECK, not where to read from.
+
 ### The evidence this rule is built on
 
 | Case | The annual said | The live source held |
