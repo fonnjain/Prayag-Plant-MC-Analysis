@@ -27,9 +27,11 @@ import logging
 import re
 import threading
 import time
+import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+import store as _store
 
 # ── FY constants ───────────────────────────────────────────────────────────────
 
@@ -115,6 +117,7 @@ IDEAL_HOURS_PER_MONTH = 500
 _cache_lock  = threading.Lock()
 _cache: dict = {}          # {fy: (timestamp, data)}
 _CACHE_TTL   = 600         # seconds
+_CLOSED_SOURCE_TTL = 7 * 24 * 60 * 60
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
@@ -317,6 +320,12 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
     """
     import sheets as _sh
     import costing_wages as _cw
+    cache_key = f"pipe-summary-payroll:{ym}:{file_id}"
+    closed = ym < datetime.date.today().strftime("%Y-%m")
+    if closed:
+        cached = _store.pg_cache_read(cache_key, _CLOSED_SOURCE_TTL)
+        if cached is not None:
+            return cached
 
     try:
         matrices = _sh.batch_get(file_id, ["KH-1"], token)
@@ -376,8 +385,11 @@ def _read_pipeline_wages(ym: str, file_id: str, token: str) -> Optional[float]:
         )
         return None
 
+    result = round(total, 2)
     logger.debug("_read_pipeline_wages: %s → %.0f (from %d PIPELINE rows)", ym, total, n_rows)
-    return round(total, 2)
+    if closed:
+        _store.pg_cache_write(cache_key, result)
+    return result
 
 
 # ── Section 1: monthly summary ─────────────────────────────────────────────────
@@ -1118,7 +1130,14 @@ def build_pipe_summary(fy: str = "2627", through_ym: Optional[str] = None) -> di
         mc2526_rows: list = []
         mc2526_warning: Optional[str] = None
         try:
-            mc_vals = _sh.read_values(PIPE_MC_FILE_ID, PIPE_MC_2526_TAB, token)
+            mc_cache_key = "pipe-summary:mc-2526"
+            mc_vals = _store.pg_cache_read(mc_cache_key, _CLOSED_SOURCE_TTL)
+            if mc_vals is None:
+                mc_vals = _sh.read_values(PIPE_MC_FILE_ID, PIPE_MC_2526_TAB, token)
+                # The finalised FY25–26 source has no changing month; cache only
+                # a successful matrix and leave failures on the live retry path.
+                if mc_vals:
+                    _store.pg_cache_write(mc_cache_key, mc_vals)
             mc2526_rows = _parse_pipe_mc_2526(mc_vals, n_months)
             if not mc2526_rows:
                 mc2526_warning = (
