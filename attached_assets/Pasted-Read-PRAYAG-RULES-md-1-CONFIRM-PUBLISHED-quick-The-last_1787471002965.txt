@@ -1,0 +1,42 @@
+Read PRAYAG_RULES.md.
+
+=== 1. CONFIRM PUBLISHED (quick) ===
+The last round mentioned a workflow restart and a preview check, but not a publish. The live
+site served a broken build over the weekend, so be explicit:
+ - commit hash on origin/main, working tree clean, local and remote in sync
+ - deployment republished, deployed build matching origin/main HEAD
+ - live check on prayag-plant.com, not the preview: /machine-planning/results returns 200
+
+=== 2. REPORT THE ANCHOR DRIFT ===
+You mentioned "report-anchor drift" as an interruption finding but never gave the figures.
+Report current values against these, and for each that moved say whether it is a live source
+change or something else. Do not adjust anything (R-30).
+  Pipe 1,283,300.15 kg / 6,507 h · Moulding 366,015.39 kg / 35,972 h · PTMT 524,467.607 net /
+  557,264.061 gross · Garden 262,818.23 kg · HDPE 23,817.24 kg · Tank litres and both
+  rejection bases
+Also report current build times per report — closed-source caching had Pipe at ~6s and
+Moulding at ~1s.
+
+=== 3. SCOPE get_data() — report first, then implement ===
+get_data() calls get_daily_records(daily_file_months) with NO source_plants filter, then
+applies plant/segment/machine filters AFTER every source has loaded. So a single-plant view
+still schedules all configured pairs. This is the same defect Garden had, on the busiest pages
+in the app: /performance, /plant, /machine, /confirmation, /data, report detail.
+
+REPORT BEFORE CHANGING:
+ a. For a request filtered to ONE plant, how many pairs are scheduled versus used?
+ b. The source-plant to emitted-plant mapping. This is the risk:
+      - R-38: MOULDING has no DAILY_SOURCES entry — it is emitted from the PIPE workbook's
+        Report-12 spec. A naive filter of {"MOULDING"} returns nothing.
+      - GARDEN and GARDEN_WB are separate sources feeding one segment view.
+      - TANK, TANK_VN, TANK_WB likewise.
+    Give the full mapping before writing any filter.
+ c. Which views are genuinely cross-plant and must stay unscoped — overview, and anything
+    aggregating multiple segments.
+
+THEN implement: derive source_plants from the requested filter where the mapping is
+unambiguous; leave cross-plant views unscoped.
+
+VALIDATE: build times before and after per route. NO figure moves anywhere — a scoping filter
+must never change what a page computes. If any does, STOP.
+Run the new route smoke suite before and after.
