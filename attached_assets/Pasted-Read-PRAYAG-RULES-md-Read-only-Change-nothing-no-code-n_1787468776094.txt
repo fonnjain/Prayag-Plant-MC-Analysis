@@ -1,0 +1,54 @@
+Read PRAYAG_RULES.md. Read-only. Change nothing — no code, no restart, no publish, no Sheets
+writes (R-21), no cache clearing (R-34).
+
+Work stopped on Saturday due to a billing interruption. Before resuming, establish exactly
+where things were left. Do not assume anything was finished.
+
+=== 1. REPOSITORY STATE ===
+ - Current HEAD hash and commit message.
+ - Is the working tree clean, or are there uncommitted or untracked changes? List them.
+ - Is local main in sync with origin/main, or ahead/behind? Give both hashes.
+ - List the last 15 commits with hash, date and message.
+
+=== 2. WHAT WAS THE LAST THING IN PROGRESS ===
+ - Was any change left uncommitted or half-applied?
+ - Any task in the tracker still open, in progress, or proposed-but-not-started? List with
+   number and title.
+ - Any file modified but not tested, or tested but not pushed?
+
+=== 3. IS THE LIVE SITE HEALTHY ===
+The last confirmed problem was a NameError breaking get_data(), which took prayag-plant.com
+down on /performance, /plant, /machine, /confirmation, /data and report detail. A two-line fix
+was applied and the workflow restarted, but it was never confirmed whether the DEPLOYMENT was
+republished.
+
+Check the LIVE site, not the preview:
+  prayag-plant.com/performance /plant /machine /confirmation /data /reports/pipe_summary
+Report the status of each. If any still returns 500, the fix never reached the deployment.
+
+Also report: is the deployed build's commit hash the same as origin/main HEAD?
+
+=== 4. ANY REGRESSION FROM THE INTERRUPTION ===
+Load each management report and confirm the anchors:
+  Pipe 1,283,300.15 kg / 6,507 h · Moulding 366,015.39 kg / 35,972 h · PTMT 524,467.607 net ·
+  Garden 262,818.23 kg · HDPE 23,817.24 kg · Tank litres and both rejection bases
+Report build times too — the closed-source caching had brought Pipe to ~6s, Moulding ~1s.
+If times have regressed, the cache may have expired or been cleared during the interruption.
+
+=== 5. WHAT WAS QUEUED BUT NOT DONE ===
+From my notes, these were identified and not completed. Confirm the status of each:
+ a. Scope get_data() by requested plant — it currently loads all configured daily pairs
+    regardless of filter, same defect Garden had. NOTE: R-38 means PIPE emits MOULDING, so a
+    naive filter would break Moulding views. Needs report-first.
+ b. Make /manifest advisory review non-blocking — 26 of its 31 seconds is an outbound Claude
+    call; the manifest facts should not wait on advisory prose (R-10).
+ c. Cache or batch the four planning Sheets reads — ~3.3s of a cold /planning load.
+ d. Extend the current-month-open vs source-unavailable wording to reports other than Garden.
+ e. Add a smoke test loading every main route and asserting 200 — the NameError passed 43
+    tests because they exercised builders, not the shared get_data() path.
+ f. Service account instead of the shared user OAuth token — infrastructure, not code, but it
+    is the only change that raises the quota ceiling rather than working beneath it.
+
+=== REPORT ===
+Repository state, what was in flight, live site health, anchor figures and build times, and the
+status of each queued item. Recommend what to do first. Change nothing.
