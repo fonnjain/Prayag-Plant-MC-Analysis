@@ -27,6 +27,7 @@ from sheets import (
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
     daily_failed_pair_details,
+    _get_drive_token,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
     load_material_records, load_maintenance_records, load_manpower_records,
     load_yield_records, load_mixer_records, load_toolroom_records,
@@ -7514,7 +7515,7 @@ def mp_results():
 
     # Staleness warnings — best-effort, never blocks render
     try:
-        _drive_tok = sheets._get_drive_token()
+        _drive_tok = _get_drive_token()
         staleness_warnings = _mp_seed_prov.build_staleness_warnings(
             _MP_SEGMENT, drive_token=_drive_tok
         )

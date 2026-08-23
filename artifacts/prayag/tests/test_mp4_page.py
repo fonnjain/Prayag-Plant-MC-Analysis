@@ -91,6 +91,7 @@ def client(monkeypatch, tmp_path):
     flask_app.app.config["TESTING"] = True
     flask_app.app.config["SECRET_KEY"] = "test"
     flask_app.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(flask_app.auth, "app_password", lambda: None)
 
     # Patch DB-dependent store functions
     monkeypatch.setattr("mp_model.AVAILABLE", False)
@@ -190,6 +191,35 @@ class TestResultsPage:
     def test_results_redirect_without_session(self, client):
         r = client.get("/machine-planning/results", follow_redirects=False)
         assert r.status_code == 302
+
+    def test_results_shows_stale_seed_warning(self, client, monkeypatch):
+        """The results route must surface staleness warnings, not swallow them."""
+        self._upload(client)
+        monkeypatch.setattr("app._get_drive_token", lambda: "drive-token")
+        monkeypatch.setattr(
+            "app._mp_seed_prov.build_staleness_warnings",
+            lambda segment, drive_token: ["Seeded machine data is 3 days behind Drive."],
+        )
+
+        r = client.get("/machine-planning/results")
+
+        assert r.status_code == 200
+        assert b"Seed data notice" in r.data
+        assert b"3 days behind Drive" in r.data
+
+    def test_results_hides_seed_warning_when_current(self, client, monkeypatch):
+        """A current plan must not show the stale-data banner."""
+        self._upload(client)
+        monkeypatch.setattr("app._get_drive_token", lambda: "drive-token")
+        monkeypatch.setattr(
+            "app._mp_seed_prov.build_staleness_warnings",
+            lambda segment, drive_token: [],
+        )
+
+        r = client.get("/machine-planning/results")
+
+        assert r.status_code == 200
+        assert b"Seed data notice" not in r.data
 
     def test_no_weight_in_coverage_panel(self, client, monkeypatch):
         monkeypatch.setattr("mp_model.get_bom_weight_rows", lambda *a, **kw: [])
