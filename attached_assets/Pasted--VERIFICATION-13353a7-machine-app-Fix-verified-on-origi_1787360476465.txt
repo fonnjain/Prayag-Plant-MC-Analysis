@@ -1,0 +1,80 @@
+# VERIFICATION — `13353a7` (machine app)
+
+Fix verified on `origin/main`. Minimal and correct — **but the same bug survives at one more site, and it is currently invisible.**
+
+---
+
+## ✅ The fix
+
+`artifacts/prayag/app.py`, **+2 / −1**:
+
+```python
++    daily_failed_pair_details,          # added to the existing `from sheets import (…)`
+-    return sheets.daily_failed_pair_details(reports)
++    return daily_failed_pair_details(reports)
+```
+
+Exactly the right shape. The module uses `from sheets import (…)` at line 24, which binds the imported **names** but never binds `sheets` itself — so any `sheets.<anything>` reference raises `NameError` at runtime. Importing the function and calling it directly is the correct fix, not aliasing the module.
+
+Six routes confirmed 200 with no traceback content. Preserving the two specific failure messages — the Garden Pipe (WB) high-water-mark reason and the open-month notice — is the right call: a generic "unavailable" would have lost the diagnosis.
+
+---
+
+## ⚠ The same bug survives at `app.py:7517`
+
+```python
+# Staleness warnings — best-effort, never blocks render
+try:
+    _drive_tok = sheets._get_drive_token()          # ← `sheets` is not bound
+    staleness_warnings = _mp_seed_prov.build_staleness_warnings(
+        _MP_SEGMENT, drive_token=_drive_tok
+    )
+except Exception:
+    staleness_warnings = []
+```
+
+Inside `mp_results()` (line 7463). I checked the scope: **no `import sheets` anywhere in that function**, and no module-level binding — line 24 is `from sheets import (…)`, which does not create the name. So this raises `NameError` on every call.
+
+**It doesn't crash the page, and that is the problem.** `except Exception` catches `NameError`, sets `staleness_warnings = []`, and the page renders 200 with **no staleness warnings — ever**. Not "no warnings to show", but "the warning system has never run".
+
+So it passes your route check, which is why it wasn't caught by the 200s. The only symptom is an absence, which is the hardest kind to notice.
+
+**Fix, matching the one you just made:**
+
+```python
+# line 24 — add to the existing import
+from sheets import (…, _get_drive_token, …)
+
+# line 7517
+_drive_tok = _get_drive_token()
+```
+
+Or `import sheets as _sh` inside the function, as `mp_results`' neighbours already do at lines 2944, 4499 and 8316 (`import sheets as _sht` / `_sheets_cr` / `_sh_run`). Either works; the local-import style is already the file's convention.
+
+**And narrow the except.** `except Exception` around a block whose only real risk is a network call will swallow every coding error in it. `except (requests.RequestException, TimeoutError)` — or at minimum log the exception rather than discarding it — turns the next occurrence into something findable.
+
+**That was the only remaining instance.** I grepped every `sheets.<name>(` call in the file: two total, and yours fixed one.
+
+---
+
+## Suggested reply
+
+> Fix verified — `13353a7`, +2/−1, exactly the right shape. `from sheets import (…)` at line 24 binds the imported names but never binds `sheets` itself, so importing the function and calling it directly is correct rather than aliasing the module. Six routes 200, no traceback content, and keeping the two specific failure messages was the right call — a generic "unavailable" would have lost the diagnosis.
+>
+> **The same bug survives at `app.py:7517`, inside `mp_results()`:**
+>
+> ```python
+> try:
+>     _drive_tok = sheets._get_drive_token()      # `sheets` is not bound here either
+>     staleness_warnings = _mp_seed_prov.build_staleness_warnings(...)
+> except Exception:
+>     staleness_warnings = []
+> ```
+>
+> No `import sheets` in that function and no module-level binding, so it raises `NameError` on every call. **It doesn't crash the page** — `except Exception` catches it and sets `staleness_warnings = []`, so the page renders 200 with no staleness warnings ever. Not "nothing to warn about", but "the warning system has never run". That's why the route checks passed.
+>
+> Fix the same way: add `_get_drive_token` to the line-24 import and call it directly, or `import sheets as _sh` inside the function — the file already does that at lines 2944, 4499 and 8316.
+>
+> And please narrow the `except`. `except Exception` around a block whose only real risk is a network call swallows every coding error in it — which is exactly what hid this one. `except (requests.RequestException, TimeoutError)`, or at minimum log the exception instead of discarding it.
+>
+> That was the only remaining instance — I grepped every `sheets.<name>(` call in the file; there were two, and yours fixed one.
