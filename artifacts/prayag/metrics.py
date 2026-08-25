@@ -14,7 +14,7 @@ Utilisation and Output Efficiency instead and mark ``oee_available = False``.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional
 import math
 
 import ideal_hours
@@ -192,6 +192,10 @@ class Record:
     source_family: str = ""
     source_file: str = ""
     source_tab: str = ""
+    # Google Sheets row number (1-based) when this Record maps to one physical
+    # source row. Aggregated or synthesized records deliberately keep None: a
+    # representative row would not be a safe unique source identity.
+    source_row: Optional[int] = None
 
     # --- tonnage band (Group-of-Moulding) ---
     tonnage_band: str = ""        # "150" | "200" | "250" | "275" | "350" | "450"

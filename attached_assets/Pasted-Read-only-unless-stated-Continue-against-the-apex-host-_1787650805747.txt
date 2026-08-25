@@ -1,0 +1,37 @@
+Read-only unless stated. Continue against the apex host https://prayag-plant.com/data-api/v1
+
+1. ROW COUNT — is 50 a cap?
+   Run: GET /records?period=2026-08-24  and report the exact total row count.
+   Then run the same for period=2026-08-23 and 2026-08-22 and report counts.
+   Search the code for any hardcoded limit/slice/head/cap (e.g. [:50], LIMIT 50, MAX_ROWS)
+   applied to /records or get_data(). If a cap exists, tell me where and what it is.
+   PTMT alone has 55 machines — 50 rows for all plants looks truncated. Confirm or disprove.
+
+2. GRAIN PER PLANT — can one machine have >1 row per day?
+   For each daily_wired plant, tell me whether shift and/or product are ever populated, and whether
+   (date, plant, machine) is unique per day. Give a counter-example if not.
+
+3. ADD source_row (code change ALLOWED for this one item)
+   Add the physical source row number to the Record serialization in /records (alongside
+   source_file and source_tab), plus fetched_at if available. This is needed so consumers can
+   identify a physical row without value-based dedup. Report the new field names when done.
+
+4. ROSTER RECONCILIATION
+   - GARDEN_WB: confirm it is a real separate plant with its own machines, and list its machine codes.
+   - Confirm ALL and GOM are aggregates that must NOT be ingested as data plants.
+   - Confirm SINK and HARDWARE are genuinely outside this API's scope.
+   - For each daily_wired plant, list the distinct machine values returned for a recent day, so I can
+     map them to our master roster.
+
+5. IDEAL HOURS ANOMALY
+   ideal_hours was 24.869565 on a daily row with ideal_source "sheet" but ideal_hours_sheet 0.
+   Explain how ideal_hours is derived, whether it is a per-day or per-month figure, and why it
+   exceeds 24 on a daily grain.
+
+6. REJECTION SEMANTICS
+   With rejection_tracked true and reject_denominator 0, does reject_count 0 mean "no rejections"
+   or "not captured"? How do I tell those apart?
+
+7. SECURITY (report only)
+   Confirm there is no rate limiting and CORS is '*'. Recommend (don't implement) adding label/owner
+   columns to api_keys and restricting CORS. Do not print key values.

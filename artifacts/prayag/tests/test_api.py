@@ -33,7 +33,8 @@ def _fake_data(status="ok", released=False):
     pipe = Record(grain="daily", period="2026-07-01", date="2026-07-01",
                   plant="PIPE", machine="M/C-1", unit="kg",
                   total_count=800.0, reject_count=10.0,
-                  actual_hours=20.0, ideal_hours=24.0, ideal_source="sheet")
+                  actual_hours=20.0, ideal_hours=24.0, ideal_source="sheet",
+                  source_file="file-1", source_tab="Report-5", source_row=42)
     rows = [tank, pipe]
     return {
         "rows": rows,
@@ -165,6 +166,8 @@ def test_records_serialization(monkeypatch):
     assert by_plant["TANK"]["runhours_tracked"] is False
     assert by_plant["PIPE"]["machine"] == "M/C-1"
     assert by_plant["PIPE"]["ideal_source"] == "sheet"
+    assert by_plant["PIPE"]["source_row"] == 42
+    assert by_plant["TANK"]["source_row"] is None
     print("PASS: /records returns raw rows with provenance and unit fields")
 
 

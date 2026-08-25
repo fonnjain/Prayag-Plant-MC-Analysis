@@ -779,6 +779,7 @@ def test_matrix_layout_found_set_when_header_detected_and_records_returned():
         _layout_found=lf,
     )
     assert len(recs) > 0, "records must be emitted"
+    assert {r.source_row for r in recs} == {3}, "source rows are 1-based Sheet rows"
     assert bool(lf), "_layout_found must be set when header is detected"
     print("PASS: _layout_found set when header found and records returned")
 

@@ -155,7 +155,7 @@ def parse_mc_detail(
     recs: List[Record] = []
     carry = {"ih": 0.0, "ir": 0.0, "mc": "", "mat": ""}
 
-    for row in values[header_idx + 1:]:
+    for source_row, row in enumerate(values[header_idx + 1:], start=header_idx + 2):
         def g(c):
             return row[c] if 0 <= c < len(row) else ""
 
@@ -207,6 +207,7 @@ def parse_mc_detail(
             source_family=segment,
             source_file=source_file,
             source_tab=source_tab,
+            source_row=source_row,
         ))
     return recs
 
@@ -561,7 +562,7 @@ def parse_daily_matrix(
         mc_c = 1
 
     recs: List[Record] = []
-    for row in values[date_row_idx + 2:]:
+    for source_row, row in enumerate(values[date_row_idx + 2:], start=date_row_idx + 3):
         label = str(row[mc_c]).strip() if mc_c < len(row) else ""
         if not label or label.upper() in _DAILY_SKIP_LABELS or label.upper().startswith("PART"):
             continue
@@ -594,6 +595,7 @@ def parse_daily_matrix(
                 source_family=segment,
                 source_file=source_file,
                 source_tab=source_tab,
+                source_row=source_row,
             ))
     return recs
 
