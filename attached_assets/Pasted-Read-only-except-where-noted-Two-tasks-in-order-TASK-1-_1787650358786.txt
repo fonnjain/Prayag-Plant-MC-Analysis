@@ -1,0 +1,31 @@
+Read-only except where noted. Two tasks, in order.
+
+TASK 1 — Make /data-api/v1 reachable externally, then prove it.
+- Diagnose the TLS handshake failure on https://www.prayag-plant.com/data-api/v1/health
+  (curl exit 35, no HTTP status). Check: is the custom domain actually bound to this deployment,
+  is the deployment running, is the TLS cert issued and valid for www.prayag-plant.com, and is
+  there a redirect/proxy terminating TLS incorrectly?
+- Report the root cause and what you changed to fix it.
+- Then prove it from OUTSIDE the app: paste the raw output of
+  curl -i https://www.prayag-plant.com/data-api/v1/health
+
+TASK 2 — Once reachable, capture the real contract (still no code changes).
+- Generate an API key via the Settings page (DB-managed) OR set PRAYAG_API_KEY in Replit Secrets.
+  Tell me WHICH you did and confirm it is set — never print the key value.
+- Make ONE authenticated call for a specific recent day, explicitly:
+  GET /data-api/v1/records?period=2026-08-24
+  Paste the RAW JSON of a SINGLE record, unmodified except redacting auth.
+- From that record, tell me exactly which field carries each of:
+  machine, plant/segment, date (and shift if present), item / Cat no, quantity produced,
+  quantity rejected, unit of measure.
+- ROW IDENTITY: does each record carry a stable unique id (row id / source row number /
+  file+tab+row)? I must NOT dedupe on values — two identical rows can be real. If no unique id
+  exists, tell me what combination is guaranteed unique per physical source row.
+- QUARANTINED ROWS: /records is documented to include quarantined rows. Which field marks them,
+  what values can it take, and are they included in /summary totals or excluded?
+- PROVENANCE: list the source/provenance fields on a record (source file, tab, row, fetched-at)
+  and say whether they identify the underlying Google Sheet.
+- Also paste GET /data-api/v1/plants so I can see the plant codes and daily_wired status.
+
+Do not fabricate or substitute mocked/test data. If a call fails, paste the exact error and status.
+Report secret NAMES and presence only — never values.
