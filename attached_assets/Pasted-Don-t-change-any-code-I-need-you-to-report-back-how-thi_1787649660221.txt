@@ -1,0 +1,40 @@
+Don't change any code. I need you to report back how this app connects (or is meant to connect)
+to the machine-data API at www.prayag-plant.com. Search the whole repo (lib/, scripts/, main.py,
+.env.example, config files) and answer these, quoting the relevant file + line where you find each:
+
+1. BASE URL & ENDPOINTS
+   - The base URL for prayag-plant.com and every endpoint path the code calls or references
+     (e.g. /api/v1/production, /machines, /daily).
+   - For each endpoint: the HTTP method (GET/POST) and what it returns (machine list? daily
+     production? rejection?).
+
+2. PARAMETERS / FILTERING
+   - What query params or body fields each endpoint accepts — especially whether I can filter by
+     DATE and by PLANT or MACHINE, or whether it returns everything in one call.
+   - Any pagination (page/offset/limit/cursor) and default page size.
+
+3. AUTHENTICATION
+   - How the app authenticates: API key in a header (which header name?), Bearer token, Basic auth,
+     query-string key, or OAuth.
+   - The exact env-var / secret NAME used (e.g. PRAYAG_PLANT_API_KEY, PRAYAG_PLANT_BASE_URL) — the
+     NAME only. DO NOT print the secret VALUE.
+   - Whether that secret is currently set in Replit Secrets (yes/no), without revealing it.
+
+4. RESPONSE SHAPE (most important)
+   - Make ONE real live call to the machine/production endpoint for a recent date and paste the RAW
+     JSON of a single record (redact nothing except auth). I need the exact field names.
+   - Specifically: what field carries the MACHINE CODE, and what do the values look like — do they
+     look like 80-1, N-200A, A02(U-150), Pipe M/C-3, M/C-3 (matching our plant master), or a
+     different scheme (numeric IDs, internal codes)?
+   - What fields carry: date/shift, item/product, quantity produced, quantity rejected, plant/unit.
+
+5. STATUS OF THE INTEGRATION
+   - Is this API actually wired and working right now, returning live data — or is it stubbed,
+     mocked, planned, or failing? If any call fails, paste the exact error and status code.
+   - If there are tests touching this API, say whether they hit the real endpoint or a mock/fixture.
+
+6. RATE LIMITS / DOCS
+   - Any documented rate limits, and whether an API doc / OpenAPI/Swagger URL exists.
+
+Output as a plain structured report. Do NOT print any secret values or full credentials — names and
+presence only. Do NOT modify code; this is read-only reconnaissance.
