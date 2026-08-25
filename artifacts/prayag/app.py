@@ -26,6 +26,7 @@ from sheets import (
     load_report_records, load_compound_data, load_pipe_moulds, index_catalogue,
     is_demo_mode, SheetReadError, last_fetch_status, clear_caches, sync_status,
     ensure_daily_discovery,
+    _get_drive_token,
     daily_failed_pair_details,
     _get_drive_token,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
@@ -7519,7 +7520,8 @@ def mp_results():
         staleness_warnings = _mp_seed_prov.build_staleness_warnings(
             _MP_SEGMENT, drive_token=_drive_tok
         )
-    except Exception:
+    except (SheetReadError, OSError, ValueError, TypeError) as exc:
+        app.logger.warning("machine planning staleness check skipped: %s", exc)
         staleness_warnings = []
 
     # Check rejection data availability — warn if the table is empty so the
