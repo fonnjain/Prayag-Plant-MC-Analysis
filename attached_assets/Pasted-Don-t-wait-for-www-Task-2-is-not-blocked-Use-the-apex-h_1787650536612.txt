@@ -1,0 +1,32 @@
+Don't wait for www — Task 2 is not blocked. Use the apex host, which you just proved is healthy:
+https://prayag-plant.com/data-api/v1  (HTTP/2 200, api_enabled:true)
+www is only a certificate/domain binding; it's the same deployment and the same data. I'll bind www
+myself in Publishing → Domains later. Proceed with Task 2 against the apex now.
+
+TASK 2 (read-only, no fabricated data):
+1. API key: api_enabled:true means a DB-managed key already exists. Do NOT print any key value.
+   Tell me: how many active keys are in the api_keys table, when each was created, and any label/
+   owner recorded. If you must create one to proceed, create it via Settings → API Key, confirm it
+   is set, and never display it.
+2. Make ONE authenticated call for a specific recent day, explicitly:
+   GET https://prayag-plant.com/data-api/v1/records?period=2026-08-24
+   Paste the RAW JSON of a SINGLE record, unmodified except redacting auth.
+   If that day has no data, try the most recent day that does and tell me which date you used.
+3. From that record, identify exactly which field carries each of: machine, plant/segment, date
+   (and shift if present), item / Cat no, quantity produced, quantity rejected, unit of measure.
+4. ROW IDENTITY: does each record carry a stable unique id (row id / source row / file+tab+row)?
+   I must NOT dedupe on values — two identical rows can be legitimately distinct. If there is no
+   unique id, tell me what combination is guaranteed unique per physical source row.
+5. QUARANTINED ROWS: which field marks them, what values can it take, and are they included in or
+   excluded from /summary totals?
+6. PROVENANCE: list the source/provenance fields on a record (source file id, tab, row, fetched-at)
+   and say whether they identify the underlying Google Sheet.
+7. Also paste GET /data-api/v1/plants (full response) so I can see plant codes and daily_wired.
+8. MACHINE CODE COLLISION CHECK — important: our master has machine codes that repeat across
+   plants (HDPE 'M/C-1..6' vs Pipe & Fitting 'Pipe M/C-1..9'; Garden 'MACHINE-1..4' vs Tank
+   'MACHINE-1'). Confirm whether the machine value in /records is unique on its own or only unique
+   when combined with plant. Give an example of the same bare code appearing under two plants if
+   one exists.
+
+Report secret NAMES and presence only, never values. Do not substitute mocked/test data; if a call
+fails, paste the exact error and status.
