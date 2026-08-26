@@ -153,10 +153,10 @@ Computed headline metrics for a period. Same figures the dashboard displays — 
 | `availability` | `number \| null` | Availability % |
 | `performance` | `number \| null` | Performance % |
 | `quality` | `number \| null` | Quality % |
-| `utilisation` | `number \| null` | Run hours ÷ ideal hours (null for output-only plants) |
-| `output_efficiency` | `number \| null` | Actual output ÷ ideal output |
+| `utilisation` | `number \| null` | Run hours ÷ ideal hours for the machines that reported in the requested period; this is reporting-machine capacity, not fixed-fleet capacity (null for output-only plants) |
+| `output_efficiency` | `number \| null` | Output from rows that have an ideal-output baseline ÷ ideal output; output without an ideal baseline is excluded from the numerator |
 | `mc_efficiency` | `number \| null` | Actual run hours ÷ Report-5 col-M ideal month hours |
-| `rejection_pct` | `number \| null` | Rejection ÷ total output |
+| `rejection_pct` | `number \| null` | Rejection ÷ `total_count`; the denominator follows `total_count_basis` (for example, `net` for PIPE and `gross` for PTMT). Consumers must read `total_count_basis` rather than assume a denominator |
 | `total_count` | `number` | Source output (unit is per-plant — do not sum across plants). Read `total_count_basis` before interpreting it. |
 | `total_count_basis` | `"net" \| "gross" \| "mixed" \| "unknown"` | Whether `total_count` is source net/good output, source gross output before rejection, a mixed rollup, or not documented. PTMT is `gross`; its separate management headline uses `good_count`/net output. |
 | `good_count` | `number` | Net/good output after compatible rejection has been deducted at the machine-month aggregate grain. |
