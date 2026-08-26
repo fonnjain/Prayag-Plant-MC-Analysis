@@ -1,0 +1,108 @@
+# PROMPT — Machine app: verify three metric denominators
+
+**Repository:** `fonnjain/Prayag-Plant-MC-Analysis` · deployed at `prayag-plant.com`
+**Read-only first.** Report the findings before changing anything.
+
+The planning app's monitoring panels (`prayag-pp.com`) display `rejection_pct`, `utilisation` and `output_efficiency` **exactly as this service returns them** — `/api/plant-live/summary` is a transparent proxy and recalculates nothing. Three of those figures do not reconcile on the planning side, so the question belongs here.
+
+---
+
+## 1 · Rejection % — the denominator may be wrong
+
+### The evidence from the planning app
+
+Four rows of the Plumbing Daily Output Log, August 2026:
+
+| Date | Good | Reject | reject ÷ good | reject ÷ (good+reject) | **Displayed** |
+|---|--:|--:|--:|--:|--:|
+| 08-01 | 13,890 | 1,090 | **7.8%** | 7.3% | **7.8%** |
+| 08-03 | 12,521 | 1,545 | **12.3%** | 11.0% | **12.3%** |
+| 08-04 | 24,102 | 1,882 | **7.8%** | 7.2% | **7.8%** |
+| 08-05 | 19,420 | 2,345 | **12.1%** | 10.8% | **12.1%** |
+
+**Four of four match `reject ÷ good`.** If `total_count` holds good output rather than gross, the rate is overstated — by 1.3 points on 08-03.
+
+### Where to look
+
+`metrics.py:598`:
+
+```python
+_rej_denom = _reject_denom_sum if _reject_denom_sum > 0 else m.total_count
+m.rejection_pct = _safe_div(m.reject_count, _rej_denom)
+```
+
+So the denominator is `total_count` for every plant except Tank. And `total_count` is documented at `metrics.py:139` as:
+
+> *"net/good output **or** gross output before rejection. Set at Record construction from the plant contract."*
+
+**The field is explicitly one or the other depending on the plant contract** — and `output_basis` records which. That is the likely cause.
+
+### What to report
+
+1. For **PIPE** and **PTMT**, what is `output_basis` — `net`, `gross`, `mixed` or unknown?
+2. Dump one raw payload per plant showing `good_count`, `total_count`, `reject_count` and `rejection_pct` for a few machines, and state which of the two candidate formulas the reported value matches.
+3. **Is `total_count` ever zero or absent** where `good_count` is populated? If it is, the fallback may have selected `good_count` rather than the contract choosing it — a different defect with a different fix.
+4. If `output_basis` is `net` for these plants, confirm whether that is intended. A rejection rate on net output answers *"rejects per good piece"*, which is a valid measure but not the usual one — and it is not what the label implies.
+
+**Do not change the formula before reporting.** If the basis is `net` by design, the fix is the label and the documentation, not the arithmetic.
+
+---
+
+## 2 · Utilisation — the implied capacity is not constant
+
+Working back from the displayed figures, `run hours ÷ utilisation %`:
+
+| Date | Run hrs | Util % | Implied capacity |
+|---|--:|--:|--:|
+| 08-01 | 92 | 85.7% | **107.4 h** |
+| 08-03 | 85 | 65.7% | **129.4 h** |
+| 08-04 | 143 | 94.5% | **151.3 h** |
+| 08-05 | 126 | 83.2% | **151.4 h** |
+
+Daily capacity should be fixed — machines × available hours. It varies by **41%** across four days.
+
+### The likely explanation, and why it needs confirming
+
+`metrics.py:499` documents the denominator as:
+
+> *"utilisation denominator: only hours from rows that ACTUALLY [ran]"*
+
+`util_ideal` accumulates `r.shift_len_min` or `r.ideal_hours` **only for rows present in the data**. So a day where fewer machines reported produces a smaller denominator — and 08-04 and 08-05 both landing at ~151.4 h suggests those are the full-fleet days while the two lower ones had fewer machines.
+
+**That may be correct behaviour** — it measures how well the *running* machines were used, rather than penalising a fleet for machines that were down. But it means daily utilisation figures are **not comparable across days**, and nothing on the screen says so.
+
+### What to report
+
+1. Confirm whether `util_ideal` varies with the number of reporting machines on each date.
+2. For those four dates, report **how many machines contributed** and the summed ideal hours.
+3. State whether a machine that did not run at all is excluded from the denominator or counted at zero — and whether that is deliberate.
+
+---
+
+## 3 · Output Efficiency — a small reconciliation gap
+
+```
+358,919 ÷ 594,720  =  60.35%      displayed: 60.0%
+```
+
+At one decimal place 60.35% renders as 60.4%, so this is not rounding.
+
+`metrics.py:579`: `m.output_efficiency = _safe_div(eff_out, m.ideal_output)`
+
+### What to report
+
+Whether `eff_out` equals the displayed `TOTAL OUTPUT` (358,919) or something else — for instance gross rather than good output, or a figure that excludes some machines. And whether `ideal_output` equals the displayed 594,720. **The gap is 0.35 points, which is small enough to be a different numerator rather than a rounding rule.**
+
+---
+
+## Reporting
+
+For each of the three: the field names involved, the value each holds for one real payload, and which formula the displayed figure matches. **Facts, not conclusions** — I will not act on any of these until the arithmetic is on the table.
+
+**Then, and only for confirmed defects**, propose the fix here rather than in the planning app. The planning app cannot correct these without masking them, and a local correction would leave every other consumer of this API reading the wrong value.
+
+---
+
+## One note on scope
+
+The planning app has a separate legacy path — `monitoring-calc.ts:189`, `computeMachineQuality()` — computing `rejectionKg ÷ totalOutputKg`, the gross denominator. **So two rejection figures exist across the two systems and may disagree.** Whichever proves correct, they should agree. Worth flagging in your report so it is reconciled once rather than twice.
