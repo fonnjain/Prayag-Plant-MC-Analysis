@@ -1,0 +1,19 @@
+Your last message closed out a diff review but did not say what was built. Please confirm what shipped.
+
+1. Does POST /data-api/v1/schedule exist? If yes, report the route, the auth method, and whether it is live on prayag-plant.com or merged only. If this diff was a different piece of work, say so — I would rather know it has not started than assume it has.
+
+If it exists, four specifics:
+
+2. The exact request shape. The planning app already produces GET /api/plan/runs/:id/schedule-request with item code, colour, quantity, material, weight, category and urgency rank per line. Tell me the shape you actually want and it will conform. Specifically: which fields the engine needs, whether material should be CPVC / UPVC / SWR / AGRI or your internal codes, whether weight is used or resolved from mp_bom_weight regardless, and how fitting demand is distinguished from pipe demand.
+
+3. ⚠ Does unfinished return pieces as well as kg? The planning app works in pieces and has no BOM — it cannot convert back. If only kg is returned, the cannot-be-made figure reaches the floor in the wrong unit. Either return both, or include the per-item conversion factor used.
+
+4. ⚠ Is week_days a required request field? Per your Q6 answer the scheduler builds synthetic slots from [6,6,6,7] and cannot recognise a worked Sunday. The planning app's calendar counts non-Sundays plus any Sunday with production — August had three, giving 29 working days rather than 26. If week_days can default, worked Sundays silently vanish from capacity. That is the same defect class that once discarded 80,522 pieces from PTMT monitoring. It must be required, not optional.
+
+5. Was the shared-machine assertion proven? MC3, MC4 and MC5 appear in the CPVC, UPVC, SWR and AGRI envelopes. Assert no machine is assigned beyond its available hours in any day or shift, and report the check. This is the single largest gain over a category-level fitter, and it should be demonstrated rather than assumed. Also confirm the two locked-out machines are excluded from available capacity, with their absence reported rather than silently reducing the total.
+
+6. One follow-up that I do not think is tracked elsewhere. Three PIPE machine-days have positive output and zero run hours — Pipe M/C-1 943.80 kg and M/C-2 1,329.60 kg on 23 August, M/C-5 808.00 kg on 20 June. The ideal rate is configured; the hours are missing.
+
+It understates output efficiency and utilisation today. And it will understate scheduler capacity once this endpoint is live, because run hours feed the capacity model. Please confirm whether it is captured in an existing task, and if not, raise it.
+
+Nothing to build in this message — I need to know the current state before the planning app is pointed at anything.
