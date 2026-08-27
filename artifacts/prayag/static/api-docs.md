@@ -29,7 +29,7 @@ Multiple keys can be active at the same time — any valid key authorises a requ
 | `502` | `source_unavailable` | The production Google Sheets could not be read |
 | `400` | `invalid_schedule_request` | The schedule-preview body is incomplete or invalid |
 | `503` | `planning_data_unavailable` | The required Plumbing planning master could not be read |
-| `503` | `schedule_machine_pool_overlap` | A machine is registered in both pipe and fitting pools, so separate previews would over-commit it |
+| `409` | `schedule_machine_pool_overlap` | A machine is registered in both pipe and fitting pools, so separate previews would over-commit it; fix the machine-pool configuration before retrying |
 
 ---
 
@@ -294,8 +294,10 @@ engine-derived material quantity.
 Pipe and fitting previews are independently mergeable only while their
 machine-master pools are disjoint. Every request checks both current pools. If
 any machine appears in both, the endpoint returns
-`503 schedule_machine_pool_overlap` with the conflicting machine names instead
-of producing schedules that could double-commit capacity.
+`409 schedule_machine_pool_overlap` with the conflicting machine names instead
+of producing schedules that could double-commit capacity. This is a
+configuration conflict, not a transient availability failure, so callers
+should not retry unchanged.
 
 ---
 

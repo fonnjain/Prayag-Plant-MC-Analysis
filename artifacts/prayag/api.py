@@ -601,7 +601,7 @@ def create_api(get_data) -> Blueprint:
             return jsonify({
                 "error": "schedule_machine_pool_overlap",
                 "message": str(exc),
-            }), 503
+            }), 409
         except PlanningDataUnavailable as exc:
             return jsonify({
                 "error": "planning_data_unavailable",

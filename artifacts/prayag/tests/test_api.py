@@ -391,7 +391,7 @@ def test_schedule_rejects_machine_registered_in_both_plumbing_pools(monkeypatch)
         headers={"X-API-Key": "sekret-123"},
         json=_schedule_request(),
     )
-    assert response.status_code == 503
+    assert response.status_code == 409
     body = response.get_json()
     assert body["error"] == "schedule_machine_pool_overlap"
     assert "M/C-DUAL" in body["message"]

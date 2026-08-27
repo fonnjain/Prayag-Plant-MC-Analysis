@@ -63,3 +63,4 @@
 - [Tank management reports 7–9](prayag-tank-mgmt-reports.md) — mgmt_tank_summary.py; mould=item_code (daily) vs mould=product_type_label (annual); size suffix is a CODE not arithmetic (-07=750 not 700); two transposed pivot sections share same TOTAL.
 - [PTMT Records API & gross/nett](prayag-ptmt-records-api.md) — daily records via get_daily_records() not get_records(); total_count=GROSS for PTMT; nett=total_count−reject_count; is_finishing already set by parser (sheets.py:2468); use r.is_finishing to exclude grinding, never re-lookup group.
 - [Plumbing working days](prayag-plumbing-working-days.md) — four-bucket days are proportional capacity counts, not exact dates; keep Mon–Sat corrective fallback until Plumbing is explicitly configured.
+- [Zero-run-hours scheduler blocker](prayag-zero-hours-scheduler-capacity.md) — positive PIPE output with zero run hours can understate live schedule capacity; reconcile source/parser or gate it explicitly.
