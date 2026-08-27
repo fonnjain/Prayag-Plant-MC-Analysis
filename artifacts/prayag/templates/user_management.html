@@ -26,9 +26,10 @@
 
   <main class="max-w-3xl mx-auto px-4 py-6">
     <a href="/" class="inline-flex items-center gap-1 text-xs text-gray-500 mb-4">← Back to dashboard</a>
-    <div class="mb-5">
-      <h1 class="text-xl font-bold" style="color:var(--navy)">User Management</h1>
-      <p class="text-sm text-gray-500 mt-1">Create accounts, set permissions, reset passwords, or remove access.</p>
+      <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div><h1 class="text-xl font-bold" style="color:var(--navy)">User Management</h1>
+        <p class="text-sm text-gray-500 mt-1">Create accounts, set permissions, reset passwords, or remove access.</p></div>
+        <a href="/settings/users/audit" class="inline-flex justify-center rounded-lg px-3 py-2 text-xs font-bold text-white" style="background:var(--navy)">View activity audit</a>
     </div>
 
     {% if message %}
@@ -40,7 +41,7 @@
 
     <section class="card p-5 mb-5">
       <h2 class="font-bold text-sm mb-1" style="color:var(--navy)">Add user</h2>
-      <p class="text-xs text-gray-500 mb-4">Passwords are stored securely and are never displayed after saving.</p>
+      <p class="text-xs text-gray-500 mb-4">Passwords are stored securely and are never displayed after saving. New users must choose a personal password at first sign-in.</p>
       <form method="post" action="/settings/users/create" class="grid gap-3 sm:grid-cols-2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
         <label class="block sm:col-span-2">
@@ -82,6 +83,9 @@
                 {% if user.id == current_user_id %}
                 <span class="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">You</span>
                 {% endif %}
+                 {% if user.must_change_password %}
+                 <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">Password change required</span>
+                 {% endif %}
               </div>
             </div>
             <div class="text-[11px] text-gray-400 text-right flex-shrink-0">Created {{ user.created_at }}</div>
@@ -102,7 +106,7 @@
 
             <form method="post" action="/settings/users/{{ user.id }}/password" class="rounded-xl bg-gray-50 p-3">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
-              <label class="block text-[11px] font-bold text-gray-600 mb-1">Reset password</label>
+               <label class="block text-[11px] font-bold text-gray-600 mb-1">Reset password (requires change at next login)</label>
               <div class="flex gap-2">
                 <input required minlength="8" type="password" name="password" autocomplete="new-password"
                        placeholder="New password" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs"/>
@@ -124,5 +128,6 @@
       </div>
     </section>
   </main>
+  {% include "_activity_heartbeat.html" %}
 </body>
 </html>

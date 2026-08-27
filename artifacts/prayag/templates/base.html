@@ -988,6 +988,7 @@ window.addEventListener('orientationchange', syncHeaderOffset);
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSheet(); });
 })();
 </script>
+{% include "_activity_heartbeat.html" %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

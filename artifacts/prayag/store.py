@@ -22,6 +22,7 @@ import math
 import pickle
 import datetime
 from typing import List, Optional, Dict, Tuple
+from zoneinfo import ZoneInfo
 
 try:
     import psycopg2
@@ -1493,6 +1494,12 @@ def delete_api_key() -> None:
 # ---------------------------------------------------------------------------
 _USER_TABLE = "app_users"
 _USER_BOOTSTRAP_TABLE = "app_user_bootstrap"
+_USER_ACTIVITY_SESSION_TABLE = "app_user_activity_sessions"
+_USER_ACTIVITY_EVENT_TABLE = "app_user_activity_events"
+_USER_ACTIVITY_DAILY_TABLE = "app_user_activity_daily"
+_ACTIVITY_TZ = ZoneInfo("Asia/Kolkata")
+_ACTIVITY_INTERVAL_CAP_SECONDS = 120
+_PASSWORD_CHANGE_POLICY_SEED = "password-change-policy-v1"
 
 
 def _init_user_tables() -> None:
@@ -1506,6 +1513,7 @@ def _init_user_tables() -> None:
                 role          TEXT NOT NULL DEFAULT 'normal'
                               CHECK (role IN ('admin', 'normal')),
                 is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
             );
@@ -1513,7 +1521,26 @@ def _init_user_tables() -> None:
                 seed_key      TEXT PRIMARY KEY,
                 completed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
             );
+            ALTER TABLE {_USER_TABLE} ADD COLUMN IF NOT EXISTS
+                must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
         """)
+        # Upgrade the accounts provisioned before password changes were
+        # mandatory. This only flips the required-change flag: it never
+        # touches an existing password hash, role, or active/inactive state.
+        # The marker and update share one transaction, so a failed startup
+        # cannot permanently skip the migration.
+        cur.execute(
+            f"""INSERT INTO {_USER_BOOTSTRAP_TABLE} (seed_key)
+                VALUES (%s) ON CONFLICT (seed_key) DO NOTHING
+                RETURNING seed_key""",
+            (_PASSWORD_CHANGE_POLICY_SEED,),
+        )
+        if cur.fetchone():
+            cur.execute(
+                f"""UPDATE {_USER_TABLE}
+                    SET must_change_password=TRUE, updated_at=now()
+                    WHERE is_active=TRUE AND must_change_password=FALSE"""
+            )
 
 
 def _user_shape(row) -> Dict:
@@ -1523,6 +1550,7 @@ def _user_shape(row) -> Dict:
         "email": row["email"],
         "role": row["role"],
         "is_active": bool(row["is_active"]),
+        "must_change_password": bool(row.get("must_change_password", False)),
         "created_at": (
             row["created_at"].strftime("%d-%m-%Y %H:%M")
             if row.get("created_at") else ""
@@ -1554,12 +1582,14 @@ def seed_initial_users(users: List[Dict], seed_key: str = "initial-admins-v1") -
                 return
             for user in users:
                 cur.execute(
-                    f"""INSERT INTO {_USER_TABLE} (email, password_hash, role, is_active)
-                        VALUES (%s, %s, %s, TRUE)
+                    f"""INSERT INTO {_USER_TABLE}
+                        (email, password_hash, role, is_active, must_change_password)
+                        VALUES (%s, %s, %s, TRUE, TRUE)
                         ON CONFLICT (email) DO UPDATE
                            SET password_hash = EXCLUDED.password_hash,
                                role = EXCLUDED.role,
                                is_active = TRUE,
+                               must_change_password = TRUE,
                                updated_at = now()""",
                     (user["email"], user["password_hash"], user["role"]),
                 )
@@ -1583,7 +1613,7 @@ def get_user_auth(email: str) -> Optional[Dict]:
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
             cur.execute(
-                f"""SELECT id, email, password_hash, role, is_active
+                f"""SELECT id, email, password_hash, role, is_active, must_change_password
                     FROM {_USER_TABLE} WHERE email=%s""",
                 (email,),
             )
@@ -1605,7 +1635,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
             cur.execute(
-                f"""SELECT id, email, role, is_active, created_at, updated_at
+                f"""SELECT id, email, role, is_active, must_change_password, created_at, updated_at
                     FROM {_USER_TABLE} WHERE id=%s""",
                 (int(user_id),),
             )
@@ -1625,7 +1655,7 @@ def list_users() -> List[Dict]:
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
             cur.execute(
-                f"""SELECT id, email, role, is_active, created_at, updated_at
+                f"""SELECT id, email, role, is_active, must_change_password, created_at, updated_at
                     FROM {_USER_TABLE} ORDER BY email"""
             )
             rows = cur.fetchall()
@@ -1646,9 +1676,11 @@ def create_user(email: str, password_hash: str, role: str) -> Dict:
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
             cur.execute(
-                f"""INSERT INTO {_USER_TABLE} (email, password_hash, role)
-                    VALUES (%s, %s, %s)
-                    RETURNING id, email, role, is_active, created_at, updated_at""",
+                f"""INSERT INTO {_USER_TABLE}
+                    (email, password_hash, role, must_change_password)
+                    VALUES (%s, %s, %s, TRUE)
+                    RETURNING id, email, role, is_active, must_change_password,
+                              created_at, updated_at""",
                 (email, password_hash, role),
             )
             row = cur.fetchone()
@@ -1660,8 +1692,13 @@ def create_user(email: str, password_hash: str, role: str) -> Dict:
         raise StoreError(message)
 
 
-def set_user_password(user_id: int, password_hash: str) -> bool:
-    """Replace one password hash. Returns False for a missing user."""
+def set_user_password(
+    user_id: int,
+    password_hash: str,
+    *,
+    must_change_password: bool = False,
+) -> bool:
+    """Replace one password hash and set its first-login requirement."""
     if not AVAILABLE:
         raise StoreError("User management requires the configured Postgres database.")
     try:
@@ -1669,8 +1706,9 @@ def set_user_password(user_id: int, password_hash: str) -> bool:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""UPDATE {_USER_TABLE}
-                    SET password_hash=%s, updated_at=now() WHERE id=%s""",
-                (password_hash, int(user_id)),
+                    SET password_hash=%s, must_change_password=%s, updated_at=now()
+                    WHERE id=%s""",
+                (password_hash, bool(must_change_password), int(user_id)),
             )
             return cur.rowcount == 1
     except Exception as exc:
@@ -1723,6 +1761,349 @@ def active_admin_count() -> int:
             return int(cur.fetchone()[0])
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# User activity — privacy-safe, server-accounted dashboard usage.
+#
+# The browser sends a heartbeat every minute while an authenticated dashboard
+# page is open. We credit only the previous heartbeat interval and cap it at
+# two minutes: a suspended browser or a lost tab can never turn into hours of
+# fabricated activity. Days are reported in the operating timezone (IST).
+# ---------------------------------------------------------------------------
+
+def _activity_now(value: Optional[datetime.datetime] = None) -> datetime.datetime:
+    now = value or datetime.datetime.now(datetime.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+    return now.astimezone(datetime.timezone.utc)
+
+
+def _activity_day(value: datetime.datetime) -> datetime.date:
+    return value.astimezone(_ACTIVITY_TZ).date()
+
+
+def _init_user_activity_tables() -> None:
+    """Create the append-only event log plus bounded-time session rollups."""
+    if not AVAILABLE:
+        return
+    _init_user_tables()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_USER_ACTIVITY_SESSION_TABLE} (
+                session_id          TEXT PRIMARY KEY,
+                user_id             INTEGER NOT NULL,
+                user_email          TEXT NOT NULL,
+                started_at          TIMESTAMPTZ NOT NULL,
+                last_heartbeat_at   TIMESTAMPTZ NOT NULL,
+                last_state          TEXT NOT NULL DEFAULT 'active'
+                                    CHECK (last_state IN ('active', 'idle')),
+                active_seconds      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                idle_seconds        DOUBLE PRECISION NOT NULL DEFAULT 0,
+                ended_at            TIMESTAMPTZ
+            );
+            CREATE INDEX IF NOT EXISTS {_USER_ACTIVITY_SESSION_TABLE}_user_started
+                ON {_USER_ACTIVITY_SESSION_TABLE} (user_id, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS {_USER_ACTIVITY_EVENT_TABLE} (
+                id           BIGSERIAL PRIMARY KEY,
+                user_id      INTEGER NOT NULL,
+                user_email   TEXT NOT NULL,
+                session_id   TEXT NOT NULL DEFAULT '',
+                event_type   TEXT NOT NULL
+                             CHECK (event_type IN ('login', 'logout', 'page', 'action')),
+                label        TEXT NOT NULL DEFAULT '',
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS {_USER_ACTIVITY_EVENT_TABLE}_user_created
+                ON {_USER_ACTIVITY_EVENT_TABLE} (user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS {_USER_ACTIVITY_DAILY_TABLE} (
+                user_id          INTEGER NOT NULL,
+                user_email       TEXT NOT NULL,
+                activity_day     DATE NOT NULL,
+                active_seconds   DOUBLE PRECISION NOT NULL DEFAULT 0,
+                idle_seconds     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, activity_day)
+            );
+            CREATE INDEX IF NOT EXISTS {_USER_ACTIVITY_DAILY_TABLE}_day
+                ON {_USER_ACTIVITY_DAILY_TABLE} (activity_day DESC, user_email);
+        """)
+
+
+def _record_user_event(
+    cur,
+    *,
+    user_id: int,
+    user_email: str,
+    session_id: str,
+    event_type: str,
+    label: str = "",
+    occurred_at: Optional[datetime.datetime] = None,
+) -> None:
+    if event_type not in ("login", "logout", "page", "action"):
+        raise StoreError(f"Unknown user activity event: {event_type!r}")
+    cur.execute(
+        f"""INSERT INTO {_USER_ACTIVITY_EVENT_TABLE}
+            (user_id, user_email, session_id, event_type, label, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s)""",
+        (int(user_id), (user_email or "").strip(), session_id or "", event_type,
+         (label or "").strip()[:160], _activity_now(occurred_at)),
+    )
+
+
+def start_user_activity_session(
+    session_id: str,
+    *,
+    user_id: int,
+    user_email: str,
+    occurred_at: Optional[datetime.datetime] = None,
+) -> None:
+    """Start one browser session and append its login event."""
+    if not AVAILABLE or not session_id:
+        return
+    now = _activity_now(occurred_at)
+    try:
+        _init_user_activity_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_USER_ACTIVITY_SESSION_TABLE}
+                    (session_id, user_id, user_email, started_at, last_heartbeat_at)
+                    VALUES (%s,%s,%s,%s,%s)
+                    ON CONFLICT (session_id) DO NOTHING""",
+                (session_id, int(user_id), (user_email or "").strip(), now, now),
+            )
+            _record_user_event(
+                cur, user_id=user_id, user_email=user_email, session_id=session_id,
+                event_type="login", occurred_at=now,
+            )
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def record_user_activity_event(
+    *,
+    user_id: int,
+    user_email: str,
+    session_id: str,
+    event_type: str,
+    label: str = "",
+    occurred_at: Optional[datetime.datetime] = None,
+) -> None:
+    """Append a safe page/action event; callers must never pass request data."""
+    if not AVAILABLE or not user_id:
+        return
+    try:
+        _init_user_activity_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            _record_user_event(
+                cur, user_id=user_id, user_email=user_email, session_id=session_id,
+                event_type=event_type, label=label, occurred_at=occurred_at,
+            )
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def record_user_activity_heartbeat(
+    session_id: str,
+    state: str,
+    *,
+    occurred_at: Optional[datetime.datetime] = None,
+) -> bool:
+    """Credit the bounded prior interval to active or idle time.
+
+    ``state`` describes the browser during the *next* interval. The elapsed
+    time since the last heartbeat is credited using the state already recorded
+    on the server, avoiding a client choosing its own historical duration.
+    """
+    if not AVAILABLE or not session_id or state not in ("active", "idle"):
+        return False
+    now = _activity_now(occurred_at)
+    try:
+        _init_user_activity_tables()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT user_id, user_email, last_heartbeat_at, last_state, ended_at
+                    FROM {_USER_ACTIVITY_SESSION_TABLE}
+                    WHERE session_id=%s FOR UPDATE""",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if not row or row["ended_at"] is not None:
+                return False
+            last_at = row["last_heartbeat_at"]
+            elapsed = max(0.0, min(
+                (now - last_at).total_seconds(),
+                float(_ACTIVITY_INTERVAL_CAP_SECONDS),
+            ))
+            active = elapsed if row["last_state"] == "active" else 0.0
+            idle = elapsed if row["last_state"] == "idle" else 0.0
+            cur.execute(
+                f"""UPDATE {_USER_ACTIVITY_SESSION_TABLE}
+                    SET active_seconds=active_seconds+%s, idle_seconds=idle_seconds+%s,
+                        last_heartbeat_at=%s, last_state=%s
+                    WHERE session_id=%s""",
+                (active, idle, now, state, session_id),
+            )
+            if elapsed:
+                cur.execute(
+                    f"""INSERT INTO {_USER_ACTIVITY_DAILY_TABLE}
+                        (user_id, user_email, activity_day, active_seconds, idle_seconds)
+                        VALUES (%s,%s,%s,%s,%s)
+                        ON CONFLICT (user_id, activity_day) DO UPDATE
+                        SET user_email=EXCLUDED.user_email,
+                            active_seconds={_USER_ACTIVITY_DAILY_TABLE}.active_seconds
+                                           + EXCLUDED.active_seconds,
+                            idle_seconds={_USER_ACTIVITY_DAILY_TABLE}.idle_seconds
+                                         + EXCLUDED.idle_seconds""",
+                    (row["user_id"], row["user_email"], _activity_day(now), active, idle),
+                )
+        return True
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def end_user_activity_session(
+    session_id: str,
+    *,
+    user_id: int,
+    user_email: str,
+    occurred_at: Optional[datetime.datetime] = None,
+) -> None:
+    """Finish a session, crediting no more than one final heartbeat interval."""
+    if not AVAILABLE or not session_id:
+        return
+    now = _activity_now(occurred_at)
+    try:
+        record_user_activity_heartbeat(session_id, "idle", occurred_at=now)
+        _init_user_activity_tables()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE {_USER_ACTIVITY_SESSION_TABLE}
+                    SET ended_at=COALESCE(ended_at, %s)
+                    WHERE session_id=%s""",
+                (now, session_id),
+            )
+            _record_user_event(
+                cur, user_id=user_id, user_email=user_email, session_id=session_id,
+                event_type="logout", occurred_at=now,
+            )
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+
+def user_activity_report(
+    from_day: datetime.date,
+    to_day: datetime.date,
+    *,
+    user_id: Optional[int] = None,
+) -> Dict:
+    """Return daily rollups and safe event detail for an administrator report."""
+    if not AVAILABLE:
+        raise StoreError("User activity requires the configured Postgres database.")
+    if from_day > to_day:
+        raise StoreError("The start date must not be after the end date.")
+    try:
+        _init_user_activity_tables()
+        filter_sql = " AND user_id=%s" if user_id is not None else ""
+        filter_params = (int(user_id),) if user_id is not None else ()
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""SELECT user_id, user_email, activity_day, active_seconds, idle_seconds
+                    FROM {_USER_ACTIVITY_DAILY_TABLE}
+                    WHERE activity_day BETWEEN %s AND %s {filter_sql}
+                    ORDER BY activity_day DESC, user_email""",
+                (from_day, to_day) + filter_params,
+            )
+            daily_rows = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                f"""SELECT user_id, user_email,
+                           (started_at AT TIME ZONE 'Asia/Kolkata')::date AS activity_day,
+                           COUNT(*) AS session_count
+                    FROM {_USER_ACTIVITY_SESSION_TABLE}
+                    WHERE (started_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+                    {filter_sql}
+                    GROUP BY user_id, user_email, activity_day""",
+                (from_day, to_day) + filter_params,
+            )
+            session_rows = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                f"""SELECT user_id, user_email, event_type, label, created_at,
+                           (created_at AT TIME ZONE 'Asia/Kolkata')::date AS activity_day
+                    FROM {_USER_ACTIVITY_EVENT_TABLE}
+                    WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+                    {filter_sql}
+                    ORDER BY created_at DESC, id DESC LIMIT 500""",
+                (from_day, to_day) + filter_params,
+            )
+            events = [dict(r) for r in cur.fetchall()]
+    except StoreError:
+        raise
+    except Exception as exc:
+        raise StoreError(str(exc))
+
+    by_key: Dict[Tuple[int, datetime.date], Dict] = {}
+    for row in daily_rows:
+        day = row["activity_day"]
+        by_key[(row["user_id"], day)] = {
+            "user_id": row["user_id"],
+            "user_email": row["user_email"],
+            "day": day.isoformat(),
+            "active_seconds": round(float(row["active_seconds"] or 0), 1),
+            "idle_seconds": round(float(row["idle_seconds"] or 0), 1),
+            "session_count": 0,
+            "pages": [],
+            "actions": [],
+        }
+    for row in session_rows:
+        key = (row["user_id"], row["activity_day"])
+        entry = by_key.setdefault(key, {
+            "user_id": row["user_id"], "user_email": row["user_email"],
+            "day": row["activity_day"].isoformat(), "active_seconds": 0.0,
+            "idle_seconds": 0.0, "session_count": 0, "pages": [], "actions": [],
+        })
+        entry["session_count"] = int(row["session_count"])
+
+    event_detail = []
+    for event in events:
+        key = (event["user_id"], event["activity_day"])
+        entry = by_key.setdefault(key, {
+            "user_id": event["user_id"], "user_email": event["user_email"],
+            "day": event["activity_day"].isoformat(), "active_seconds": 0.0,
+            "idle_seconds": 0.0, "session_count": 0, "pages": [], "actions": [],
+        })
+        if event["event_type"] == "page" and event["label"] not in entry["pages"]:
+            entry["pages"].append(event["label"])
+        if event["event_type"] == "action" and event["label"] not in entry["actions"]:
+            entry["actions"].append(event["label"])
+        created = event["created_at"].astimezone(_ACTIVITY_TZ)
+        event_detail.append({
+            "day": event["activity_day"].isoformat(),
+            "user_email": event["user_email"],
+            "type": event["event_type"],
+            "label": event["label"],
+            "when": created.strftime("%d-%m-%Y %H:%M"),
+        })
+
+    rows = sorted(
+        by_key.values(), key=lambda r: (r["day"], r["user_email"]), reverse=True
+    )
+    return {
+        "from_day": from_day.isoformat(),
+        "to_day": to_day.isoformat(),
+        "rows": rows,
+        "events": event_detail,
+        "summary": {
+            "active_seconds": round(sum(r["active_seconds"] for r in rows), 1),
+            "idle_seconds": round(sum(r["idle_seconds"] for r in rows), 1),
+            "sessions": sum(r["session_count"] for r in rows),
+            "users": len({r["user_id"] for r in rows}),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

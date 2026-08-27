@@ -69,11 +69,16 @@ def client_with_pw():
     import app as appmod
 
     orig = auth_mod.app_password
+    orig_store_available = auth_mod.store.AVAILABLE
     auth_mod.app_password = lambda: "secret123"
+    # This suite exercises the documented legacy fallback. Database-backed
+    # account authentication is covered independently in test_auth_users.py.
+    auth_mod.store.AVAILABLE = False
     appmod.app.config["TESTING"] = True
     with appmod.app.test_client() as c:
         yield c
     auth_mod.app_password = orig
+    auth_mod.store.AVAILABLE = orig_store_available
 
 
 # ---------------------------------------------------------------------------

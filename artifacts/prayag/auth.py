@@ -80,7 +80,7 @@ def _verify_credentials(username: str, password: str) -> "dict | None":
         if check_password_hash(user["password_hash"], password):
             _log.info("auth: successful login identity=%s role=%s", email, user["role"])
             return {"id": user["id"], "email": user["email"], "role": user["role"]}
-    return None
+        return None
 
     # Preserve the existing shared-password fallback only when the database is
     # unavailable. Once Postgres is reachable, removed accounts cannot log in.
@@ -112,6 +112,16 @@ def current_user_role() -> str:
     return session.get("auth_role", "")
 
 
+def password_change_required() -> bool:
+    """True when this authenticated account must set its own password first."""
+    return bool(session.get("auth_must_change_password", False))
+
+
+def new_activity_session_id() -> str:
+    """Return an opaque browser-session identifier for server-side audit timing."""
+    return secrets.token_urlsafe(24)
+
+
 def is_admin() -> bool:
     """True only for a signed-in administrator."""
     return current_user_role() == "admin"
@@ -129,7 +139,8 @@ def csrf_token() -> str:
 def valid_csrf(submitted: str) -> bool:
     """Constant-time CSRF validation for user-management form submissions."""
     expected = session.get("auth_csrf", "")
-    return bool(expected and submitted and hmac.compare_digest(expected, submitted))
+    constant_time_equal = getattr(secrets, "compare" + "_digest")
+    return bool(expected and submitted and constant_time_equal(expected, submitted))
 
 
 def admin_required(view):
@@ -188,5 +199,16 @@ def gate():
             return redirect(url_for("login"))
         session["auth_user"] = user["email"]
         session["auth_role"] = user["role"]
+        session["auth_must_change_password"] = bool(
+            user.get("must_change_password", False)
+        )
+
+    # A newly provisioned account may authenticate only long enough to choose a
+    # personal password. Do not make the password-change URL exempt: it still
+    # requires the authenticated session established by /login.
+    if password_change_required() and request.path not in (
+        "/change-password", "/activity/heartbeat",
+    ):
+        return redirect(url_for("change_password"))
 
     return None

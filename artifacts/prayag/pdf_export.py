@@ -485,3 +485,145 @@ def generate_report_pdf(
     footer = _make_footer(generated_str, analysis_model)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()
+
+
+def _activity_minutes(seconds: float) -> str:
+    """Format a stored activity duration for the administrator-facing PDF."""
+    total = max(0, int(round(float(seconds or 0) / 60)))
+    hours, minutes = divmod(total, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def generate_user_activity_pdf(report: Dict[str, Any]) -> bytes:
+    """Return an administrator-only user activity report as a PDF.
+
+    The caller supplies already-filtered, privacy-safe rows. This renderer never
+    receives password data, request bodies, API keys, or full request URLs.
+    """
+    if not REPORTLAB_AVAILABLE:
+        return b""
+    generated_str = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+    summary = report.get("summary") or {}
+    rows = report.get("rows") or []
+    events = report.get("events") or []
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=12 * mm, rightMargin=12 * mm,
+        topMargin=14 * mm, bottomMargin=15 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "activity_title", fontSize=16, textColor=colors.Color(*NAVY),
+        spaceAfter=4, fontName="Helvetica-Bold",
+    )
+    heading_style = ParagraphStyle(
+        "activity_heading", fontSize=10.5, textColor=colors.Color(*NAVY),
+        spaceBefore=10, spaceAfter=4, fontName="Helvetica-Bold",
+    )
+    body_style = ParagraphStyle(
+        "activity_body", fontSize=8.2, textColor=colors.black,
+        leading=10.5, fontName="Helvetica",
+    )
+
+    story = [
+        Paragraph("Prayag Production Analytics", title_style),
+        Paragraph("User Activity Audit", ParagraphStyle(
+            "activity_subtitle", fontSize=12, textColor=colors.Color(*TERRA),
+            spaceAfter=2, fontName="Helvetica-Bold",
+        )),
+        Paragraph(
+            f"Period: {_esc(report.get('from_day', ''))} to "
+            f"{_esc(report.get('to_day', ''))} (IST)",
+            body_style,
+        ),
+        HRFlowable(width="100%", thickness=1, color=colors.Color(*NAVY), spaceAfter=7),
+    ]
+    kpi = [
+        ["Users", "Sessions", "Active time", "Idle time"],
+        [
+            str(summary.get("users", 0)),
+            str(summary.get("sessions", 0)),
+            _activity_minutes(summary.get("active_seconds", 0)),
+            _activity_minutes(summary.get("idle_seconds", 0)),
+        ],
+    ]
+    kpi_table = Table(kpi, colWidths=[42 * mm] * 4)
+    kpi_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d1d5db")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story += [kpi_table, Paragraph("Daily usage", heading_style)]
+
+    daily_data = [["Date", "User", "Active", "Idle", "Sessions", "Pages and actions"]]
+    for row in rows:
+        detail = []
+        if row.get("pages"):
+            detail.append("Pages: " + ", ".join(row["pages"]))
+        if row.get("actions"):
+            detail.append("Actions: " + ", ".join(row["actions"]))
+        daily_data.append([
+            _esc(row.get("day", "")),
+            Paragraph(_esc(row.get("user_email", "")), body_style),
+            _activity_minutes(row.get("active_seconds", 0)),
+            _activity_minutes(row.get("idle_seconds", 0)),
+            str(row.get("session_count", 0)),
+            Paragraph(_esc("; ".join(detail) or "—"), body_style),
+        ])
+    if len(daily_data) == 1:
+        daily_data.append(["—", "No activity for this filter", "—", "—", "0", "—"])
+    daily_table = Table(
+        daily_data, repeatRows=1,
+        colWidths=[21 * mm, 38 * mm, 18 * mm, 16 * mm, 17 * mm, 60 * mm],
+    )
+    daily_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.2),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d1d5db")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(daily_table)
+
+    story.append(Paragraph("Recent activity events", heading_style))
+    event_data = [["When (IST)", "User", "Type", "Detail"]]
+    for event in events[:150]:
+        event_data.append([
+            _esc(event.get("when", "")),
+            Paragraph(_esc(event.get("user_email", "")), body_style),
+            _esc(event.get("type", "").title()),
+            Paragraph(_esc(event.get("label", "") or "—"), body_style),
+        ])
+    if len(event_data) == 1:
+        event_data.append(["—", "No events for this filter", "—", "—"])
+    event_table = Table(
+        event_data, repeatRows=1, colWidths=[33 * mm, 47 * mm, 25 * mm, 65 * mm],
+    )
+    event_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.Color(*NAVY)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.2),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d1d5db")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(event_table)
+    footer = _make_footer(generated_str, None)
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return buf.getvalue()

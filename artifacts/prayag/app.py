@@ -68,7 +68,7 @@ import verify
 import freshness
 import compound as compound_mod
 import auth
-from pdf_export import generate_report_pdf, generate_ai_report_pdf
+from pdf_export import generate_report_pdf, generate_ai_report_pdf, generate_user_activity_pdf
 from report_cell_accessors import pivot_cell
 from glossary import (
     GLOSSARY, GLOSSARY_BY_KEY, FORMULAS, RATING_BANDS, RATING_NOTE,
@@ -85,6 +85,78 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 # before_request gate — inactive when PRAYAG_APP_PASSWORD is not set.
 app.before_request(auth.gate)
 
+_AUDIT_EXEMPT_PATHS = frozenset({
+    "/login", "/logout", "/health", "/change-password", "/activity/heartbeat",
+})
+_AUDIT_PAGE_LABELS = {
+    "/": "Dashboard home",
+    "/settings/users": "User management",
+    "/settings/users/audit": "User activity audit",
+}
+
+
+def _audit_label() -> str:
+    """Return a safe route-derived label without query or form values."""
+    if request.path in _AUDIT_PAGE_LABELS:
+        return _AUDIT_PAGE_LABELS[request.path]
+    endpoint = (request.endpoint or "").replace("_", " ").strip()
+    return endpoint.title()[:160] or "Dashboard page"
+
+
+def _audit_session_id() -> str:
+    return str(session.get("audit_session_id") or "")
+
+
+@app.before_request
+def _capture_user_page_visit():
+    """Append page visits only after the auth gate has accepted the request."""
+    if (
+        request.method != "GET"
+        or request.path in _AUDIT_EXEMPT_PATHS
+        or request.path.startswith(("/static/", "/data-api/"))
+    ):
+        return None
+    user_id = auth.current_user_id()
+    if not user_id or not _audit_session_id():
+        return None
+    try:
+        store.record_user_activity_event(
+            user_id=user_id,
+            user_email=auth.current_user() or "",
+            session_id=_audit_session_id(),
+            event_type="page",
+            label=_audit_label(),
+        )
+    except store.StoreError:
+        app.logger.warning("user activity: unable to record page visit")
+    return None
+
+
+@app.after_request
+def _capture_user_action(response):
+    """Record successful non-GET dashboard actions without capturing payloads."""
+    if (
+        response.status_code >= 400
+        or request.method in ("GET", "HEAD", "OPTIONS")
+        or request.path in _AUDIT_EXEMPT_PATHS
+        or request.path.startswith(("/static/", "/data-api/"))
+    ):
+        return response
+    user_id = auth.current_user_id()
+    if not user_id or not _audit_session_id():
+        return response
+    try:
+        store.record_user_activity_event(
+            user_id=user_id,
+            user_email=auth.current_user() or "",
+            session_id=_audit_session_id(),
+            event_type="action",
+            label=_audit_label(),
+        )
+    except store.StoreError:
+        app.logger.warning("user activity: unable to record action")
+    return response
+
 
 @app.context_processor
 def _inject_auth():
@@ -94,6 +166,7 @@ def _inject_auth():
         "auth_user": auth.current_user(),
         "auth_role": auth.current_user_role(),
         "auth_is_admin": auth.is_admin(),
+        "auth_csrf_token": auth.csrf_token() if auth.current_user() else "",
     }
 
 
@@ -2904,12 +2977,32 @@ def login():
         password = request.form.get("password", "")
         identity = auth._verify_credentials(username, password)
         if identity is not None:
+            must_change_password = False
+            if store.AVAILABLE and identity["id"] is not None:
+                try:
+                    account = store.get_user_by_id(identity["id"])
+                    must_change_password = bool(
+                        account and account.get("must_change_password", False)
+                    )
+                except store.StoreError:
+                    app.logger.warning("auth: unable to read password-change state")
             session.clear()
             session["auth_user_id"] = identity["id"]
             session["auth_user"] = identity["email"]
             session["auth_role"] = identity["role"]
+            session["auth_must_change_password"] = must_change_password
+            session["audit_session_id"] = auth.new_activity_session_id()
+            try:
+                store.start_user_activity_session(
+                    session["audit_session_id"],
+                    user_id=identity["id"],
+                    user_email=identity["email"],
+                )
+            except store.StoreError:
+                app.logger.warning("user activity: unable to start session")
             # Apply Secure flag dynamically based on whether the request is HTTPS.
-            resp = make_response(redirect(url_for("hub")))
+            destination = "change_password" if auth.password_change_required() else "hub"
+            resp = make_response(redirect(url_for(destination)))
             if request.is_secure:
                 app.config["SESSION_COOKIE_SECURE"] = True
             return resp
@@ -2923,8 +3016,91 @@ def login():
 @app.route("/logout")
 def logout():
     """Clear the session and redirect to /login."""
+    try:
+        store.end_user_activity_session(
+            _audit_session_id(),
+            user_id=auth.current_user_id() or 0,
+            user_email=auth.current_user() or "",
+        )
+    except store.StoreError:
+        app.logger.warning("user activity: unable to close session")
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/change-password", methods=["GET", "POST"])
+def change_password():
+    """Force newly provisioned users to replace their initial password."""
+    user_id = auth.current_user_id()
+    if not user_id:
+        return redirect(url_for("login"))
+    if not auth.password_change_required():
+        return redirect(url_for("hub"))
+    if request.method == "POST":
+        if not auth.valid_csrf(request.form.get("csrf_token", "")):
+            abort(400, "Invalid form token. Refresh the page and try again.")
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+        if len(password) < 8:
+            return render_template(
+                "change_password.html",
+                error="New passwords must be at least 8 characters.",
+                csrf_token=auth.csrf_token(),
+            ), 400
+        if password != confirm:
+            return render_template(
+                "change_password.html",
+                error="The passwords do not match.",
+                csrf_token=auth.csrf_token(),
+            ), 400
+        try:
+            changed = store.set_user_password(
+                user_id, auth.hash_password(password), must_change_password=False
+            )
+        except store.StoreError as exc:
+            return render_template(
+                "change_password.html", error=str(exc), csrf_token=auth.csrf_token()
+            ), 503
+        if not changed:
+            session.clear()
+            return redirect(url_for("login"))
+        session["auth_must_change_password"] = False
+        try:
+            store.record_user_activity_event(
+                user_id=user_id, user_email=auth.current_user() or "",
+                session_id=_audit_session_id(), event_type="action",
+                label="Changed first-login password",
+            )
+        except store.StoreError:
+            app.logger.warning("user activity: unable to record password change")
+        return redirect(url_for("hub"))
+    return render_template("change_password.html", error="", csrf_token=auth.csrf_token())
+
+
+@app.route("/activity/heartbeat", methods=["POST"])
+def activity_heartbeat():
+    """Receive privacy-safe activity state; timing remains server-accounted."""
+    user_id = auth.current_user_id()
+    session_id = _audit_session_id()
+    if not user_id or not session_id:
+        abort(401)
+    payload = request.get_json(silent=True) or {}
+    token = request.headers.get("X-CSRF-Token", "")
+    if not auth.valid_csrf(token):
+        abort(400, "Invalid activity token.")
+    state = payload.get("state")
+    if state not in ("active", "idle"):
+        abort(400, "Activity state must be active or idle.")
+    try:
+        if payload.get("closing"):
+            store.end_user_activity_session(
+                session_id, user_id=user_id, user_email=auth.current_user() or ""
+            )
+        else:
+            store.record_user_activity_heartbeat(session_id, state)
+    except store.StoreError:
+        app.logger.warning("user activity: unable to record heartbeat")
+    return ("", 204)
 
 
 @app.route("/health")
@@ -8535,6 +8711,42 @@ def _user_post_allowed() -> bool:
     return auth.valid_csrf(request.form.get("csrf_token", ""))
 
 
+def _activity_filter_dates() -> tuple[datetime.date, datetime.date]:
+    """Read strictly ISO-formatted admin audit dates with a useful default."""
+    today = _today()
+    default_from = today - datetime.timedelta(days=6)
+    try:
+        from_day = datetime.date.fromisoformat(
+            request.args.get("from_date", default_from.isoformat())
+        )
+        to_day = datetime.date.fromisoformat(
+            request.args.get("to_date", today.isoformat())
+        )
+    except ValueError:
+        abort(400, "Dates must use YYYY-MM-DD.")
+    if from_day > to_day:
+        abort(400, "The start date must not be after the end date.")
+    return from_day, to_day
+
+
+def _activity_filter_user_id() -> Optional[int]:
+    """Accept only a numeric account id; never pass arbitrary query text on."""
+    raw_user_id = (request.args.get("user_id") or "").strip()
+    if not raw_user_id:
+        return None
+    try:
+        return int(raw_user_id)
+    except ValueError:
+        abort(400, "Choose a valid user.")
+
+
+def _activity_duration(seconds: float) -> str:
+    """Format an audit duration for templates without exposing raw intervals."""
+    minutes = max(0, int(round(float(seconds or 0) / 60)))
+    hours, remaining = divmod(minutes, 60)
+    return f"{hours}h {remaining}m" if hours else f"{remaining}m"
+
+
 @app.route("/settings/users")
 @auth.admin_required
 def user_management():
@@ -8547,6 +8759,49 @@ def user_management():
         message=request.args.get("message", ""),
         error=request.args.get("error", ""),
     )
+
+
+@app.route("/settings/users/audit")
+@auth.admin_required
+def user_activity_audit():
+    """Render the filtered, privacy-safe activity audit for administrators."""
+    from_day, to_day = _activity_filter_dates()
+    user_id = _activity_filter_user_id()
+    try:
+        report = store.user_activity_report(from_day, to_day, user_id=user_id)
+        users = store.list_users()
+    except store.StoreError as exc:
+        abort(503, str(exc))
+    return render_template(
+        "user_activity_audit.html",
+        report=report,
+        users=users,
+        selected_user_id=user_id,
+        from_date=from_day.isoformat(),
+        to_date=to_day.isoformat(),
+        duration=_activity_duration,
+    )
+
+
+@app.route("/settings/users/audit.pdf")
+@auth.admin_required
+def user_activity_audit_pdf():
+    """Download exactly the current administrator-filtered activity report."""
+    from_day, to_day = _activity_filter_dates()
+    user_id = _activity_filter_user_id()
+    try:
+        report = store.user_activity_report(from_day, to_day, user_id=user_id)
+        pdf_data = generate_user_activity_pdf(report)
+    except store.StoreError as exc:
+        abort(503, str(exc))
+    if not pdf_data:
+        abort(503, "PDF export is unavailable on this server.")
+    response = make_response(pdf_data)
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="user_activity_{from_day.isoformat()}_{to_day.isoformat()}.pdf"'
+    )
+    return response
 
 
 @app.route("/settings/users/create", methods=["POST"])
@@ -8579,12 +8834,14 @@ def user_reset_password(user_id: int):
     if len(password) < 8:
         return _users_redirect(error="New passwords must be at least 8 characters.")
     try:
-        changed = store.set_user_password(user_id, auth.hash_password(password))
+        changed = store.set_user_password(
+            user_id, auth.hash_password(password), must_change_password=True
+        )
     except store.StoreError as exc:
         return _users_redirect(error=str(exc))
     if not changed:
         return _users_redirect(error="That account no longer exists.")
-    return _users_redirect(message="Password reset.")
+    return _users_redirect(message="Password reset. The user must choose a new password at next sign-in.")
 
 
 @app.route("/settings/users/<int:user_id>/role", methods=["POST"])

@@ -1,0 +1,45 @@
+{% if auth_user and auth_csrf_token %}
+<script>
+/* Privacy-safe usage timing: no form values, URLs, keystrokes, or screen data. */
+(function () {
+  var endpoint = "/activity/heartbeat";
+  var csrf = {{ auth_csrf_token|tojson }};
+  var idleAfterMs = 5 * 60 * 1000;
+  var intervalMs = 60 * 1000;
+  var lastInteraction = Date.now();
+  var lastTouch = 0;
+
+  function markInteraction() {
+    var now = Date.now();
+    if (now - lastTouch > 1000) {
+      lastInteraction = now;
+      lastTouch = now;
+    }
+  }
+  function currentState() {
+    return document.visibilityState === "visible" && document.hasFocus() &&
+      (Date.now() - lastInteraction) <= idleAfterMs ? "active" : "idle";
+  }
+  function sendState() {
+    try {
+      fetch(endpoint, {
+        method: "POST",
+        keepalive: true,
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf},
+        body: JSON.stringify({state: currentState()})
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  ["pointerdown", "keydown", "touchstart", "scroll"].forEach(function (eventName) {
+    window.addEventListener(eventName, markInteraction, {passive: true});
+  });
+  window.addEventListener("focus", function () { markInteraction(); sendState(); });
+  window.addEventListener("blur", sendState);
+  document.addEventListener("visibilitychange", sendState);
+  window.addEventListener("pagehide", sendState);
+  setTimeout(sendState, 1200);
+  window.setInterval(sendState, intervalMs);
+})();
+</script>
+{% endif %}
