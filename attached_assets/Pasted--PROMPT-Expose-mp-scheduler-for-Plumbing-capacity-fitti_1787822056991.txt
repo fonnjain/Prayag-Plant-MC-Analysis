@@ -1,0 +1,120 @@
+# PROMPT — Expose `mp_scheduler` for Plumbing capacity fitting
+
+**Repository:** `fonnjain/Prayag-Plant-MC-Analysis` · `prayag-plant.com`
+
+Your Q1–Q7 answers settled the design. **Building this.**
+
+---
+
+## What was decided from your answers
+
+**Plumbing Pass 2 will call this app.** `mp_scheduler` is live, operator-facing, and resolves the shared-machine problem — MC3, MC4, MC5 across CPVC, UPVC, SWR and AGRI — by construction, because it assigns real machine-hours rather than summing envelopes that were never additive.
+
+**PTMT will not.** Your answer that PTMT has no routing, no BOM weights and no rates was decisive. PTMT gets a simpler category-p90 fitter in the planning app. **Do not build PTMT support here.**
+
+**And your recommendation is accepted:** a **preview-only, non-persistent** endpoint in the Flask app, with the planning app sending normalised engine-compatible demand rather than a bare payload. That is your **1–2 engineer-day** estimate rather than the 3–5 day one, and it keeps demand ownership where it belongs.
+
+---
+
+# What to build
+
+```
+POST /data-api/v1/schedule
+X-API-Key: <key>
+```
+
+## Request
+
+The planning app already produces this — `GET /api/plan/runs/:id/schedule-request` exists and returns item code, colour, quantity, material, weight, category and urgency rank per line.
+
+**Tell us the exact shape you want** and the planning app will conform. Specifically:
+
+- which fields the engine needs to resolve BOM, routing, rates and capable machines
+- whether `material` should be `CPVC` / `UPVC` / `SWR` / `AGRI` or your internal codes
+- whether `weight` is useful or the engine resolves it from `mp_bom_weight` regardless
+- how you want fitting demand distinguished from pipe demand
+
+**No W1–W4 will be sent.** Per your Q4 answer, absent weeks means `first_requested_week = 1` and the existing priority rule derives the placement — W1-origin fills W1 capacity, remainder cascades into W2 ahead of W2's own demand. **That is exactly the behaviour we want**, and the reason we are not pre-splitting the month.
+
+## Response
+
+`ScheduleResult.to_dict()` already carries everything needed:
+
+```
+blocks                  day/shift assignments
+weekly_fill             what fits each week
+unfinished              the cannot-be-made list
+total_capacity_hrs
+total_scheduled_hrs
+total_idle_hrs
+week_days
+downtime_machine_days
+downtime_hours_lost
+capacity_advisory
+```
+
+**No renaming required** — the planning app will map. Return the native shape.
+
+## ⚠ One conversion the planning app cannot do
+
+**`unfinished` comes back in kg. The planning app works in pieces.**
+
+It has no BOM and cannot convert back. **Please return unfinished quantity in pieces as well as kg**, or include the per-item conversion factor used. Otherwise the cannot-be-made figure reaches the floor in the wrong unit.
+
+## Non-persistent
+
+No run identity, no storage, no freeze semantics. **The planning app owns demand and persists the resulting plan.** Per your recommendation, a shared ownership model is a separate deliberate design, not something to acquire by accident.
+
+---
+
+# ⚠ The Sunday problem — fix this before or alongside
+
+Your Q6 answer confirmed the risk, and it is the same defect class that once discarded **80,522 pieces** from PTMT monitoring.
+
+The scheduler builds synthetic day slots from `week_days = [6,6,6,7]` and **cannot tell which slot is a Sunday or whether one was worked.** Meanwhile the planning app's calendar counts non-Sundays **plus any Sunday with production** — August had three worked Sundays, giving 29 working days rather than 26.
+
+**So a worked Sunday is counted by planning and excluded from scheduler capacity**, unless someone manually configures a larger total.
+
+**Two options, and this needs deciding rather than deferring:**
+
+**Accept `week_days` from the request.** The planning app computes the Sunday-aware split and sends `[6,7,6,10]` or whatever the month gives. Simplest, and the calling app already has the calendar.
+
+**Or make the scheduler date-aware** — real dates, worked-Sunday recognition. Better long-term, considerably more work, and out of scope here.
+
+**Recommend the first**, with `week_days` as a required request field so it can never silently fall back to `[6,6,6,7]`.
+
+---
+
+# Verification
+
+Once built, run one Plumbing month end to end and report:
+
+```
+demand sent            pieces, item count
+scheduled              pieces and kg
+unfinished             pieces and kg
+capacity hrs           scheduled / idle / total
+week_days used         confirm it matches what was sent
+```
+
+**Two specific checks:**
+
+**Shared machines are not over-committed.** MC3, MC4 and MC5 appear in multiple material envelopes. Assert no machine is assigned beyond its available hours in any day or shift. **This is the single largest gain over a category-level fitter and should be proven, not assumed.**
+
+**And the two locked-out machines are excluded** from available capacity, with their absence reported rather than silently reducing the total.
+
+---
+
+# Do not
+
+- **Build PTMT support.** Routing, BOM and rates do not exist for it; PTMT is being handled in the planning app.
+- **Change any metric calculation.** Rejection, utilisation and output efficiency are settled and validated against Prayag's own figures. **They must not move.**
+- **Add persistence or freeze semantics.** Preview only.
+
+---
+
+## One item still open from earlier
+
+**Three PIPE machine-days have positive output and zero run hours** — `Pipe M/C-1` 943.80 kg and `M/C-2` 1,329.60 kg on 23 August, `M/C-5` 808.00 kg on 20 June. The ideal rate is configured; the hours are missing.
+
+That understates both output efficiency and utilisation, and **it will understate scheduler capacity too** once this endpoint is live, since run hours feed the capacity model. Worth fixing before Pass 2 depends on it.
