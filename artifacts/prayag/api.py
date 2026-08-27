@@ -71,6 +71,10 @@ class PlanningDataUnavailable(RuntimeError):
     """The MP master data required for a schedule preview is unavailable."""
 
 
+class ScheduleMachinePoolConflict(RuntimeError):
+    """A machine is configured in both independent Plumbing schedule pools."""
+
+
 @dataclasses.dataclass(frozen=True)
 class _SchedulePreviewRequest:
     """Validated, engine-ready input for one non-persistent schedule preview."""
@@ -211,14 +215,37 @@ def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
     plan run, cache a result, write plan lines, or mutate the saved calendar.
     """
     preview = _parse_schedule_preview_request(payload)
-    machine_kind = "extrusion" if preview.kind == "pipe" else "moulding"
     try:
-        machines = _mp_model.get_machines(
-            "PLUMBING", preview.month, kind=machine_kind
+        extrusion_machines = _mp_model.get_machines(
+            "PLUMBING", preview.month, kind="extrusion"
+        )
+        moulding_machines = _mp_model.get_machines(
+            "PLUMBING", preview.month, kind="moulding"
+        )
+        extrusion_names = {
+            str(row.get("machine") or "")
+            for row in extrusion_machines if row.get("machine")
+        }
+        moulding_names = {
+            str(row.get("machine") or "")
+            for row in moulding_machines if row.get("machine")
+        }
+        overlap = sorted(extrusion_names & moulding_names)
+        if overlap:
+            raise ScheduleMachinePoolConflict(
+                "Plumbing machine pool overlap detected: " + ", ".join(overlap) +
+                ". Pipe and fitting previews cannot be merged safely."
+            )
+
+        machines = (
+            extrusion_machines if preview.kind == "pipe" else moulding_machines
         )
         if not machines:
+            machine_kind_label = (
+                "extrusion" if preview.kind == "pipe" else "moulding"
+            )
             raise PlanningDataUnavailable(
-                f"No {machine_kind} machine master data is configured for {preview.month}."
+                f"No {machine_kind_label} machine master data is configured for {preview.month}."
             )
         machine_names = {
             str(row.get("machine") or "") for row in machines if row.get("machine")
@@ -269,6 +296,8 @@ def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
             week_days_override=preview.week_days,
         )
     except PlanningDataUnavailable:
+        raise
+    except ScheduleMachinePoolConflict:
         raise
     except SchedulePreviewError:
         raise
@@ -568,6 +597,11 @@ def create_api(get_data) -> Blueprint:
                 "error": "invalid_schedule_request",
                 "message": str(exc),
             }), 400
+        except ScheduleMachinePoolConflict as exc:
+            return jsonify({
+                "error": "schedule_machine_pool_overlap",
+                "message": str(exc),
+            }), 503
         except PlanningDataUnavailable as exc:
             return jsonify({
                 "error": "planning_data_unavailable",

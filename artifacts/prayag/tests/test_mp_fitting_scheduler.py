@@ -137,6 +137,7 @@ class TestEmptyDemand:
         result = _run([], segment="PLUMBING", month="2026-07")
         assert result.segment == "PLUMBING"
         assert result.effective_month == "2026-07"
+        assert result.kind == "fitting"
 
     def test_weekly_fill_rows_produced(self):
         result = _run([])

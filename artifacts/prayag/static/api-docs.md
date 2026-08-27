@@ -29,6 +29,7 @@ Multiple keys can be active at the same time — any valid key authorises a requ
 | `502` | `source_unavailable` | The production Google Sheets could not be read |
 | `400` | `invalid_schedule_request` | The schedule-preview body is incomplete or invalid |
 | `503` | `planning_data_unavailable` | The required Plumbing planning master could not be read |
+| `503` | `schedule_machine_pool_overlap` | A machine is registered in both pipe and fitting pools, so separate previews would over-commit it |
 
 ---
 
@@ -263,7 +264,9 @@ always resolves its per-piece BOM weight from the current `mp_bom_weight` master
 **Response**
 
 The response is the native schedule result: `blocks`, `weekly_fill`,
-`unfinished`, capacity and idle totals, `week_days`, and downtime totals. A
+`unfinished`, capacity and idle totals, `week_days`, `kind`, and downtime totals.
+`kind` echoes the requested `pipe` or `fitting` schedule type, so callers can
+retain the source when showing both independent pools together. A
 locked machine has `DOWN` blocks, making its excluded capacity explicit.
 `unfinished[].remaining_pcs` is the remaining gross production-piece quantity
 after the engine's rejection gross-up; `remaining_kg` is the equivalent
@@ -272,6 +275,7 @@ engine-derived material quantity.
 ```json
 {
   "segment": "PLUMBING",
+  "kind": "pipe",
   "effective_month": "2026-07",
   "week_days": [7, 7, 7, 10],
   "blocks": [{"week": 1, "day": 1, "machine": "M/C-3", "shift": "DAY"}],
@@ -286,6 +290,12 @@ engine-derived material quantity.
   "downtime_hours_lost": 40.0
 }
 ```
+
+Pipe and fitting previews are independently mergeable only while their
+machine-master pools are disjoint. Every request checks both current pools. If
+any machine appears in both, the endpoint returns
+`503 schedule_machine_pool_overlap` with the conflicting machine names instead
+of producing schedules that could double-commit capacity.
 
 ---
 

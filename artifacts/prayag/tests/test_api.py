@@ -352,6 +352,7 @@ def test_schedule_dispatches_fitting_demand_to_the_fitting_engine(monkeypatch):
         seen["schedule"] = kwargs
         return SimpleNamespace(to_dict=lambda: {
             "segment": "PLUMBING",
+            "kind": "fitting",
             "effective_month": "2026-07",
             "blocks": [],
             "weekly_fill": [],
@@ -373,6 +374,27 @@ def test_schedule_dispatches_fitting_demand_to_the_fitting_engine(monkeypatch):
     assert isinstance(demand[0], apimod._mp_engine.FittingDemandItem)
     assert seen["schedule"]["fitting_items"] == [fitting_item]
     assert seen["schedule"]["week_days_override"] == [7, 7, 7, 10]
+    assert response.get_json()["kind"] == "fitting"
+
+
+def test_schedule_rejects_machine_registered_in_both_plumbing_pools(monkeypatch):
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+    monkeypatch.setattr(
+        apimod._mp_model, "get_machines",
+        lambda _segment, _month, kind=None: [{"machine": "M/C-DUAL"}]
+        if kind in ("extrusion", "moulding") else [],
+    )
+    response = _client().post(
+        "/data-api/v1/schedule",
+        headers={"X-API-Key": "sekret-123"},
+        json=_schedule_request(),
+    )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["error"] == "schedule_machine_pool_overlap"
+    assert "M/C-DUAL" in body["message"]
 
 
 def test_schedule_rejects_pipe_demand_missing_from_the_bom_master(monkeypatch):
@@ -529,6 +551,7 @@ def test_schedule_preview_uses_engine_calendar_capacity_and_downtime(monkeypatch
 
     # Caller-provided full calendar is used, rather than the saved legacy split.
     assert body["segment"] == "PLUMBING"
+    assert body["kind"] == "pipe"
     assert body["effective_month"] == "2026-07"
     assert body["week_days"] == [7, 7, 7, 10]
     assert body["params_used"]["week_days"] == [7, 7, 7, 10]

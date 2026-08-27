@@ -118,6 +118,7 @@ class TestEmptyDemand:
         result = _run([], [])
         # 2 machines × 25 days × 2 shifts = 100 blocks all idle
         assert all(b.is_idle for b in result.blocks)
+        assert result.kind == "pipe"
         assert result.total_scheduled_hrs == 0.0
         assert result.total_idle_hrs > 0
         assert result.unfinished == []
