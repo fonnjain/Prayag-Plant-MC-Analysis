@@ -1,4 +1,5 @@
-"""Read-only JSON API (v1) — lets external apps consume the full dashboard data.
+"""JSON API (v1) — lets external apps consume dashboard data and request
+non-persistent Plumbing schedule previews.
 
 Design rules (mirror the app's invariants exactly):
   * Every figure is produced by the SAME pipeline the dashboard uses
@@ -9,7 +10,8 @@ Design rules (mirror the app's invariants exactly):
   * Data-confirmation gating is FIRST-CLASS in the payload: consumers get
     ``confirmation.status`` and ``figures_gated`` so an error-gated period is
     never mistaken for clean data.
-  * Read-only: no route mutates anything.
+   * No route persists or mutates production/planning data.  The schedule preview
+     computes from the current MP master data and returns a transient result.
 
 Auth: every data endpoint requires the ``PRAYAG_API_KEY`` secret, supplied as
 an ``X-API-Key`` header (preferred), ``Authorization: Bearer <key>``, or an
@@ -20,8 +22,11 @@ from __future__ import annotations
 
 import dataclasses
 import hmac
+import math
 import os
+import re
 from functools import wraps
+from typing import Any
 
 from flask import Blueprint, jsonify, request
 
@@ -34,6 +39,11 @@ from metrics import (
 )
 from sheets import SheetReadError, months_with_data
 from sources import DAILY_SOURCES, PLANT_LOCATIONS, PLANT_NAMES
+import mp_engine as _mp_engine
+import mp_model as _mp_model
+import mp_rejection_plan as _mp_rejection_plan
+import mp_scheduler as _mp_scheduler
+import mp_wastage as _mp_wastage
 
 
 API_KEY_ENV = "PRAYAG_API_KEY"
@@ -48,6 +58,224 @@ _PERIOD_TOKENS = [
     "YYYY-MM (exact calendar month)", "YYYY-MM-DD (single day)",
     "1..12 (fiscal-year month number, Apr=4 anchored to the current FY)",
 ]
+_SCHEDULE_MATERIALS = frozenset({"CPVC", "UPVC", "SWR", "AGRI"})
+_SCHEDULE_KINDS = frozenset({"pipe", "fitting"})
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+class SchedulePreviewError(ValueError):
+    """A request cannot be converted into a safe schedule preview."""
+
+
+class PlanningDataUnavailable(RuntimeError):
+    """The MP master data required for a schedule preview is unavailable."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _SchedulePreviewRequest:
+    """Validated, engine-ready input for one non-persistent schedule preview."""
+
+    month: str
+    kind: str
+    week_days: list[int]
+    demand: list[dict[str, Any]]
+
+
+def _positive_number(value: Any, field: str, line_number: int) -> float:
+    """Return a finite positive request number or raise a client-safe error."""
+    if isinstance(value, bool):
+        raise SchedulePreviewError(
+            f"demand[{line_number}].{field} must be a positive number."
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise SchedulePreviewError(
+            f"demand[{line_number}].{field} must be a positive number."
+        ) from None
+    if number <= 0 or number == float("inf") or number != number:
+        raise SchedulePreviewError(
+            f"demand[{line_number}].{field} must be a positive finite number."
+        )
+    return number
+
+
+def _parse_schedule_preview_request(payload: Any) -> _SchedulePreviewRequest:
+    """Validate a Plumbing preview request and extract engine-owned fields.
+
+    The planning app may retain presentation/provenance fields such as colour,
+    urgency, category, or a supplied weight.  Only the fields the engine owns
+    are consumed here; BOM weight is always resolved from the MP master data.
+    """
+    if not isinstance(payload, dict):
+        raise SchedulePreviewError("Request body must be a JSON object.")
+
+    if payload.get("segment") != "PLUMBING":
+        raise SchedulePreviewError("segment must be exactly 'PLUMBING'.")
+
+    month = payload.get("month")
+    if not isinstance(month, str) or not _MONTH_RE.fullmatch(month):
+        raise SchedulePreviewError("month must be in YYYY-MM format.")
+    try:
+        _mp_model.calendar_days_in_month(month)
+    except Exception:
+        raise SchedulePreviewError("month must be a valid calendar month in YYYY-MM format.") from None
+
+    kind = payload.get("kind")
+    if not isinstance(kind, str) or kind.lower() not in _SCHEDULE_KINDS:
+        raise SchedulePreviewError("kind must be either 'pipe' or 'fitting'.")
+    kind = kind.lower()
+
+    if "week_days" not in payload:
+        raise SchedulePreviewError("week_days is required for a schedule preview.")
+    try:
+        week_days = _mp_model.validate_week_days(payload["week_days"], month)
+    except Exception as exc:
+        raise SchedulePreviewError(str(exc)) from None
+
+    lines = payload.get("demand")
+    if not isinstance(lines, list) or not lines:
+        raise SchedulePreviewError("demand must be a non-empty array.")
+
+    demand: list[dict[str, Any]] = []
+    for line_number, line in enumerate(lines):
+        if not isinstance(line, dict):
+            raise SchedulePreviewError(f"demand[{line_number}] must be an object.")
+        supplied_code = line.get("item_code")
+        if not isinstance(supplied_code, str) or not supplied_code.strip():
+            raise SchedulePreviewError(f"demand[{line_number}].item_code is required.")
+        item_code = _mp_engine._norm_code(supplied_code)
+        if not item_code:
+            raise SchedulePreviewError(f"demand[{line_number}].item_code is invalid.")
+
+        raw_code = line.get("raw_code", supplied_code)
+        if not isinstance(raw_code, str) or not raw_code.strip():
+            raise SchedulePreviewError(f"demand[{line_number}].raw_code must be text when supplied.")
+
+        material = line.get("material")
+        if not isinstance(material, str) or material.upper() not in _SCHEDULE_MATERIALS:
+            allowed = ", ".join(sorted(_SCHEDULE_MATERIALS))
+            raise SchedulePreviewError(
+                f"demand[{line_number}].material must be one of {allowed}."
+            )
+        demand.append({
+            "item_code": item_code,
+            "raw_code": raw_code.strip(),
+            "material": material.upper(),
+            "qty_pcs": _positive_number(line.get("qty_pcs"), "qty_pcs", line_number),
+        })
+
+    return _SchedulePreviewRequest(
+        month=month, kind=kind, week_days=week_days, demand=demand,
+    )
+
+
+def _schedule_plan_lookups(month: str) -> tuple[dict, dict]:
+    """Build the same rejection and wastage lookup inputs as the planning UI."""
+    params_row = _mp_model.get_params("PLUMBING", month)
+    override_pct = float(getattr(params_row, "waste_pct", 0.0) or 0.0)
+    return (
+        _mp_rejection_plan.build_rejection_lookup("PLUMBING"),
+        _mp_wastage.build_wastage_lookup("PLUMBING", override_pct=override_pct),
+    )
+
+
+def _require_schedulable_items(
+    items: list[Any], machine_names: set[str], kind: str,
+) -> None:
+    """Reject previews that would otherwise silently drop requested demand."""
+    problems: list[str] = []
+    for item in items:
+        label = str(getattr(item, "raw_code", "") or getattr(item, "item_code", "item"))
+        if not getattr(item, "has_weight", False):
+            problems.append(f"{label}: no BOM weight")
+        elif not getattr(item, "has_machine", False):
+            problems.append(f"{label}: no capable {kind} route")
+        elif not math.isfinite(float(getattr(item, "machine_hrs", 0.0) or 0.0)):
+            problems.append(f"{label}: quantity exceeds the safe scheduling range")
+        elif float(getattr(item, "machine_hrs", 0.0) or 0.0) <= 0:
+            problems.append(f"{label}: no usable production rate")
+        elif not (set(getattr(item, "capable_machines", []) or []) & machine_names):
+            problems.append(f"{label}: route has no active {kind} machine")
+    if problems:
+        raise SchedulePreviewError(
+            "Requested demand cannot be scheduled from the current Plumbing "
+            "master: " + "; ".join(problems) + "."
+        )
+
+
+def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
+    """Run one transient, capacity-feasible Plumbing schedule preview.
+
+    This deliberately reads master data and downtime live but does not create a
+    plan run, cache a result, write plan lines, or mutate the saved calendar.
+    """
+    preview = _parse_schedule_preview_request(payload)
+    machine_kind = "extrusion" if preview.kind == "pipe" else "moulding"
+    try:
+        machines = _mp_model.get_machines(
+            "PLUMBING", preview.month, kind=machine_kind
+        )
+        if not machines:
+            raise PlanningDataUnavailable(
+                f"No {machine_kind} machine master data is configured for {preview.month}."
+            )
+        machine_names = {
+            str(row.get("machine") or "") for row in machines if row.get("machine")
+        }
+        rejection_lookup, wastage_lookup = _schedule_plan_lookups(preview.month)
+        downtime_records = _mp_model.get_downtime_affecting_month(
+            "PLUMBING", preview.month
+        )
+        if preview.kind == "pipe":
+            demand = [
+                _mp_engine.DemandItem(
+                    **line, week_qty={}, first_requested_week=1
+                )
+                for line in preview.demand
+            ]
+            engine_result = _mp_engine.run_engine(
+                demand, preview.month, "PLUMBING",
+                rej_lookup=rejection_lookup, wastage_lookup=wastage_lookup,
+            )
+            _require_schedulable_items(
+                engine_result.items, machine_names, "extrusion",
+            )
+            return _mp_scheduler.run_shift_schedule(
+                engine_items=engine_result.items,
+                demand_items=demand,
+                segment="PLUMBING",
+                effective_month=preview.month,
+                downtime_records=downtime_records,
+                week_days_override=preview.week_days,
+            )
+
+        fitting_demand = [
+            _mp_engine.FittingDemandItem(**line) for line in preview.demand
+        ]
+        fitting_result = _mp_engine.run_fitting_engine(
+            fitting_demand, preview.month, "PLUMBING",
+            rej_lookup=rejection_lookup, wastage_lookup=wastage_lookup,
+        )
+        _require_schedulable_items(
+            fitting_result.items, machine_names, "moulding",
+        )
+        return _mp_scheduler.run_fitting_schedule(
+            fitting_items=fitting_result.items,
+            fitting_demand=fitting_demand,
+            segment="PLUMBING",
+            effective_month=preview.month,
+            downtime_records=downtime_records,
+            week_days_override=preview.week_days,
+        )
+    except PlanningDataUnavailable:
+        raise
+    except SchedulePreviewError:
+        raise
+    except Exception as exc:
+        raise PlanningDataUnavailable(
+            "The Plumbing planning master data could not be read."
+        ) from exc
 
 
 def _configured_keys() -> list:
@@ -191,7 +419,7 @@ def create_api(get_data) -> Blueprint:
         resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["Access-Control-Allow-Headers"] = \
             "X-API-Key, Authorization, Content-Type"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
@@ -219,6 +447,8 @@ def create_api(get_data) -> Blueprint:
                     "per-plant/machine/date rollups, confirmation status",
                 "GET /data-api/v1/records": "raw row-level data for a period "
                     "(same filters) — every row with provenance",
+                "POST /data-api/v1/schedule": "non-persistent, capacity-feasible "
+                    "Plumbing pipe or fitting schedule preview",
             },
             "period_tokens": _PERIOD_TOKENS,
             "notes": [
@@ -325,5 +555,24 @@ def create_api(get_data) -> Blueprint:
             "rows": [_record_json(r) for r in data["rows"]],
             "quarantined": [_record_json(r) for r in data["quarantined"]],
         })
+
+    @bp.post("/schedule")
+    @_require_key
+    def schedule():
+        """Return one authenticated, non-persistent Plumbing schedule preview."""
+        payload = request.get_json(silent=True)
+        try:
+            result = run_schedule_preview(payload)
+        except SchedulePreviewError as exc:
+            return jsonify({
+                "error": "invalid_schedule_request",
+                "message": str(exc),
+            }), 400
+        except PlanningDataUnavailable as exc:
+            return jsonify({
+                "error": "planning_data_unavailable",
+                "message": str(exc),
+            }), 503
+        return jsonify(result.to_dict())
 
     return bp

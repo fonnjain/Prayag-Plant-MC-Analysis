@@ -54,6 +54,7 @@ class UnfinishedItem:
     capable_machines: List[str]
     origin_week: int
     downtime_reason: str = ""   # set when the only capable machines are down
+    remaining_pcs: float = 0.0  # gross production pieces after rejection gross-up
 
 
 @dataclasses.dataclass
@@ -133,6 +134,7 @@ class _WorkItem:
     first_requested_week: int   # 1..4; 0 treated as 1 in sort
     remaining_hrs: float
     rate_kg_per_hr: float
+    rate_pcs_per_hr: float
     capable_machines: List[str]
 
     def sort_key(self) -> Tuple:
@@ -173,8 +175,14 @@ class _ScheduleCapacity:
         return self.schedulable_days(machine_params, days) * self._full_day_hours(machine_params)
 
 
-def _week_days_for_schedule(segment: str, params_row: Optional[object]) -> List[int]:
+def _week_days_for_schedule(
+    segment: str,
+    params_row: Optional[object],
+    week_days_override: Optional[List[int]] = None,
+) -> List[int]:
     """Read a safe four-week split without changing legacy non-Plumbing behavior."""
+    if segment == "PLUMBING" and week_days_override is not None:
+        return list(week_days_override)
     if params_row:
         week_days_str = str(getattr(params_row, "week_days", "[6,6,6,7]") or "[6,6,6,7]")
         if segment == "PLUMBING" and not getattr(params_row, "week_days_configured", False):
@@ -194,12 +202,17 @@ def _derive_schedule_capacity(
     segment: str,
     params_row: Optional[object],
     effective_month: str,
+    week_days_override: Optional[List[int]] = None,
 ) -> _ScheduleCapacity:
-    week_days = tuple(_week_days_for_schedule(segment, params_row))
+    week_days = tuple(_week_days_for_schedule(
+        segment, params_row, week_days_override=week_days_override,
+    ))
     configured = bool(
         segment == "PLUMBING"
-        and params_row
-        and getattr(params_row, "week_days_configured", False)
+        and (
+            week_days_override is not None
+            or (params_row and getattr(params_row, "week_days_configured", False))
+        )
     )
     try:
         year_s, month_s = effective_month.split("-", 1)
@@ -511,6 +524,7 @@ def run_shift_schedule(
     segment: str,
     effective_month: str,
     downtime_records: Optional[list] = None,  # from mp_model.get_downtime_affecting_month
+    week_days_override: Optional[List[int]] = None,
 ) -> ScheduleResult:
     """
     Build a day-by-day, shift-level schedule from EngineResult items.
@@ -531,7 +545,9 @@ def run_shift_schedule(
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
     else:
         min_run_block = 2.0
-    capacity = _derive_schedule_capacity(segment, params_row, effective_month)
+    capacity = _derive_schedule_capacity(
+        segment, params_row, effective_month, week_days_override=week_days_override,
+    )
     week_days = list(capacity.week_days)
     total_days = capacity.total_days
 
@@ -570,6 +586,11 @@ def run_shift_schedule(
             first_requested_week=first_week,
             remaining_hrs=float(it.machine_hrs),
             rate_kg_per_hr=float(it.rate_kg_per_hr),
+            rate_pcs_per_hr=(
+                float(getattr(it, "gross_qty_pcs", 0.0) or getattr(it, "qty_pcs", 0.0))
+                / float(it.machine_hrs)
+                if float(it.machine_hrs) > 0 else 0.0
+            ),
             capable_machines=[mc for mc in it.capable_machines if mc in mc_params],
         ))
 
@@ -665,6 +686,7 @@ def run_shift_schedule(
                 if w.capable_machines and all(mc in all_down_machines for mc in w.capable_machines)
                 else ""
             ),
+            remaining_pcs=round(w.remaining_hrs * w.rate_pcs_per_hr, 1),
         )
         for w in work_items if w.remaining_hrs > 0.01
     ]
@@ -760,6 +782,7 @@ def run_fitting_schedule(
     segment: str,
     effective_month: str,
     downtime_records: Optional[list] = None,
+    week_days_override: Optional[List[int]] = None,
 ) -> ScheduleResult:
     """
     Build a day-by-day, shift-level schedule for fitting (moulding) machines.
@@ -777,7 +800,9 @@ def run_fitting_schedule(
         min_run_block = float(getattr(params_row, "min_run_block_hours", 2.0) or 2.0)
     else:
         min_run_block = 2.0
-    capacity = _derive_schedule_capacity(segment, params_row, effective_month)
+    capacity = _derive_schedule_capacity(
+        segment, params_row, effective_month, week_days_override=week_days_override,
+    )
     week_days = list(capacity.week_days)
     total_days = capacity.total_days
 
@@ -815,6 +840,10 @@ def run_fitting_schedule(
             first_requested_week=1,   # FittingDemandItem has no week split
             remaining_hrs=hrs,
             rate_kg_per_hr=rate_kg_hr,
+            rate_pcs_per_hr=(
+                float(getattr(it, "gross_qty_pcs", 0.0) or getattr(it, "qty_pcs", 0.0))
+                / hrs
+            ),
             capable_machines=capable,
         ))
 
@@ -943,6 +972,7 @@ def run_fitting_schedule(
                 if w.capable_machines and all(mc in all_down_machines for mc in w.capable_machines)
                 else ""
             ),
+            remaining_pcs=round(w.remaining_hrs * w.rate_pcs_per_hr, 1),
         )
         for w in work_items if w.remaining_hrs > 0.01
     ]

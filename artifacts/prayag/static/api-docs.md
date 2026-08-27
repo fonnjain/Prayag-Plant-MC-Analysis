@@ -2,7 +2,7 @@
 
 **Version:** v1  
 **Base path:** `/data-api/v1`  
-**Protocol:** HTTPS (GET requests only — read-only API)
+**Protocol:** HTTPS. Read-only data endpoints use `GET`; the schedule-preview endpoint uses a non-persistent `POST`.
 
 ---
 
@@ -27,6 +27,8 @@ Multiple keys can be active at the same time — any valid key authorises a requ
 | `401` | `unauthorized` | Missing or invalid API key |
 | `503` | `api_disabled` | No key has been configured on this deployment |
 | `502` | `source_unavailable` | The production Google Sheets could not be read |
+| `400` | `invalid_schedule_request` | The schedule-preview body is incomplete or invalid |
+| `503` | `planning_data_unavailable` | The required Plumbing planning master could not be read |
 
 ---
 
@@ -217,6 +219,76 @@ Raw row-level data with full provenance. Same filters as `/summary`.
 
 ---
 
+### `POST /data-api/v1/schedule`
+Returns a **non-persistent**, capacity-feasible Plumbing schedule preview. Send
+one request for either `pipe` or `fitting`; make a separate request when both
+kinds are needed. The endpoint reads the current machine master, routing, BOM,
+rates, rejection/wastage inputs, and recorded machine downtime. It does not
+create a plan run, freeze demand, write plan lines, or change a saved calendar.
+
+**Request**
+```json
+{
+  "segment": "PLUMBING",
+  "month": "2026-07",
+  "kind": "pipe",
+  "week_days": [7, 7, 7, 10],
+  "demand": [
+    {
+      "item_code": "CPVC-EXAMPLE-20MM",
+      "raw_code": "CPVC Example 20 mm",
+      "material": "CPVC",
+      "qty_pcs": 12000
+    }
+  ]
+}
+```
+
+| Field | Required | Rules |
+|-------|----------|-------|
+| `segment` | Yes | Must be exactly `PLUMBING`. PTMT is not supported. |
+| `month` | Yes | A real calendar month in `YYYY-MM` format. |
+| `kind` | Yes | Either `pipe` or `fitting`. |
+| `week_days` | Yes | Exactly four positive whole-day counts. Their sum cannot exceed the selected calendar month. Include Sundays here when the planning app intends to schedule them. |
+| `demand` | Yes | A non-empty array of normalized demand lines. With no W1–W4 input, each line starts in week 1 and cascades through later capacity. |
+| `demand[].item_code` | Yes | Normalized product code used to find the MP master data. |
+| `demand[].raw_code` | No | Original display code. Defaults to `item_code`. |
+| `demand[].material` | Yes | One of `CPVC`, `UPVC`, `SWR`, or `AGRI`. |
+| `demand[].qty_pcs` | Yes | Positive requested piece quantity. |
+
+Optional planning-app fields such as colour, category, urgency, and supplied
+weight are ignored. **Do not use request weight as an override:** the schedule
+always resolves its per-piece BOM weight from the current `mp_bom_weight` master.
+
+**Response**
+
+The response is the native schedule result: `blocks`, `weekly_fill`,
+`unfinished`, capacity and idle totals, `week_days`, and downtime totals. A
+locked machine has `DOWN` blocks, making its excluded capacity explicit.
+`unfinished[].remaining_pcs` is the remaining gross production-piece quantity
+after the engine's rejection gross-up; `remaining_kg` is the equivalent
+engine-derived material quantity.
+
+```json
+{
+  "segment": "PLUMBING",
+  "effective_month": "2026-07",
+  "week_days": [7, 7, 7, 10],
+  "blocks": [{"week": 1, "day": 1, "machine": "M/C-3", "shift": "DAY"}],
+  "weekly_fill": [{"week": 1, "machine": "M/C-3", "capacity_hrs": 140.0}],
+  "unfinished": [{
+    "item_code": "CPVC-EXAMPLE-20MM",
+    "remaining_hours": 18.0,
+    "remaining_kg": 720.0,
+    "remaining_pcs": 900.0
+  }],
+  "downtime_machine_days": 2,
+  "downtime_hours_lost": 40.0
+}
+```
+
+---
+
 ## Design invariants
 
 These guarantee the API always agrees with the dashboard:
@@ -254,8 +326,14 @@ curl -H "X-API-Key: prayag-xxxx..." \
 # Custom date range
 curl -H "X-API-Key: prayag-xxxx..." \
      "https://your-domain/data-api/v1/summary?period=custom&from_date=2026-04-01&to_date=2026-06-30"
+
+# Non-persistent Plumbing pipe schedule preview
+curl -X POST -H "X-API-Key: prayag-xxxx..." \
+     -H "Content-Type: application/json" \
+     https://your-domain/data-api/v1/schedule \
+     -d '{"segment":"PLUMBING","month":"2026-07","kind":"pipe","week_days":[7,7,7,10],"demand":[{"item_code":"CPVC-EXAMPLE-20MM","material":"CPVC","qty_pcs":12000}]}'
 ```
 
 ---
 
-*All data is read-only and recomputed deterministically from the production Google Sheets on every request. No figures are stored or cached across API calls in a way that could serve stale data.*
+*Production-data endpoints are read-only and recomputed deterministically from the production Google Sheets. Schedule previews read the current Plumbing planning master but are also non-persistent: no preview is stored, frozen, or written back.*

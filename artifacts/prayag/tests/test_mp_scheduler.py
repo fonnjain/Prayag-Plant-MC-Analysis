@@ -282,6 +282,21 @@ class TestScheduleResult:
         assert "min_run_block_hours" in result.params_used
         assert result.params_used["min_run_block_hours"] == 5.0
 
+    def test_old_schedule_dict_defaults_new_unfinished_piece_field(self):
+        result = _run([
+            _ItemResult(
+                item_code="OVER", raw_code="OVER", material="CPVC",
+                qty_pcs=1000, machine_hrs=999.0, rate_kg_per_hr=100.0,
+                capable_machines=["M/C-1"],
+            )
+        ], [_DemandItem("OVER", "OVER", "CPVC", 1000)])
+        payload = result.to_dict()
+        assert payload["unfinished"]
+        payload["unfinished"][0].pop("remaining_pcs")
+        import mp_scheduler as sched
+        restored = sched.ScheduleResult.from_dict(payload)
+        assert restored.unfinished[0].remaining_pcs == 0.0
+
 
 class TestMinBlock:
     def test_tiny_item_padded_to_min_block(self):
