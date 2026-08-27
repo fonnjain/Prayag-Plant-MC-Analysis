@@ -1,0 +1,113 @@
+# PROMPT — Machine app: can `mp_scheduler` serve the planning app?
+
+**Repository:** `fonnjain/Prayag-Plant-MC-Analysis` · `prayag-plant.com` · HEAD `14b64d2`
+**Read-only. Report only — no code changes.**
+
+---
+
+## Why we are asking
+
+The planning app (`prayag-pp.com`) is being changed to a two-stage model:
+
+```
+PASS 1   demand    →  Temporary Plan     what is needed
+PASS 2   capacity  →  Production Plan    what can be made
+```
+
+Today Pass 2 does not exist there. The plan spreads demand across four weeks by stock cover with **no capacity check at all** — PTMT week 1 is given **3.58×** the plant's proven daily rate, and Plumbing week 1 gets **94.5%** of the month.
+
+**We were about to build a capacity fitter in the planning app. Then we found `mp_scheduler.py`.**
+
+From its own docstring, it already does more than we were going to build:
+
+> *"Takes the engine EngineResult items (with capable_machines + machine_hrs) and the raw demand (with per-week quantities from W1..W4 cols) and produces a day-by-day, shift-level schedule across the working month."*
+
+> *"Priority queue: (first_requested_week ASC, remaining_hrs DESC). W1 demand fills W1 capacity first; unfinished W1 overflow cascades into W2 ahead of W2's own items."*
+
+And `ScheduleResult` already carries what the planning app needs: `blocks`, `weekly_fill`, **`unfinished`**, `total_capacity_hrs`, `total_scheduled_hrs`, `total_idle_hrs`, `downtime_machine_days`, `week_days`.
+
+**`unfinished` is precisely the "cannot be made this month" list we need.** And a shift-level scheduler resolves the shared-machine problem — MC3, MC4 and MC5 spanning CPVC, SWR, AGRI and UPVC — by construction, because it assigns real machine-hours to real items rather than summing envelopes that were never additive.
+
+**Building a second, worse version of this in the planning app would be a mistake.** So, before anything is designed:
+
+---
+
+# Questions
+
+## Q1 · Is `mp_scheduler` reachable from outside?
+
+I found no reference to it in `api.py`. Is it currently:
+
+- exposed on an endpoint,
+- callable internally only,
+- or a parallel track not wired into anything live?
+
+The module comment says **"ADDITIVE / ISOLATED: reads only `mp_*` tables; never touches the headline pipeline"**, which reads like a parallel track. **Please confirm its actual status** — running in production, experimental, or dormant.
+
+## Q2 · Where does its demand come from today?
+
+`mp_seed.py` normalises demand codes, so something feeds it. Please report:
+
+- what populates the `mp_*` demand tables — an upload, a sheet, a manual step
+- whether the W1–W4 quantities come from Prayag's planning workbook, the planning app, or somewhere else
+- how often it is refreshed, and by whom
+
+**This determines whether integration is a new build or a re-pointing of an existing input.**
+
+## Q3 · What exactly does it need as input?
+
+For one segment and one month, the minimum viable payload:
+
+- required fields per demand line — item code, colour, quantity, week, material, anything else
+- how items map to `capable_machines` — is that resolved inside the scheduler or supplied?
+- what `machine_hrs` is and whether the caller must provide it
+- whether it needs kg or pieces *(the planning app works in pieces; the machine app appears to work in kg with BOM conversion)*
+
+## Q4 · Could it accept a monthly demand list without pre-assigned weeks?
+
+The planning app's Pass 1 produces **monthly** quantities with no weekly split — that is the point, since the current weekly split is what produces the infeasible schedule.
+
+**Can the scheduler take demand with no W1–W4 and derive the weekly placement itself?** If it requires weeks as input, the planning app would have to guess a split before the scheduler could correct it, which defeats the purpose.
+
+## Q5 · Which segments does it currently support?
+
+The docstring mentions Plumbing behaviour explicitly and refers to *"legacy non-Plumbing behavior"*. **Does it work for PTMT today?** PTMT has no machine-level capacity model in the planning app — only `category_capacity.p90PerDay` — so if the scheduler covers PTMT machines, that is a significant gain.
+
+## Q6 · Is the calendar shared?
+
+Stage 0 on the planning side flagged that **the Plumbing machine cascade distributes machine-days across Mon–Sat, while the plant calendar also counts worked Sundays.** A worked Sunday would then be counted by monitoring but excluded from capacity — the same class of defect as the Sunday bug that discarded 80,522 pieces.
+
+**Please confirm how `week_days` is derived and whether it recognises worked Sundays.**
+
+## Q7 · What would exposing it cost?
+
+If the answers above are favourable, roughly what is involved in exposing:
+
+```
+POST /v1/schedule
+  { segment, month, demand: [{ code, colour, qty, material? }] }
+→ { blocks, weekly_fill, unfinished, capacity_hrs, scheduled_hrs, idle_hrs, week_days }
+```
+
+**Not a request to build it** — an estimate of whether this is a thin wrapper over existing code or a significant piece of work.
+
+---
+
+## What we are not asking for
+
+- No code changes
+- No new endpoints yet
+- No changes to metric calculations — **rejection, utilisation and output efficiency are settled and must not move**
+
+---
+
+## Why this matters
+
+If `mp_scheduler` can serve the planning app, the split is clean and correct:
+
+```
+Planning app    owns demand      — what is owed and needed
+Machine app     owns capacity    — what the machines can do
+```
+
+**Neither duplicates the other**, which is what each was built for. If it cannot, we will build a simpler capacity fitter in the planning app — but we would rather know before writing it than after.
