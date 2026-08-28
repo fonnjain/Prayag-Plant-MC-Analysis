@@ -100,6 +100,16 @@ def test_closed_without_key(monkeypatch):
     })
     assert preview.status_code == 503
     assert preview.get_json()["error"] == "api_disabled"
+    corrective = c.post("/data-api/v1/corrective-replan", json={
+        "segment": "PLUMBING", "month": "2026-07",
+        "as_of_date": "2026-07-15", "week_days": [7, 7, 7, 10],
+        "demand": [{
+            "item_code": "PIPEA", "material": "CPVC", "category": "pipe",
+            "qty_pcs": 100, "produced_to_date_pcs": 10,
+        }],
+    })
+    assert corrective.status_code == 503
+    assert corrective.get_json()["error"] == "api_disabled"
     print("PASS: API is closed (503) until PRAYAG_API_KEY is configured")
 
 
@@ -581,6 +591,304 @@ def test_schedule_preview_uses_engine_calendar_capacity_and_downtime(monkeypatch
         for item in body["unfinished"]
     )
     assert "POST" in response.headers["Access-Control-Allow-Methods"]
+
+
+def _corrective_request(**overrides):
+    request = {
+        "segment": "PLUMBING",
+        "month": "2026-07",
+        "as_of_date": "2026-07-15",
+        "week_days": [7, 7, 7, 10],
+        "demand": [
+            {
+                "item_code": "PIPE-A",
+                "material": "CPVC",
+                "category": "pipe",
+                "qty_pcs": 1000,
+                "produced_to_date_pcs": 50,
+            },
+            {
+                "item_code": "FIT-A",
+                "material": "UPVC",
+                "category": "fitting",
+                "qty_pcs": 2000,
+                "produced_to_date_pcs": 125,
+            },
+        ],
+        "cap_feasible_by_cat": {
+            "CPVC Pipe": 900,
+            "UPVC Fitting": 1500,
+        },
+    }
+    request.update(overrides)
+    return request
+
+
+def _enable_api(monkeypatch):
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+
+
+def test_corrective_replan_rejects_invalid_contract_before_loading_actuals(monkeypatch):
+    _enable_api(monkeypatch)
+    monkeypatch.setattr(
+        apimod._sheets, "load_corrective_replan_actuals",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not load actuals")),
+    )
+    c = _client()
+    hdr = {"X-API-Key": "sekret-123"}
+
+    for patch, expected in (
+        ({"segment": "PTMT"}, "segment"),
+        ({"month": "2026-13"}, "month"),
+        ({"as_of_date": "2026-08-01"}, "selected month"),
+        ({"week_days": [7, 7, 7]}, "exactly four"),
+        ({"demand": [{
+            "item_code": "PIPE-A", "material": "PPR", "category": "pipe",
+            "qty_pcs": 100, "produced_to_date_pcs": 0,
+        }]}, "material"),
+        ({"demand": [{
+            "item_code": "PIPE-A", "material": "CPVC", "category": "other",
+            "qty_pcs": 100, "produced_to_date_pcs": 0,
+        }]}, "category"),
+        ({"demand": [{
+            "item_code": "PIPE-A", "material": "CPVC", "category": "pipe",
+            "qty_pcs": 100, "produced_to_date_pcs": -1,
+        }]}, "produced_to_date_pcs"),
+        ({"cap_feasible_by_cat": {"Made Up Category": 1}}, "unknown category"),
+    ):
+        response = c.post(
+            "/data-api/v1/corrective-replan",
+            headers=hdr,
+            json=_corrective_request(**patch),
+        )
+        assert response.status_code == 400, response.get_json()
+        assert response.get_json()["error"] == "invalid_corrective_replan_request"
+        assert expected.lower() in response.get_json()["message"].lower()
+
+    for bad_qty in (0, True, "not-a-number", float("nan"), float("inf")):
+        response = c.post(
+            "/data-api/v1/corrective-replan",
+            headers=hdr,
+            json=_corrective_request(demand=[{
+                "item_code": "PIPE-A",
+                "material": "CPVC",
+                "category": "pipe",
+                "qty_pcs": bad_qty,
+                "produced_to_date_pcs": 0,
+            }]),
+        )
+        assert response.status_code == 400, response.get_json()
+        assert response.get_json()["error"] == "invalid_corrective_replan_request"
+        assert "qty_pcs" in response.get_json()["message"]
+
+
+def test_corrective_replan_maps_demand_calendar_and_confidence_to_native_result(
+    monkeypatch,
+):
+    _enable_api(monkeypatch)
+    monkeypatch.setattr(
+        apimod._sheets, "load_corrective_replan_actuals",
+        lambda month: {
+            "file_id": "pipe-file",
+            "r11": [["r11"]],
+            "r12": [["r12"]],
+            "error": None,
+        },
+    )
+    seen = {}
+
+    def _compute(**kwargs):
+        seen.update(kwargs)
+        return apimod._mp_corrective_replan.CorrectiveReplanResult(
+            month=kwargs["month"],
+            as_of_date=kwargs["as_of_date"],
+            working_days_total=sum(kwargs["configured_week_days"]),
+            working_days_elapsed=14,
+            working_days_remaining=17,
+            categories=[
+                apimod._mp_corrective_replan.CategoryResult(
+                    category="CPVC Pipe",
+                    daily_values=[100, 120, 140],
+                    n_days=3,
+                    produced_to_date=360,
+                    cap_per_day=120,
+                    method="mean(low-confidence,3d)",
+                    remaining=950,
+                    working_days_remaining=17,
+                    feasible=2040,
+                    shortfall=0,
+                    cap_feasible=900,
+                ),
+                apimod._mp_corrective_replan.CategoryResult(
+                    category="UPVC Fitting",
+                    daily_values=[],
+                    n_days=0,
+                    produced_to_date=0,
+                    cap_per_day=0,
+                    method="none",
+                    remaining=1875,
+                    working_days_remaining=17,
+                    feasible=0,
+                    shortfall=1875,
+                    cap_feasible=1500,
+                ),
+            ],
+            source_file_id=kwargs["file_id"],
+            source_date_min="2026-07-01",
+            source_date_max="2026-07-03",
+            plan_produced_total=175,
+            actual_produced_total=360,
+            other_produced=0,
+            warnings=[],
+        )
+
+    monkeypatch.setattr(
+        apimod._mp_corrective_replan, "compute_corrective_replan", _compute,
+    )
+    response = _client().post(
+        "/data-api/v1/corrective-replan",
+        headers={"X-API-Key": "sekret-123"},
+        json=_corrective_request(),
+    )
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+
+    assert seen["month"] == "2026-07"
+    assert seen["as_of_date"] == "2026-07-15"
+    assert seen["r11_values"] == [["r11"]]
+    assert seen["r12_values"] == [["r12"]]
+    assert seen["configured_week_days"] == [7, 7, 7, 10]
+    assert seen["cap_feasible_by_cat"] == {
+        "CPVC Pipe": 900,
+        "UPVC Fitting": 1500,
+    }
+    pipe, fitting = seen["plan_recs"]
+    assert (pipe.item_code, pipe.family, pipe.category) == (
+        "PIPEA", "CPVC", "Pipe",
+    )
+    assert (pipe.produce_required, pipe.produced) == (1000, 50)
+    assert (fitting.item_code, fitting.family, fitting.category) == (
+        "FITA", "UPVC", "Fitting",
+    )
+
+    assert body["week_days"] == [7, 7, 7, 10]
+    assert body["working_days_total"] == 31
+    assert body["min_days_for_p90"] == 5
+    assert body["units"]["shortfall"] == "pcs"
+    by_category = {row["category"]: row for row in body["categories"]}
+    assert by_category["CPVC Pipe"]["low_confidence"] is True
+    assert by_category["CPVC Pipe"]["not_started"] is False
+    assert by_category["CPVC Pipe"]["method"] == "mean(low-confidence,3d)"
+    assert by_category["CPVC Pipe"]["cap_feasible"] == 900
+    assert by_category["UPVC Fitting"]["not_started"] is True
+    assert by_category["UPVC Fitting"]["shortfall"] == 1875
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_corrective_replan_returns_stable_error_for_unavailable_actuals(monkeypatch):
+    _enable_api(monkeypatch)
+    monkeypatch.setattr(
+        apimod._sheets, "load_corrective_replan_actuals",
+        lambda _month: {
+            "file_id": "pipe-file",
+            "r11": [["partial"]],
+            "r12": [],
+            "error": "sensitive connector failure detail",
+        },
+    )
+    response = _client().post(
+        "/data-api/v1/corrective-replan",
+        headers={"X-API-Key": "sekret-123"},
+        json=_corrective_request(),
+    )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["error"] == "corrective_actuals_unavailable"
+    assert "Report-11 and Report-12 actuals are unavailable" in body["message"]
+    assert "sensitive connector" not in body["message"]
+
+
+def test_corrective_replan_endpoint_runs_real_engine_with_sunday_aware_calendar(
+    monkeypatch,
+):
+    _enable_api(monkeypatch)
+    r11 = [
+        ["", "DATE", "", "", "TYPES", "ITEM CODE", "", "", "PCS"],
+        ["", "Jul 1, 2026", "", "", "CPVC", "PIPE-A", "", "", 100],
+        ["", "Jul 2, 2026", "", "", "CPVC", "PIPE-A", "", "", 120],
+        ["", "Jul 3, 2026", "", "", "CPVC", "PIPE-A", "", "", 140],
+    ]
+    r12 = [
+        ["DATE", "MATERIAL", "ITEM CODE", "", "", "", "", "", "OUTPUT PRODUCTION"],
+        ["Jul 1, 2026", "UPVC", "FIT-A", "", "", "", "", "", 200],
+        ["Jul 2, 2026", "UPVC", "FIT-A", "", "", "", "", "", 220],
+        ["Jul 3, 2026", "UPVC", "FIT-A", "", "", "", "", "", 240],
+        ["Jul 4, 2026", "UPVC", "FIT-A", "", "", "", "", "", 260],
+        ["Jul 5, 2026", "UPVC", "FIT-A", "", "", "", "", "", 280],
+    ]
+    monkeypatch.setattr(
+        apimod._sheets, "load_corrective_replan_actuals",
+        lambda _month: {
+            "file_id": "pipe-file",
+            "r11": r11,
+            "r12": r12,
+            "error": None,
+        },
+    )
+
+    response = _client().post(
+        "/data-api/v1/corrective-replan",
+        headers={"X-API-Key": "sekret-123"},
+        json=_corrective_request(),
+    )
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    by_category = {row["category"]: row for row in body["categories"]}
+
+    assert body["working_days_total"] == 31
+    assert body["working_days_elapsed"] == 14
+    assert body["working_days_remaining"] == 17
+    assert by_category["CPVC Pipe"]["n_days"] == 3
+    assert by_category["CPVC Pipe"]["method"] == "mean(low-confidence,3d)"
+    assert by_category["CPVC Pipe"]["low_confidence"] is True
+    assert by_category["CPVC Pipe"]["remaining"] == 950
+    assert by_category["UPVC Fitting"]["n_days"] == 5
+    assert by_category["UPVC Fitting"]["method"] == "p90"
+    assert by_category["UPVC Fitting"]["low_confidence"] is False
+    assert by_category["UPVC Fitting"]["remaining"] == 1875
+    assert by_category["SWR Solvent"]["not_started"] is True
+
+
+def test_corrective_replan_hides_computation_failure_details(monkeypatch):
+    _enable_api(monkeypatch)
+    monkeypatch.setattr(
+        apimod._sheets, "load_corrective_replan_actuals",
+        lambda _month: {
+            "file_id": "pipe-file",
+            "r11": [],
+            "r12": [],
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        apimod._mp_corrective_replan,
+        "compute_corrective_replan",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("sensitive internal parser state")
+        ),
+    )
+    response = _client().post(
+        "/data-api/v1/corrective-replan",
+        headers={"X-API-Key": "sekret-123"},
+        json=_corrective_request(),
+    )
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["error"] == "corrective_replan_failed"
+    assert body["message"] == "The Plumbing corrective re-plan could not be computed."
+    assert "sensitive internal" not in body["message"]
 
 
 if __name__ == "__main__":

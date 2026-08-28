@@ -21,6 +21,7 @@ it is never silently open.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hmac
 import math
 import os
@@ -28,7 +29,7 @@ import re
 from functools import wraps
 from typing import Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from metrics import (
     MetricsResult,
@@ -39,6 +40,8 @@ from metrics import (
 )
 from sheets import SheetReadError, months_with_data
 from sources import DAILY_SOURCES, PLANT_LOCATIONS, PLANT_NAMES
+import sheets as _sheets
+import mp_corrective_replan as _mp_corrective_replan
 import mp_engine as _mp_engine
 import mp_model as _mp_model
 import mp_rejection_plan as _mp_rejection_plan
@@ -60,6 +63,8 @@ _PERIOD_TOKENS = [
 ]
 _SCHEDULE_MATERIALS = frozenset({"CPVC", "UPVC", "SWR", "AGRI"})
 _SCHEDULE_KINDS = frozenset({"pipe", "fitting"})
+_CORRECTIVE_KINDS = frozenset({"pipe", "fitting", "solvent"})
+_CORRECTIVE_CATEGORIES = frozenset(_mp_corrective_replan.CATEGORY_ORDER)
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
@@ -75,6 +80,18 @@ class ScheduleMachinePoolConflict(RuntimeError):
     """A machine is configured in both independent Plumbing schedule pools."""
 
 
+class CorrectivePreviewError(ValueError):
+    """A request cannot be converted into a safe corrective preview."""
+
+
+class CorrectiveActualsUnavailable(RuntimeError):
+    """Report-11/12 could not both be read for a corrective preview."""
+
+
+class CorrectiveComputationError(RuntimeError):
+    """The corrective engine failed after request validation."""
+
+
 @dataclasses.dataclass(frozen=True)
 class _SchedulePreviewRequest:
     """Validated, engine-ready input for one non-persistent schedule preview."""
@@ -83,6 +100,30 @@ class _SchedulePreviewRequest:
     kind: str
     week_days: list[int]
     demand: list[dict[str, Any]]
+
+
+@dataclasses.dataclass(frozen=True)
+class _CorrectivePreviewRequest:
+    """Validated input for one non-persistent corrective re-plan preview."""
+
+    month: str
+    as_of_date: str
+    week_days: list[int]
+    plan_recs: list[Any]
+    cap_feasible_by_cat: dict[str, float] | None
+
+
+@dataclasses.dataclass(frozen=True)
+class _CorrectivePlanRecord:
+    """Minimal PlanRecord-compatible row consumed by the corrective engine."""
+
+    item_code: str
+    family: str
+    category: str
+    produce_required: float
+    produced: float
+    ideal_qty: float = 0.0
+    closing_stock: float = 0.0
 
 
 def _positive_number(value: Any, field: str, line_number: int) -> float:
@@ -100,6 +141,21 @@ def _positive_number(value: Any, field: str, line_number: int) -> float:
     if number <= 0 or number == float("inf") or number != number:
         raise SchedulePreviewError(
             f"demand[{line_number}].{field} must be a positive finite number."
+        )
+    return number
+
+
+def _nonnegative_number(value: Any, field: str) -> float:
+    """Return a finite non-negative request number or raise a client-safe error."""
+    if isinstance(value, bool):
+        raise CorrectivePreviewError(f"{field} must be a non-negative number.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise CorrectivePreviewError(f"{field} must be a non-negative number.") from None
+    if number < 0 or not math.isfinite(number):
+        raise CorrectivePreviewError(
+            f"{field} must be a non-negative finite number."
         )
     return number
 
@@ -171,6 +227,127 @@ def _parse_schedule_preview_request(payload: Any) -> _SchedulePreviewRequest:
 
     return _SchedulePreviewRequest(
         month=month, kind=kind, week_days=week_days, demand=demand,
+    )
+
+
+def _parse_corrective_preview_request(payload: Any) -> _CorrectivePreviewRequest:
+    """Validate and adapt caller-owned demand for the corrective engine."""
+    if not isinstance(payload, dict):
+        raise CorrectivePreviewError("Request body must be a JSON object.")
+    if payload.get("segment") != "PLUMBING":
+        raise CorrectivePreviewError("segment must be exactly 'PLUMBING'.")
+
+    month = payload.get("month")
+    if not isinstance(month, str) or not _MONTH_RE.fullmatch(month):
+        raise CorrectivePreviewError("month must be in YYYY-MM format.")
+    try:
+        _mp_model.calendar_days_in_month(month)
+    except Exception:
+        raise CorrectivePreviewError(
+            "month must be a valid calendar month in YYYY-MM format."
+        ) from None
+
+    as_of_date = payload.get("as_of_date")
+    if not isinstance(as_of_date, str):
+        raise CorrectivePreviewError("as_of_date must be in YYYY-MM-DD format.")
+    try:
+        as_of = datetime.date.fromisoformat(as_of_date)
+    except ValueError:
+        raise CorrectivePreviewError(
+            "as_of_date must be a valid date in YYYY-MM-DD format."
+        ) from None
+    if as_of.strftime("%Y-%m") != month:
+        raise CorrectivePreviewError(
+            "as_of_date must fall inside the selected month."
+        )
+
+    if "week_days" not in payload:
+        raise CorrectivePreviewError(
+            "week_days is required for a corrective re-plan preview."
+        )
+    try:
+        week_days = _mp_model.validate_week_days(payload["week_days"], month)
+    except Exception as exc:
+        raise CorrectivePreviewError(str(exc)) from None
+
+    lines = payload.get("demand")
+    if not isinstance(lines, list) or not lines:
+        raise CorrectivePreviewError("demand must be a non-empty array.")
+
+    plan_recs: list[_CorrectivePlanRecord] = []
+    for line_number, line in enumerate(lines):
+        if not isinstance(line, dict):
+            raise CorrectivePreviewError(f"demand[{line_number}] must be an object.")
+
+        supplied_code = line.get("item_code")
+        if not isinstance(supplied_code, str) or not supplied_code.strip():
+            raise CorrectivePreviewError(
+                f"demand[{line_number}].item_code is required."
+            )
+        item_code = _mp_engine._norm_code(supplied_code)
+        if not item_code:
+            raise CorrectivePreviewError(
+                f"demand[{line_number}].item_code is invalid."
+            )
+
+        material = line.get("material")
+        if not isinstance(material, str) or material.upper() not in _SCHEDULE_MATERIALS:
+            allowed = ", ".join(sorted(_SCHEDULE_MATERIALS))
+            raise CorrectivePreviewError(
+                f"demand[{line_number}].material must be one of {allowed}."
+            )
+        material = material.upper()
+
+        category = line.get("category")
+        if not isinstance(category, str) or category.strip().lower() not in _CORRECTIVE_KINDS:
+            allowed = ", ".join(sorted(_CORRECTIVE_KINDS))
+            raise CorrectivePreviewError(
+                f"demand[{line_number}].category must be one of {allowed}."
+            )
+        category = category.strip().lower()
+
+        try:
+            qty_pcs = _positive_number(
+                line.get("qty_pcs"), "qty_pcs", line_number,
+            )
+        except SchedulePreviewError as exc:
+            raise CorrectivePreviewError(str(exc)) from None
+        produced_to_date = _nonnegative_number(
+            line.get("produced_to_date_pcs"),
+            f"demand[{line_number}].produced_to_date_pcs",
+        )
+        plan_recs.append(_CorrectivePlanRecord(
+            item_code=item_code,
+            family=material,
+            category=category.title(),
+            produce_required=qty_pcs,
+            produced=produced_to_date,
+        ))
+
+    cap_feasible_raw = payload.get("cap_feasible_by_cat")
+    cap_feasible_by_cat: dict[str, float] | None = None
+    if cap_feasible_raw is not None:
+        if not isinstance(cap_feasible_raw, dict):
+            raise CorrectivePreviewError(
+                "cap_feasible_by_cat must be an object keyed by canonical category."
+            )
+        cap_feasible_by_cat = {}
+        for category, value in cap_feasible_raw.items():
+            if category not in _CORRECTIVE_CATEGORIES:
+                raise CorrectivePreviewError(
+                    "cap_feasible_by_cat contains an unknown category: "
+                    f"{category!r}."
+                )
+            cap_feasible_by_cat[category] = _nonnegative_number(
+                value, f"cap_feasible_by_cat[{category!r}]",
+            )
+
+    return _CorrectivePreviewRequest(
+        month=month,
+        as_of_date=as_of_date,
+        week_days=week_days,
+        plan_recs=plan_recs,
+        cap_feasible_by_cat=cap_feasible_by_cat,
     )
 
 
@@ -305,6 +482,64 @@ def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
         raise PlanningDataUnavailable(
             "The Plumbing planning master data could not be read."
         ) from exc
+
+
+def run_corrective_replan_preview(
+    payload: Any,
+) -> tuple[_mp_corrective_replan.CorrectiveReplanResult, list[int]]:
+    """Run one transient Plumbing pace projection using internally-read actuals."""
+    preview = _parse_corrective_preview_request(payload)
+    try:
+        actuals = _sheets.load_corrective_replan_actuals(preview.month)
+    except Exception as exc:
+        raise CorrectiveActualsUnavailable(
+            f"Report-11 and Report-12 actuals are unavailable for {preview.month}."
+        ) from exc
+
+    if not isinstance(actuals, dict) or actuals.get("error"):
+        raise CorrectiveActualsUnavailable(
+            f"Report-11 and Report-12 actuals are unavailable for {preview.month}."
+        )
+
+    try:
+        result = _mp_corrective_replan.compute_corrective_replan(
+            month=preview.month,
+            plan_recs=preview.plan_recs,
+            r11_values=actuals.get("r11") or [],
+            r12_values=actuals.get("r12") or [],
+            as_of_date=preview.as_of_date,
+            file_id=str(actuals.get("file_id") or ""),
+            cap_feasible_by_cat=preview.cap_feasible_by_cat,
+            configured_week_days=preview.week_days,
+        )
+    except Exception as exc:
+        raise CorrectiveComputationError(
+            "The Plumbing corrective re-plan could not be computed."
+        ) from exc
+    return result, preview.week_days
+
+
+def _corrective_result_json(
+    result: _mp_corrective_replan.CorrectiveReplanResult,
+    week_days: list[int],
+) -> dict:
+    """Serialize native result fields plus explicit confidence and unit metadata."""
+    payload = dataclasses.asdict(result)
+    for category, category_payload in zip(result.categories, payload["categories"]):
+        category_payload["low_confidence"] = category.low_confidence
+        category_payload["not_started"] = category.not_started
+        category_payload["shortfall_pct"] = category.shortfall_pct
+    payload["week_days"] = list(week_days)
+    payload["min_days_for_p90"] = _mp_corrective_replan.MIN_DAYS_FOR_P90
+    payload["units"] = {
+        "produced_to_date": "pcs",
+        "remaining": "pcs",
+        "cap_per_day": "pcs/day",
+        "feasible": "pcs",
+        "shortfall": "pcs",
+        "cap_feasible": "pcs",
+    }
+    return payload
 
 
 def _configured_keys() -> list:
@@ -478,6 +713,8 @@ def create_api(get_data) -> Blueprint:
                     "(same filters) — every row with provenance",
                 "POST /data-api/v1/schedule": "non-persistent, capacity-feasible "
                     "Plumbing pipe or fitting schedule preview",
+                "POST /data-api/v1/corrective-replan": "non-persistent Plumbing "
+                    "run-rate projection from internally-read Report-11/12 actuals",
             },
             "period_tokens": _PERIOD_TOKENS,
             "notes": [
@@ -608,5 +845,32 @@ def create_api(get_data) -> Blueprint:
                 "message": str(exc),
             }), 503
         return jsonify(result.to_dict())
+
+    @bp.post("/corrective-replan")
+    @_require_key
+    def corrective_replan():
+        """Return one authenticated, non-persistent Plumbing pace projection."""
+        payload = request.get_json(silent=True)
+        try:
+            result, week_days = run_corrective_replan_preview(payload)
+        except CorrectivePreviewError as exc:
+            return jsonify({
+                "error": "invalid_corrective_replan_request",
+                "message": str(exc),
+            }), 400
+        except CorrectiveActualsUnavailable as exc:
+            return jsonify({
+                "error": "corrective_actuals_unavailable",
+                "message": str(exc),
+            }), 503
+        except CorrectiveComputationError as exc:
+            current_app.logger.error(
+                "corrective re-plan API computation failed", exc_info=True,
+            )
+            return jsonify({
+                "error": "corrective_replan_failed",
+                "message": str(exc),
+            }), 500
+        return jsonify(_corrective_result_json(result, week_days))
 
     return bp

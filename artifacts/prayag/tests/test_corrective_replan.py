@@ -1002,6 +1002,39 @@ class TestProducedToDateReconciliation(unittest.TestCase):
         self.assertAlmostEqual(result.other_produced, 17_600, delta=5)
 
 
+class TestAsOfDateScope(unittest.TestCase):
+    """Only selected-month actuals on or before as_of_date may drive pace."""
+
+    def test_future_and_adjacent_month_rows_are_excluded(self):
+        result = _run(
+            r11_rows=[
+                ("Jul 31, 2026", "CPVC", "P-OLD", 1000),
+                ("Aug 1, 2026", "CPVC", "P-NOW", 100),
+                ("Aug 9, 2026", "CPVC", "P-FUTURE", 900),
+                ("Sep 1, 2026", "CPVC", "P-NEXT", 1000),
+            ],
+            r12_rows=[
+                ("Jul 31, 2026", "UPVC", "F-OLD", 1000),
+                ("Aug 2, 2026", "UPVC", "F-NOW", 200),
+                ("Aug 10, 2026", "UPVC", "F-FUTURE", 800),
+                ("Aug 10, 2026", "TEFFLONE", "T-FUTURE", 500),
+                ("Sep 1, 2026", "UPVC", "F-NEXT", 1000),
+            ],
+            as_of="2026-08-08",
+        )
+
+        cpvc_pipe = _cat(result, "CPVC Pipe")
+        upvc_fitting = _cat(result, "UPVC Fitting")
+        self.assertEqual(cpvc_pipe.daily_values, [100.0])
+        self.assertEqual(cpvc_pipe.produced_to_date, 100.0)
+        self.assertEqual(upvc_fitting.daily_values, [200.0])
+        self.assertEqual(upvc_fitting.produced_to_date, 200.0)
+        self.assertEqual(result.actual_produced_total, 300.0)
+        self.assertEqual(result.other_produced, 0.0)
+        self.assertEqual(result.source_date_min, "2026-08-01")
+        self.assertEqual(result.source_date_max, "2026-08-02")
+
+
 class TestXlsxLabels(unittest.TestCase):
     """Fix 1: XLSX must use run-rate / pace language, not capacity language."""
 

@@ -2,7 +2,7 @@
 
 **Version:** v1  
 **Base path:** `/data-api/v1`  
-**Protocol:** HTTPS. Read-only data endpoints use `GET`; the schedule-preview endpoint uses a non-persistent `POST`.
+**Protocol:** HTTPS. Read-only data endpoints use `GET`; planning previews use non-persistent `POST` requests.
 
 ---
 
@@ -30,6 +30,9 @@ Multiple keys can be active at the same time — any valid key authorises a requ
 | `400` | `invalid_schedule_request` | The schedule-preview body is incomplete or invalid |
 | `503` | `planning_data_unavailable` | The required Plumbing planning master could not be read |
 | `409` | `schedule_machine_pool_overlap` | A machine is registered in both pipe and fitting pools, so separate previews would over-commit it; fix the machine-pool configuration before retrying |
+| `400` | `invalid_corrective_replan_request` | The corrective-preview body is incomplete or invalid |
+| `503` | `corrective_actuals_unavailable` | Report-11 and Report-12 could not both be read for the requested month |
+| `500` | `corrective_replan_failed` | The validated request could not be computed; internal exception details are not returned |
 
 ---
 
@@ -301,6 +304,122 @@ should not retry unchanged.
 
 ---
 
+### `POST /data-api/v1/corrective-replan`
+Returns a **non-persistent** Plumbing run-rate projection. This endpoint answers
+where output will land if the production pace observed so far continues. It is
+not a machine-capacity statement; use `/schedule` for what the configured
+machines can physically make.
+
+The API reads Report-11 and Report-12 internally from the monthly PIPE workbook.
+Raw actual rows are never accepted from the caller. It does not create or
+modify a plan run, freeze demand, write plan lines, or change a saved calendar.
+
+**Request**
+```json
+{
+  "segment": "PLUMBING",
+  "month": "2026-07",
+  "as_of_date": "2026-07-15",
+  "week_days": [7, 7, 7, 10],
+  "demand": [
+    {
+      "item_code": "CPVC-PIPE-20MM",
+      "material": "CPVC",
+      "category": "pipe",
+      "qty_pcs": 12000,
+      "produced_to_date_pcs": 3400
+    },
+    {
+      "item_code": "UPVC-FITTING-EXAMPLE",
+      "material": "UPVC",
+      "category": "fitting",
+      "qty_pcs": 8000,
+      "produced_to_date_pcs": 2100
+    }
+  ],
+  "cap_feasible_by_cat": {
+    "CPVC Pipe": 9000,
+    "UPVC Fitting": 6500
+  }
+}
+```
+
+| Field | Required | Rules |
+|-------|----------|-------|
+| `segment` | Yes | Must be exactly `PLUMBING`. PTMT is not supported. |
+| `month` | Yes | A real calendar month in `YYYY-MM` format. |
+| `as_of_date` | Yes | A real `YYYY-MM-DD` date inside `month`. |
+| `week_days` | Yes | Exactly four positive whole-day counts. Their sum cannot exceed the month's calendar days. Include worked Sundays in these buckets. No legacy calendar fallback is used. |
+| `demand` | Yes | A non-empty array. Multiple rows in the same material/category are summed by the corrective engine. |
+| `demand[].item_code` | Yes | Normalized for contract consistency and traceability. Corrective category totals do not use BOM weight. |
+| `demand[].material` | Yes | One of `CPVC`, `UPVC`, `SWR`, or `AGRI`. |
+| `demand[].category` | Yes | One of `pipe`, `fitting`, or `solvent` (case-insensitive). |
+| `demand[].qty_pcs` | Yes | Positive requested piece quantity. |
+| `demand[].produced_to_date_pcs` | Yes | Non-negative piece quantity already produced against this demand line. It may exceed `qty_pcs`; remaining demand then floors at zero. |
+| `cap_feasible_by_cat` | No | Object of non-negative piece totals keyed by canonical categories such as `CPVC Pipe`, `UPVC Fitting`, or `SWR Solvent`. Unknown category keys are rejected. |
+
+`cap_feasible_by_cat` lets the planning app place the main run's machine answer
+beside the corrective pace answer. It does not affect pace, projected output,
+or shortfall calculations.
+
+**Response**
+
+The native corrective result fields are returned without renaming. Category
+quantities are in **pieces**; `cap_per_day` is pieces/day. Explicit
+`low_confidence` and `not_started` flags are added because a missing pace is not
+the same as zero shortfall.
+
+```json
+{
+  "month": "2026-07",
+  "as_of_date": "2026-07-15",
+  "week_days": [7, 7, 7, 10],
+  "working_days_total": 31,
+  "working_days_elapsed": 14,
+  "working_days_remaining": 17,
+  "min_days_for_p90": 5,
+  "categories": [
+    {
+      "category": "CPVC Pipe",
+      "n_days": 3,
+      "produced_to_date": 3600,
+      "cap_per_day": 1200,
+      "method": "mean(low-confidence,3d)",
+      "remaining": 8600,
+      "working_days_remaining": 17,
+      "feasible": 20400,
+      "shortfall": 0,
+      "shortfall_pct": 0,
+      "cap_feasible": 9000,
+      "low_confidence": true,
+      "not_started": false
+    }
+  ],
+  "warnings": [],
+  "units": {
+    "produced_to_date": "pcs",
+    "remaining": "pcs",
+    "cap_per_day": "pcs/day",
+    "feasible": "pcs",
+    "shortfall": "pcs",
+    "cap_feasible": "pcs"
+  }
+}
+```
+
+Pace method:
+
+- At least `min_days_for_p90` non-zero production days: `method` is `p90`.
+- One to four non-zero production days: `method` is
+  `mean(low-confidence,Nd)` and `low_confidence` is `true`.
+- No observed production: `method` is `none` and `not_started` is `true`.
+
+`remaining`, `feasible`, and `shortfall` are pieces. The schedule endpoint uses
+different native units: `unfinished[].remaining_pcs` is pieces and
+`unfinished[].remaining_kg` is the engine-derived kg equivalent.
+
+---
+
 ## Design invariants
 
 These guarantee the API always agrees with the dashboard:
@@ -344,8 +463,14 @@ curl -X POST -H "X-API-Key: prayag-xxxx..." \
      -H "Content-Type: application/json" \
      https://your-domain/data-api/v1/schedule \
      -d '{"segment":"PLUMBING","month":"2026-07","kind":"pipe","week_days":[7,7,7,10],"demand":[{"item_code":"CPVC-EXAMPLE-20MM","material":"CPVC","qty_pcs":12000}]}'
+
+# Non-persistent Plumbing corrective run-rate preview
+curl -X POST -H "X-API-Key: prayag-xxxx..." \
+     -H "Content-Type: application/json" \
+     https://your-domain/data-api/v1/corrective-replan \
+     -d '{"segment":"PLUMBING","month":"2026-07","as_of_date":"2026-07-15","week_days":[7,7,7,10],"demand":[{"item_code":"CPVC-EXAMPLE-20MM","material":"CPVC","category":"pipe","qty_pcs":12000,"produced_to_date_pcs":3400}],"cap_feasible_by_cat":{"CPVC Pipe":9000}}'
 ```
 
 ---
 
-*Production-data endpoints are read-only and recomputed deterministically from the production Google Sheets. Schedule previews read the current Plumbing planning master but are also non-persistent: no preview is stored, frozen, or written back.*
+*Production-data endpoints are read-only and recomputed deterministically from the production Google Sheets. Plumbing schedule and corrective previews are also non-persistent: no preview is stored, frozen, or written back.*

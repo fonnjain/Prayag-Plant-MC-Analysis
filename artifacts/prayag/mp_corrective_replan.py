@@ -296,7 +296,30 @@ _compute_cap_per_day = _compute_pace_per_day
 # Report-11 parser (Pipe pcs)
 # ---------------------------------------------------------------------------
 
-def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[str, float]]:
+def _date_is_in_scope(
+    date_iso: str,
+    year: int,
+    month: int,
+    cutoff: Optional[datetime.date],
+) -> bool:
+    """Keep only selected-month actuals up to and including the as-of date."""
+    try:
+        row_date = datetime.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return False
+    return (
+        row_date.year == year
+        and row_date.month == month
+        and (cutoff is None or row_date <= cutoff)
+    )
+
+
+def _parse_r11_daily_pcs(
+    values: list,
+    year: int,
+    month: int,
+    cutoff: Optional[datetime.date] = None,
+) -> Dict[str, Dict[str, float]]:
     """Parse Report-11 (M/C & Item-wise Actual Production).
 
     Returns {date_iso: {category: pcs_total}}.
@@ -356,6 +379,8 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
             if mat_type and mat_type not in ("TYPES", "TYPE") and pcs > 0:
                 n_no_date += 1
             continue
+        if not _date_is_in_scope(last_date, year, month, cutoff):
+            continue
 
         # Type → category.  We sum ITEM ROWS per (date, category) so that
         # _compute_pace_per_day receives per-CATEGORY-per-DAY totals, not
@@ -394,7 +419,10 @@ def _parse_r11_daily_pcs(values: list, year: int, month: int) -> Dict[str, Dict[
 # ---------------------------------------------------------------------------
 
 def _parse_r12_daily_pcs(
-    values: list, year: int, month: int
+    values: list,
+    year: int,
+    month: int,
+    cutoff: Optional[datetime.date] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
     """Parse Report-12 (Mould M/C) for fitting pcs per category per date.
 
@@ -462,6 +490,8 @@ def _parse_r12_daily_pcs(
                 pass
 
         if last_date is None:
+            continue
+        if not _date_is_in_scope(last_date, year, month, cutoff):
             continue
 
         mat = _cell(col_mat).upper()
@@ -586,8 +616,12 @@ def compute_corrective_replan(
     )
 
     # --- Parse daily actuals ------------------------------------------------
-    r11_daily              = _parse_r11_daily_pcs(r11_values, year, mnum)
-    r12_daily, r12_other   = _parse_r12_daily_pcs(r12_values, year, mnum)
+    r11_daily = _parse_r11_daily_pcs(
+        r11_values, year, mnum, cutoff=as_of,
+    )
+    r12_daily, r12_other = _parse_r12_daily_pcs(
+        r12_values, year, mnum, cutoff=as_of,
+    )
     # r12_other: {material → total pcs} for unclassified materials (e.g. TEFFLONE)
 
     # _parse_r11_daily_pcs embeds a sentinel key when it encountered rows whose
