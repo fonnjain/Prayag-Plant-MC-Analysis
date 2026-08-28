@@ -1,0 +1,136 @@
+# PROMPT — Expose both Plumbing engines to the planning app
+
+**Repository:** `fonnjain/Prayag-Plant-MC-Analysis` · `prayag-plant.com`
+
+Your Q1–Q7 answers settled the main-run design. Reading further, **you already have the recompute engine too** — so this covers both, with one shared contract.
+
+---
+
+## What the planning app needs, and what you already have
+
+The planning app is now two-stage for PTMT and needs the same for Plumbing:
+
+| | Planning app needs | Your module | What it answers |
+|---|---|---|---|
+| **Main run** | Pass 1 demand → machine-feasible plan | `mp_scheduler` | what the machines can physically make |
+| **Recompute** | mid-month corrective | `mp_corrective_replan` | where output lands at the pace observed so far |
+
+**Your own docstring draws the distinction better than we could:**
+
+> *"This is a RUN-RATE projection, NOT a machine-capacity statement. It answers: if the plant keeps producing at the pace seen so far, where will output land by month end? For machine-capacity, use the separate Capacity-Feasible Plan."*
+
+**That split is right and should be preserved.** At month start there are no actuals, so machines must be modelled. Mid-month there is observed pace, which is better evidence than a theoretical rate.
+
+**PTMT is not in scope.** It has no routing, no BOM and no rates here — its fitter is built in the planning app on category p90. **Do not add PTMT support.**
+
+---
+
+# 1 · `POST /data-api/v1/schedule` — the main run
+
+Wraps `mp_scheduler`. **Preview only, non-persistent**, per your recommendation — 1–2 engineer-days rather than 3–5, and demand ownership stays with the planning app.
+
+**Request.** The planning app has `GET /api/plan/runs/:id/schedule-request` producing `itemCode`, `colour`, `quantity`, `material`, `weightKg`, `category`, `urgencyRank`. **Tell us the exact shape you want and it will conform.**
+
+**No W1–W4 will be sent.** Per your Q4 answer, absent weeks means `first_requested_week = 1`, and the existing priority rule derives placement — W1-origin fills W1 capacity, remainder cascades into W2 ahead of W2's own demand. **That is the behaviour we want**, and the reason we do not pre-split.
+
+**Response:** return `ScheduleResult.to_dict()` natively. No renaming — the planning app will map.
+
+**⚠ One conversion we cannot do.** `unfinished` returns in **kg**; the planning app works in **pieces** and has no BOM. **Return unfinished in pieces as well as kg**, or include the per-item factor used. Otherwise the cannot-be-made figure reaches the floor in the wrong unit.
+
+---
+
+# 2 · `POST /data-api/v1/corrective-replan` — the recompute
+
+Wraps `compute_corrective_replan`. **Also preview-only.**
+
+Its signature already fits an API boundary:
+
+```python
+compute_corrective_replan(
+    month, plan_recs, r11_values, r12_values, as_of_date,
+    file_id, cap_feasible_by_cat, configured_week_days)
+```
+
+**`r11_values` and `r12_values` are yours** — read them internally from the monthly PIPE workbook rather than accepting them over the wire. The planning app has no access to Report-11/12 and should not.
+
+**`plan_recs` comes from us** — the same demand contract as `/schedule`, plus `producedToDate` per item so `remaining` can be computed.
+
+**`cap_feasible_by_cat` is the useful part.** The planning app can pass the main run's own output, so the response shows *"pace says X, machines say Y"* side by side. **Those two engines were built to talk to each other; the API should let them.**
+
+**Response:** `CorrectiveReplanResult` natively — `categories` with `cap_per_day`, `method`, `remaining`, `feasible`, `shortfall`, `cap_feasible`, plus the working-day counts and `warnings`.
+
+**Return `shortfall` in pieces.** It already is — Report-11/12 are pcs — which is one fewer conversion than the scheduler needs. Worth confirming.
+
+---
+
+# 3 · ⚠ The calendar — fix once, apply to both
+
+Your Q6 answer confirmed the risk. `mp_scheduler` builds synthetic day slots from `week_days = [6,6,6,7]` with **no date awareness** — it cannot tell which slot is a Sunday or whether one was worked.
+
+The planning app's calendar counts non-Sundays **plus any Sunday with production**. August 2026 had **three worked Sundays**, giving 29 working days rather than 26.
+
+**So a worked Sunday is counted by planning and excluded from capacity** unless someone manually configures a larger total.
+
+**`compute_corrective_replan` already accepts `configured_week_days`** and sums it for the total, so the pattern exists. **Apply the same to `mp_scheduler`.**
+
+**Make `week_days` a required request field on both endpoints.** The planning app owns the Sunday-aware calendar and will send `[6,7,6,10]` or whatever the month gives. **Required, so it can never silently fall back to `[6,6,6,7]`.**
+
+This is the same defect class as the Sunday bug that once discarded **80,522 pieces** from PTMT monitoring. Fixing it in one place for both engines is the point.
+
+---
+
+# 4 · Verification
+
+Run one Plumbing month through both and report:
+
+**Schedule**
+
+```
+demand sent          pieces, item count
+scheduled            pieces and kg
+unfinished           pieces and kg
+capacity hrs         scheduled / idle / total
+week_days used       confirm it matches what was sent
+```
+
+**Two checks that matter more than the totals:**
+
+**No shared machine is over-committed.** MC3, MC4 and MC5 appear in multiple material envelopes. **Assert no machine exceeds its available hours in any day or shift.** This is the single largest gain over a category-level fitter and should be proven, not assumed.
+
+**The two locked-out machines are excluded**, with their absence reported rather than silently reducing the total.
+
+**Corrective replan**
+
+```
+as_of_date, working days total / elapsed / remaining
+per category: cap_per_day, method, remaining, feasible, shortfall
+categories using "mean(low-confidence)" — flagged, not hidden
+```
+
+**Report which categories fall below `MIN_DAYS_FOR_P90 = 5`.** A category with 3 observed days produces a mean, not a p90, and the planning app must show that differently — the same principle as a dash meaning "cannot compute".
+
+---
+
+# 5 · One thing the planning app cannot yet supply
+
+Its `schedule-request` currently returns **`weightKg: null`**. The scheduler needs weight to convert pieces → kg → hours.
+
+**Please confirm whether `mp_bom_weight` covers the Plumbing codes we would send**, particularly the PPR family — `PF*`, `PG*`, `P20A*` — which appear in the product catalogue but not yet in the planning roster.
+
+**If neither app has weights for a code, that code cannot be scheduled**, and it is better to know before the endpoint is built than after.
+
+---
+
+# Do not
+
+- **Build PTMT support.** Routing, BOM and rates do not exist for it.
+- **Change any metric calculation.** Rejection, utilisation and output efficiency are settled against Prayag's own figures and must not move.
+- **Add persistence or freeze semantics.** Preview only — the planning app owns and persists the plan.
+
+---
+
+## Still open from earlier
+
+**Three PIPE machine-days have positive output and zero run hours** — `Pipe M/C-1` 943.80 kg and `M/C-2` 1,329.60 kg on 23 August, `M/C-5` 808.00 kg on 20 June. The ideal rate is configured; the hours are missing.
+
+**That understates capacity**, and once `/schedule` is live it will understate what the scheduler believes the plant can do. Worth fixing before Pass 2 depends on it.
