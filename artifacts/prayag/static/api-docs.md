@@ -28,6 +28,7 @@ Multiple keys can be active at the same time — any valid key authorises a requ
 | `503` | `api_disabled` | No key has been configured on this deployment |
 | `502` | `source_unavailable` | The production Google Sheets could not be read |
 | `400` | `invalid_schedule_request` | The schedule-preview body is incomplete or invalid |
+| `422` | `no_schedulable_demand` | Every submitted schedule line is data-limited; the response includes per-item coverage reasons |
 | `503` | `planning_data_unavailable` | The required Plumbing planning master could not be read |
 | `409` | `schedule_machine_pool_overlap` | A machine is registered in both pipe and fitting pools, so separate previews would over-commit it; fix the machine-pool configuration before retrying |
 | `400` | `invalid_corrective_replan_request` | The corrective-preview body is incomplete or invalid |
@@ -266,13 +267,52 @@ always resolves its per-piece BOM weight from the current `mp_bom_weight` master
 
 **Response**
 
-The response is the native schedule result: `blocks`, `weekly_fill`,
+The native schedule fields remain at the top level: `blocks`, `weekly_fill`,
 `unfinished`, capacity and idle totals, `week_days`, `kind`, and downtime totals.
 `kind` echoes the requested `pipe` or `fitting` schedule type, so callers can
-retain the source when showing both independent pools together. A
-locked machine has `DOWN` blocks, making its excluded capacity explicit.
-`unfinished[].remaining_pcs` is the remaining gross production-piece quantity
-after the engine's rejection gross-up; `remaining_kg` is the equivalent
+retain the source when showing both independent pools together. A locked machine
+has `DOWN` blocks, making its excluded capacity explicit.
+
+Three additional blocks make modelling coverage explicit:
+
+- `coverage.items` returns one row for every submitted demand line, in request
+  order. `status` is `schedulable`, `partial`, or `not_modellable`;
+  `can_schedule` is the independent machine-allocation decision.
+- `coverage.summary` aggregates item count, demand pieces, and percentage by
+  status overall, by material, and by canonical category.
+- `data_limited` contains only `can_schedule=false` lines. Mixed requests still
+  schedule valid lines; if every line is data-limited the endpoint returns
+  `422 no_schedulable_demand` with the same coverage blocks and no schedule.
+
+`unfinished` is capacity/downtime-limited demand only. A missing BOM, route,
+rate, or active machine is never inserted into `unfinished`.
+
+Per-item classifications:
+
+| `status` | Meaning |
+|----------|---------|
+| `schedulable` | Direct BOM, item/fitting-standard route, and direct usable rate are present |
+| `partial` | BOM is present, but route/rate uses a documented fallback or has no usable fallback; check `can_schedule` |
+| `not_modellable` | No BOM weight exists |
+
+`route` identifies `direct`, `material_fallback`, `missing`, `inactive`, or
+`not_evaluated` when a missing BOM prevents later modelling steps.
+`rate` identifies `direct`, `cycle_fallback`, `material_fallback`,
+`overall_fallback`, `estimated_average`, `estimated`, `missing`, or
+`not_evaluated`. Stable machine-readable reason codes include `missing_bom`,
+`missing_route`, `inactive_route`,
+`missing_rate`, `route_fallback`, and `rate_fallback`.
+
+`demand_reconciliation` deliberately keeps two different piece bases separate:
+
+1. submitted net requested pieces = schedulable net requested pieces +
+   data-limited net requested pieces;
+2. modelled gross pieces after rejection uplift = scheduled gross pieces +
+   capacity-limited gross pieces.
+
+Do not add a net-request field to a gross-production field.
+`unfinished[].remaining_pcs` is the remaining **gross** production-piece
+quantity after rejection uplift; `remaining_kg` is the equivalent
 engine-derived material quantity.
 
 ```json
@@ -289,6 +329,40 @@ engine-derived material quantity.
     "remaining_kg": 720.0,
     "remaining_pcs": 900.0
   }],
+  "coverage": {
+    "items": [{
+      "item_code": "CPVCEXAMPLE20MM",
+      "raw_code": "CPVC Example 20 mm",
+      "kind": "pipe",
+      "material": "CPVC",
+      "category": "CPVC Pipe",
+      "requested_pcs": 12000,
+      "status": "partial",
+      "can_schedule": true,
+      "bom": "direct",
+      "route": "direct",
+      "rate": "material_fallback",
+      "reasons": ["rate_fallback"]
+    }],
+    "summary": {
+      "total_item_count": 1,
+      "total_demand_pcs": 12000,
+      "by_status": {
+        "schedulable": {"item_count": 0, "demand_pcs": 0, "demand_pct": 0},
+        "partial": {"item_count": 1, "demand_pcs": 12000, "demand_pct": 100},
+        "not_modellable": {"item_count": 0, "demand_pcs": 0, "demand_pct": 0}
+      }
+    }
+  },
+  "data_limited": [],
+  "demand_reconciliation": {
+    "submitted_requested_pcs": 12000,
+    "schedulable_requested_pcs": 12000,
+    "data_limited_requested_pcs": 0,
+    "modelled_gross_pcs": 12360,
+    "scheduled_gross_pcs": 11460,
+    "capacity_limited_gross_pcs": 900
+  },
   "downtime_machine_days": 2,
   "downtime_hours_lost": 40.0
 }

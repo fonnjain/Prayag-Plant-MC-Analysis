@@ -26,6 +26,7 @@ import hmac
 import math
 import os
 import re
+from collections import defaultdict
 from functools import wraps
 from typing import Any
 
@@ -80,6 +81,17 @@ class ScheduleMachinePoolConflict(RuntimeError):
     """A machine is configured in both independent Plumbing schedule pools."""
 
 
+class NoSchedulableDemand(SchedulePreviewError):
+    """Every submitted line is data-limited, so no schedule can be produced."""
+
+    def __init__(self, payload: dict):
+        super().__init__(
+            "None of the submitted demand can be scheduled from the current "
+            "Plumbing master data."
+        )
+        self.payload = payload
+
+
 class CorrectivePreviewError(ValueError):
     """A request cannot be converted into a safe corrective preview."""
 
@@ -100,6 +112,27 @@ class _SchedulePreviewRequest:
     kind: str
     week_days: list[int]
     demand: list[dict[str, Any]]
+
+
+@dataclasses.dataclass(frozen=True)
+class _SchedulePreviewResult:
+    """Native scheduler result plus demand-modelling coverage metadata."""
+
+    schedule: Any
+    coverage_items: list[dict[str, Any]]
+    data_limited: list[dict[str, Any]]
+    coverage_summary: dict[str, Any]
+    demand_reconciliation: dict[str, Any]
+
+    def to_dict(self) -> dict:
+        payload = self.schedule.to_dict()
+        payload["coverage"] = {
+            "items": self.coverage_items,
+            "summary": self.coverage_summary,
+        }
+        payload["data_limited"] = self.data_limited
+        payload["demand_reconciliation"] = self.demand_reconciliation
+        return payload
 
 
 @dataclasses.dataclass(frozen=True)
@@ -361,31 +394,235 @@ def _schedule_plan_lookups(month: str) -> tuple[dict, dict]:
     )
 
 
-def _require_schedulable_items(
-    items: list[Any], machine_names: set[str], kind: str,
+def _rate_provenance(item: Any, kind: str) -> str:
+    """Return a stable direct/fallback rate label without changing engine math."""
+    if not getattr(item, "has_weight", False):
+        return "not_evaluated"
+    machine_hrs = float(getattr(item, "machine_hrs", 0.0) or 0.0)
+    if not math.isfinite(machine_hrs) or machine_hrs <= 0:
+        return "missing"
+    if kind == "pipe":
+        tier = str(getattr(item, "rate_fallback_tier", "") or "")
+        return {
+            "item": "direct",
+            "mat_avg": "material_fallback",
+            "overall_avg": "overall_fallback",
+        }.get(tier, "estimated" if getattr(item, "rate_estimated", False) else "direct")
+    if not getattr(item, "rate_estimated", False):
+        return "direct"
+    if getattr(item, "cycle_time_sec", None) is not None:
+        return "cycle_fallback"
+    return "estimated_average"
+
+
+def _classify_schedule_items(
+    items: list[Any],
+    request_lines: list[dict[str, Any]],
+    machine_names: set[str],
+    kind: str,
+) -> list[dict[str, Any]]:
+    """Describe modelling confidence and hard gaps for every submitted line."""
+    if len(items) != len(request_lines):
+        raise PlanningDataUnavailable(
+            "The Plumbing planning engine returned an incomplete item result."
+        )
+    route_kind = "extrusion" if kind == "pipe" else "moulding"
+    out: list[dict[str, Any]] = []
+    for item, line in zip(items, request_lines):
+        has_bom = bool(getattr(item, "has_weight", False))
+        capable = sorted(set(getattr(item, "capable_machines", []) or []))
+        active_capable = sorted(set(capable) & machine_names)
+        # Optimisers set has_machine=False when configured routes point only to
+        # machines absent from the active monthly master.  The retained capable
+        # list still proves the route exists, so distinguish inactive from absent.
+        has_route = bool(capable)
+        engine_allocatable = bool(getattr(item, "has_machine", False))
+        route_provenance = "not_evaluated"
+        rate_provenance = _rate_provenance(item, kind)
+        reasons: list[str] = []
+
+        if not has_bom:
+            reasons.append("missing_bom")
+        else:
+            if not has_route:
+                route_provenance = "missing"
+                reasons.append("missing_route")
+            elif not active_capable:
+                route_provenance = "inactive"
+                reasons.append("inactive_route")
+            elif kind == "fitting" and getattr(item, "route_estimated", False):
+                route_provenance = "material_fallback"
+                reasons.append("route_fallback")
+            else:
+                route_provenance = "direct"
+
+            machine_hrs = float(getattr(item, "machine_hrs", 0.0) or 0.0)
+            if not math.isfinite(machine_hrs):
+                reasons.append("quantity_exceeds_safe_range")
+            elif machine_hrs <= 0:
+                reasons.append("missing_rate")
+            elif rate_provenance != "direct":
+                reasons.append("rate_fallback")
+
+        can_schedule = (
+            has_bom
+            and has_route
+            and engine_allocatable
+            and bool(active_capable)
+            and math.isfinite(float(getattr(item, "machine_hrs", 0.0) or 0.0))
+            and float(getattr(item, "machine_hrs", 0.0) or 0.0) > 0
+        )
+        if not has_bom:
+            status = "not_modellable"
+        elif (
+            can_schedule
+            and route_provenance == "direct"
+            and rate_provenance == "direct"
+        ):
+            status = "schedulable"
+        else:
+            status = "partial"
+
+        material = str(line["material"])
+        out.append({
+            "item_code": str(line["item_code"]),
+            "raw_code": str(line["raw_code"]),
+            "kind": kind,
+            "material": material,
+            "category": f"{material} {kind.title()}",
+            "requested_pcs": round(float(line["qty_pcs"]), 4),
+            "status": status,
+            "can_schedule": can_schedule,
+            "bom": "direct" if has_bom else "missing",
+            "route": route_provenance,
+            "rate": rate_provenance,
+            "capable_machines": capable,
+            "active_capable_machines": active_capable,
+            "reasons": reasons,
+            "reason_text": _coverage_reason_text(
+                reasons, route_kind=route_kind,
+            ),
+        })
+    return out
+
+
+def _coverage_reason_text(reasons: list[str], route_kind: str) -> list[str]:
+    labels = {
+        "missing_bom": "No BOM weight is available.",
+        "missing_route": f"No capable {route_kind} route is available.",
+        "inactive_route": f"The route has no active {route_kind} machine.",
+        "missing_rate": "No usable production rate is available.",
+        "quantity_exceeds_safe_range": "Quantity exceeds the safe scheduling range.",
+        "route_fallback": "A material-level route fallback is being used.",
+        "rate_fallback": "An estimated production-rate fallback is being used.",
+    }
+    return [labels[reason] for reason in reasons if reason in labels]
+
+
+def _coverage_bucket_summary(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int]]:
+    buckets: dict[str, dict[str, float | int]] = {
+        status: {"item_count": 0, "demand_pcs": 0.0, "demand_pct": 0.0}
+        for status in ("schedulable", "partial", "not_modellable")
+    }
+    total_pcs = sum(float(row["requested_pcs"]) for row in rows)
+    for row in rows:
+        bucket = buckets[row["status"]]
+        bucket["item_count"] = int(bucket["item_count"]) + 1
+        bucket["demand_pcs"] = float(bucket["demand_pcs"]) + float(
+            row["requested_pcs"]
+        )
+    for bucket in buckets.values():
+        bucket["demand_pcs"] = round(float(bucket["demand_pcs"]), 4)
+        bucket["demand_pct"] = (
+            round(float(bucket["demand_pcs"]) / total_pcs * 100.0, 2)
+            if total_pcs > 0 else 0.0
+        )
+    return buckets
+
+
+def _coverage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped_material: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped_material[row["material"]].append(row)
+        grouped_category[row["category"]].append(row)
+    return {
+        "units": {"demand": "pcs"},
+        "total_item_count": len(rows),
+        "total_demand_pcs": round(sum(float(r["requested_pcs"]) for r in rows), 4),
+        "by_status": _coverage_bucket_summary(rows),
+        "by_material": {
+            key: _coverage_bucket_summary(grouped_material[key])
+            for key in sorted(grouped_material)
+        },
+        "by_category": {
+            key: _coverage_bucket_summary(grouped_category[key])
+            for key in sorted(grouped_category)
+        },
+    }
+
+
+def _reject_unsafe_schedule_quantities(
+    coverage_items: list[dict[str, Any]],
 ) -> None:
-    """Reject previews that would otherwise silently drop requested demand."""
-    problems: list[str] = []
-    for item in items:
-        label = str(getattr(item, "raw_code", "") or getattr(item, "item_code", "item"))
-        if not getattr(item, "has_weight", False):
-            problems.append(f"{label}: no BOM weight")
-        elif not getattr(item, "has_machine", False):
-            problems.append(f"{label}: no capable {kind} route")
-        elif not math.isfinite(float(getattr(item, "machine_hrs", 0.0) or 0.0)):
-            problems.append(f"{label}: quantity exceeds the safe scheduling range")
-        elif float(getattr(item, "machine_hrs", 0.0) or 0.0) <= 0:
-            problems.append(f"{label}: no usable production rate")
-        elif not (set(getattr(item, "capable_machines", []) or []) & machine_names):
-            problems.append(f"{label}: route has no active {kind} machine")
-    if problems:
+    unsafe = [
+        row["raw_code"]
+        for row in coverage_items
+        if "quantity_exceeds_safe_range" in row["reasons"]
+    ]
+    if unsafe:
         raise SchedulePreviewError(
-            "Requested demand cannot be scheduled from the current Plumbing "
-            "master: " + "; ".join(problems) + "."
+            "Requested demand exceeds the safe scheduling range for: "
+            + ", ".join(unsafe) + "."
         )
 
 
-def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
+def _demand_reconciliation(
+    coverage_items: list[dict[str, Any]],
+    engine_items: list[Any],
+    schedule: Any | None,
+) -> dict[str, Any]:
+    """Return separate net-request and gross-production identities."""
+    submitted = sum(float(row["requested_pcs"]) for row in coverage_items)
+    schedulable_requested = sum(
+        float(row["requested_pcs"])
+        for row in coverage_items if row["can_schedule"]
+    )
+    data_limited_requested = submitted - schedulable_requested
+    modelled_gross = sum(
+        float(getattr(item, "gross_qty_pcs", 0.0) or getattr(item, "qty_pcs", 0.0))
+        for item, row in zip(engine_items, coverage_items)
+        if row["can_schedule"]
+    )
+    capacity_limited_gross = (
+        sum(
+            float(item.remaining_pcs or 0.0)
+            for item in (getattr(schedule, "unfinished", []) or [])
+        )
+        if schedule is not None else 0.0
+    )
+    scheduled_gross = max(0.0, modelled_gross - capacity_limited_gross)
+    return {
+        "units": {
+            "submitted_requested": "net pcs",
+            "schedulable_requested": "net pcs",
+            "data_limited_requested": "net pcs",
+            "modelled": "gross pcs after rejection uplift",
+            "scheduled": "gross pcs after rejection uplift",
+            "capacity_limited": "gross pcs after rejection uplift",
+        },
+        "submitted_requested_pcs": round(submitted, 4),
+        "schedulable_requested_pcs": round(schedulable_requested, 4),
+        "data_limited_requested_pcs": round(data_limited_requested, 4),
+        "modelled_gross_pcs": round(modelled_gross, 4),
+        "scheduled_gross_pcs": round(scheduled_gross, 4),
+        "capacity_limited_gross_pcs": round(capacity_limited_gross, 4),
+    }
+
+
+def run_schedule_preview(payload: Any) -> _SchedulePreviewResult:
     """Run one transient, capacity-feasible Plumbing schedule preview.
 
     This deliberately reads master data and downtime live but does not create a
@@ -434,7 +671,12 @@ def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
         if preview.kind == "pipe":
             demand = [
                 _mp_engine.DemandItem(
-                    **line, week_qty={}, first_requested_week=1
+                    item_code=line["item_code"],
+                    raw_code=line["raw_code"],
+                    material=line["material"],
+                    qty_pcs=line["qty_pcs"],
+                    week_qty={},
+                    first_requested_week=1,
                 )
                 for line in preview.demand
             ]
@@ -442,35 +684,107 @@ def run_schedule_preview(payload: Any) -> _mp_scheduler.ScheduleResult:
                 demand, preview.month, "PLUMBING",
                 rej_lookup=rejection_lookup, wastage_lookup=wastage_lookup,
             )
-            _require_schedulable_items(
-                engine_result.items, machine_names, "extrusion",
+            coverage_items = _classify_schedule_items(
+                engine_result.items, preview.demand, machine_names, preview.kind,
             )
-            return _mp_scheduler.run_shift_schedule(
-                engine_items=engine_result.items,
-                demand_items=demand,
+            _reject_unsafe_schedule_quantities(coverage_items)
+            valid_pairs = [
+                (item, demand_item)
+                for item, demand_item, coverage in zip(
+                    engine_result.items, demand, coverage_items,
+                )
+                if coverage["can_schedule"]
+            ]
+            if not valid_pairs:
+                reconciliation = _demand_reconciliation(
+                    coverage_items, engine_result.items, None,
+                )
+                raise NoSchedulableDemand({
+                    "coverage": {
+                        "items": coverage_items,
+                        "summary": _coverage_summary(coverage_items),
+                    },
+                    "data_limited": [
+                        row for row in coverage_items if not row["can_schedule"]
+                    ],
+                    "demand_reconciliation": reconciliation,
+                })
+            schedule = _mp_scheduler.run_shift_schedule(
+                engine_items=[pair[0] for pair in valid_pairs],
+                demand_items=[pair[1] for pair in valid_pairs],
                 segment="PLUMBING",
                 effective_month=preview.month,
                 downtime_records=downtime_records,
                 week_days_override=preview.week_days,
             )
+            return _SchedulePreviewResult(
+                schedule=schedule,
+                coverage_items=coverage_items,
+                data_limited=[
+                    row for row in coverage_items if not row["can_schedule"]
+                ],
+                coverage_summary=_coverage_summary(coverage_items),
+                demand_reconciliation=_demand_reconciliation(
+                    coverage_items, engine_result.items, schedule,
+                ),
+            )
 
         fitting_demand = [
-            _mp_engine.FittingDemandItem(**line) for line in preview.demand
+            _mp_engine.FittingDemandItem(
+                item_code=line["item_code"],
+                raw_code=line["raw_code"],
+                material=line["material"],
+                qty_pcs=line["qty_pcs"],
+            )
+            for line in preview.demand
         ]
         fitting_result = _mp_engine.run_fitting_engine(
             fitting_demand, preview.month, "PLUMBING",
             rej_lookup=rejection_lookup, wastage_lookup=wastage_lookup,
         )
-        _require_schedulable_items(
-            fitting_result.items, machine_names, "moulding",
+        coverage_items = _classify_schedule_items(
+            fitting_result.items, preview.demand, machine_names, preview.kind,
         )
-        return _mp_scheduler.run_fitting_schedule(
-            fitting_items=fitting_result.items,
-            fitting_demand=fitting_demand,
+        _reject_unsafe_schedule_quantities(coverage_items)
+        valid_pairs = [
+            (item, demand_item)
+            for item, demand_item, coverage in zip(
+                fitting_result.items, fitting_demand, coverage_items,
+            )
+            if coverage["can_schedule"]
+        ]
+        if not valid_pairs:
+            reconciliation = _demand_reconciliation(
+                coverage_items, fitting_result.items, None,
+            )
+            raise NoSchedulableDemand({
+                "coverage": {
+                    "items": coverage_items,
+                    "summary": _coverage_summary(coverage_items),
+                },
+                "data_limited": [
+                    row for row in coverage_items if not row["can_schedule"]
+                ],
+                "demand_reconciliation": reconciliation,
+            })
+        schedule = _mp_scheduler.run_fitting_schedule(
+            fitting_items=[pair[0] for pair in valid_pairs],
+            fitting_demand=[pair[1] for pair in valid_pairs],
             segment="PLUMBING",
             effective_month=preview.month,
             downtime_records=downtime_records,
             week_days_override=preview.week_days,
+        )
+        return _SchedulePreviewResult(
+            schedule=schedule,
+            coverage_items=coverage_items,
+            data_limited=[
+                row for row in coverage_items if not row["can_schedule"]
+            ],
+            coverage_summary=_coverage_summary(coverage_items),
+            demand_reconciliation=_demand_reconciliation(
+                coverage_items, fitting_result.items, schedule,
+            ),
         )
     except PlanningDataUnavailable:
         raise
@@ -829,6 +1143,12 @@ def create_api(get_data) -> Blueprint:
         payload = request.get_json(silent=True)
         try:
             result = run_schedule_preview(payload)
+        except NoSchedulableDemand as exc:
+            return jsonify({
+                "error": "no_schedulable_demand",
+                "message": str(exc),
+                **exc.payload,
+            }), 422
         except SchedulePreviewError as exc:
             return jsonify({
                 "error": "invalid_schedule_request",

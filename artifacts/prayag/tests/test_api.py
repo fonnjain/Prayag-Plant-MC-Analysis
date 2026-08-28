@@ -407,7 +407,7 @@ def test_schedule_rejects_machine_registered_in_both_plumbing_pools(monkeypatch)
     assert "M/C-DUAL" in body["message"]
 
 
-def test_schedule_rejects_pipe_demand_missing_from_the_bom_master(monkeypatch):
+def test_schedule_returns_mixed_pipe_preview_with_missing_bom_data_limited(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
     monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
@@ -421,13 +421,27 @@ def test_schedule_rejects_pipe_demand_missing_from_the_bom_master(monkeypatch):
         headers={"X-API-Key": "sekret-123"},
         json=_schedule_request(),
     )
-    assert response.status_code == 400
+    assert response.status_code == 200, response.get_json()
     body = response.get_json()
-    assert body["error"] == "invalid_schedule_request"
-    assert "PIPEB: no BOM weight" in body["message"]
+    coverage = {row["item_code"]: row for row in body["coverage"]["items"]}
+    assert coverage["PIPEA"]["status"] == "schedulable"
+    assert coverage["PIPEA"]["can_schedule"] is True
+    assert coverage["PIPEB"]["status"] == "not_modellable"
+    assert coverage["PIPEB"]["can_schedule"] is False
+    assert coverage["PIPEB"]["reasons"] == ["missing_bom"]
+    assert [row["item_code"] for row in body["data_limited"]] == ["PIPEB"]
+    assert all(row["item_code"] != "PIPEB" for row in body["unfinished"])
+    summary = body["coverage"]["summary"]
+    assert summary["total_demand_pcs"] == 200000.0
+    assert summary["by_status"]["schedulable"]["demand_pcs"] == 100000.0
+    assert summary["by_status"]["not_modellable"]["demand_pcs"] == 100000.0
+    recon = body["demand_reconciliation"]
+    assert recon["submitted_requested_pcs"] == (
+        recon["schedulable_requested_pcs"] + recon["data_limited_requested_pcs"]
+    )
 
 
-def test_schedule_rejects_unroutable_fitting_demand(monkeypatch):
+def test_schedule_reports_all_unroutable_fitting_demand_as_data_limited(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
     monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
@@ -454,13 +468,18 @@ def test_schedule_rejects_unroutable_fitting_demand(monkeypatch):
             "item_code": "FIT-A", "material": "CPVC", "qty_pcs": 100,
         }]),
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
     body = response.get_json()
-    assert body["error"] == "invalid_schedule_request"
-    assert "FIT-A: no capable moulding route" in body["message"]
+    assert body["error"] == "no_schedulable_demand"
+    assert body["data_limited"][0]["status"] == "partial"
+    assert body["data_limited"][0]["can_schedule"] is False
+    assert body["data_limited"][0]["reasons"] == ["missing_route", "missing_rate"]
+    assert body["coverage"]["summary"]["by_category"]["CPVC Fitting"]["partial"][
+        "demand_pcs"
+    ] == 100.0
 
 
-def test_schedule_rejects_pipe_demand_with_no_usable_production_rate(monkeypatch):
+def test_schedule_reports_all_no_rate_demand_as_data_limited(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
     monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
@@ -487,8 +506,11 @@ def test_schedule_rejects_pipe_demand_with_no_usable_production_rate(monkeypatch
             "item_code": "PIPE-A", "material": "CPVC", "qty_pcs": 100,
         }]),
     )
-    assert response.status_code == 400
-    assert "PIPE-A: no usable production rate" in response.get_json()["message"]
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["error"] == "no_schedulable_demand"
+    assert body["data_limited"][0]["reasons"] == ["missing_rate"]
+    assert body["demand_reconciliation"]["data_limited_requested_pcs"] == 100.0
 
 
 def test_schedule_rejects_extreme_finite_demand_before_nonfinite_output(monkeypatch):
@@ -510,10 +532,11 @@ def test_schedule_rejects_extreme_finite_demand_before_nonfinite_output(monkeypa
     assert response.status_code == 400, response.get_json()
     body = response.get_json()
     assert body["error"] == "invalid_schedule_request"
-    assert "PIPEA: quantity exceeds the safe scheduling range" in body["message"]
+    assert "PIPEA" in body["message"]
+    assert "safe scheduling range" in body["message"]
 
 
-def test_schedule_rejects_fitting_route_without_an_active_machine(monkeypatch):
+def test_schedule_reports_inactive_fitting_route_as_data_limited(monkeypatch):
     monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
     monkeypatch.setattr(storemod, "get_api_key", lambda: None)
     monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
@@ -530,7 +553,7 @@ def test_schedule_rejects_fitting_route_without_an_active_machine(monkeypatch):
         apimod._mp_engine, "run_fitting_engine",
         lambda *_args, **_kwargs: SimpleNamespace(items=[SimpleNamespace(
             item_code="FIT-A", raw_code="FIT-A", has_weight=True,
-            has_machine=True, machine_hrs=1.0, capable_machines=["MOD-99"],
+            has_machine=False, machine_hrs=1.0, capable_machines=["MOD-99"],
         )]),
     )
     response = _client().post(
@@ -540,8 +563,175 @@ def test_schedule_rejects_fitting_route_without_an_active_machine(monkeypatch):
             "item_code": "FIT-A", "material": "CPVC", "qty_pcs": 100,
         }]),
     )
-    assert response.status_code == 400
-    assert "FIT-A: route has no active moulding machine" in response.get_json()["message"]
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["error"] == "no_schedulable_demand"
+    assert body["data_limited"][0]["route"] == "inactive"
+    assert body["data_limited"][0]["reasons"] == ["inactive_route"]
+
+
+def test_schedule_reports_inactive_pipe_route_after_optimizer_lockout(monkeypatch):
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+    monkeypatch.setattr(
+        apimod._mp_model, "get_machines",
+        lambda _segment, _month, kind=None: [{"machine": "M/C-1"}]
+        if kind == "extrusion" else [],
+    )
+    monkeypatch.setattr(apimod, "_schedule_plan_lookups", lambda _month: ({}, {}))
+    monkeypatch.setattr(
+        apimod._mp_model, "get_downtime_affecting_month", lambda *_: []
+    )
+    monkeypatch.setattr(
+        apimod._mp_engine, "run_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(items=[SimpleNamespace(
+            item_code="PIPEA", raw_code="PIPE-A", has_weight=True,
+            has_machine=False, machine_hrs=1.0, capable_machines=["M/C-99"],
+            rate_estimated=False, rate_fallback_tier="item",
+        )]),
+    )
+    response = _client().post(
+        "/data-api/v1/schedule",
+        headers={"X-API-Key": "sekret-123"},
+        json=_schedule_request(demand=[{
+            "item_code": "PIPE-A", "material": "CPVC", "qty_pcs": 100,
+        }]),
+    )
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["error"] == "no_schedulable_demand"
+    assert body["data_limited"][0]["route"] == "inactive"
+    assert body["data_limited"][0]["reasons"] == ["inactive_route"]
+
+
+def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+    monkeypatch.setattr(
+        apimod._mp_model, "get_machines",
+        lambda _segment, _month, kind=None: [{"machine": "MOD-1"}]
+        if kind == "moulding" else [],
+    )
+    monkeypatch.setattr(apimod, "_schedule_plan_lookups", lambda _month: ({}, {}))
+    monkeypatch.setattr(
+        apimod._mp_model, "get_downtime_affecting_month", lambda *_: []
+    )
+    items = [
+        SimpleNamespace(
+            item_code="FITDIRECT", raw_code="FIT-DIRECT", has_weight=True,
+            has_machine=True, machine_hrs=1.0, capable_machines=["MOD-1"],
+            rate_estimated=False, route_estimated=False, gross_qty_pcs=100.0,
+        ),
+        SimpleNamespace(
+            item_code="FITFALLBACK", raw_code="FIT-FALLBACK", has_weight=True,
+            has_machine=True, machine_hrs=2.0, capable_machines=["MOD-1"],
+            rate_estimated=True, route_estimated=True, cycle_time_sec=None,
+            gross_qty_pcs=200.0,
+        ),
+        SimpleNamespace(
+            item_code="FITNOBOM", raw_code="FIT-NO-BOM", has_weight=False,
+            has_machine=False, machine_hrs=0.0, capable_machines=[],
+        ),
+    ]
+    monkeypatch.setattr(
+        apimod._mp_engine, "run_fitting_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(items=items),
+    )
+    monkeypatch.setattr(
+        apimod._mp_scheduler, "run_fitting_schedule",
+        lambda **_kwargs: SimpleNamespace(
+            unfinished=[SimpleNamespace(remaining_pcs=50.0)],
+            to_dict=lambda: {
+                "segment": "PLUMBING", "kind": "fitting",
+                "effective_month": "2026-07", "blocks": [],
+                "weekly_fill": [], "unfinished": [{
+                    "item_code": "FITDIRECT", "remaining_pcs": 50.0,
+                }],
+            },
+        ),
+    )
+    response = _client().post(
+        "/data-api/v1/schedule",
+        headers={"X-API-Key": "sekret-123"},
+        json=_schedule_request(kind="fitting", demand=[
+            {"item_code": "FIT-DIRECT", "material": "CPVC", "qty_pcs": 100},
+            {"item_code": "FIT-FALLBACK", "material": "CPVC", "qty_pcs": 200},
+            {"item_code": "FIT-NO-BOM", "material": "CPVC", "qty_pcs": 50},
+        ]),
+    )
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    coverage = {row["item_code"]: row for row in body["coverage"]["items"]}
+    assert coverage["FITDIRECT"]["status"] == "schedulable"
+    assert coverage["FITDIRECT"]["route"] == "direct"
+    assert coverage["FITDIRECT"]["rate"] == "direct"
+    assert coverage["FITFALLBACK"]["status"] == "partial"
+    assert coverage["FITFALLBACK"]["can_schedule"] is True
+    assert coverage["FITFALLBACK"]["route"] == "material_fallback"
+    assert coverage["FITFALLBACK"]["rate"] == "estimated_average"
+    assert coverage["FITFALLBACK"]["reasons"] == [
+        "route_fallback", "rate_fallback",
+    ]
+    assert coverage["FITNOBOM"]["status"] == "not_modellable"
+    assert coverage["FITNOBOM"]["route"] == "not_evaluated"
+    assert coverage["FITNOBOM"]["rate"] == "not_evaluated"
+    category = body["coverage"]["summary"]["by_category"]["CPVC Fitting"]
+    assert category["schedulable"]["demand_pcs"] == 100.0
+    assert category["partial"]["demand_pcs"] == 200.0
+    assert category["not_modellable"]["demand_pcs"] == 50.0
+    assert [row["item_code"] for row in body["data_limited"]] == ["FITNOBOM"]
+    recon = body["demand_reconciliation"]
+    assert recon["submitted_requested_pcs"] == 350.0
+    assert recon["schedulable_requested_pcs"] == 300.0
+    assert recon["data_limited_requested_pcs"] == 50.0
+    assert recon["modelled_gross_pcs"] == 300.0
+    assert recon["scheduled_gross_pcs"] == 250.0
+    assert recon["capacity_limited_gross_pcs"] == 50.0
+
+
+def test_schedule_surfaces_ppr_family_codes_when_no_bom_exists(monkeypatch):
+    monkeypatch.setenv(apimod.API_KEY_ENV, "sekret-123")
+    monkeypatch.setattr(storemod, "get_api_key", lambda: None)
+    monkeypatch.setattr(storemod, "get_all_api_keys", lambda: [])
+    monkeypatch.setattr(
+        apimod._mp_model, "get_machines",
+        lambda _segment, _month, kind=None: [{"machine": "MOD-1"}]
+        if kind == "moulding" else [],
+    )
+    monkeypatch.setattr(apimod, "_schedule_plan_lookups", lambda _month: ({}, {}))
+    monkeypatch.setattr(
+        apimod._mp_model, "get_downtime_affecting_month", lambda *_: []
+    )
+    codes = ["PF101", "PG202", "P20A303"]
+    monkeypatch.setattr(
+        apimod._mp_engine, "run_fitting_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(items=[
+            SimpleNamespace(
+                item_code=code, raw_code=code, has_weight=False,
+                has_machine=False, machine_hrs=0.0, capable_machines=[],
+            )
+            for code in codes
+        ]),
+    )
+    response = _client().post(
+        "/data-api/v1/schedule",
+        headers={"X-API-Key": "sekret-123"},
+        json=_schedule_request(kind="fitting", demand=[
+            {"item_code": code, "material": "CPVC", "qty_pcs": 10}
+            for code in codes
+        ]),
+    )
+    assert response.status_code == 422
+    body = response.get_json()
+    assert [row["item_code"] for row in body["data_limited"]] == codes
+    assert all(row["status"] == "not_modellable" for row in body["data_limited"])
+    assert all(row["route"] == "not_evaluated" for row in body["data_limited"])
+    assert all(row["rate"] == "not_evaluated" for row in body["data_limited"])
+    assert body["coverage"]["summary"]["by_status"]["not_modellable"] == {
+        "item_count": 3, "demand_pcs": 30.0, "demand_pct": 100.0,
+    }
 
 
 def test_schedule_preview_uses_engine_calendar_capacity_and_downtime(monkeypatch):
@@ -589,6 +779,18 @@ def test_schedule_preview_uses_engine_calendar_capacity_and_downtime(monkeypatch
     assert all(
         item["downtime_reason"] == ""
         for item in body["unfinished"]
+    )
+    coverage = body["coverage"]
+    assert coverage["summary"]["by_status"]["schedulable"]["item_count"] == 2
+    assert not body["data_limited"]
+    reconciliation = body["demand_reconciliation"]
+    assert reconciliation["submitted_requested_pcs"] == (
+        reconciliation["schedulable_requested_pcs"]
+        + reconciliation["data_limited_requested_pcs"]
+    )
+    assert reconciliation["modelled_gross_pcs"] == (
+        reconciliation["scheduled_gross_pcs"]
+        + reconciliation["capacity_limited_gross_pcs"]
     )
     assert "POST" in response.headers["Access-Control-Allow-Methods"]
 
