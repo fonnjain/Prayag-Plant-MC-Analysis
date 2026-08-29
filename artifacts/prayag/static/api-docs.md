@@ -317,6 +317,16 @@ normalized selected method:
 - `direct_value`: the direct same-item rate when available;
 - `fallback_method` and `fallback_value`: the fallback candidate the engine
   would use if the direct rate were absent (or the selected fallback itself);
+- `fallback_policy`: `lower_quartile_nearest_rank` for material/overall
+  estimates. It uses nearest-rank P25, which is the minimum when fewer than
+  four valid peers exist. A configured pipe material rate may lower, but never
+  raise, this conservative peer rate. Direct item standards and same-item
+  fitting cycle rates are unchanged;
+- `pre_policy_fallback_value`: the former arithmetic-mean candidate;
+- `pre_policy_machine_hrs`, `conservative_machine_hrs`,
+  `capacity_delta_hrs`, and `capacity_delta_pct`: capacity before versus after
+  the conservative policy. A positive delta means the old mean understated
+  required machine hours;
 - `divergence_pct`: `(fallback_value - direct_value) / direct_value × 100`,
   returned only when both comparable values exist;
 - `comparison`: `available`, `no_direct_same_item_rate`,
@@ -334,8 +344,15 @@ For material/overall averages, the compared item's direct rate is excluded from
 the candidate average, so the check does not grade an estimate partly against
 itself.
 It reports comparison item count and demand pieces, demand-weighted signed and
-absolute divergence, and maximum absolute divergence. This is a confidence
-diagnostic, not an input to scheduler math.
+absolute divergence, maximum absolute divergence, and up to ten
+`optimistic_outliers` where the fallback is faster than the direct standard.
+
+`coverage.summary.fallback_policy.capacity_impact` aggregates former-mean and
+conservative hours only across request items that use an affected
+material/overall fallback and have `can_schedule=true`. Here “scheduled” means
+the engine has a usable BOM, rate, and active capable route; it does not promise
+that monthly capacity can finish every piece. Direct standards, same-item
+fitting cycle rates, and data-gap items with no usable route are excluded.
 
 Stable machine-readable reason codes include `missing_bom`, `missing_route`,
 `inactive_route`, `missing_rate`, `route_fallback`, and `rate_fallback`.

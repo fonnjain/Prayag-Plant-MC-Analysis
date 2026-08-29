@@ -442,7 +442,7 @@ def _rate_method(item: Any, kind: str) -> str:
 
 
 def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
-    """Expose selected/direct/fallback rates and a comparable divergence."""
+    """Expose selected/direct/fallback rates and fallback-policy capacity impact."""
     method = _rate_method(item, kind)
     unit = "kg/hr" if kind == "pipe" else "pcs/hr"
     attr = "rate_kg_per_hr" if kind == "pipe" else "pcs_per_hr"
@@ -455,6 +455,8 @@ def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
         selected = None
     direct = getattr(item, "direct_rate_value", None)
     fallback = getattr(item, "fallback_rate_value", None)
+    pre_policy = getattr(item, "pre_policy_fallback_rate_value", None)
+    fallback_policy = str(getattr(item, "fallback_rate_policy", "") or "")
     fallback_tier = str(getattr(item, "fallback_rate_tier", "") or "")
     try:
         direct = float(direct) if direct is not None else None
@@ -464,6 +466,10 @@ def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
         fallback = float(fallback) if fallback is not None else None
     except (TypeError, ValueError):
         fallback = None
+    try:
+        pre_policy = float(pre_policy) if pre_policy is not None else None
+    except (TypeError, ValueError):
+        pre_policy = None
     if direct is None and method in ("direct_item", "direct_fitting_standard"):
         direct = selected
     if fallback is None and method not in (
@@ -474,6 +480,11 @@ def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
         direct = None
     if fallback is not None and (not math.isfinite(fallback) or fallback <= 0):
         fallback = None
+    if (
+        pre_policy is not None
+        and (not math.isfinite(pre_policy) or pre_policy <= 0)
+    ):
+        pre_policy = None
     fallback_method = (
         _normalized_rate_tier(fallback_tier, kind, estimated=True)
         if fallback_tier else (
@@ -492,6 +503,30 @@ def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
         comparison = "no_fallback_reference_rate"
     else:
         comparison = "available"
+
+    basis_attr = "material_kg" if kind == "pipe" else "gross_qty_pcs"
+    try:
+        capacity_basis = float(getattr(item, basis_attr, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        capacity_basis = 0.0
+    if not math.isfinite(capacity_basis) or capacity_basis <= 0:
+        capacity_basis = 0.0
+    pre_policy_hrs = None
+    conservative_hrs = None
+    capacity_delta_hrs = None
+    capacity_delta_pct = None
+    if (
+        capacity_basis > 0
+        and pre_policy is not None
+        and fallback is not None
+    ):
+        pre_policy_hrs = capacity_basis / pre_policy
+        conservative_hrs = capacity_basis / fallback
+        capacity_delta_hrs = conservative_hrs - pre_policy_hrs
+        capacity_delta_pct = (
+            capacity_delta_hrs / pre_policy_hrs * 100.0
+            if pre_policy_hrs > 0 else None
+        )
     return {
         "method": method,
         "value": round(selected, 4) if selected is not None else None,
@@ -500,6 +535,24 @@ def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
         "direct_available": direct is not None,
         "fallback_method": fallback_method,
         "fallback_value": round(fallback, 4) if fallback is not None else None,
+        "fallback_policy": fallback_policy or None,
+        "pre_policy_fallback_value": (
+            round(pre_policy, 4) if pre_policy is not None else None
+        ),
+        "pre_policy_machine_hrs": (
+            round(pre_policy_hrs, 4) if pre_policy_hrs is not None else None
+        ),
+        "conservative_machine_hrs": (
+            round(conservative_hrs, 4) if conservative_hrs is not None else None
+        ),
+        "capacity_delta_hrs": (
+            round(capacity_delta_hrs, 4)
+            if capacity_delta_hrs is not None else None
+        ),
+        "capacity_delta_pct": (
+            round(capacity_delta_pct, 2)
+            if capacity_delta_pct is not None else None
+        ),
         "divergence_pct": divergence,
         "comparison": comparison,
     }
@@ -651,6 +704,15 @@ def _coverage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_route_method": _coverage_method_summary(rows, "route_method"),
         "by_rate_method": _coverage_method_summary(rows, "rate_method"),
         "rate_confidence_by_fallback_method": _rate_confidence_summary(rows),
+        "fallback_policy": {
+            "name": _mp_engine.FALLBACK_RATE_POLICY,
+            "rule": (
+                "Estimated material and overall rates use nearest-rank P25; "
+                "configured material rates may lower but not raise that rate; "
+                "direct item standards and same-item cycle rates are unchanged."
+            ),
+            "capacity_impact": _fallback_policy_capacity_summary(rows),
+        },
         "by_material": {
             key: _coverage_bucket_summary(grouped_material[key])
             for key in sorted(grouped_material)
@@ -670,7 +732,7 @@ def _coverage_method_summary(
     for row in rows:
         grouped[str(row[field])].append(row)
     total_pcs = sum(float(row["requested_pcs"]) for row in rows)
-    result: dict[str, dict[str, float | int]] = {}
+    result: dict[str, dict[str, Any]] = {}
     for method in sorted(grouped):
         method_pcs = sum(float(row["requested_pcs"]) for row in grouped[method])
         result[method] = {
@@ -684,7 +746,7 @@ def _coverage_method_summary(
 
 def _rate_confidence_summary(
     rows: list[dict[str, Any]],
-) -> dict[str, dict[str, float | int]]:
+) -> dict[str, dict[str, Any]]:
     """Demand-weight comparable fallback-vs-direct divergences."""
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -695,7 +757,7 @@ def _rate_confidence_summary(
             and detail["divergence_pct"] is not None
         ):
             grouped[str(detail["fallback_method"])].append(row)
-    result: dict[str, dict[str, float | int]] = {}
+    result: dict[str, dict[str, Any]] = {}
     for method in sorted(grouped):
         method_rows = grouped[method]
         demand = sum(float(row["requested_pcs"]) for row in method_rows)
@@ -734,6 +796,14 @@ def _rate_confidence_summary(
             )
             for row in method_rows
         )
+        optimistic_rows = sorted(
+            (
+                row for row in method_rows
+                if float(row["rate_provenance"]["divergence_pct"]) > 0
+            ),
+            key=lambda row: float(row["rate_provenance"]["divergence_pct"]),
+            reverse=True,
+        )
         result[method] = {
             "comparison_item_count": len(method_rows),
             "comparison_demand_pcs": round(demand, 4),
@@ -744,8 +814,55 @@ def _rate_confidence_summary(
                 round(weighted_abs / demand, 2) if demand > 0 else 0.0
             ),
             "max_abs_divergence_pct": round(max_abs, 2),
+            "optimistic_outlier_count": len(optimistic_rows),
+            "optimistic_outliers": [
+                {
+                    "item_code": row["item_code"],
+                    "material": row["material"],
+                    "requested_pcs": row["requested_pcs"],
+                    "direct_value": row["rate_provenance"]["direct_value"],
+                    "fallback_value": row["rate_provenance"]["fallback_value"],
+                    "divergence_pct": row["rate_provenance"]["divergence_pct"],
+                }
+                for row in optimistic_rows[:10]
+            ],
         }
     return result
+
+
+def _fallback_policy_capacity_summary(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Sum policy impact only for demand using an affected estimated fallback."""
+    comparable = [
+        row for row in rows
+        if row["can_schedule"]
+        and row["rate_method"] in ("material_average", "overall_average")
+        and row["rate_provenance"]["pre_policy_machine_hrs"] is not None
+        and row["rate_provenance"]["conservative_machine_hrs"] is not None
+    ]
+    pre_policy_hrs = sum(
+        float(row["rate_provenance"]["pre_policy_machine_hrs"])
+        for row in comparable
+    )
+    conservative_hrs = sum(
+        float(row["rate_provenance"]["conservative_machine_hrs"])
+        for row in comparable
+    )
+    delta = conservative_hrs - pre_policy_hrs
+    return {
+        "comparison_item_count": len(comparable),
+        "comparison_demand_pcs": round(
+            sum(float(row["requested_pcs"]) for row in comparable), 4,
+        ),
+        "pre_policy_machine_hrs": round(pre_policy_hrs, 4),
+        "conservative_machine_hrs": round(conservative_hrs, 4),
+        "additional_machine_hrs": round(delta, 4),
+        "additional_machine_hrs_pct": (
+            round(delta / pre_policy_hrs * 100.0, 2)
+            if pre_policy_hrs > 0 else 0.0
+        ),
+    }
 
 
 def _reject_unsafe_schedule_quantities(

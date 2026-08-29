@@ -129,8 +129,8 @@ class TestRateFallback:
         rate, est, tier = _get_rate("S1", "SWR", ph_dict, mat_avg, overall)
         assert est is True
         assert tier == "overall_avg"
-        # Falls back to overall avg = (40+60)/2 = 50
-        assert abs(rate - 50.0) < 1e-6
+        # Nearest-rank P25 is the slower peer for this two-item sample.
+        assert abs(rate - 40.0) < 1e-6
 
     def test_overall_fallback_when_no_same_material(self):
         ph = [_ph_row("C1", 30.0), _ph_row("U1", 50.0)]
@@ -141,7 +141,7 @@ class TestRateFallback:
         rate, est, tier = _get_rate("AG1", "AGRI", ph_dict, mat_avg, overall)
         assert est is True
         assert tier == "overall_avg"
-        assert abs(rate - 40.0) < 1e-6   # (30+50)/2
+        assert abs(rate - 30.0) < 1e-6
 
     def test_same_material_avg_preferred_over_overall(self):
         ph = [_ph_row("C1", 40.0), _ph_row("C2", 60.0), _ph_row("U1", 120.0)]
@@ -150,11 +150,33 @@ class TestRateFallback:
               _route_row("U1", "M/C-2", "UPVC"),
               _route_row("C3", "M/C-1", "CPVC")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        # C3 has no ph entry but is CPVC; CPVC avg = (40+60)/2 = 50
+        # C3 has no ph entry; small-sample P25 takes the slower CPVC peer.
         rate, est, tier = _get_rate("C3", "CPVC", ph_dict, mat_avg, overall)
         assert est is True
         assert tier == "mat_avg"
-        assert abs(rate - 50.0) < 1e-6
+        assert abs(rate - 40.0) < 1e-6
+
+    def test_fast_outlier_cannot_overstate_missing_item_capacity(self):
+        ph = [
+            _ph_row("C1", 10.0), _ph_row("C2", 20.0),
+            _ph_row("C3", 30.0), _ph_row("CFAST", 1000.0),
+        ]
+        rt = [
+            _route_row("C1", "M/C-1", "CPVC"),
+            _route_row("C2", "M/C-1", "CPVC"),
+            _route_row("C3", "M/C-1", "CPVC"),
+            _route_row("CFAST", "M/C-1", "CPVC"),
+            _route_row("MISSING", "M/C-1", "CPVC"),
+        ]
+        ph_dict, mat_rates, overall = self._lookups(ph, rt)
+        rate, estimated, tier = _get_rate(
+            "MISSING", "CPVC", ph_dict, mat_rates, overall,
+        )
+        assert estimated is True
+        assert tier == "mat_avg"
+        assert rate == 10.0
+        assert 100.0 / rate == 10.0
+        assert 100.0 / rate > 100.0 / ((10.0 + 20.0 + 30.0 + 1000.0) / 4)
 
     def test_direct_rate_comparison_uses_peer_only_material_average(self):
         ph = {"A": 40.0, "B": 60.0, "U": 120.0}
@@ -172,10 +194,24 @@ class TestRateFallback:
 
     def test_direct_rate_comparison_honours_configured_material_rate(self):
         rate, tier = _pipe_fallback_reference(
-            "A", "CPVC", {"A": 40.0}, [_route_row("A", "M/C-1", "CPVC")],
-            {"CPVC": 75.0}, {"CPVC"},
+            "A", "CPVC", {"A": 40.0, "B": 60.0}, [
+                _route_row("A", "M/C-1", "CPVC"),
+                _route_row("B", "M/C-1", "CPVC"),
+            ],
+            {"CPVC": 30.0}, {"CPVC"},
         )
-        assert rate == 75.0
+        assert rate == 30.0
+        assert tier == "mat_avg"
+
+    def test_configured_material_rate_cannot_exceed_peer_only_ceiling(self):
+        rate, tier = _pipe_fallback_reference(
+            "A", "CPVC", {"A": 1000.0, "B": 60.0}, [
+                _route_row("A", "M/C-1", "CPVC"),
+                _route_row("B", "M/C-1", "CPVC"),
+            ],
+            {"CPVC": 500.0}, {"CPVC"},
+        )
+        assert rate == 60.0
         assert tier == "mat_avg"
 
     def test_swr_items_always_estimated_with_only_cpvc_upvc_rates(self):
@@ -357,6 +393,36 @@ class TestCoverageGaps:
         loaded = {a.machine for it in result.items for a in it.assignments}
         if "M/C-2" not in loaded:
             assert "M/C-2" in result.coverage_gaps.idle_machines
+
+    def test_engine_uses_conservative_rate_and_reports_capacity_impact(self):
+        demand = _demand([("MISSING", 100)], material="CPVC")
+        bom = [_bom_row("MISSING", 1.0)]
+        ph = [
+            _ph_row("C1", 10.0), _ph_row("C2", 20.0),
+            _ph_row("C3", 30.0), _ph_row("CFAST", 1000.0),
+        ]
+        rt = [
+            _route_row("C1", "M/C-1"), _route_row("C2", "M/C-1"),
+            _route_row("C3", "M/C-1"), _route_row("CFAST", "M/C-1"),
+            _route_row("MISSING", "M/C-1"),
+        ]
+        params = types.SimpleNamespace(
+            waste_pct=0.0, pulverizer_pct=25.0,
+            cpvc_mat_rate=500.0, upvc_mat_rate=0.0,
+            swr_mat_rate=0.0, agri_mat_rate=0.0,
+        )
+        with patch("mp_model.get_bom_weight_rows", return_value=bom), \
+             patch("mp_model.get_per_hour", return_value=ph), \
+             patch("mp_model.get_routing", return_value=rt), \
+             patch("mp_model.get_machines", return_value=[_machine_row("M/C-1")]), \
+             patch("mp_model.get_params", return_value=params):
+            result = run_engine(demand, "2026-07")
+        item = result.items[0]
+        assert item.rate_kg_per_hr == 10.0
+        assert item.machine_hrs == 10.051
+        assert item.pre_policy_fallback_rate_value == 500.0
+        assert item.fallback_rate_value == 10.0
+        assert item.fallback_rate_policy == "lower_quartile_nearest_rank"
 
 
 # ── Demand parsing ────────────────────────────────────────────────────────────
@@ -837,12 +903,15 @@ class TestComputeEffectiveCosts:
         d = _make_minimal_engine_result().to_dict()
         for field in (
             "direct_rate_value", "fallback_rate_value", "fallback_rate_tier",
+            "pre_policy_fallback_rate_value", "fallback_rate_policy",
         ):
             d["items"][0].pop(field, None)
         restored = eng.EngineResult.from_dict(d)
         assert restored.items[0].direct_rate_value is None
         assert restored.items[0].fallback_rate_value is None
         assert restored.items[0].fallback_rate_tier == ""
+        assert restored.items[0].pre_policy_fallback_rate_value is None
+        assert restored.items[0].fallback_rate_policy == ""
 
 
 def _make_minimal_engine_result() -> eng.EngineResult:

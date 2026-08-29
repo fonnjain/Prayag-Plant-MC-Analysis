@@ -626,14 +626,18 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
             pcs_per_hr=100.0, rate_fallback_tier="fitting_std",
             direct_rate_value=100.0, fallback_rate_value=80.0,
             fallback_rate_tier="mat_avg",
+            pre_policy_fallback_rate_value=120.0,
+            fallback_rate_policy="lower_quartile_nearest_rank",
         ),
         SimpleNamespace(
             item_code="FITFALLBACK", raw_code="FIT-FALLBACK", has_weight=True,
-            has_machine=True, machine_hrs=2.0, capable_machines=["MOD-1"],
+            has_machine=True, machine_hrs=2.5, capable_machines=["MOD-1"],
             rate_estimated=True, route_estimated=True, cycle_time_sec=None,
             gross_qty_pcs=200.0, pcs_per_hr=80.0,
             rate_fallback_tier="mat_avg", direct_rate_value=None,
             fallback_rate_value=80.0, fallback_rate_tier="mat_avg",
+            pre_policy_fallback_rate_value=100.0,
+            fallback_rate_policy="lower_quartile_nearest_rank",
         ),
         SimpleNamespace(
             item_code="FITNOBOM", raw_code="FIT-NO-BOM", has_weight=False,
@@ -681,6 +685,12 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
         "direct_available": True,
         "fallback_method": "material_average",
         "fallback_value": 80.0,
+        "fallback_policy": "lower_quartile_nearest_rank",
+        "pre_policy_fallback_value": 120.0,
+        "pre_policy_machine_hrs": 0.8333,
+        "conservative_machine_hrs": 1.25,
+        "capacity_delta_hrs": 0.4167,
+        "capacity_delta_pct": 50.0,
         "divergence_pct": -20.0,
         "comparison": "available",
     }
@@ -691,6 +701,15 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
     assert coverage["FITFALLBACK"]["rate_method"] == "material_average"
     assert coverage["FITFALLBACK"]["rate_provenance"]["direct_value"] is None
     assert coverage["FITFALLBACK"]["rate_provenance"]["fallback_value"] == 80.0
+    assert (
+        coverage["FITFALLBACK"]["rate_provenance"]["pre_policy_fallback_value"]
+        == 100.0
+    )
+    assert (
+        coverage["FITFALLBACK"]["rate_provenance"]["conservative_machine_hrs"]
+        == 2.5
+    )
+    assert coverage["FITFALLBACK"]["rate_provenance"]["capacity_delta_hrs"] == 0.5
     assert coverage["FITFALLBACK"]["rate_provenance"]["divergence_pct"] is None
     assert (
         coverage["FITFALLBACK"]["rate_provenance"]["comparison"]
@@ -715,6 +734,24 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
         "demand_weighted_signed_divergence_pct": -20.0,
         "demand_weighted_abs_divergence_pct": 20.0,
         "max_abs_divergence_pct": 20.0,
+        "optimistic_outlier_count": 0,
+        "optimistic_outliers": [],
+    }
+    assert summary["fallback_policy"] == {
+        "name": "lower_quartile_nearest_rank",
+        "rule": (
+            "Estimated material and overall rates use nearest-rank P25; "
+            "configured material rates may lower but not raise that rate; "
+            "direct item standards and same-item cycle rates are unchanged."
+        ),
+        "capacity_impact": {
+            "comparison_item_count": 1,
+            "comparison_demand_pcs": 200.0,
+            "pre_policy_machine_hrs": 2.0,
+            "conservative_machine_hrs": 2.5,
+            "additional_machine_hrs": 0.5,
+            "additional_machine_hrs_pct": 25.0,
+        },
     }
     assert [row["item_code"] for row in body["data_limited"]] == ["FITNOBOM"]
     recon = body["demand_reconciliation"]
@@ -784,6 +821,75 @@ def test_rate_provenance_distinguishes_every_pipe_and_fitting_fallback_tier():
         assert detail["divergence_pct"] == divergence
         assert detail["comparison"] == comparison
         assert detail["unit"] == ("kg/hr" if kind == "pipe" else "pcs/hr")
+
+
+def test_rate_confidence_summary_identifies_optimistic_item_outliers():
+    rows = [{
+        "item_code": "SLOW-ITEM",
+        "material": "CPVC",
+        "requested_pcs": 500.0,
+        "rate_provenance": {
+            "comparison": "available",
+            "fallback_method": "material_average",
+            "fallback_value": 150.0,
+            "direct_value": 50.0,
+            "divergence_pct": 200.0,
+        },
+    }]
+    summary = apimod._rate_confidence_summary(rows)["material_average"]
+    assert summary["optimistic_outlier_count"] == 1
+    assert summary["optimistic_outliers"] == [{
+        "item_code": "SLOW-ITEM",
+        "material": "CPVC",
+        "requested_pcs": 500.0,
+        "direct_value": 50.0,
+        "fallback_value": 150.0,
+        "divergence_pct": 200.0,
+    }]
+
+
+def test_direct_only_demand_has_zero_fallback_policy_capacity_impact():
+    rows = [{
+        "item_code": "DIRECT",
+        "material": "CPVC",
+        "requested_pcs": 100.0,
+        "can_schedule": True,
+        "rate_method": "direct_item",
+        "rate_provenance": {
+            "pre_policy_machine_hrs": 1.0,
+            "conservative_machine_hrs": 2.0,
+        },
+    }]
+    assert apimod._fallback_policy_capacity_summary(rows) == {
+        "comparison_item_count": 0,
+        "comparison_demand_pcs": 0,
+        "pre_policy_machine_hrs": 0,
+        "conservative_machine_hrs": 0,
+        "additional_machine_hrs": 0,
+        "additional_machine_hrs_pct": 0.0,
+    }
+
+
+def test_unroutable_fallback_demand_does_not_inflate_capacity_impact():
+    rows = [{
+        "item_code": "NO-ROUTE",
+        "material": "CPVC",
+        "requested_pcs": 500.0,
+        "can_schedule": False,
+        "rate_method": "material_average",
+        "rate_provenance": {
+            "pre_policy_machine_hrs": 2.0,
+            "conservative_machine_hrs": 10.0,
+        },
+    }]
+    assert apimod._fallback_policy_capacity_summary(rows) == {
+        "comparison_item_count": 0,
+        "comparison_demand_pcs": 0,
+        "pre_policy_machine_hrs": 0,
+        "conservative_machine_hrs": 0,
+        "additional_machine_hrs": 0,
+        "additional_machine_hrs_pct": 0.0,
+    }
 
 
 def test_schedule_surfaces_ppr_family_codes_when_no_bom_exists(monkeypatch):

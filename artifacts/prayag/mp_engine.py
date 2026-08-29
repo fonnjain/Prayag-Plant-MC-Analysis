@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import math
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -46,6 +47,13 @@ REPORT_11_GROUPS: Dict[str, List[str]] = {
     "C": ["M/C-5", "M/C-6"],
     "D": ["M/C-7", "M/C-8", "M/C-9"],
 }
+
+# Estimated material/overall rates use the nearest-rank lower quartile (P25).
+# This deliberately chooses the slow side of observed peer standards so one
+# unusually fast item cannot make a missing-standard item look too productive.
+# For fewer than four peers nearest-rank P25 is the minimum observed rate.
+FALLBACK_RATE_POLICY = "lower_quartile_nearest_rank"
+_LEGACY_FALLBACK_RATE_POLICY = "arithmetic_mean"
 
 
 # ── Dataclasses ──────────────────────────────────────────────────────────────
@@ -91,10 +99,12 @@ class ItemResult:
     # "item" = seeded per-item rate; "mat_avg" = per-material average;
     # "overall_avg" = overall pipe average (last-resort fallback)
     rate_fallback_tier: str = "item"
-    # Comparable rate inputs retained for provenance; neither changes scheduling.
+    # Comparable rate inputs retained for provenance.
     direct_rate_value: Optional[float] = None
     fallback_rate_value: Optional[float] = None
     fallback_rate_tier: str = ""
+    pre_policy_fallback_rate_value: Optional[float] = None
+    fallback_rate_policy: str = ""
     # Rejection + waste factors (both always applied when data is available)
     gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
     rej_rate: float = 0.0         # rejection % applied (e.g. 12.0 for 12%)
@@ -422,12 +432,14 @@ def parse_demand_excel(file_bytes: bytes) -> List[DemandItem]:
 def _build_rate_lookups(
     per_hour_rows: List[dict],
     routing_rows: List[dict],
+    *,
+    policy: str = FALLBACK_RATE_POLICY,
 ) -> Tuple[Dict[str, float], Dict[str, float], float]:
     """
     Returns:
         ph_dict      — {item_code: kg_per_hr}   (only basis='kg_per_hr')
-        mat_avg      — {material: avg kg_per_hr}  (for fallback)
-        overall_avg  — avg across all kg_per_hr pipe items (final fallback)
+        mat_avg      — {material: conservative kg_per_hr}  (for fallback)
+        overall_avg  — conservative rate across all pipe items (final fallback)
     """
     # material of each pipe item (from routing)
     routing_material: Dict[str, str] = {}
@@ -442,17 +454,41 @@ def _build_rate_lookups(
             continue
         ic  = r["item_code"]
         val = float(r["value"])
+        if not math.isfinite(val) or val <= 0:
+            continue
         ph_dict[ic] = val
         mat = routing_material.get(ic, "")
         if mat:
             ph_by_mat[mat].append(val)
 
     mat_avg: Dict[str, float] = {
-        m: sum(vs) / len(vs) for m, vs in ph_by_mat.items() if vs
+        m: _fallback_rate(vs, policy=policy)
+        for m, vs in ph_by_mat.items() if vs
     }
     all_vals = list(ph_dict.values())
-    overall_avg = sum(all_vals) / len(all_vals) if all_vals else 1.0
+    overall_avg = _fallback_rate(all_vals, policy=policy, default=1.0)
     return ph_dict, mat_avg, overall_avg
+
+
+def _fallback_rate(
+    values: List[float],
+    *,
+    policy: str = FALLBACK_RATE_POLICY,
+    default: float = 1.0,
+) -> float:
+    """Return a positive peer-rate statistic for an estimated standard."""
+    valid = sorted(
+        float(value) for value in values
+        if math.isfinite(float(value)) and float(value) > 0
+    )
+    if not valid:
+        return default
+    if policy == _LEGACY_FALLBACK_RATE_POLICY:
+        return sum(valid) / len(valid)
+    if policy != FALLBACK_RATE_POLICY:
+        raise ValueError(f"Unknown fallback-rate policy: {policy}")
+    nearest_rank = max(1, math.ceil(0.25 * len(valid)))
+    return valid[nearest_rank - 1]
 
 
 def _get_rate(
@@ -483,10 +519,10 @@ def _pipe_fallback_reference(
     routing_rows: List[dict],
     material_rates: Dict[str, float],
     overridden_materials: Set[str],
+    *,
+    policy: str = FALLBACK_RATE_POLICY,
 ) -> Tuple[float, str]:
     """Return the rate this direct item would get if its own rate were absent."""
-    if material in overridden_materials:
-        return material_rates[material], "mat_avg"
     routing_material = {
         r["item_code"]: r.get("material", "")
         for r in routing_rows if str(r.get("machine", "")).startswith("M/C-")
@@ -495,11 +531,19 @@ def _pipe_fallback_reference(
         rate for code, rate in ph_dict.items()
         if code != item_code and routing_material.get(code) == material
     ]
+    if material in overridden_materials:
+        if policy == _LEGACY_FALLBACK_RATE_POLICY:
+            return material_rates[material], "mat_avg"
+        peer_pool = material_peers or [
+            rate for code, rate in ph_dict.items() if code != item_code
+        ]
+        peer_ceiling = _fallback_rate(peer_pool, policy=policy)
+        return min(material_rates[material], peer_ceiling), "mat_avg"
     if material_peers:
-        return sum(material_peers) / len(material_peers), "mat_avg"
+        return _fallback_rate(material_peers, policy=policy), "mat_avg"
     all_peers = [rate for code, rate in ph_dict.items() if code != item_code]
     return (
-        (sum(all_peers) / len(all_peers), "overall_avg")
+        (_fallback_rate(all_peers, policy=policy), "overall_avg")
         if all_peers else (1.0, "overall_avg")
     )
 
@@ -707,8 +751,13 @@ def run_engine(
                 pipe_caps[ic].append(mc)
             routed_machines.add(mc)
 
-    # Rate lookups — computed from seeded items, then overridden by stored params
+    # Rate lookups — computed from seeded items.  A configured material rate may
+    # lower the conservative peer rate, but may not raise it and overstate
+    # capacity.  The uncapped configured value is retained for impact reporting.
     ph_dict, mat_avg, overall_avg = _build_rate_lookups(ph_rows, routing)
+    _, legacy_mat_avg, legacy_overall_avg = _build_rate_lookups(
+        ph_rows, routing, policy=_LEGACY_FALLBACK_RATE_POLICY,
+    )
     overridden_materials: Set[str] = set()
     if params_row:
         for _mat, _attr in [
@@ -717,7 +766,9 @@ def run_engine(
         ]:
             _v = float(getattr(params_row, _attr, 0.0) or 0.0)
             if _v > 0.0:
-                mat_avg[_mat] = _v
+                conservative_ceiling = mat_avg.get(_mat, overall_avg)
+                mat_avg[_mat] = min(_v, conservative_ceiling)
+                legacy_mat_avg[_mat] = _v
                 overridden_materials.add(_mat)
 
     # ── Per-item chain math ──────────────────────────────────────────────────
@@ -781,9 +832,17 @@ def run_engine(
             fallback_rate, fallback_tier = _pipe_fallback_reference(
                 ic, mat, ph_dict, routing, mat_avg, overridden_materials,
             )
+            pre_policy_fallback_rate, _ = _pipe_fallback_reference(
+                ic, mat, ph_dict, routing, legacy_mat_avg, overridden_materials,
+                policy=_LEGACY_FALLBACK_RATE_POLICY,
+            )
         else:
             fallback_rate = rate
             fallback_tier = tier
+            pre_policy_fallback_rate = (
+                legacy_mat_avg.get(mat, legacy_overall_avg)
+                if tier == "mat_avg" else legacy_overall_avg
+            )
 
         caps = pipe_caps.get(ic, [])
         has_mc = bool(caps)
@@ -803,6 +862,8 @@ def run_engine(
             direct_rate_value=round(direct_rate, 4) if direct_rate is not None else None,
             fallback_rate_value=round(fallback_rate, 4),
             fallback_rate_tier=fallback_tier,
+            pre_policy_fallback_rate_value=round(pre_policy_fallback_rate, 4),
+            fallback_rate_policy=FALLBACK_RATE_POLICY,
             machine_hrs=round(machine_hrs, 4),
             capable_machines=sorted(caps),
             assignments=[],
@@ -962,10 +1023,12 @@ class FittingItemResult:
     # "fitting_std" = direct item standard; "cycle" = per-hour cycle;
     # "mat_avg" = same-material average; "overall_avg" = last-resort average.
     rate_fallback_tier: str = "fitting_std"
-    # Comparable rate inputs retained for provenance; neither changes scheduling.
+    # Comparable rate inputs retained for provenance.
     direct_rate_value: Optional[float] = None
     fallback_rate_value: Optional[float] = None
     fallback_rate_tier: str = ""
+    pre_policy_fallback_rate_value: Optional[float] = None
+    fallback_rate_policy: str = ""
     # Rejection + waste factors (both always applied when data is available)
     gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
     rej_rate: float = 0.0         # rejection % applied (e.g. 0.9 for 0.9%)
@@ -1111,13 +1174,15 @@ def _build_fitting_rate_lookups(
     fitting_std_rows: List[dict],
     per_hour_rows: List[dict],
     demand: List[FittingDemandItem],
+    *,
+    policy: str = FALLBACK_RATE_POLICY,
 ) -> Tuple[
     Dict[str, List[dict]],   # fstd_by_item: {item_code: [{machine, cavity, cycle, pcs_per_hr}]}
     Dict[str, float],         # cycle_ph: {item_code: cycle_time_sec}
     Dict[str, float],         # mat_avg_pcs: {material: avg pcs/hr}
     float,                    # overall_avg_pcs
 ]:
-    """Resolve fitting pcs/hr rates from fitting_std → per_hour → material avg → overall avg."""
+    """Resolve fitting rates from direct standards to conservative peer fallbacks."""
     item_material = {d.item_code: d.material for d in demand}
 
     fstd_by_item: Dict[str, List[dict]] = defaultdict(list)
@@ -1126,7 +1191,14 @@ def _build_fitting_rate_lookups(
     for r in fitting_std_rows:
         cavity = float(r["cavity"]) if r["cavity"] is not None else None
         cycle  = float(r["cycle_time_sec"]) if r["cycle_time_sec"] is not None else None
-        pps    = (cavity * 3600.0 / cycle) if (cavity and cycle and cycle > 0) else None
+        pps = (
+            cavity * 3600.0 / cycle
+            if (
+                cavity is not None and cavity > 0
+                and cycle is not None and cycle > 0
+            )
+            else None
+        )
         entry  = {"machine": r["machine"], "cavity": cavity,
                   "cycle_time_sec": cycle, "pcs_per_hr": pps}
         ic = r["item_code"]
@@ -1154,10 +1226,15 @@ def _build_fitting_rate_lookups(
                     if mat:
                         mat_pcs[mat].append(pps)
 
-    mat_avg_pcs = {m: sum(vs) / len(vs) for m, vs in mat_pcs.items() if vs}
+    mat_avg_pcs = {
+        m: _fallback_rate(vs, policy=policy, default=60.0)
+        for m, vs in mat_pcs.items() if vs
+    }
     all_pps = [e["pcs_per_hr"] for entries in fstd_by_item.values()
                for e in entries if e["pcs_per_hr"] is not None]
-    overall_avg = sum(all_pps) / len(all_pps) if all_pps else 60.0
+    overall_avg = _fallback_rate(
+        all_pps, policy=policy, default=60.0,
+    )
     return dict(fstd_by_item), cycle_ph, mat_avg_pcs, overall_avg
 
 
@@ -1203,6 +1280,8 @@ def _fitting_fallback_reference(
     fstd_by_item: Dict[str, List[dict]],
     cycle_ph: Dict[str, float],
     demand: List[FittingDemandItem],
+    *,
+    policy: str = FALLBACK_RATE_POLICY,
 ) -> Tuple[float, str]:
     """Return the fallback a direct fitting item would get without its standard."""
     cycle = cycle_ph.get(item_code)
@@ -1215,7 +1294,7 @@ def _fitting_fallback_reference(
             for entry in entries if entry["pcs_per_hr"] is not None
         ]
         return (
-            (sum(all_peers) / len(all_peers), "overall_avg")
+            (_fallback_rate(all_peers, policy=policy, default=60.0), "overall_avg")
             if all_peers else (60.0, "overall_avg")
         )
 
@@ -1236,7 +1315,9 @@ def _fitting_fallback_reference(
             if peer_cycle is not None and peer_cycle > 0:
                 material_peers.append(3600.0 / peer_cycle)
     if material_peers:
-        return sum(material_peers) / len(material_peers), "mat_avg"
+        return _fallback_rate(
+            material_peers, policy=policy, default=60.0,
+        ), "mat_avg"
 
     all_peers = [
         float(entry["pcs_per_hr"])
@@ -1244,7 +1325,7 @@ def _fitting_fallback_reference(
         for entry in entries if entry["pcs_per_hr"] is not None
     ]
     return (
-        (sum(all_peers) / len(all_peers), "overall_avg")
+        (_fallback_rate(all_peers, policy=policy, default=60.0), "overall_avg")
         if all_peers else (60.0, "overall_avg")
     )
 
@@ -1475,6 +1556,9 @@ def run_fitting_engine(
     fstd_by_item, cycle_ph, mat_avg_pcs, overall_avg = _build_fitting_rate_lookups(
         fstd_rows, ph_rows, demand
     )
+    _, _, legacy_mat_avg_pcs, legacy_overall_avg = _build_fitting_rate_lookups(
+        fstd_rows, ph_rows, demand, policy=_LEGACY_FALLBACK_RATE_POLICY,
+    )
 
     # Route lookups + material-level fallback map
     item_routes, mat_machines = _build_fitting_routes(fstd_rows, routing_rows, demand)
@@ -1539,9 +1623,21 @@ def run_fitting_engine(
             fallback_rate, fallback_tier = _fitting_fallback_reference(
                 ic, mat, fstd_by_item, cycle_ph, demand,
             )
+            pre_policy_fallback_rate, _ = _fitting_fallback_reference(
+                ic, mat, fstd_by_item, cycle_ph, demand,
+                policy=_LEGACY_FALLBACK_RATE_POLICY,
+            )
         else:
             fallback_rate = pps
             fallback_tier = rate_tier
+            if rate_tier == "cycle":
+                pre_policy_fallback_rate = pps
+            elif rate_tier == "mat_avg":
+                pre_policy_fallback_rate = legacy_mat_avg_pcs.get(
+                    mat, legacy_overall_avg,
+                )
+            else:
+                pre_policy_fallback_rate = legacy_overall_avg
         # Machine hours based on gross pieces (machine must produce g_qty including rejects)
         machine_hrs = g_qty / pps if pps > 0 else 0.0
 
@@ -1584,6 +1680,8 @@ def run_fitting_engine(
             direct_rate_value=round(direct_rate, 4) if direct_rate is not None else None,
             fallback_rate_value=round(fallback_rate, 4),
             fallback_rate_tier=fallback_tier,
+            pre_policy_fallback_rate_value=round(pre_policy_fallback_rate, 4),
+            fallback_rate_policy=FALLBACK_RATE_POLICY,
             gross_qty_pcs=round(g_qty, 4),
             rej_rate=round(rej_rate_frac * 100, 4),
             rej_basis=rej_basis,

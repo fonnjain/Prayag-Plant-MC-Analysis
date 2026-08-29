@@ -191,8 +191,30 @@ class TestCavityCycleRate:
         rate, tier = eng._fitting_fallback_reference(
             "A", "CPVC", fstd_by_item, cycle_ph, demand
         )
-        assert rate == 160.0
+        assert rate == 120.0
         assert tier == "overall_avg"
+
+    def test_fast_outlier_cannot_overstate_missing_item_capacity(self):
+        demand = _demand(
+            ("SLOW", "CPVC", 100), ("MID1", "CPVC", 100),
+            ("MID2", "CPVC", 100), ("FAST", "CPVC", 100),
+            ("MISSING", "CPVC", 600),
+        )
+        fstd = [
+            _fstd("SLOW", "A01(NU-200)", 1.0, 60.0),   # 60 pcs/hr
+            _fstd("MID1", "A02(NU-200)", 2.0, 90.0),   # 80 pcs/hr
+            _fstd("MID2", "A03(NU-200)", 2.0, 72.0),   # 100 pcs/hr
+            _fstd("FAST", "A04(NU-200)", 20.0, 60.0),  # 1200 pcs/hr
+        ]
+        lookups = eng._build_fitting_rate_lookups(fstd, [], demand)
+        pps, estimated, _, _, tier = eng._get_fitting_rate(
+            "MISSING", "CPVC", *lookups,
+        )
+        assert estimated is True
+        assert tier == "mat_avg"
+        assert pps == 60.0
+        assert 600.0 / pps == 10.0
+        assert 600.0 / pps > 600.0 / ((60.0 + 80.0 + 100.0 + 1200.0) / 4)
 
     def test_machine_hrs_formula(self):
         """machine_hrs = qty / pcs_per_hr."""
@@ -431,6 +453,7 @@ class TestSerialisationRoundTrip:
         for field in (
             "rate_fallback_tier", "direct_rate_value",
             "fallback_rate_value", "fallback_rate_tier",
+            "pre_policy_fallback_rate_value", "fallback_rate_policy",
         ):
             d["items"][0].pop(field, None)
         restored = eng.FittingEngineResult.from_dict(d)
@@ -439,6 +462,8 @@ class TestSerialisationRoundTrip:
         assert item.direct_rate_value is None
         assert item.fallback_rate_value is None
         assert item.fallback_rate_tier == ""
+        assert item.pre_policy_fallback_rate_value is None
+        assert item.fallback_rate_policy == ""
 
     def test_to_dict_is_json_serialisable(self):
         import json
@@ -619,3 +644,53 @@ class TestRateEstimatedFlag:
             "NEW", "SWR", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert est is True
+
+
+def test_fitting_engine_applies_conservative_fallback_to_machine_hours(monkeypatch):
+    demand = _demand(
+        ("SLOW", "CPVC", 100), ("MID1", "CPVC", 100),
+        ("MID2", "CPVC", 100), ("FAST", "CPVC", 100),
+        ("MISSING", "CPVC", 600),
+    )
+    fstd = [
+        _fstd("SLOW", "A01(NU-200)", 1.0, 60.0),
+        _fstd("MID1", "A02(NU-200)", 2.0, 90.0),
+        _fstd("MID2", "A03(NU-200)", 2.0, 72.0),
+        _fstd("FAST", "A04(NU-200)", 20.0, 60.0),
+    ]
+    monkeypatch.setattr(
+        eng._mp, "get_bom_weight_rows",
+        lambda *_: [
+            {"item_code": item.item_code, "weight_per_pc_kg": 0.1}
+            for item in demand
+        ],
+    )
+    monkeypatch.setattr(eng._mp, "get_per_hour", lambda *_: [])
+    monkeypatch.setattr(eng._mp, "get_routing", lambda *_: [])
+    monkeypatch.setattr(eng._mp, "get_fitting_std", lambda *_: fstd)
+    monkeypatch.setattr(
+        eng._mp, "get_machines",
+        lambda *_args, **_kwargs: [
+            {
+                "machine": machine, "capacity_hrs_month": 500.0,
+                "operators_ot": 1, "support_w": 1,
+            }
+            for machine in (
+                "A01(NU-200)", "A02(NU-200)",
+                "A03(NU-200)", "A04(NU-200)",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        eng._mp, "get_params",
+        lambda *_: type("Params", (), {"waste_pct": 0.0, "pulverizer_pct": 25.0})(),
+    )
+    monkeypatch.setattr(eng._mp, "get_compound_recipes", lambda *_: [])
+
+    result = eng.run_fitting_engine(demand, "2026-07")
+    item = next(row for row in result.items if row.item_code == "MISSING")
+    assert item.pcs_per_hr == 60.0
+    assert item.machine_hrs == 10.0
+    assert item.pre_policy_fallback_rate_value == 360.0
+    assert item.fallback_rate_value == 60.0
+    assert item.fallback_rate_policy == "lower_quartile_nearest_rank"
