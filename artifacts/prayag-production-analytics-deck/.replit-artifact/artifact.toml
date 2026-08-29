@@ -1,0 +1,28 @@
+kind = "slides"
+previewPath = "/prayag-production-analytics-deck/"
+title = "Prayag Production Analytics"
+description = "A 17-slide internal product deck explaining Prayag Production Analytics, its source-first operational metrics, safe Plumbing scheduling previews, fallback methods, and August 2026 rate-confidence findings."
+version = "1.0.0"
+id = "artifacts/prayag-production-analytics-deck"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/prayag-production-analytics-deck/" ]
+localPort = 20529
+
+[services.development]
+run = "pnpm --filter @workspace/prayag-production-analytics-deck run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/prayag-production-analytics-deck", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/prayag-production-analytics-deck/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20529"
+BASE_PATH = "/prayag-production-analytics-deck/"

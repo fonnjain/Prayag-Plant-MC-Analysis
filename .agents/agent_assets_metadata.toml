@@ -115,3 +115,10 @@ uri = "file://prayag-project.zip"
 type = "unspecified"
 title = "Prayag Project — Complete Source"
 description = "Full workspace snapshot (excluding .git, node_modules, __pycache__, venv). 241 MB."
+
+[[outputs]]
+id = "rH82OSV0TMGCUVMDwqJsE"
+uri = "file://.local/outputs/Prayag-Production-Analytics.pptx"
+type = "slides"
+title = "Prayag Production Analytics (PPTX)"
+description = "Editable 17-slide PowerPoint deck covering the app, its data-trust model, Plumbing scheduling preview, and August fallback-confidence findings."
