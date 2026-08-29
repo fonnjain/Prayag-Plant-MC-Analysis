@@ -122,3 +122,10 @@ uri = "file://.local/outputs/Prayag-Production-Analytics.pptx"
 type = "slides"
 title = "Prayag Production Analytics (PPTX)"
 description = "Editable 17-slide PowerPoint deck covering the app, its data-trust model, Plumbing scheduling preview, and August fallback-confidence findings."
+
+[[outputs]]
+id = "hxVjWcXbYD4i8PSkUrXI_"
+uri = "file://.local/outputs/Prayag-App-Functional-Walkthrough.pptx"
+type = "slides"
+title = "Prayag App Functional Walkthrough (PPTX)"
+description = "Editable 17-slide PowerPoint walkthrough of the Prayag app dashboards, reports, planning tools, costing, operations, and audit controls."

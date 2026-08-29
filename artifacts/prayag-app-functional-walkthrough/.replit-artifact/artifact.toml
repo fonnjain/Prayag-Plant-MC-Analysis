@@ -1,0 +1,28 @@
+kind = "slides"
+previewPath = "/prayag-app-functional-walkthrough/"
+title = "Prayag App Functional Walkthrough"
+description = "A 17-slide functional walkthrough of the Prayag Production Analytics app, covering dashboards, reports, machine planning, costing, operations, data audit, and the operator workflow."
+version = "1.0.0"
+id = "artifacts/prayag-app-functional-walkthrough"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/prayag-app-functional-walkthrough/" ]
+localPort = 22839
+
+[services.development]
+run = "pnpm --filter @workspace/prayag-app-functional-walkthrough run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/prayag-app-functional-walkthrough", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/prayag-app-functional-walkthrough/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22839"
+BASE_PATH = "/prayag-app-functional-walkthrough/"
