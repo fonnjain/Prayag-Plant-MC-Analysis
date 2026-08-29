@@ -279,7 +279,8 @@ Three additional blocks make modelling coverage explicit:
   order. `status` is `schedulable`, `partial`, or `not_modellable`;
   `can_schedule` is the independent machine-allocation decision.
 - `coverage.summary` aggregates item count, demand pieces, and percentage by
-  status overall, by material, and by canonical category.
+  status overall, by material, and by canonical category. It also reports
+  demand-weighted reach under `by_route_method` and `by_rate_method`.
 - `data_limited` contains only `can_schedule=false` lines. Mixed requests still
   schedule valid lines; if every line is data-limited the endpoint returns
   `422 no_schedulable_demand` with the same coverage blocks and no schedule.
@@ -295,13 +296,49 @@ Per-item classifications:
 | `partial` | BOM is present, but route/rate uses a documented fallback or has no usable fallback; check `can_schedule` |
 | `not_modellable` | No BOM weight exists |
 
-`route` identifies `direct`, `material_fallback`, `missing`, `inactive`, or
-`not_evaluated` when a missing BOM prevents later modelling steps.
-`rate` identifies `direct`, `cycle_fallback`, `material_fallback`,
-`overall_fallback`, `estimated_average`, `estimated`, `missing`, or
-`not_evaluated`. Stable machine-readable reason codes include `missing_bom`,
-`missing_route`, `inactive_route`,
-`missing_rate`, `route_fallback`, and `rate_fallback`.
+`route` and `route_method` identify `direct`, `material_fallback`, `missing`,
+`inactive`, or `not_evaluated` when a missing BOM prevents later modelling
+steps. `route` is retained for compatibility.
+
+`rate` retains the original compatibility labels. `rate_method` is the
+normalized selected method:
+
+| `rate_method` | Meaning |
+|---------------|---------|
+| `direct_item` | Pipe item has its own kg/hr standard |
+| `direct_fitting_standard` | Fitting item has a direct cavity/cycle standard |
+| `cycle_time` | Fitting uses its item-level per-hour cycle fallback |
+| `material_average` | Same-material average is used |
+| `overall_average` | Last-resort average across available direct standards is used |
+| `missing` / `not_evaluated` | No usable rate, or BOM was missing first |
+
+`rate_provenance` contains the selected `method`, `value`, and `unit`, plus:
+
+- `direct_value`: the direct same-item rate when available;
+- `fallback_method` and `fallback_value`: the fallback candidate the engine
+  would use if the direct rate were absent (or the selected fallback itself);
+- `divergence_pct`: `(fallback_value - direct_value) / direct_value × 100`,
+  returned only when both comparable values exist;
+- `comparison`: `available`, `no_direct_same_item_rate`,
+  `no_fallback_reference_rate`, or `not_evaluated`.
+
+A positive divergence means the fallback is faster than the direct standard and
+would schedule fewer hours, so it is potentially optimistic. A negative value
+is conservative. A fallback-selected item normally has no same-item direct
+rate by definition, so its divergence is explicitly `null`; the API never
+invents a direct comparison.
+
+`coverage.summary.rate_confidence_by_fallback_method` cross-checks fallback
+candidates against direct standards for the request items where both exist.
+For material/overall averages, the compared item's direct rate is excluded from
+the candidate average, so the check does not grade an estimate partly against
+itself.
+It reports comparison item count and demand pieces, demand-weighted signed and
+absolute divergence, and maximum absolute divergence. This is a confidence
+diagnostic, not an input to scheduler math.
+
+Stable machine-readable reason codes include `missing_bom`, `missing_route`,
+`inactive_route`, `missing_rate`, `route_fallback`, and `rate_fallback`.
 
 `demand_reconciliation` deliberately keeps two different piece bases separate:
 
@@ -342,6 +379,19 @@ engine-derived material quantity.
       "bom": "direct",
       "route": "direct",
       "rate": "material_fallback",
+      "route_method": "direct",
+      "rate_method": "material_average",
+      "rate_provenance": {
+        "method": "material_average",
+        "value": 44.5,
+        "unit": "kg/hr",
+        "direct_value": null,
+        "direct_available": false,
+        "fallback_method": "material_average",
+        "fallback_value": 44.5,
+        "divergence_pct": null,
+        "comparison": "no_direct_same_item_rate"
+      },
       "reasons": ["rate_fallback"]
     }],
     "summary": {
@@ -351,7 +401,16 @@ engine-derived material quantity.
         "schedulable": {"item_count": 0, "demand_pcs": 0, "demand_pct": 0},
         "partial": {"item_count": 1, "demand_pcs": 12000, "demand_pct": 100},
         "not_modellable": {"item_count": 0, "demand_pcs": 0, "demand_pct": 0}
-      }
+      },
+      "by_route_method": {
+        "direct": {"item_count": 1, "demand_pcs": 12000, "demand_pct": 100}
+      },
+      "by_rate_method": {
+        "material_average": {
+          "item_count": 1, "demand_pcs": 12000, "demand_pct": 100
+        }
+      },
+      "rate_confidence_by_fallback_method": {}
     }
   },
   "data_limited": [],

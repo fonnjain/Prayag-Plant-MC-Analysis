@@ -91,6 +91,10 @@ class ItemResult:
     # "item" = seeded per-item rate; "mat_avg" = per-material average;
     # "overall_avg" = overall pipe average (last-resort fallback)
     rate_fallback_tier: str = "item"
+    # Comparable rate inputs retained for provenance; neither changes scheduling.
+    direct_rate_value: Optional[float] = None
+    fallback_rate_value: Optional[float] = None
+    fallback_rate_tier: str = ""
     # Rejection + waste factors (both always applied when data is available)
     gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
     rej_rate: float = 0.0         # rejection % applied (e.g. 12.0 for 12%)
@@ -472,6 +476,34 @@ def _get_rate(
     return overall_avg, True, "overall_avg"
 
 
+def _pipe_fallback_reference(
+    item_code: str,
+    material: str,
+    ph_dict: Dict[str, float],
+    routing_rows: List[dict],
+    material_rates: Dict[str, float],
+    overridden_materials: Set[str],
+) -> Tuple[float, str]:
+    """Return the rate this direct item would get if its own rate were absent."""
+    if material in overridden_materials:
+        return material_rates[material], "mat_avg"
+    routing_material = {
+        r["item_code"]: r.get("material", "")
+        for r in routing_rows if str(r.get("machine", "")).startswith("M/C-")
+    }
+    material_peers = [
+        rate for code, rate in ph_dict.items()
+        if code != item_code and routing_material.get(code) == material
+    ]
+    if material_peers:
+        return sum(material_peers) / len(material_peers), "mat_avg"
+    all_peers = [rate for code, rate in ph_dict.items() if code != item_code]
+    return (
+        (sum(all_peers) / len(all_peers), "overall_avg")
+        if all_peers else (1.0, "overall_avg")
+    )
+
+
 # ── Optimiser ────────────────────────────────────────────────────────────────
 
 def _compute_machine_loads(
@@ -677,6 +709,7 @@ def run_engine(
 
     # Rate lookups — computed from seeded items, then overridden by stored params
     ph_dict, mat_avg, overall_avg = _build_rate_lookups(ph_rows, routing)
+    overridden_materials: Set[str] = set()
     if params_row:
         for _mat, _attr in [
             ("CPVC", "cpvc_mat_rate"), ("UPVC", "upvc_mat_rate"),
@@ -685,6 +718,7 @@ def run_engine(
             _v = float(getattr(params_row, _attr, 0.0) or 0.0)
             if _v > 0.0:
                 mat_avg[_mat] = _v
+                overridden_materials.add(_mat)
 
     # ── Per-item chain math ──────────────────────────────────────────────────
     items: List[ItemResult] = []
@@ -742,6 +776,14 @@ def run_engine(
             estimated = True
             tier = "overall_avg"
         machine_hrs = material_kg / rate if rate > 0 else 0.0
+        direct_rate = ph_dict.get(ic)
+        if tier == "item":
+            fallback_rate, fallback_tier = _pipe_fallback_reference(
+                ic, mat, ph_dict, routing, mat_avg, overridden_materials,
+            )
+        else:
+            fallback_rate = rate
+            fallback_tier = tier
 
         caps = pipe_caps.get(ic, [])
         has_mc = bool(caps)
@@ -758,6 +800,9 @@ def run_engine(
             rate_kg_per_hr=round(rate, 4),
             rate_estimated=estimated,
             rate_fallback_tier=tier,
+            direct_rate_value=round(direct_rate, 4) if direct_rate is not None else None,
+            fallback_rate_value=round(fallback_rate, 4),
+            fallback_rate_tier=fallback_tier,
             machine_hrs=round(machine_hrs, 4),
             capable_machines=sorted(caps),
             assignments=[],
@@ -914,6 +959,13 @@ class FittingItemResult:
     assignments: List[FittingAssignedPortion]
     has_weight: bool
     has_machine: bool
+    # "fitting_std" = direct item standard; "cycle" = per-hour cycle;
+    # "mat_avg" = same-material average; "overall_avg" = last-resort average.
+    rate_fallback_tier: str = "fitting_std"
+    # Comparable rate inputs retained for provenance; neither changes scheduling.
+    direct_rate_value: Optional[float] = None
+    fallback_rate_value: Optional[float] = None
+    fallback_rate_tier: str = ""
     # Rejection + waste factors (both always applied when data is available)
     gross_qty_pcs: float = 0.0    # gross pieces after rejection grossing (≥ qty_pcs)
     rej_rate: float = 0.0         # rejection % applied (e.g. 0.9 for 0.9%)
@@ -1116,11 +1168,12 @@ def _get_fitting_rate(
     cycle_ph: Dict[str, float],
     mat_avg_pcs: Dict[str, float],
     overall_avg: float,
-) -> Tuple[float, bool, Optional[float], Optional[float]]:
-    """Return (pcs_per_hr, rate_estimated, cavity, cycle_time_sec).
+) -> Tuple[float, bool, Optional[float], Optional[float], str]:
+    """Return (pcs_per_hr, estimated, cavity, cycle_time_sec, source_tier).
 
     Precedence: fitting_std average → per_hour cycle → material avg → overall avg.
     cavity and cycle_time_sec are None when not available from fitting_std.
+    source_tier is fitting_std, cycle, mat_avg, or overall_avg.
     """
     if item_code in fstd_by_item:
         entries = fstd_by_item[item_code]
@@ -1130,17 +1183,70 @@ def _get_fitting_rate(
             # Take first entry's cavity/cycle as representative
             cavity   = valid[0]["cavity"]
             cycle    = valid[0]["cycle_time_sec"]
-            return avg_pps, False, cavity, cycle
+            return avg_pps, False, cavity, cycle, "fitting_std"
 
     if item_code in cycle_ph:
         cycle = cycle_ph[item_code]
-        pps   = 3600.0 / cycle if cycle > 0 else overall_avg
-        return pps, True, None, cycle
+        if cycle > 0:
+            return 3600.0 / cycle, True, None, cycle, "cycle"
+        return overall_avg, True, None, cycle, "overall_avg"
 
     if material in mat_avg_pcs:
-        return mat_avg_pcs[material], True, None, None
+        return mat_avg_pcs[material], True, None, None, "mat_avg"
 
-    return overall_avg, True, None, None
+    return overall_avg, True, None, None, "overall_avg"
+
+
+def _fitting_fallback_reference(
+    item_code: str,
+    material: str,
+    fstd_by_item: Dict[str, List[dict]],
+    cycle_ph: Dict[str, float],
+    demand: List[FittingDemandItem],
+) -> Tuple[float, str]:
+    """Return the fallback a direct fitting item would get without its standard."""
+    cycle = cycle_ph.get(item_code)
+    if cycle is not None:
+        if cycle > 0:
+            return 3600.0 / cycle, "cycle"
+        all_peers = [
+            float(entry["pcs_per_hr"])
+            for code, entries in fstd_by_item.items() if code != item_code
+            for entry in entries if entry["pcs_per_hr"] is not None
+        ]
+        return (
+            (sum(all_peers) / len(all_peers), "overall_avg")
+            if all_peers else (60.0, "overall_avg")
+        )
+
+    material_by_item = {item.item_code: item.material for item in demand}
+    material_peers: List[float] = []
+    for code, peer_material in material_by_item.items():
+        if code == item_code or peer_material != material:
+            continue
+        valid = [
+            float(entry["pcs_per_hr"])
+            for entry in fstd_by_item.get(code, [])
+            if entry["pcs_per_hr"] is not None
+        ]
+        if valid:
+            material_peers.extend(valid)
+        else:
+            peer_cycle = cycle_ph.get(code)
+            if peer_cycle is not None and peer_cycle > 0:
+                material_peers.append(3600.0 / peer_cycle)
+    if material_peers:
+        return sum(material_peers) / len(material_peers), "mat_avg"
+
+    all_peers = [
+        float(entry["pcs_per_hr"])
+        for code, entries in fstd_by_item.items() if code != item_code
+        for entry in entries if entry["pcs_per_hr"] is not None
+    ]
+    return (
+        (sum(all_peers) / len(all_peers), "overall_avg")
+        if all_peers else (60.0, "overall_avg")
+    )
 
 
 # ── Route resolution ──────────────────────────────────────────────────────────
@@ -1421,12 +1527,21 @@ def run_fitting_engine(
         fresh       = material_kg * (1.0 - pulv_pct / 100.0)
         pulv        = material_kg - fresh
 
-        pps, rate_est, cavity, cycle = _get_fitting_rate(
+        pps, rate_est, cavity, cycle, rate_tier = _get_fitting_rate(
             ic, mat, fstd_by_item, cycle_ph, mat_avg_pcs, overall_avg
         )
         if pps <= 0:
             pps = overall_avg
             rate_est = True
+            rate_tier = "overall_avg"
+        direct_rate = pps if rate_tier == "fitting_std" else None
+        if rate_tier == "fitting_std":
+            fallback_rate, fallback_tier = _fitting_fallback_reference(
+                ic, mat, fstd_by_item, cycle_ph, demand,
+            )
+        else:
+            fallback_rate = pps
+            fallback_tier = rate_tier
         # Machine hours based on gross pieces (machine must produce g_qty including rejects)
         machine_hrs = g_qty / pps if pps > 0 else 0.0
 
@@ -1465,6 +1580,10 @@ def run_fitting_engine(
             assignments=[],
             has_weight=True,
             has_machine=has_mc,
+            rate_fallback_tier=rate_tier,
+            direct_rate_value=round(direct_rate, 4) if direct_rate is not None else None,
+            fallback_rate_value=round(fallback_rate, 4),
+            fallback_rate_tier=fallback_tier,
             gross_qty_pcs=round(g_qty, 4),
             rej_rate=round(rej_rate_frac * 100, 4),
             rej_basis=rej_basis,

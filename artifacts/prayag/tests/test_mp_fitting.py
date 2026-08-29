@@ -77,13 +77,14 @@ class TestCavityCycleRate:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        pps, est, cavity, cycle = eng._get_fitting_rate(
+        pps, est, cavity, cycle, tier = eng._get_fitting_rate(
             "ITEM1", "CPVC", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert abs(pps - 80.0) < 1e-3
         assert est is False
         assert cavity == 2.0
         assert cycle == 90.0
+        assert tier == "fitting_std"
 
     def test_per_hour_cycle_fallback(self):
         fstd = []
@@ -92,13 +93,29 @@ class TestCavityCycleRate:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        pps, est, cavity, cycle = eng._get_fitting_rate(
+        pps, est, cavity, cycle, tier = eng._get_fitting_rate(
             "ITEM2", "UPVC", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert abs(pps - 60.0) < 1e-3
         assert est is True
         assert cavity is None
         assert abs(cycle - 60.0) < 1e-6
+        assert tier == "cycle"
+
+    def test_invalid_cycle_uses_overall_average_and_reports_that_tier(self):
+        fstd = [_fstd("KNOWN", "A01(NU-200)", 2.0, 90.0)]  # 80 pcs/hr
+        demand = _demand(("KNOWN", "CPVC", 100), ("BAD", "CPVC", 100))
+        fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
+            fstd, [_ph("BAD", 0.0)], demand
+        )
+        pps, est, cavity, cycle, tier = eng._get_fitting_rate(
+            "BAD", "CPVC", fstd_by_item, cycle_ph, mat_avg, overall
+        )
+        assert pps == 80.0
+        assert est is True
+        assert cavity is None
+        assert cycle == 0.0
+        assert tier == "overall_avg"
 
     def test_material_avg_fallback(self):
         """Item with no fitting_std or per_hour → material category average."""
@@ -108,12 +125,13 @@ class TestCavityCycleRate:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        pps, est, cavity, cycle = eng._get_fitting_rate(
+        pps, est, cavity, cycle, tier = eng._get_fitting_rate(
             "UNKNOWN", "CPVC", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert abs(pps - 80.0) < 1e-3
         assert est is True
         assert cavity is None
+        assert tier == "mat_avg"
 
     def test_overall_avg_last_resort(self):
         """Item with no matching material → overall average."""
@@ -124,11 +142,57 @@ class TestCavityCycleRate:
             fstd, ph, demand
         )
         # SWR1 has no CPVC fstd entry and no per_hour, and mat_avg won't have SWR
-        pps, est, cavity, cycle = eng._get_fitting_rate(
+        pps, est, cavity, cycle, tier = eng._get_fitting_rate(
             "SWR1", "SWR", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert abs(pps - 240.0) < 1e-3   # falls to overall_avg = 240
         assert est is True
+        assert tier == "overall_avg"
+
+    def test_direct_comparison_prefers_same_item_cycle_fallback(self):
+        demand = _demand(("ITEM1", "CPVC", 100))
+        fstd = [_fstd("ITEM1", "A01(NU-200)", 2.0, 90.0)]
+        fstd_by_item, cycle_ph, _, _ = eng._build_fitting_rate_lookups(
+            fstd, [_ph("ITEM1", 60.0)], demand
+        )
+        rate, tier = eng._fitting_fallback_reference(
+            "ITEM1", "CPVC", fstd_by_item, cycle_ph, demand
+        )
+        assert rate == 60.0
+        assert tier == "cycle"
+
+    def test_direct_comparison_uses_peer_only_material_average(self):
+        demand = _demand(("A", "CPVC", 100), ("B", "CPVC", 100))
+        fstd = [
+            _fstd("A", "A01(NU-200)", 2.0, 90.0),   # 80 pcs/hr
+            _fstd("B", "A02(NU-200)", 3.0, 90.0),   # 120 pcs/hr
+        ]
+        fstd_by_item, cycle_ph, _, _ = eng._build_fitting_rate_lookups(
+            fstd, [], demand
+        )
+        rate, tier = eng._fitting_fallback_reference(
+            "A", "CPVC", fstd_by_item, cycle_ph, demand
+        )
+        assert rate == 120.0
+        assert tier == "mat_avg"
+
+    def test_invalid_same_item_cycle_comparison_uses_peer_only_overall(self):
+        demand = _demand(
+            ("A", "CPVC", 100), ("B", "CPVC", 100), ("C", "UPVC", 100),
+        )
+        fstd = [
+            _fstd("A", "A01(NU-200)", 2.0, 90.0),   # 80 pcs/hr
+            _fstd("B", "A02(NU-200)", 3.0, 90.0),   # 120 pcs/hr
+            _fstd("C", "A03(NU-200)", 5.0, 90.0),   # 200 pcs/hr
+        ]
+        fstd_by_item, cycle_ph, _, _ = eng._build_fitting_rate_lookups(
+            fstd, [_ph("A", 0.0)], demand
+        )
+        rate, tier = eng._fitting_fallback_reference(
+            "A", "CPVC", fstd_by_item, cycle_ph, demand
+        )
+        assert rate == 160.0
+        assert tier == "overall_avg"
 
     def test_machine_hrs_formula(self):
         """machine_hrs = qty / pcs_per_hr."""
@@ -233,7 +297,7 @@ class TestCoverageGapReporting:
             mat_kg = qty * wt * (1 + waste / 100)
             fresh  = mat_kg * (1 - pulv / 100)
             pv     = mat_kg - fresh
-            pps, rest, cavity, cycle = eng._get_fitting_rate(
+            pps, rest, cavity, cycle, rate_tier = eng._get_fitting_rate(
                 ic, mat, fstd_by_item, cycle_ph, mat_avg, overall
             )
             caps = item_routes.get(ic, [])
@@ -254,6 +318,7 @@ class TestCoverageGapReporting:
                 num_cycles=round(qty/cavity) if cavity else None,
                 capable_machines=sorted(caps), route_estimated=route_est,
                 assignments=[], has_weight=True, has_machine=bool(caps),
+                rate_fallback_tier=rate_tier,
             ))
         return items, no_weight, no_machine, n_route_est, n_unroutable
 
@@ -360,6 +425,20 @@ class TestSerialisationRoundTrip:
         assert it.assignments[0].machine == "A01(NU-200)"
         assert res2.n_route_estimated == 0
         assert res2.n_unroutable == 0
+
+    def test_rate_provenance_fields_default_for_old_payload(self):
+        d = self._make_result().to_dict()
+        for field in (
+            "rate_fallback_tier", "direct_rate_value",
+            "fallback_rate_value", "fallback_rate_tier",
+        ):
+            d["items"][0].pop(field, None)
+        restored = eng.FittingEngineResult.from_dict(d)
+        item = restored.items[0]
+        assert item.rate_fallback_tier == "fitting_std"
+        assert item.direct_rate_value is None
+        assert item.fallback_rate_value is None
+        assert item.fallback_rate_tier == ""
 
     def test_to_dict_is_json_serialisable(self):
         import json
@@ -512,7 +591,7 @@ class TestRateEstimatedFlag:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        _, est, _, _ = eng._get_fitting_rate(
+        _, est, _, _, _ = eng._get_fitting_rate(
             "ITEM_OK", "CPVC", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert est is False
@@ -524,7 +603,7 @@ class TestRateEstimatedFlag:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        _, est, _, _ = eng._get_fitting_rate(
+        _, est, _, _, _ = eng._get_fitting_rate(
             "PH_ITEM", "UPVC", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert est is True
@@ -536,7 +615,7 @@ class TestRateEstimatedFlag:
         fstd_by_item, cycle_ph, mat_avg, overall = eng._build_fitting_rate_lookups(
             fstd, ph, demand
         )
-        _, est, _, _ = eng._get_fitting_rate(
+        _, est, _, _, _ = eng._get_fitting_rate(
             "NEW", "SWR", fstd_by_item, cycle_ph, mat_avg, overall
         )
         assert est is True

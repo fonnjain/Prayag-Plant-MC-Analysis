@@ -30,6 +30,7 @@ from mp_engine import (
     _build_rate_lookups,
     _compute_machine_loads,
     _get_rate,
+    _pipe_fallback_reference,
     _lpt_optimise,
     run_engine,
 )
@@ -113,9 +114,10 @@ class TestRateFallback:
         ph = [_ph_row("A1", 45.0)]
         rt = [_route_row("A1", "M/C-1", "CPVC")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        rate, est, _tier = _get_rate("A1", "CPVC", ph_dict, mat_avg, overall)
+        rate, est, tier = _get_rate("A1", "CPVC", ph_dict, mat_avg, overall)
         assert rate == 45.0
         assert est is False
+        assert tier == "item"
 
     def test_same_material_fallback_is_estimated(self):
         ph = [_ph_row("C1", 40.0), _ph_row("C2", 60.0)]
@@ -124,8 +126,9 @@ class TestRateFallback:
               _route_row("S1", "M/C-3", "SWR")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
         # S1 has no per-hour entry; same material SWR has no entries either
-        rate, est, _tier = _get_rate("S1", "SWR", ph_dict, mat_avg, overall)
+        rate, est, tier = _get_rate("S1", "SWR", ph_dict, mat_avg, overall)
         assert est is True
+        assert tier == "overall_avg"
         # Falls back to overall avg = (40+60)/2 = 50
         assert abs(rate - 50.0) < 1e-6
 
@@ -135,8 +138,9 @@ class TestRateFallback:
               _route_row("U1", "M/C-2", "UPVC"),
               _route_row("AG1", "M/C-4", "AGRI")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
-        rate, est, _tier = _get_rate("AG1", "AGRI", ph_dict, mat_avg, overall)
+        rate, est, tier = _get_rate("AG1", "AGRI", ph_dict, mat_avg, overall)
         assert est is True
+        assert tier == "overall_avg"
         assert abs(rate - 40.0) < 1e-6   # (30+50)/2
 
     def test_same_material_avg_preferred_over_overall(self):
@@ -147,9 +151,32 @@ class TestRateFallback:
               _route_row("C3", "M/C-1", "CPVC")]
         ph_dict, mat_avg, overall = self._lookups(ph, rt)
         # C3 has no ph entry but is CPVC; CPVC avg = (40+60)/2 = 50
-        rate, est, _tier = _get_rate("C3", "CPVC", ph_dict, mat_avg, overall)
+        rate, est, tier = _get_rate("C3", "CPVC", ph_dict, mat_avg, overall)
         assert est is True
+        assert tier == "mat_avg"
         assert abs(rate - 50.0) < 1e-6
+
+    def test_direct_rate_comparison_uses_peer_only_material_average(self):
+        ph = {"A": 40.0, "B": 60.0, "U": 120.0}
+        routes = [
+            _route_row("A", "M/C-1", "CPVC"),
+            _route_row("B", "M/C-1", "CPVC"),
+            _route_row("U", "M/C-2", "UPVC"),
+        ]
+        rate, tier = _pipe_fallback_reference(
+            "A", "CPVC", ph, routes,
+            {"CPVC": 50.0, "UPVC": 120.0}, set(),
+        )
+        assert rate == 60.0
+        assert tier == "mat_avg"
+
+    def test_direct_rate_comparison_honours_configured_material_rate(self):
+        rate, tier = _pipe_fallback_reference(
+            "A", "CPVC", {"A": 40.0}, [_route_row("A", "M/C-1", "CPVC")],
+            {"CPVC": 75.0}, {"CPVC"},
+        )
+        assert rate == 75.0
+        assert tier == "mat_avg"
 
     def test_swr_items_always_estimated_with_only_cpvc_upvc_rates(self):
         ph = [_ph_row("PS2", 45.0), _ph_row("PW11", 50.0)]
@@ -805,6 +832,17 @@ class TestComputeEffectiveCosts:
         assert restored.cost_by_material == {}
         assert restored.n_unpriced == 0
         assert restored.totals.routable_compound_cost_rs == 0.0
+
+    def test_engine_result_rate_provenance_fields_default_for_old_payload(self):
+        d = _make_minimal_engine_result().to_dict()
+        for field in (
+            "direct_rate_value", "fallback_rate_value", "fallback_rate_tier",
+        ):
+            d["items"][0].pop(field, None)
+        restored = eng.EngineResult.from_dict(d)
+        assert restored.items[0].direct_rate_value is None
+        assert restored.items[0].fallback_rate_value is None
+        assert restored.items[0].fallback_rate_tier == ""
 
 
 def _make_minimal_engine_result() -> eng.EngineResult:

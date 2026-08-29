@@ -623,12 +623,17 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
             item_code="FITDIRECT", raw_code="FIT-DIRECT", has_weight=True,
             has_machine=True, machine_hrs=1.0, capable_machines=["MOD-1"],
             rate_estimated=False, route_estimated=False, gross_qty_pcs=100.0,
+            pcs_per_hr=100.0, rate_fallback_tier="fitting_std",
+            direct_rate_value=100.0, fallback_rate_value=80.0,
+            fallback_rate_tier="mat_avg",
         ),
         SimpleNamespace(
             item_code="FITFALLBACK", raw_code="FIT-FALLBACK", has_weight=True,
             has_machine=True, machine_hrs=2.0, capable_machines=["MOD-1"],
             rate_estimated=True, route_estimated=True, cycle_time_sec=None,
-            gross_qty_pcs=200.0,
+            gross_qty_pcs=200.0, pcs_per_hr=80.0,
+            rate_fallback_tier="mat_avg", direct_rate_value=None,
+            fallback_rate_value=80.0, fallback_rate_tier="mat_avg",
         ),
         SimpleNamespace(
             item_code="FITNOBOM", raw_code="FIT-NO-BOM", has_weight=False,
@@ -667,10 +672,30 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
     assert coverage["FITDIRECT"]["status"] == "schedulable"
     assert coverage["FITDIRECT"]["route"] == "direct"
     assert coverage["FITDIRECT"]["rate"] == "direct"
+    assert coverage["FITDIRECT"]["rate_method"] == "direct_fitting_standard"
+    assert coverage["FITDIRECT"]["rate_provenance"] == {
+        "method": "direct_fitting_standard",
+        "value": 100.0,
+        "unit": "pcs/hr",
+        "direct_value": 100.0,
+        "direct_available": True,
+        "fallback_method": "material_average",
+        "fallback_value": 80.0,
+        "divergence_pct": -20.0,
+        "comparison": "available",
+    }
     assert coverage["FITFALLBACK"]["status"] == "partial"
     assert coverage["FITFALLBACK"]["can_schedule"] is True
     assert coverage["FITFALLBACK"]["route"] == "material_fallback"
     assert coverage["FITFALLBACK"]["rate"] == "estimated_average"
+    assert coverage["FITFALLBACK"]["rate_method"] == "material_average"
+    assert coverage["FITFALLBACK"]["rate_provenance"]["direct_value"] is None
+    assert coverage["FITFALLBACK"]["rate_provenance"]["fallback_value"] == 80.0
+    assert coverage["FITFALLBACK"]["rate_provenance"]["divergence_pct"] is None
+    assert (
+        coverage["FITFALLBACK"]["rate_provenance"]["comparison"]
+        == "no_direct_same_item_rate"
+    )
     assert coverage["FITFALLBACK"]["reasons"] == [
         "route_fallback", "rate_fallback",
     ]
@@ -681,6 +706,16 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
     assert category["schedulable"]["demand_pcs"] == 100.0
     assert category["partial"]["demand_pcs"] == 200.0
     assert category["not_modellable"]["demand_pcs"] == 50.0
+    summary = body["coverage"]["summary"]
+    assert summary["by_route_method"]["material_fallback"]["demand_pcs"] == 200.0
+    assert summary["by_rate_method"]["material_average"]["demand_pcs"] == 200.0
+    assert summary["rate_confidence_by_fallback_method"]["material_average"] == {
+        "comparison_item_count": 1,
+        "comparison_demand_pcs": 100.0,
+        "demand_weighted_signed_divergence_pct": -20.0,
+        "demand_weighted_abs_divergence_pct": 20.0,
+        "max_abs_divergence_pct": 20.0,
+    }
     assert [row["item_code"] for row in body["data_limited"]] == ["FITNOBOM"]
     recon = body["demand_reconciliation"]
     assert recon["submitted_requested_pcs"] == 350.0
@@ -689,6 +724,66 @@ def test_schedule_exposes_direct_and_fallback_fitting_provenance(monkeypatch):
     assert recon["modelled_gross_pcs"] == 300.0
     assert recon["scheduled_gross_pcs"] == 250.0
     assert recon["capacity_limited_gross_pcs"] == 50.0
+
+
+def test_rate_provenance_distinguishes_every_pipe_and_fitting_fallback_tier():
+    cases = [
+        (
+            "pipe",
+            SimpleNamespace(
+                has_weight=True, rate_kg_per_hr=100.0, rate_estimated=False,
+                rate_fallback_tier="item", direct_rate_value=100.0,
+                fallback_rate_value=120.0, fallback_rate_tier="mat_avg",
+            ),
+            "direct_item", "material_average", 20.0, "available",
+        ),
+        (
+            "pipe",
+            SimpleNamespace(
+                has_weight=True, rate_kg_per_hr=75.0, rate_estimated=True,
+                rate_fallback_tier="mat_avg", direct_rate_value=None,
+                fallback_rate_value=75.0, fallback_rate_tier="mat_avg",
+            ),
+            "material_average", "material_average", None,
+            "no_direct_same_item_rate",
+        ),
+        (
+            "pipe",
+            SimpleNamespace(
+                has_weight=True, rate_kg_per_hr=55.0, rate_estimated=True,
+                rate_fallback_tier="overall_avg", direct_rate_value=None,
+                fallback_rate_value=55.0, fallback_rate_tier="overall_avg",
+            ),
+            "overall_average", "overall_average", None,
+            "no_direct_same_item_rate",
+        ),
+        (
+            "fitting",
+            SimpleNamespace(
+                has_weight=True, pcs_per_hr=60.0, rate_estimated=True,
+                rate_fallback_tier="cycle", direct_rate_value=None,
+                fallback_rate_value=60.0, fallback_rate_tier="cycle",
+            ),
+            "cycle_time", "cycle_time", None, "no_direct_same_item_rate",
+        ),
+        (
+            "fitting",
+            SimpleNamespace(
+                has_weight=True, pcs_per_hr=90.0, rate_estimated=True,
+                rate_fallback_tier="overall_avg", direct_rate_value=None,
+                fallback_rate_value=90.0, fallback_rate_tier="overall_avg",
+            ),
+            "overall_average", "overall_average", None,
+            "no_direct_same_item_rate",
+        ),
+    ]
+    for kind, item, method, fallback_method, divergence, comparison in cases:
+        detail = apimod._rate_provenance_detail(item, kind)
+        assert detail["method"] == method
+        assert detail["fallback_method"] == fallback_method
+        assert detail["divergence_pct"] == divergence
+        assert detail["comparison"] == comparison
+        assert detail["unit"] == ("kg/hr" if kind == "pipe" else "pcs/hr")
 
 
 def test_schedule_surfaces_ppr_family_codes_when_no_bom_exists(monkeypatch):

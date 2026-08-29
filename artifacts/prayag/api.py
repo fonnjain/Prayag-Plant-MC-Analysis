@@ -415,6 +415,96 @@ def _rate_provenance(item: Any, kind: str) -> str:
     return "estimated_average"
 
 
+def _normalized_rate_tier(tier: str, kind: str, *, estimated: bool = False) -> str:
+    """Normalize an engine-specific rate tier for the public API."""
+    if kind == "pipe":
+        return {
+            "item": "direct_item",
+            "mat_avg": "material_average",
+            "overall_avg": "overall_average",
+        }.get(tier, "estimated" if estimated else "direct_item")
+    return {
+        "fitting_std": "direct_fitting_standard",
+        "cycle": "cycle_time",
+        "mat_avg": "material_average",
+        "overall_avg": "overall_average",
+    }.get(tier, "estimated_average" if estimated else "direct_fitting_standard")
+
+
+def _rate_method(item: Any, kind: str) -> str:
+    """Normalize engine-specific rate tiers for the public API."""
+    if not getattr(item, "has_weight", False):
+        return "not_evaluated"
+    tier = str(getattr(item, "rate_fallback_tier", "") or "")
+    return _normalized_rate_tier(
+        tier, kind, estimated=bool(getattr(item, "rate_estimated", False)),
+    )
+
+
+def _rate_provenance_detail(item: Any, kind: str) -> dict[str, Any]:
+    """Expose selected/direct/fallback rates and a comparable divergence."""
+    method = _rate_method(item, kind)
+    unit = "kg/hr" if kind == "pipe" else "pcs/hr"
+    attr = "rate_kg_per_hr" if kind == "pipe" else "pcs_per_hr"
+    selected = getattr(item, attr, None)
+    try:
+        selected = float(selected)
+    except (TypeError, ValueError):
+        selected = None
+    if selected is None or not math.isfinite(selected) or selected <= 0:
+        selected = None
+    direct = getattr(item, "direct_rate_value", None)
+    fallback = getattr(item, "fallback_rate_value", None)
+    fallback_tier = str(getattr(item, "fallback_rate_tier", "") or "")
+    try:
+        direct = float(direct) if direct is not None else None
+    except (TypeError, ValueError):
+        direct = None
+    try:
+        fallback = float(fallback) if fallback is not None else None
+    except (TypeError, ValueError):
+        fallback = None
+    if direct is None and method in ("direct_item", "direct_fitting_standard"):
+        direct = selected
+    if fallback is None and method not in (
+        "direct_item", "direct_fitting_standard", "not_evaluated",
+    ):
+        fallback = selected
+    if direct is not None and (not math.isfinite(direct) or direct <= 0):
+        direct = None
+    if fallback is not None and (not math.isfinite(fallback) or fallback <= 0):
+        fallback = None
+    fallback_method = (
+        _normalized_rate_tier(fallback_tier, kind, estimated=True)
+        if fallback_tier else (
+            method if method not in ("direct_item", "direct_fitting_standard")
+            else None
+        )
+    )
+    divergence = None
+    if fallback is not None and direct is not None and direct != 0:
+        divergence = round((fallback - direct) / direct * 100.0, 2)
+    if method == "not_evaluated":
+        comparison = "not_evaluated"
+    elif direct is None:
+        comparison = "no_direct_same_item_rate"
+    elif fallback is None:
+        comparison = "no_fallback_reference_rate"
+    else:
+        comparison = "available"
+    return {
+        "method": method,
+        "value": round(selected, 4) if selected is not None else None,
+        "unit": unit,
+        "direct_value": round(direct, 4) if direct is not None else None,
+        "direct_available": direct is not None,
+        "fallback_method": fallback_method,
+        "fallback_value": round(fallback, 4) if fallback is not None else None,
+        "divergence_pct": divergence,
+        "comparison": comparison,
+    }
+
+
 def _classify_schedule_items(
     items: list[Any],
     request_lines: list[dict[str, Any]],
@@ -439,6 +529,8 @@ def _classify_schedule_items(
         engine_allocatable = bool(getattr(item, "has_machine", False))
         route_provenance = "not_evaluated"
         rate_provenance = _rate_provenance(item, kind)
+        rate_method = _rate_method(item, kind)
+        rate_detail = _rate_provenance_detail(item, kind)
         reasons: list[str] = []
 
         if not has_bom:
@@ -495,7 +587,10 @@ def _classify_schedule_items(
             "can_schedule": can_schedule,
             "bom": "direct" if has_bom else "missing",
             "route": route_provenance,
+            "route_method": route_provenance,
             "rate": rate_provenance,
+            "rate_method": rate_method,
+            "rate_provenance": rate_detail,
             "capable_machines": capable,
             "active_capable_machines": active_capable,
             "reasons": reasons,
@@ -553,6 +648,9 @@ def _coverage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "total_item_count": len(rows),
         "total_demand_pcs": round(sum(float(r["requested_pcs"]) for r in rows), 4),
         "by_status": _coverage_bucket_summary(rows),
+        "by_route_method": _coverage_method_summary(rows, "route_method"),
+        "by_rate_method": _coverage_method_summary(rows, "rate_method"),
+        "rate_confidence_by_fallback_method": _rate_confidence_summary(rows),
         "by_material": {
             key: _coverage_bucket_summary(grouped_material[key])
             for key in sorted(grouped_material)
@@ -562,6 +660,92 @@ def _coverage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for key in sorted(grouped_category)
         },
     }
+
+
+def _coverage_method_summary(
+    rows: list[dict[str, Any]], field: str,
+) -> dict[str, dict[str, float | int]]:
+    """Summarize demand reach by a route/rate provenance method."""
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row[field])].append(row)
+    total_pcs = sum(float(row["requested_pcs"]) for row in rows)
+    result: dict[str, dict[str, float | int]] = {}
+    for method in sorted(grouped):
+        method_pcs = sum(float(row["requested_pcs"]) for row in grouped[method])
+        result[method] = {
+            "item_count": len(grouped[method]),
+            "demand_pcs": round(method_pcs, 4),
+            "demand_pct": round(method_pcs / total_pcs * 100.0, 2)
+            if total_pcs > 0 else 0.0,
+        }
+    return result
+
+
+def _rate_confidence_summary(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int]]:
+    """Demand-weight comparable fallback-vs-direct divergences."""
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        detail = row["rate_provenance"]
+        if (
+            detail["comparison"] == "available"
+            and detail["fallback_method"]
+            and detail["divergence_pct"] is not None
+        ):
+            grouped[str(detail["fallback_method"])].append(row)
+    result: dict[str, dict[str, float | int]] = {}
+    for method in sorted(grouped):
+        method_rows = grouped[method]
+        demand = sum(float(row["requested_pcs"]) for row in method_rows)
+        weighted_signed = sum(
+            float(row["requested_pcs"])
+            * (
+                (
+                    float(row["rate_provenance"]["fallback_value"])
+                    - float(row["rate_provenance"]["direct_value"])
+                )
+                / float(row["rate_provenance"]["direct_value"])
+                * 100.0
+            )
+            for row in method_rows
+        )
+        weighted_abs = sum(
+            float(row["requested_pcs"])
+            * abs(
+                (
+                    float(row["rate_provenance"]["fallback_value"])
+                    - float(row["rate_provenance"]["direct_value"])
+                )
+                / float(row["rate_provenance"]["direct_value"])
+                * 100.0
+            )
+            for row in method_rows
+        )
+        max_abs = max(
+            abs(
+                (
+                    float(row["rate_provenance"]["fallback_value"])
+                    - float(row["rate_provenance"]["direct_value"])
+                )
+                / float(row["rate_provenance"]["direct_value"])
+                * 100.0
+            )
+            for row in method_rows
+        )
+        result[method] = {
+            "comparison_item_count": len(method_rows),
+            "comparison_demand_pcs": round(demand, 4),
+            "demand_weighted_signed_divergence_pct": (
+                round(weighted_signed / demand, 2) if demand > 0 else 0.0
+            ),
+            "demand_weighted_abs_divergence_pct": (
+                round(weighted_abs / demand, 2) if demand > 0 else 0.0
+            ),
+            "max_abs_divergence_pct": round(max_abs, 2),
+        }
+    return result
 
 
 def _reject_unsafe_schedule_quantities(
