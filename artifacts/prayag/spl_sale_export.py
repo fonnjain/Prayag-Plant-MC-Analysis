@@ -97,6 +97,96 @@ def read_stock(path: str | Path) -> list[StockRow]:
     return rows
 
 
+def read_custom_demand(
+    file_bytes: bytes,
+    selected_category: str,
+) -> tuple[list[StockRow], list[str]]:
+    """Parse a temporary custom-run upload using header names, not column letters."""
+    import io
+
+    workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    worksheet = workbook.active
+    aliases = {
+        "code": {"ITEMCODE", "ITEM", "CODE", "PRODUCTCODE"},
+        "name": {"ITEMNAME", "PRODUCTNAME", "DESCRIPTION"},
+        "category": {"CATEGORY", "PRODUCTCATEGORY"},
+        "qty": {
+            "QTY", "QUANTITY", "REQUIREDQTY", "REQUIREDQUANTITY",
+            "PRODUCTIONQTY", "PRODUCTIONPLAN", "STOCK",
+        },
+    }
+
+    def header_key(value: Any) -> str:
+        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+    header_row = 0
+    columns: dict[str, int] = {}
+    observed: list[str] = []
+    for row_number, values in enumerate(
+        worksheet.iter_rows(min_row=1, max_row=20, values_only=True), 1,
+    ):
+        keys = [header_key(value) for value in values]
+        candidate: dict[str, int] = {}
+        for field, names in aliases.items():
+            for index, key in enumerate(keys):
+                if key in names:
+                    candidate[field] = index
+                    break
+        if "code" in candidate and "qty" in candidate:
+            header_row, columns = row_number, candidate
+            observed = [str(value or "").strip() for value in values if value]
+            break
+    if not header_row:
+        raise ValueError(
+            "Could not find Item Code and required quantity columns. "
+            "Accepted quantity headers include Required Quantity, Qty, "
+            "Production Plan, and Stock."
+        )
+
+    selected = selected_category.strip().upper()
+    rows: list[StockRow] = []
+    warnings: list[str] = []
+    for source_row, values in enumerate(
+        worksheet.iter_rows(min_row=header_row + 1, values_only=True),
+        header_row + 1,
+    ):
+        raw_code = str(values[columns["code"]] or "").strip()
+        if not raw_code:
+            continue
+        qty = _number(values[columns["qty"]])
+        if qty <= 0:
+            continue
+        workbook_category = (
+            str(values[columns["category"]] or "").strip().upper()
+            if "category" in columns else ""
+        )
+        if workbook_category and workbook_category != selected:
+            warnings.append(
+                f"Row {source_row} ({raw_code}) skipped: category "
+                f"{workbook_category} does not match {selected}."
+            )
+            continue
+        rows.append(StockRow(
+            source_row=source_row,
+            raw_code=raw_code,
+            item_name=(
+                str(values[columns["name"]] or "").strip()
+                if "name" in columns else ""
+            ),
+            category=selected,
+            packing=0.0,
+            qty_pcs=qty,
+            file_weight_per_pc_kg=0.0,
+            file_total_weight_kg=0.0,
+        ))
+    if not rows:
+        suffix = f" Headers found: {', '.join(observed)}." if observed else ""
+        raise ValueError(
+            f"No positive-quantity rows matched category {selected}.{suffix}"
+        )
+    return rows, warnings
+
+
 def classify_stock(
     stock_rows: Iterable[StockRow],
     routing_rows: Iterable[dict],
@@ -190,6 +280,21 @@ def build_plan(
     effective_month: str = "2026-08",
 ) -> SplSalePlan:
     source_rows = read_stock(source_path)
+    return build_plan_from_rows(
+        source_rows, segment=segment, effective_month=effective_month,
+    )
+
+
+def build_plan_from_rows(
+    source_rows: list[StockRow],
+    *,
+    segment: str = "PLUMBING",
+    effective_month: str = "2026-08",
+    rej_lookup: dict | None = None,
+    wastage_lookup: dict | None = None,
+    downtime_records: list | None = None,
+) -> SplSalePlan:
+    """Build an in-memory plan.  This function performs no writes."""
     routing = mp_model.get_routing(segment, effective_month)
     scheduled, unscheduled = classify_stock(source_rows, routing)
 
@@ -216,17 +321,23 @@ def build_plan(
                 qty_pcs=stock.qty_pcs,
             ))
 
-    pipe_engine = mp_engine.run_engine(pipe_demand, effective_month, segment)
+    pipe_engine = mp_engine.run_engine(
+        pipe_demand, effective_month, segment,
+        rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
+    )
     fitting_engine = mp_engine.run_fitting_engine(
         fitting_demand, effective_month, segment,
+        rej_lookup=rej_lookup, wastage_lookup=wastage_lookup,
     )
     pipe_schedule = mp_scheduler.run_shift_schedule(
         pipe_engine.items, pipe_demand,
         segment=segment, effective_month=effective_month,
+        downtime_records=downtime_records,
     )
     fitting_schedule = mp_scheduler.run_fitting_schedule(
         fitting_engine.items, fitting_demand,
         segment=segment, effective_month=effective_month,
+        downtime_records=downtime_records,
     )
     return SplSalePlan(
         source_rows, scheduled, unscheduled, pipe_demand, fitting_demand,

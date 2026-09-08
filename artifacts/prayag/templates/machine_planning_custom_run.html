@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Customized Machine Run{% endblock %}
+{% block content %}
+<div style="padding:.75rem .75rem 5rem;max-width:920px;margin:0 auto;">
+  <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.85rem;font-size:.73rem;">
+    <a href="{{ url_for('mp_home') }}" style="color:#9ca3af;text-decoration:none;">Machine Planning</a>
+    <span style="color:#d1d5db;">›</span>
+    <strong style="color:var(--navy);">Customized Run</strong>
+  </div>
+
+  <div style="background:var(--navy);border-radius:1rem;padding:1.05rem 1.15rem;margin-bottom:.85rem;color:#fff;">
+    <div style="font-size:1.05rem;font-weight:800;">Customized Run</div>
+    <div style="font-size:.73rem;color:rgba(255,255,255,.68);margin-top:.22rem;">
+      Plan only the uploaded item codes and required production quantities.
+    </div>
+  </div>
+
+  <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:.7rem;
+              padding:.65rem .8rem;margin-bottom:.85rem;font-size:.75rem;color:#065f46;">
+    <strong>Temporary and isolated:</strong> this run appears only on this page.
+    It is not saved to Plan Runs, Follow-Up, Release Plans, or the planning database.
+    Leaving or refreshing after a result clears it.
+  </div>
+
+  {% if error %}
+  <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:.65rem;
+              padding:.65rem .8rem;margin-bottom:.75rem;font-size:.76rem;color:#991b1b;">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data"
+        style="background:#fff;border-radius:.85rem;padding:1rem;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:1rem;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.7rem;">
+      <label style="font-size:.72rem;font-weight:700;color:var(--navy);">
+        Product category
+        <select name="category" required style="display:block;width:100%;margin-top:.3rem;padding:.55rem;
+                border:1px solid #d1d5db;border-radius:.45rem;background:#fff;">
+          {% for category in categories %}
+          <option value="{{ category }}" {% if category == selected_category %}selected{% endif %}>{{ category }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="font-size:.72rem;font-weight:700;color:var(--navy);">
+        Planning month
+        <select name="month" required style="display:block;width:100%;margin-top:.3rem;padding:.55rem;
+                border:1px solid #d1d5db;border-radius:.45rem;background:#fff;">
+          {% for month in available_months %}
+          <option value="{{ month }}" {% if month == selected_month %}selected{% endif %}>{{ month }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="font-size:.72rem;font-weight:700;color:var(--navy);">
+        Item code workbook
+        <input name="demand_file" type="file" accept=".xlsx" required
+               style="display:block;width:100%;margin-top:.3rem;font-size:.72rem;">
+      </label>
+    </div>
+    <div style="font-size:.68rem;color:#6b7280;margin-top:.7rem;">
+      Required columns: <strong>Item Code</strong> and
+      <strong>Required Quantity</strong>, <strong>Qty</strong>,
+      <strong>Production Plan</strong>, or <strong>Stock</strong>.
+      Item Name and Category are optional.
+    </div>
+    <button type="submit" style="margin-top:.8rem;background:#0f766e;color:#fff;border:0;
+            border-radius:.45rem;padding:.55rem 1rem;font-weight:800;cursor:pointer;">
+      Run Customized Plan
+    </button>
+  </form>
+
+  {% if warnings %}
+  <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:.65rem;padding:.65rem .8rem;
+              margin-bottom:.8rem;font-size:.72rem;color:#92400e;">
+    <strong>Rows skipped</strong>
+    <ul style="margin:.3rem 0 0 1rem;padding:0;">{% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if summary %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:.55rem;margin-bottom:.9rem;">
+    {% for label,value in [
+      ('Uploaded items', summary.uploaded),
+      ('Routed items', summary.routed),
+      ('Unrouted items', summary.unrouted),
+      ('Required pcs', summary.qty),
+      ('Scheduled pcs', summary.planned_qty),
+      ('Machines used', summary.machines),
+    ] %}
+    <div style="background:#fff;border-radius:.6rem;padding:.65rem;box-shadow:0 1px 4px rgba(0,0,0,.07);">
+      <div style="font-size:.62rem;color:#6b7280;text-transform:uppercase;font-weight:700;">{{ label }}</div>
+      <div style="font-size:1rem;color:var(--navy);font-weight:800;margin-top:.15rem;">{{ "{:,.0f}".format(value) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div style="background:#fff;border-radius:.75rem;padding:.8rem;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:.8rem;overflow:auto;">
+    <h3 style="font-size:.82rem;color:var(--navy);margin:0 0 .55rem;">Machine Load</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+      <thead><tr style="background:var(--navy);color:#fff;">
+        <th style="padding:.4rem;text-align:left;">Machine</th><th style="padding:.4rem;text-align:right;">Demand hrs</th>
+        <th style="padding:.4rem;text-align:right;">Scheduled hrs</th><th style="padding:.4rem;text-align:right;">Capacity hrs</th>
+        <th style="padding:.4rem;text-align:right;">Demand %</th>
+      </tr></thead>
+      <tbody>{% for row in machine_rows %}<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:.38rem;font-weight:700;">{{ row.machine }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.1f}".format(row.demand_hours) }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.1f}".format(row.scheduled_hours) }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.1f}".format(row.capacity_hours) }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:.1f}".format(row.utilisation) }}%</td>
+      </tr>{% else %}<tr><td colspan="5" style="padding:.7rem;text-align:center;color:#9ca3af;">No machine load generated.</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+
+  <div style="background:#fff;border-radius:.75rem;padding:.8rem;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:.8rem;overflow:auto;">
+    <h3 style="font-size:.82rem;color:var(--navy);margin:0 0 .55rem;">Uploaded Item Results</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+      <thead><tr style="background:var(--navy);color:#fff;">
+        <th style="padding:.4rem;text-align:left;">Item</th><th style="padding:.4rem;text-align:right;">Required pcs</th>
+        <th style="padding:.4rem;text-align:right;">Material kg</th><th style="padding:.4rem;text-align:right;">Machine hrs</th>
+        <th style="padding:.4rem;text-align:left;">Status</th>
+      </tr></thead>
+      <tbody>{% for row in item_rows %}<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:.38rem;"><strong>{{ row.raw_code }}</strong>{% if row.item_name %}<div style="font-size:.62rem;color:#6b7280;">{{ row.item_name }}</div>{% endif %}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.0f}".format(row.qty) }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.2f}".format(row.material_kg) }}</td>
+        <td style="padding:.38rem;text-align:right;">{{ "{:,.2f}".format(row.machine_hrs) }}</td>
+        <td style="padding:.38rem;color:{% if row.status == 'Planned' %}#047857{% else %}#b45309{% endif %};font-weight:700;">{{ row.status }}</td>
+      </tr>{% endfor %}</tbody>
+    </table>
+  </div>
+
+  <div style="background:#fff;border-radius:.75rem;padding:.8rem;box-shadow:0 1px 4px rgba(0,0,0,.07);overflow:auto;">
+    <h3 style="font-size:.82rem;color:var(--navy);margin:0 0 .55rem;">
+      Day-wise Machine Plan{% if summary.completion %} · completes {{ summary.completion.strftime('%d-%m-%Y') }}{% endif %}
+    </h3>
+    <table style="width:100%;border-collapse:collapse;font-size:.7rem;min-width:680px;">
+      <thead><tr style="background:var(--navy);color:#fff;">
+        <th style="padding:.4rem;text-align:left;">Date</th><th style="padding:.4rem;text-align:left;">Machine</th>
+        <th style="padding:.4rem;text-align:left;">Shift</th><th style="padding:.4rem;text-align:left;">Item</th>
+        <th style="padding:.4rem;text-align:right;">Hours</th><th style="padding:.4rem;text-align:right;">Planned pcs</th>
+      </tr></thead>
+      <tbody>{% for row in blocks %}<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:.35rem;">{{ row.date.strftime('%d-%m-%Y') if row.date else '—' }}</td>
+        <td style="padding:.35rem;font-weight:700;">{{ row.machine }}</td><td style="padding:.35rem;">{{ row.shift }}</td>
+        <td style="padding:.35rem;">{{ row.raw_code }}</td>
+        <td style="padding:.35rem;text-align:right;">{{ "{:.2f}".format(row.hours) }}</td>
+        <td style="padding:.35rem;text-align:right;">{{ "{:,.0f}".format(row.pieces) }}</td>
+      </tr>{% else %}<tr><td colspan="6" style="padding:.7rem;text-align:center;color:#9ca3af;">No schedulable blocks.</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

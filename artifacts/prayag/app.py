@@ -7637,6 +7637,216 @@ def mp_upload():
     return redirect(url_for("mp_results"))
 
 
+_CUSTOM_RUN_CATEGORIES = (
+    "CPVC-FG", "UPVC-FG", "SWR-FG", "AGRI-FG",
+    "CPVC-PIPE", "UPVC-PIPE", "SWR-PIPE", "AGRI-PIPE",
+)
+
+
+@app.route("/machine-planning/customized-run", methods=["GET", "POST"])
+def mp_custom_run():
+    """Request-local custom plan; never persists into runs or follow-up."""
+    em = _mp_seed.current_month()
+    month = request.form.get("month", em).strip() or em
+    category = request.form.get("category", "CPVC-FG").strip().upper()
+    error = None
+    plan = None
+    warnings: list[str] = []
+    blocks: list[dict] = []
+    item_rows: list[dict] = []
+    machine_rows: list[dict] = []
+    summary = None
+
+    try:
+        from mp_model import _conn
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT effective_month FROM mp_bom_weight "
+                "WHERE segment=%s ORDER BY effective_month DESC LIMIT 12",
+                (_mp_seed.SEGMENT,),
+            )
+            available_months = [row[0] for row in cur.fetchall()]
+    except Exception:
+        available_months = [em]
+    if month not in available_months:
+        available_months = [month] + available_months
+
+    if request.method == "POST":
+        upload = request.files.get("demand_file")
+        if category not in _CUSTOM_RUN_CATEGORIES:
+            error = "Choose a valid product category."
+        elif not upload or not upload.filename:
+            error = "Choose an Excel file to run."
+        elif not upload.filename.lower().endswith(".xlsx"):
+            error = "Only .xlsx files are accepted."
+        else:
+            try:
+                from spl_sale_export import (
+                    _plan_dates, build_plan_from_rows, read_custom_demand,
+                )
+                source_rows, warnings = read_custom_demand(
+                    upload.read(), category,
+                )
+                rej_lookup, wastage_lookup = _build_plan_lookups(
+                    _mp_seed.SEGMENT, month,
+                )
+                try:
+                    downtime_records = _mp_model.get_downtime_affecting_month(
+                        _mp_seed.SEGMENT, month,
+                    )
+                except Exception:
+                    downtime_records = []
+                plan = build_plan_from_rows(
+                    source_rows,
+                    segment=_mp_seed.SEGMENT,
+                    effective_month=month,
+                    rej_lookup=rej_lookup,
+                    wastage_lookup=wastage_lookup,
+                    downtime_records=downtime_records,
+                )
+                all_engine_items = list(plan.pipe_engine.items) + list(plan.fitting_engine.items)
+                item_by_code = {
+                    _mp_seed.norm_code(item.item_code): item
+                    for item in all_engine_items
+                }
+                all_schedule_blocks = (
+                    list(plan.pipe_schedule.blocks)
+                    + list(plan.fitting_schedule.blocks)
+                )
+                unfinished = (
+                    list(plan.pipe_schedule.unfinished)
+                    + list(plan.fitting_schedule.unfinished)
+                )
+                unfinished_by_code = {
+                    _mp_seed.norm_code(item.item_code): item
+                    for item in unfinished
+                }
+                hours_left = {
+                    code: max(
+                        0.0,
+                        float(item.machine_hrs)
+                        - float(
+                            getattr(unfinished_by_code.get(code), "remaining_hours", 0.0)
+                            or 0.0
+                        ),
+                    )
+                    for code, item in item_by_code.items()
+                }
+                max_day = max(
+                    (block.day for block in all_schedule_blocks if not block.is_idle),
+                    default=0,
+                )
+                dates = _plan_dates(max_day, month) if max_day else {}
+                for block in sorted(
+                    all_schedule_blocks,
+                    key=lambda value: (value.day, value.machine, value.shift),
+                ):
+                    if block.is_idle or not block.item_code:
+                        continue
+                    item = item_by_code.get(_mp_seed.norm_code(block.item_code))
+                    if not item:
+                        continue
+                    code = _mp_seed.norm_code(block.item_code)
+                    available = max(
+                        0.0, float(block.planned_hours) - float(block.excess_hours),
+                    )
+                    productive = min(available, max(0.0, hours_left.get(code, 0.0)))
+                    hours_left[code] = max(0.0, hours_left.get(code, 0.0) - productive)
+                    if productive <= 0:
+                        continue
+                    pieces = (
+                        float(item.qty_pcs) * productive / float(item.machine_hrs)
+                        if item.machine_hrs else 0.0
+                    )
+                    blocks.append({
+                        "date": dates.get(block.day),
+                        "day": block.day,
+                        "machine": block.machine,
+                        "shift": block.shift,
+                        "raw_code": item.raw_code,
+                        "item_code": item.item_code,
+                        "hours": productive,
+                        "pieces": pieces,
+                    })
+                no_weight = set(plan.pipe_engine.coverage_gaps.no_weight) | set(
+                    plan.fitting_engine.coverage_gaps.no_weight
+                )
+                no_machine = set(plan.pipe_engine.coverage_gaps.no_machine) | set(
+                    plan.fitting_engine.coverage_gaps.no_machine
+                )
+                for row in plan.scheduled:
+                    item = item_by_code.get(row.stock.match_code)
+                    item_rows.append({
+                        "raw_code": row.stock.raw_code,
+                        "item_name": row.stock.item_name,
+                        "qty": row.stock.qty_pcs,
+                        "material_kg": float(item.material_kg) if item else 0.0,
+                        "machine_hrs": float(item.machine_hrs) if item else 0.0,
+                        "status": (
+                            "Missing BOM weight" if row.stock.match_code in no_weight
+                            else "No capable machine" if row.stock.match_code in no_machine
+                            else "Partially planned" if row.stock.match_code in unfinished_by_code
+                            else "Planned"
+                        ),
+                    })
+                for row in plan.unscheduled:
+                    item_rows.append({
+                        "raw_code": row.stock.raw_code,
+                        "item_name": row.stock.item_name,
+                        "qty": row.stock.qty_pcs,
+                        "material_kg": 0.0,
+                        "machine_hrs": 0.0,
+                        "status": row.reason,
+                    })
+                for result, schedule in (
+                    (plan.pipe_engine, plan.pipe_schedule),
+                    (plan.fitting_engine, plan.fitting_schedule),
+                ):
+                    scheduled_by_machine: dict[str, float] = {}
+                    for fill in schedule.weekly_fill:
+                        scheduled_by_machine[fill.machine] = (
+                            scheduled_by_machine.get(fill.machine, 0.0)
+                            + float(fill.scheduled_hrs)
+                        )
+                    for load in result.machine_loads:
+                        if load.assigned_hrs <= 0 and not scheduled_by_machine.get(load.machine):
+                            continue
+                        machine_rows.append({
+                            "machine": load.machine,
+                            "demand_hours": float(load.assigned_hrs),
+                            "scheduled_hours": scheduled_by_machine.get(load.machine, 0.0),
+                            "capacity_hours": float(load.capacity_hrs),
+                            "utilisation": float(load.utilisation_pct),
+                        })
+                summary = {
+                    "uploaded": len(source_rows),
+                    "routed": len(plan.scheduled),
+                    "unrouted": len(plan.unscheduled),
+                    "qty": sum(row.qty_pcs for row in source_rows),
+                    "planned_qty": sum(row["pieces"] for row in blocks),
+                    "machines": len(machine_rows),
+                    "completion": dates.get(max_day),
+                }
+            except Exception as exc:
+                app.logger.warning("customized machine run failed: %s", exc)
+                error = f"Customized run could not be completed: {exc}"
+
+    return render_template(
+        "machine_planning_custom_run.html",
+        categories=_CUSTOM_RUN_CATEGORIES,
+        available_months=available_months or [em],
+        selected_month=month,
+        selected_category=category,
+        error=error,
+        warnings=warnings,
+        plan=plan,
+        summary=summary,
+        blocks=blocks,
+        item_rows=item_rows,
+        machine_rows=machine_rows,
+    )
+
+
 @app.route("/machine-planning/results")
 def mp_results():
     """Show optimiser results for the most recently uploaded demand plan."""
