@@ -6,108 +6,126 @@ id = "RKa4QV-9UkeJTb5VDCpi9"
 uri = "file://confirmation_signoffs_fields.csv"
 type = "table"
 title = "confirmation_signoffs — all columns & their sources"
+logical_id = "b2ee2838-6e9f-4b67-a860-f51dbdb195ba"
 
 [[outputs]]
 id = "kth2-evGtmaT-01_vmrMs"
 uri = "file://prayag_input_fields.csv"
 type = "table"
 title = "Prayag — all input data fields"
+logical_id = "f4261bd3-02e6-4c90-8e3c-aa70a705a322"
 
 [[outputs]]
 id = "TgdzV6FAng4ApvpvKi7be"
 uri = "file://prayag_legacy_monthly_input.csv"
 type = "table"
 title = "Monthly data input template (Apr–Jun 2026)"
+logical_id = "431df17e-0824-41c9-9ee8-81701fc8ff50"
 
 [[outputs]]
 id = "cJNM4prsX5buKpKvjUK7f"
 uri = "file://prayag_legacy_daily_input.csv"
 type = "table"
 title = "Daily data input template (Apr–Jun 2026)"
+logical_id = "8458a521-329d-4719-8314-c0fcf70d516d"
 
 [[outputs]]
 id = "GsYN_vI2R43qWh8uIpJIb"
 uri = "file://prayag_architecture.xlsx"
 type = "table"
 title = "Prayag Analytics — Complete Architecture Document"
+logical_id = "c7b77f77-2de2-49ba-a84d-6840b64bee8e"
 
 [[outputs]]
 id = "J-KluYhnDXK1UFFPKfBcz"
 uri = "file://exports/Prayag_Architecture.xlsx"
 type = "table"
 title = "Prayag Production Analytics — Complete Architecture"
+logical_id = "d13a5481-3228-4b04-b0cd-686afa64167d"
 
 [[outputs]]
 id = "TW-Q6OTWIgK7WHIQV8RYu"
 uri = "file://exports/Prayag_GoogleSheet_File_IDs.xlsx"
 type = "table"
 title = "Prayag — Google Sheet File IDs (40 IDs, 4 sheets)"
+logical_id = "dafd7e0b-d720-486e-aed4-09dfdb9301dd"
 
 [[outputs]]
 id = "mpSw79jQUXdj2UJqSlFx_"
 uri = "file://exports/Prayag_Daily_Data_Sourcing.xlsx"
 type = "table"
 title = "Prayag — Daily Data Sourcing (spreadsheet → worksheet → columns/rows)"
+logical_id = "27ec6c99-0840-40a7-b74c-cd0967862bc2"
 
 [[outputs]]
 id = "kKTdwZfNtDRVfWZv8r23t"
 uri = "file://exports/pipe_mc_calculation_2026-06.xlsx"
 type = "table"
 title = "PIPE M/C Output & Rejection — Calculation (Jun 2026)"
+logical_id = "2f3806c1-0d29-4872-bafb-cee424e5b813"
 
 [[outputs]]
 id = "Uh-8CLxilQlS7zj6hTQvy"
 uri = "file://exports/HDPE_calculation_2026-05.xlsx"
 type = "table"
 title = "HDPE — M/C Output & Rejection Calculation (May 2026)"
+logical_id = "7cec412a-bca8-4a77-a4cc-bf9214fa0774"
 
 [[outputs]]
 id = "89zGhMq4rkOoafmc1owKQ"
 uri = "file://exports/Injection_Moulding_calculation_2026-06.xlsx"
 type = "table"
 title = "Injection Moulding — M/C Output & Rejection Calculation (Jun 2026)"
+logical_id = "00167671-51a7-4eaf-a984-834c98577c41"
 
 [[outputs]]
 id = "FMd62PRgNE6Q2ZjEqc7yP"
 uri = "file://exports/PTMT_calculation_2026-06.xlsx"
 type = "table"
 title = "PTMT — M/C Output & Rejection Calculation (Jun 2026)"
+logical_id = "a1c6cd11-a43a-4c1c-bf4b-93174843d8e9"
 
 [[outputs]]
 id = "08RFNI9soPXy9WzlfL_Uj"
 uri = "file://exports/Tanks_KH_calculation_2026-06.xlsx"
 type = "table"
 title = "Tanks (KH) — Output & Rejection Calculation (Jun 2026)"
+logical_id = "70dea0d0-106d-41c9-be9a-896c50d1d0ec"
 
 [[outputs]]
 id = "R0Uzs5ZFQ6oz4ynKuMty8"
 uri = "file://exports/Prayag_Calculation_and_Data_Sources.xlsx"
 type = "table"
 title = "Prayag — Calculation & Data-Sourcing Reference"
+logical_id = "e15a47d2-8052-4b30-8c72-45660e633b43"
 
 [[outputs]]
 id = "wMeZEdLFOksXJE6dRmfcL"
 uri = "file://artifacts/prayag/static/api-docs.md"
 type = "text"
 title = "Prayag Production Analytics — API Reference"
+logical_id = "17447425-5a16-427d-b233-dd5138ebdaa2"
 
 [[outputs]]
 id = "3X4OgjVmy6LhIx4ccmbhd"
 uri = "file://Prayag_Production_Analytics_Walkthrough.docx"
 type = "word_document"
 title = "Prayag Production Analytics — Complete Walkthrough"
+logical_id = "c946272f-24ae-46aa-a3d9-07c0dab7bc3f"
 
 [[outputs]]
 id = "wpYRBDsCZypkByBbSScB2"
 uri = "file://Prayag_Architecture_and_Database.xlsx"
 type = "table"
 title = "Prayag Architecture & Database Schema"
+logical_id = "8cb4ec20-e447-4394-a359-f29a2a4e03fc"
 
 [[outputs]]
 id = "FAVgdtswjnx8hNv4xyHLI"
 uri = "file://Prayag_Logic_and_Formulas.md"
 type = "text"
 title = "Prayag Logic & Formulas Reference"
+logical_id = "c4826f21-4ac5-432e-ac18-868ce7717556"
 
 [[outputs]]
 id = "fp7iBMgdqjJhNs57fojBl"
@@ -115,6 +133,7 @@ uri = "file://prayag-project.zip"
 type = "unspecified"
 title = "Prayag Project — Complete Source"
 description = "Full workspace snapshot (excluding .git, node_modules, __pycache__, venv). 241 MB."
+logical_id = "0e411d4e-07d2-4bf6-9d9b-c2bd89a03a60"
 
 [[outputs]]
 id = "rH82OSV0TMGCUVMDwqJsE"
@@ -122,6 +141,7 @@ uri = "file://.local/outputs/Prayag-Production-Analytics.pptx"
 type = "slides"
 title = "Prayag Production Analytics (PPTX)"
 description = "Editable 17-slide PowerPoint deck covering the app, its data-trust model, Plumbing scheduling preview, and August fallback-confidence findings."
+logical_id = "f390d2e2-0a9b-4119-96f0-487934fb04ce"
 
 [[outputs]]
 id = "hxVjWcXbYD4i8PSkUrXI_"
@@ -129,3 +149,32 @@ uri = "file://.local/outputs/Prayag-App-Functional-Walkthrough.pptx"
 type = "slides"
 title = "Prayag App Functional Walkthrough (PPTX)"
 description = "Editable 17-slide PowerPoint walkthrough of the Prayag app dashboards, reports, planning tools, costing, operations, and audit controls."
+logical_id = "bfb79327-d186-4b2c-ad58-f48e82fed4f5"
+
+[[outputs]]
+id = "eurPycAK2ZpkvvTRlFNwu"
+uri = "file://.local/outputs/Spl-Sale-Column-E-Routing-Check.csv"
+type = "table"
+title = "Spl Sale Column E Routing Check (CSV)"
+description = "Read-only Plumbing routing check for all 236 uploaded items, treating column E as the piece quantity to schedule. No optimiser has been run."
+logical_id = "e275acb3-773d-4549-a07f-69f9ed8898b2"
+content_hash = "sha256:207113cdc7fe99a5f35e6dec0bf85d03105d44351cacf0baf3229c12006b0077"
+size = 20119
+mtime_ms = 1788854152163
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/e275acb3-773d-4549-a07f-69f9ed8898b2/83eccb8b-fbc2-4c97-9b6b-4de32106be88"
+storage_version_token = "1788854153755374"
+content_type = "text/csv"
+
+[[outputs]]
+id = "Xx_QAfFm565-UQ33vCmRi"
+uri = "file://.local/outputs/Plumbing-Machine-Routing-Map-Aug-2026.csv"
+type = "table"
+title = "Plumbing Machine Routing Map — August 2026 (CSV)"
+description = "Read-only current-effective-month routing map listing each Plumbing machine, materials, and capable item codes."
+logical_id = "a80cf697-d36e-4122-b890-90442e37d9fc"
+content_hash = "sha256:27581e176bb70b8a7457be49f77b3746a3887ee8330341fee7219865fd3a2664"
+size = 6922
+mtime_ms = 1788854170675
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a80cf697-d36e-4122-b890-90442e37d9fc/5c114dfc-9957-4c4b-8439-140507a0b564"
+storage_version_token = "1788854171540729"
+content_type = "text/csv"
