@@ -1,0 +1,85 @@
+# Machine Planning from `Spl_Sale.xlsx` — Which Machine Runs What
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+A file has been uploaded: **`Spl_Sale.xlsx`**, single tab **`Pending Prod.`**.
+
+---
+
+## READ THIS FIRST — what the file actually is
+
+Its columns are:
+
+```
+A Item Code · B Item Name · C Category · D Packing · E Net Stock · F Weight/Pc (g) · G Total Weight (kg)
+```
+
+**Column E is Net Stock — finished pieces already on hand.** It is **not** a production quantity and **not** a release plan. There is no "Production Plan" column, so this file will **not** load through the normal release-plan upload (`_locate_plan_columns` looks for `Item Code` + `Production Plan` by header text).
+
+**Totals for reference:** 236 items · **232,214 pieces** · **205,882.38 kg**.
+
+In planning terms, stock is what gets **subtracted from demand** — it tells the planner what *not* to make. Do not treat column E as something to produce.
+
+---
+
+## What I need
+
+**Which machine would run which product** — the routing view — for the items in this file. Two steps.
+
+### STEP 1 — Report the routing (READ-ONLY, do this first)
+
+The machine-to-product mapping lives in the **`mp_routing`** table, not in the repo or in this file. So report it from the database:
+
+1. For `segment = 'PLUMBING'`, current effective month, list from `mp_routing`: **each machine and the item codes / materials it is capable of running.**
+2. For each of the 236 item codes in `Spl_Sale.xlsx`, show its **capable machine(s)** via `get_routing()`.
+3. List every item with **no capable machine** (the `no_machine` set) — these cannot be planned and must be visible.
+4. Note which categories fall outside Plumbing planning entirely. From the file: `WATER TANK`, `CPVC-TRADING`, `Agri-Trading`, `Trading`, and 22 rows with a blank category (which carry 102,941 kg — the largest weight block, so say what they are).
+
+**Do not run the optimiser yet. Report the routing map first**, so I can confirm it looks right before anything is scheduled.
+
+### STEP 2 — Then produce the machine plan
+
+Once Step 1 is confirmed, produce a **machine-by-machine table**:
+
+```
+Machine | Material | Items it would run | Total pieces | Total kg | Est. hours
+```
+
+Using the existing planner logic — do not write a new calculation:
+- **Routing** decides which machines are capable.
+- **Per-hour rates** give the hours (kg ÷ rate per machine-hour).
+- **BOM weights** convert pieces to kg where needed — though this file already carries `Weight/Pc` and `Total Weight`, so **report if the file's weights disagree with the BOM seed** rather than silently preferring one.
+
+Also report:
+- items assigned to more than one capable machine, and how the load was split
+- machines in the routing that received **no** load (`idle_machines`)
+- extrusion machines with **no routing rows at all** (`locked_out_machines`)
+
+---
+
+## Important — treat this as a stock file, not a demand file
+
+Because column E is stock, a true production plan needs a **demand or release-plan** figure to net it against:
+
+```
+net demand = demand − net stock
+```
+
+Without a demand file, you can only show **which machines are capable of these items** — which is what Step 2 asks for. **Do not invent a demand figure to make a schedule.** If you produce anything that looks like a production schedule, state plainly that it is a **capability/routing view**, not a plan to produce, since no demand was supplied.
+
+If a release plan for this period already exists in the system, say so — then the two can be joined properly, and I will ask for that as a separate step.
+
+---
+
+## Constraints
+
+- **Seeds:** check the seed freshness first. Wastage and Rejection were last seeded 29 days ago. If any seed is stale, **say so before planning** — a plan built on stale wastage or rejection assumptions will be wrong (this is what the Planning Hub's re-seed warning is for).
+- **Scope:** Plumbing only. PTMT is not yet active in planning.
+- **No code changes.** No Sheets writes (**R-21**). No cache clearing (**R-34**).
+- **Do not fabricate routing.** If an item has no routing row, it appears in `no_machine` — never guess a machine for it.
+- Every figure must trace to `mp_routing`, the per-hour rate seed, or the uploaded file. State which, per column.
+
+## Report back
+
+Step 1: the routing map, the `no_machine` list, and the out-of-scope categories including the 22 blank-category rows.
+Step 2: the machine-by-machine table, the split logic, idle and locked-out machines, any file-vs-BOM weight disagreements, and a clear statement that this is a capability view unless a demand file was joined.
