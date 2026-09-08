@@ -1,0 +1,77 @@
+# Item Code Matching — The Dash Defect (DIAGNOSE FIRST)
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Report before changing anything** (**R-28**). Do not adjust any figure to make it match (**R-30**).
+
+---
+
+## The defect
+
+The `Spl_Sale` planning run left **173 of 236 items unscheduled**, 140 of them with the reason *"No capable Plumbing machine route."* A large share of those are **not missing routes at all — they are the same item written two ways.**
+
+The stock file uses a **dash**; the routing table does not:
+
+| File code | Routing code (visible in Data Setup → Pipe Routing) | Pieces | Weight |
+|---|---|---:|---:|
+| `PS-2` | `PS2` | 8,259 | 5,120.6 kg |
+| `PS-2S` | `PS2S` | 346 | 357.5 kg |
+| `PS-3` | `PS3` | 4,670 | 4,623.3 kg |
+| `PS-13` | `PS13` | 1,599 | 1,279.2 kg |
+
+The Pipe Routing tab shows `PS18 · PS18S · PS19 · PS19S · PS1S · PS2 · PS2S · PS3 · PS3S · PS4 · PS4S · PS5 · PS6 · PS6S · PS7` — **no dashes anywhere.** So `PS-2` in the file can never match `PS2` in routing, and the item is dropped as unroutable.
+
+**Scale of the problem:**
+- Dashed CPVC/UPVC pipe codes (`PS-` / `PU-`): **7 items · 24,679 pcs · 21,926 kg**
+- Dashed AGRI codes (`A-` / `AS-`): **35 items · 13,322 pcs · 4,565 kg**
+- Together: **26,491 kg — about 19% of all unscheduled weight**, wrongly excluded from planning.
+
+---
+
+## STEP 1 — Diagnose and report (read-only)
+
+1. **Confirm the mismatch.** For every unscheduled item with reason "No capable Plumbing machine route", normalise its code (strip non-alphanumerics, uppercase) and test whether a routing row exists for the normalised form. Report every item where a route **does** exist under a different spelling.
+
+2. **Report the normalisation the code uses today.** `mp_engine.py` already has item-code cleaning (around lines 242–260 — it keeps short all-numeric codes like `5110`, drops ERP IDs and header rows). Print the exact function and say whether it strips dashes. If it does not, that is the defect.
+
+3. **Check the reverse direction too.** Are there routing rows whose codes have dashes while the file's do not? Same normalised comparison, other way round.
+
+4. **List all other separator variants**, not just dashes: spaces (`PS 2`), dots (`PS.2`), trailing letters or suffixes (`PS-2S` vs `PS2S`), and differing case. Report each family found.
+
+5. **Confirm the genuinely unroutable set.** After normalised matching, how many items *really* have no route? Those are a legitimate routing-data gap and need listing separately — do not lump them in with the dash cases.
+
+**Report all five before making any change.**
+
+---
+
+## STEP 2 — Fix (only after Step 1 is reviewed)
+
+Normalise item codes **at comparison time**, in one shared helper used by every place that matches a code against routing, BOM weights or per-hour rates.
+
+- Normalise for **matching only**. Always **display and store the original code as written** — never rewrite the source spelling.
+- Strip non-alphanumerics and upper-case for the comparison key: `PS-2` → `PS2`, `A-27C` → `A27C`.
+- **Do not merge codes that differ by more than punctuation.** `PS2` and `PS2S` are *different items* — the trailing `S` is meaningful and must not be normalised away. Only separators are removed.
+- If a normalised key matches **more than one** routing row, that is an ambiguity — **report it, do not guess.**
+
+### Validate
+
+- The four named items above must route: `PS-2` → `PS2`, `PS-2S` → `PS2S`, `PS-3` → `PS3`, `PS-13` → `PS13`.
+- **`PS2` and `PS2S` must remain distinct** — confirm they did not collapse into one.
+- Report the unscheduled count before and after (currently 173 of 236), and the weight recovered.
+- **No figure changes for items that already routed.** The 63 scheduled items must produce identical output.
+- Nothing in the routing table is edited — this is a matching fix, not a data fix.
+
+---
+
+## Also report separately
+
+**22 rows have a blank category and zero in column E**, currently dismissed as *"Blank-category subtotal/non-item row."* In the original `Spl_Sale.xlsx` these carry **102,941 kg — the single largest weight block in the file.** Confirm what they are: subtotal rows, or real items whose category is simply missing? If they are real items, that weight is being silently dropped and matters more than the dash defect.
+
+---
+
+## Constraints
+
+- Plumbing only; PTMT not yet active in planning.
+- No Sheets writes (**R-21**). No cache clearing (**R-34**).
+- Do not fabricate a route for any item that genuinely has none.
+- Every recovered item must trace to a real `mp_routing` row — state which.

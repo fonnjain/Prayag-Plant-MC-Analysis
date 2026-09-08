@@ -192,3 +192,17 @@ mtime_ms = 1788854731284
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/b50494e0-9c67-4a10-8092-70fbb0a8e18e/9d2bd4c7-2d7a-4eb0-9b7a-843faf501ed9"
 storage_version_token = "1788854759093852"
 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "5vyttp4Xs8cWk5LGaTisD"
+uri = "file://.local/outputs/Spl-Sale-Dash-Defect-Diagnostic.csv"
+type = "table"
+title = "Spl Sale — Item-code Matching Diagnostic"
+description = "Read-only evidence listing all 24 recoverable spelling mismatches with their real routing rows, all 116 genuine Plumbing routing gaps, and the 22 blank-category subtotal rows."
+logical_id = "705c59c0-4869-45df-9717-2b0cd76519e5"
+content_hash = "sha256:dd32725a24a22c6d38c4e4c350d1c711fb87f846263e8399388068467aed0a64"
+size = 22029
+mtime_ms = 1788857209415
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/705c59c0-4869-45df-9717-2b0cd76519e5/725bfbc3-33d1-4a3a-abea-178d2e56a62b"
+storage_version_token = "1788857218222572"
+content_type = "text/csv"
