@@ -178,3 +178,17 @@ mtime_ms = 1788854170675
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a80cf697-d36e-4122-b890-90442e37d9fc/5c114dfc-9957-4c4b-8439-140507a0b564"
 storage_version_token = "1788854171540729"
 content_type = "text/csv"
+
+[[outputs]]
+id = "q_NMGSIDWKTzqY9ZxZl8V"
+uri = "file://.local/outputs/Spl-Sale-Day-Wise-Machine-Planning.xlsx"
+type = "table"
+title = "Spl Sale — Day-wise Machine Planning (Excel)"
+description = "Detailed machine-wise and item-wise daily plan for the 63 mapped Plumbing items, with summaries, assumptions, source stock, and all 173 excluded rows listed separately as Unscheduled."
+logical_id = "b50494e0-9c67-4a10-8092-70fbb0a8e18e"
+content_hash = "sha256:dac4aec7f0b65b7277f85d299bd1af01f634a5c77456046299f761321c7665b5"
+size = 71325
+mtime_ms = 1788854731284
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/b50494e0-9c67-4a10-8092-70fbb0a8e18e/9d2bd4c7-2d7a-4eb0-9b7a-843faf501ed9"
+storage_version_token = "1788854759093852"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
