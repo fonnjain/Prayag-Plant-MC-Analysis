@@ -70,6 +70,16 @@ class TestNormCode:
     def test_pure_code(self):
         assert norm_code("PS-12") == "PS12"
 
+    def test_strips_dots(self):
+        assert norm_code("PS.12") == "PS12"
+
+    def test_meaningful_suffix_is_preserved(self):
+        assert norm_code("PS-2S") == "PS2S"
+        assert norm_code("PS-2") != norm_code("PS-2S")
+
+    def test_slash_is_preserved(self):
+        assert norm_code("GP346MW/H") == "GP346MW/H"
+
 
 class TestToFloat:
     def test_integer_string(self):

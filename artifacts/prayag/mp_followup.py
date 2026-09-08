@@ -555,11 +555,11 @@ def build_plan_lines_from_schedule(
     item_by_code: dict = {}
     if engine_result is not None:
         for it in (engine_result.items or []):
-            item_by_code[it.item_code] = it
+            item_by_code[_norm_code(it.item_code)] = it
 
     lines = []
     for block in (sched.blocks or []):
-        item = item_by_code.get(block.item_code)
+        item = item_by_code.get(_norm_code(block.item_code))
         net_hrs  = max(0.0, float(block.planned_hours) - float(block.excess_hours))
         rate     = float(item.rate_kg_per_hr) if item else 0.0
         kg       = net_hrs * rate

@@ -24,6 +24,7 @@ from mp_engine import (
     DemandItem,
     EngineResult,
     ItemResult,
+    ItemCodeAmbiguityError,
     MachineLoad,
     PlanTotals,
     _baseline_assign,
@@ -361,6 +362,41 @@ class TestCoverageGaps:
              patch("mp_model.get_params",          return_value=_params()):
             result = run_engine(demand, "2026-07")
         assert "SWRX" in result.coverage_gaps.no_machine
+
+    def test_engine_normalises_direct_demand_and_lookup_rows(self):
+        demand = [DemandItem("PS-2", "PS-2", "CPVC", 100)]
+        # Deliberately bypass seed normalisation on every mocked DB boundary.
+        bom = [{"item_code": "PS.2", "weight_per_pc_kg": 0.05}]
+        ph = [{"item_code": "PS 2", "value": 50.0, "basis": "kg_per_hr"}]
+        rt = [{
+            "item_code": "PS2", "machine": "M/C-1",
+            "material": "CPVC", "capable": True,
+        }]
+        mc = [_machine_row("M/C-1")]
+        with patch("mp_model.get_bom_weight_rows", return_value=bom), \
+             patch("mp_model.get_per_hour", return_value=ph), \
+             patch("mp_model.get_routing", return_value=rt), \
+             patch("mp_model.get_machines", return_value=mc), \
+             patch("mp_model.get_params", return_value=_params()):
+            result = run_engine(demand, "2026-07")
+        assert result.coverage_gaps.no_weight == []
+        assert result.coverage_gaps.no_machine == []
+        assert result.items[0].item_code == "PS2"
+        assert result.items[0].rate_kg_per_hr == 50.0
+
+    def test_engine_rejects_normalised_lookup_ambiguity(self):
+        demand = [DemandItem("PS2", "PS2", "CPVC", 100)]
+        bom = [
+            {"item_code": "PS-2", "weight_per_pc_kg": 0.05},
+            {"item_code": "PS.2", "weight_per_pc_kg": 0.06},
+        ]
+        with patch("mp_model.get_bom_weight_rows", return_value=bom), \
+             patch("mp_model.get_per_hour", return_value=[]), \
+             patch("mp_model.get_routing", return_value=[]), \
+             patch("mp_model.get_machines", return_value=[]), \
+             patch("mp_model.get_params", return_value=_params()):
+            with pytest.raises(ItemCodeAmbiguityError, match="mp_bom_weight"):
+                run_engine(demand, "2026-07")
 
     def test_locked_out_machine_reported(self):
         demand = _demand([("PS2", 1000)])

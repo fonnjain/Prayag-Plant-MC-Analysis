@@ -206,3 +206,17 @@ mtime_ms = 1788857209415
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/705c59c0-4869-45df-9717-2b0cd76519e5/725bfbc3-33d1-4a3a-abea-178d2e56a62b"
 storage_version_token = "1788857218222572"
 content_type = "text/csv"
+
+[[outputs]]
+id = "etWs1QX1lm24afN1dUhyG"
+uri = "file://.local/outputs/Spl-Sale-Day-Wise-Machine-Planning-Fixed.xlsx"
+type = "table"
+title = "Spl Sale — Corrected Machine Planning Export"
+description = "Re-generated through shared item-code normalization. Contains 87 routed items, 149 unscheduled rows, and explicitly flags A-721 as route-matched but blocked by missing BOM weight."
+logical_id = "9e918437-9fd8-49d7-a971-02b2656eb0aa"
+content_hash = "sha256:f86917f9e42ce2a045b5fa2336f08b7110279c28b72e8396e9071cd435122daa"
+size = 48369
+mtime_ms = 1788866789521
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/9e918437-9fd8-49d7-a971-02b2656eb0aa/9c07cce6-7aab-4b4a-95c1-0963c944a241"
+storage_version_token = "1788866843383353"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

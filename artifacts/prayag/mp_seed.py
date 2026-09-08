@@ -78,14 +78,15 @@ def current_month() -> str:
 
 
 def norm_code(code: str) -> str:
-    """Normalise an item code: strip, uppercase, remove all spaces and hyphens.
+    """Normalise an item code: strip, uppercase, remove spaces, hyphens, and dots.
 
     Examples:
         "PW 11"  -> "PW11"
         "PW-11"  -> "PW11"
+        "PW.11"  -> "PW11"
         " ps-16 "-> "PS16"
     """
-    return re.sub(r"[\s\-]+", "", str(code).strip()).upper()
+    return re.sub(r"[\s\-.]+", "", str(code).strip()).upper()
 
 
 def _to_float(val: str) -> Optional[float]:
@@ -205,6 +206,10 @@ def parse_bom_weights(rows: List[list]) -> List[dict]:
         raw_code = _cell(row, code_col)
         raw_wt = _cell(row, wt_col)
         if not raw_code or not raw_wt:
+            continue
+        # Decimal-only values are OD/size labels, not item codes.  Check the
+        # source spelling before norm_code removes the separator.
+        if re.fullmatch(r"\d+\.\d+", str(raw_code).strip()):
             continue
         nc = norm_code(raw_code)
         if not nc:

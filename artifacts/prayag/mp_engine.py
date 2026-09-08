@@ -26,6 +26,31 @@ except ImportError:
 
 # ── local imports (all mp_* — never production pipeline) ────────────────────
 from mp_seed import norm_code as _norm_code, SEGMENT as _DEFAULT_SEGMENT
+class ItemCodeAmbiguityError(ValueError):
+    """Raised when distinct source spellings collapse to one comparison key."""
+
+
+def _assert_unambiguous_item_codes(rows: List[dict], source: str) -> None:
+    spellings: Dict[str, Set[str]] = defaultdict(set)
+    for row in rows:
+        raw = str(row.get("item_code") or "").strip()
+        key = _norm_code(raw)
+        if key and raw:
+            spellings[key].add(raw)
+    collisions = {
+        key: sorted(values)
+        for key, values in spellings.items() if len(values) > 1
+    }
+    if collisions:
+        details = "; ".join(
+            f"{key}: {', '.join(values)}"
+            for key, values in sorted(collisions.items())
+        )
+        raise ItemCodeAmbiguityError(
+            f"Ambiguous normalised item codes in {source}: {details}"
+        )
+
+
 import mp_model as _mp
 import mp_rejection_plan as _mp_rej
 import mp_wastage as _mp_wst
@@ -262,11 +287,11 @@ def _is_skip_row(cell_a: str, cell_d: str) -> bool:
         return True
     if _is_total_row(cell_a):
         return True
+    # Check decimal-only OD/size labels before normalisation removes the dot.
+    if re.fullmatch(r"\d+\.\d+", str(cell_a).strip()):
+        return True
     nc = _norm_code(cell_a)
     if not nc:
-        return True
-    # Decimal size tokens ("104.8", "1.0") — digits.digits, no letters
-    if re.match(r'^\d+\.\d+$', nc):
         return True
     # Long all-digit strings are ERP IDs or row serials, not item codes
     if nc.isdigit() and len(nc) >= 8:
@@ -445,14 +470,14 @@ def _build_rate_lookups(
     routing_material: Dict[str, str] = {}
     for r in routing_rows:
         if r["machine"].startswith("M/C-"):
-            routing_material.setdefault(r["item_code"], r.get("material", ""))
+            routing_material.setdefault(_norm_code(r["item_code"]), r.get("material", ""))
 
     ph_dict: Dict[str, float] = {}
     ph_by_mat: Dict[str, List[float]] = defaultdict(list)
     for r in per_hour_rows:
         if r["basis"] != "kg_per_hr":
             continue
-        ic  = r["item_code"]
+        ic  = _norm_code(r["item_code"])
         val = float(r["value"])
         if not math.isfinite(val) or val <= 0:
             continue
@@ -524,7 +549,7 @@ def _pipe_fallback_reference(
 ) -> Tuple[float, str]:
     """Return the rate this direct item would get if its own rate were absent."""
     routing_material = {
-        r["item_code"]: r.get("material", "")
+        _norm_code(r["item_code"]): r.get("material", "")
         for r in routing_rows if str(r.get("machine", "")).startswith("M/C-")
     }
     material_peers = [
@@ -730,8 +755,18 @@ def run_engine(
     ph_rows    = _mp.get_per_hour(segment, effective_month)
     routing    = _mp.get_routing(segment, effective_month)
     machines   = _mp.get_machines(segment, effective_month, kind="extrusion")
+    _assert_unambiguous_item_codes(bom_rows, "mp_bom_weight")
+    _assert_unambiguous_item_codes(ph_rows, "mp_per_hour")
+    _assert_unambiguous_item_codes(routing, "mp_routing")
 
-    bom: Dict[str, float] = {r["item_code"]: float(r["weight_per_pc_kg"]) for r in bom_rows}
+    demand = [
+        dataclasses.replace(d, item_code=_norm_code(d.item_code))
+        for d in demand
+    ]
+    bom: Dict[str, float] = {
+        _norm_code(r["item_code"]): float(r["weight_per_pc_kg"])
+        for r in bom_rows
+    }
 
     # Per-machine params
     mc_params: Dict[str, dict] = {m["machine"]: m for m in machines}
@@ -746,7 +781,7 @@ def run_engine(
     for r in routing:
         mc = r["machine"]
         if mc.startswith("M/C-") and r.get("capable", True):
-            ic = r["item_code"]
+            ic = _norm_code(r["item_code"])
             if mc not in pipe_caps[ic]:
                 pipe_caps[ic].append(mc)
             routed_machines.add(mc)
@@ -1183,7 +1218,7 @@ def _build_fitting_rate_lookups(
     float,                    # overall_avg_pcs
 ]:
     """Resolve fitting rates from direct standards to conservative peer fallbacks."""
-    item_material = {d.item_code: d.material for d in demand}
+    item_material = {_norm_code(d.item_code): d.material for d in demand}
 
     fstd_by_item: Dict[str, List[dict]] = defaultdict(list)
     mat_pcs: Dict[str, List[float]] = defaultdict(list)
@@ -1201,7 +1236,7 @@ def _build_fitting_rate_lookups(
         )
         entry  = {"machine": r["machine"], "cavity": cavity,
                   "cycle_time_sec": cycle, "pcs_per_hr": pps}
-        ic = r["item_code"]
+        ic = _norm_code(r["item_code"])
         fstd_by_item[ic].append(entry)
         if pps is not None:
             mat = item_material.get(ic)
@@ -1212,12 +1247,12 @@ def _build_fitting_rate_lookups(
     cycle_ph: Dict[str, float] = {}
     for r in per_hour_rows:
         if r["basis"] == "cycle":
-            cycle_ph[r["item_code"]] = float(r["value"])
+            cycle_ph[_norm_code(r["item_code"])] = float(r["value"])
 
     # also add per_hour cycle items to mat_pcs if not already in fitting_std
     for r in per_hour_rows:
         if r["basis"] == "cycle":
-            ic = r["item_code"]
+            ic = _norm_code(r["item_code"])
             if ic not in fstd_by_item:
                 cycle_val = float(r["value"])
                 pps = 3600.0 / cycle_val if cycle_val > 0 else None
@@ -1345,20 +1380,21 @@ def _build_fitting_routes(
     Material→machine map is derived from demand items that have fitting_std entries —
     those are the items whose material we know and whose historical machine we know.
     """
-    item_material = {d.item_code: d.material for d in demand}
+    item_material = {_norm_code(d.item_code): d.material for d in demand}
 
     # Primary routes from fitting_std
     item_routes: Dict[str, List[str]] = defaultdict(list)
     for r in fitting_std_rows:
         mc = r["machine"]
-        if mc and mc not in item_routes[r["item_code"]]:
-            item_routes[r["item_code"]].append(mc)
+        ic = _norm_code(r["item_code"])
+        if mc and mc not in item_routes[ic]:
+            item_routes[ic].append(mc)
 
     # Supplement with mp_routing non-M/C rows (should be identical data)
     for r in routing_rows:
         mc = r["machine"]
         if _is_moulding_machine(mc) and r.get("capable", True):
-            ic = r["item_code"]
+            ic = _norm_code(r["item_code"])
             if mc not in item_routes[ic]:
                 item_routes[ic].append(mc)
 
@@ -1540,8 +1576,19 @@ def run_fitting_engine(
     routing_rows = _mp.get_routing(segment, effective_month)
     fstd_rows    = _mp.get_fitting_std(segment, effective_month)
     mc_rows      = _mp.get_machines(segment, effective_month)
+    _assert_unambiguous_item_codes(bom_rows, "mp_bom_weight")
+    _assert_unambiguous_item_codes(ph_rows, "mp_per_hour")
+    _assert_unambiguous_item_codes(routing_rows, "mp_routing")
+    _assert_unambiguous_item_codes(fstd_rows, "mp_fitting_std")
 
-    bom: Dict[str, float] = {r["item_code"]: float(r["weight_per_pc_kg"]) for r in bom_rows}
+    demand = [
+        dataclasses.replace(d, item_code=_norm_code(d.item_code))
+        for d in demand
+    ]
+    bom: Dict[str, float] = {
+        _norm_code(r["item_code"]): float(r["weight_per_pc_kg"])
+        for r in bom_rows
+    }
 
     # Only moulding machines for fittings
     mc_params: Dict[str, dict] = {

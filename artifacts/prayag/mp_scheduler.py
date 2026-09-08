@@ -25,6 +25,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 import mp_model as _mp
+from mp_seed import norm_code as _norm_code
 
 
 # ── Public dataclasses ────────────────────────────────────────────────────────
@@ -561,7 +562,7 @@ def run_shift_schedule(
         return float(r.get("hours_per_shift") or 10.0)
 
     # ── Build demand_map: item_code → DemandItem ──────────────────────────────
-    demand_map = {d.item_code: d for d in demand_items}
+    demand_map = {_norm_code(d.item_code): d for d in demand_items}
 
     # ── Build work items from engine output ───────────────────────────────────
     work_items: List[_WorkItem] = []
@@ -571,7 +572,7 @@ def run_shift_schedule(
         if it.machine_hrs <= 1e-6:
             continue
 
-        d = demand_map.get(it.item_code)
+        d = demand_map.get(_norm_code(it.item_code))
         if d is not None:
             # Restore int keys (JSON storage converts them to str)
             wq_raw = getattr(d, "week_qty", {}) or {}
