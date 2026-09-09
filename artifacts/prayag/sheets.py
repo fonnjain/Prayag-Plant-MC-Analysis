@@ -19,6 +19,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import logging
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, List, Optional, Tuple
@@ -196,10 +197,38 @@ def _mint_deployment_identity() -> str:
     endpoint may briefly return a startup error. Match the supported connector
     SDK's bounded five-second retry behavior.
     """
-    endpoint = "http://127.0.0.1:1105/getIdentityToken"
-    body = json.dumps({"audience": _connector_audience()}).encode("utf-8")
     deadline = time.monotonic() + 5.0
     last_error: Optional[BaseException] = None
+    audience = _connector_audience()
+
+    # Follow the connectors SDK exactly: prefer the Replit CLI mint because it
+    # runs in the deployment's full identity context. hostingpid1 is the
+    # supported fallback while the CLI is unavailable or still starting.
+    try:
+        remaining = max(0.05, deadline - time.monotonic())
+        result = subprocess.run(
+            [
+                os.environ.get("REPLIT_CLI", "replit"),
+                "identity",
+                "create",
+                "--audience",
+                audience,
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=remaining,
+        )
+        token = result.stdout.strip()
+        if token:
+            logger.info("connector identity: deployment token minted via CLI")
+            return token
+        last_error = ValueError("replit identity create returned an empty token")
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        last_error = exc
+
+    endpoint = "http://127.0.0.1:1105/getIdentityToken"
+    body = json.dumps({"audience": audience}).encode("utf-8")
 
     while time.monotonic() < deadline:
         remaining = max(0.05, deadline - time.monotonic())
@@ -215,7 +244,7 @@ def _mint_deployment_identity() -> str:
             token = str(payload.get("identityToken", "")).strip()
             if not token:
                 raise ValueError("local identity endpoint returned an empty token")
-            logger.info("connector identity: deployment token minted")
+            logger.info("connector identity: deployment token minted via loopback")
             return token
         except urllib.error.HTTPError as exc:
             last_error = exc

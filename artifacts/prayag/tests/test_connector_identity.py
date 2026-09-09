@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import subprocess
 from unittest.mock import patch
 
 import sheets
@@ -26,14 +27,41 @@ def test_deployment_identity_is_minted_for_connectors():
     response = _JsonResponse({"identityToken": "minted-test-token"})
 
     with patch.dict(os.environ, env, clear=True):
-        with patch("urllib.request.urlopen", return_value=response) as urlopen:
-            assert sheets._connector_xtokens() == ["depl minted-test-token"]
+        with patch(
+            "subprocess.run", side_effect=FileNotFoundError("replit")
+        ):
+            with patch("urllib.request.urlopen", return_value=response) as urlopen:
+                assert sheets._connector_xtokens() == ["depl minted-test-token"]
 
     request = urlopen.call_args.args[0]
     assert request.full_url == "http://127.0.0.1:1105/getIdentityToken"
     assert json.loads(request.data) == {
         "audience": "https://connectors.replit.com"
     }
+
+
+def test_deployment_identity_prefers_replit_cli():
+    env = {
+        "REPLIT_DEPLOYMENT_ID": "deployment-test",
+        "REPLIT_CONNECTORS_AUDIENCE": "connectors.replit.com",
+    }
+    completed = subprocess.CompletedProcess(
+        args=["replit"], returncode=0, stdout="cli-minted-token\n", stderr=""
+    )
+
+    with patch.dict(os.environ, env, clear=True):
+        with patch("subprocess.run", return_value=completed) as run:
+            with patch("urllib.request.urlopen") as urlopen:
+                assert sheets._connector_xtokens() == ["depl cli-minted-token"]
+
+    assert run.call_args.args[0] == [
+        "replit",
+        "identity",
+        "create",
+        "--audience",
+        "https://connectors.replit.com",
+    ]
+    urlopen.assert_not_called()
 
 
 def test_development_connector_uses_repl_identity():
