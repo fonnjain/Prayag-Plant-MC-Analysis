@@ -248,3 +248,17 @@ mtime_ms = 1788928706585
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/ad5d2731-d132-4793-8bf5-732d5e476cd7/6fa6d58e-ddd8-4341-b05b-1b6436471cb5"
 storage_version_token = "1788928707434341"
 content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+[[outputs]]
+id = "dn3EINeEY_jciKmX5hMXL"
+uri = "file://.local/outputs/Prayag-Plumbing-Capacity-and-Scheduling-Contract.docx"
+type = "word_document"
+title = "Prayag Plumbing Capacity and Scheduling Contract"
+description = "Complete Word-document response to the September Plumbing capacity query, covering Parts A–F with production database evidence, tables, API contract, and clearly stated unknowns."
+logical_id = "223621be-4418-44ae-87f2-19a35a2edc63"
+content_hash = "sha256:593b5a773320a4a7016daf1a28b835306456dc92bfd7178605549e48dd75f029"
+size = 45732
+mtime_ms = 1788950861236
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/223621be-4418-44ae-87f2-19a35a2edc63/3b7e0510-337b-49f4-9063-2d8a16252ed4"
+storage_version_token = "1788950870317442"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
