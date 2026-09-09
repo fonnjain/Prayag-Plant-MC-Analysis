@@ -3,8 +3,8 @@ name: Prayag production connector identity
 description: Credential precedence for Replit connector calls from published Prayag runtimes.
 ---
 
-When requesting Replit connector credentials, try the deployment renewal identity before the repl identity when both are available, while retaining the repl identity as a fallback.
+When requesting Replit connector credentials from a published runtime, mint an audience-scoped deployment identity through the local hosting identity endpoint. Never send the raw deployment renewal credential to the connector service. Development can continue using the repl identity.
 
-**Why:** A published VM exposed both identity variables. Selecting the repl identity first caused connector-service 401 responses for Google Sheets and Drive even though development reads and the connected-account status were healthy.
+**Why:** Raw deployment renewal credentials are explicitly rejected by the connector service. Sending one caused 401 responses for Google Sheets and Drive even though development reads and the connected-account status were healthy.
 
-**How to apply:** Any shared connector-token helper used in both development and publishing must prefer the deployment-scoped credential and may fall back to the repl-scoped credential if the first request fails.
+**How to apply:** Detect deployment markers, mint against the connector audience through hostingpid1's loopback endpoint with a bounded startup retry, and send the resulting token as a deployment identity. Fail closed if minting fails.

@@ -157,20 +157,78 @@ def sync_status() -> dict:
     }
 
 
-def _connector_xtokens() -> List[str]:
-    """Return connector credentials in the order appropriate for this runtime.
+def _is_deployment_environment() -> bool:
+    if os.environ.get("REPLIT_CONRUN"):
+        return False
+    return any(
+        os.environ.get(name)
+        for name in (
+            "REPLIT_DEPLOYMENT_ID",
+            "REPLIT_DEPLOYMENT_ENVIRONMENT",
+            "WEB_REPL_RENEWAL",
+        )
+    )
 
-    Published apps can expose both identities.  The deployment renewal token
-    must win there; the repl identity remains the development/fallback path.
+
+def _connector_audience() -> str:
+    audience = os.environ.get("REPLIT_CONNECTORS_AUDIENCE", "").strip()
+    if not audience:
+        return "https://connectors.replit.com"
+    if audience.startswith(("http://", "https://")):
+        return audience
+    return "https://" + audience
+
+
+def _mint_deployment_identity() -> str:
+    """Mint the audience-scoped identity required by published connectors.
+
+    hostingpid1 starts identity renewal alongside the app, so its loopback
+    endpoint may briefly return a startup error. Match the supported connector
+    SDK's bounded five-second retry behavior.
     """
+    endpoint = "http://127.0.0.1:1105/getIdentityToken"
+    body = json.dumps({"audience": _connector_audience()}).encode("utf-8")
+    deadline = time.monotonic() + 5.0
+    last_error: Optional[BaseException] = None
+
+    while time.monotonic() < deadline:
+        remaining = max(0.05, deadline - time.monotonic())
+        req = urllib.request.Request(
+            endpoint,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=remaining) as response:
+                payload = json.load(response)
+            token = str(payload.get("identityToken", "")).strip()
+            if not token:
+                raise ValueError("local identity endpoint returned an empty token")
+            return token
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code < 500:
+                break
+        except (urllib.error.URLError, ValueError, OSError) as exc:
+            last_error = exc
+
+        retry_budget = deadline - time.monotonic()
+        if retry_budget <= 0:
+            break
+        time.sleep(min(0.25, retry_budget))
+
+    raise RuntimeError(
+        "Could not mint an audience-scoped deployment identity."
+    ) from last_error
+
+
+def _connector_xtokens() -> List[str]:
+    """Return connector credentials using the supported runtime identity."""
+    if _is_deployment_environment():
+        return ["depl " + _mint_deployment_identity()]
     repl_identity = os.environ.get("REPL_IDENTITY")
-    web_renewal = os.environ.get("WEB_REPL_RENEWAL")
-    tokens: List[str] = []
-    if web_renewal:
-        tokens.append("depl " + web_renewal)
-    if repl_identity:
-        tokens.append("repl " + repl_identity)
-    return tokens
+    return ["repl " + repl_identity] if repl_identity else []
 
 
 def _fetch_token() -> Tuple[Optional[str], float]:
