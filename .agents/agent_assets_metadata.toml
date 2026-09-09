@@ -276,3 +276,17 @@ mtime_ms = 1788967071919
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a20acf11-3326-4bfe-841d-4b3da3073438/39cc05d2-66f1-45d5-b0a4-5ecbc6d34f25"
 storage_version_token = "1788967080110806"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "RJMvP4svfUBapqbKIQWsD"
+uri = "file://.local/outputs/Prayag-September-Plumbing-Plan-Run-Blocker-Assessment.docx"
+type = "word_document"
+title = "September Plumbing Plan — Run & Export Assessment"
+description = "Word report covering the forward-plan source check, seven seed statuses, the missing-demand blocker, run outcome, authoritative scheduler chain, and required input to continue."
+logical_id = "a6697cdb-fbfc-434b-86d6-f239caa45f9f"
+content_hash = "sha256:f6a3dfea40dde76d7fc894cb52158a8dab913c6d679db462085e64c9c15f2436"
+size = 39097
+mtime_ms = 1788970215668
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a6697cdb-fbfc-434b-86d6-f239caa45f9f/1321eaac-2ade-4c22-9b35-d1135b0397d7"
+storage_version_token = "1788970225302434"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
