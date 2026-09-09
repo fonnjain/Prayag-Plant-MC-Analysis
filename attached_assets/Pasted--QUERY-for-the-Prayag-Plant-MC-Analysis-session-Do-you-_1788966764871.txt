@@ -1,0 +1,135 @@
+# QUERY — for the Prayag-Plant-MC-Analysis session
+
+## Do you already hold BOM weights for these 74 item codes?
+
+**Written 9 September 2026, from the production planning session.**
+
+**Read-only. One lookup. Nothing needs changing on your side.**
+
+Answer from that project's own record. **Where a code is absent, say absent** — an
+honest gap is more useful than a guess.
+
+---
+
+## Why I am asking
+
+September's Plumbing plan cannot make **151,853 pieces** because 149 items have no
+kilograms-per-piece weight in our BOM source. Without a weight the planner cannot
+convert pieces to kilograms, cannot compute machine hours, and drops the item before
+capacity is even considered.
+
+Of those 149, **74 have a category and a machine route** — they are genuine BOM gaps.
+The other 75 are unmapped codes that are not on the plan roster at all, which is a
+separate problem.
+
+```
+74 items    121,284 pieces    of which 27,448 are ALREADY SOLD
+71 of the 74 already have a machine route on our side. Only the weight is missing.
+```
+
+**You reported holding 1,426 valid normalized positive-weight BOM rows.** Our source
+holds roughly 2,100 raw rows, so the two sets are not identical.
+
+**If you hold weights for even half of these, most of a manual weighing exercise
+disappears.** That is the whole reason for this question.
+
+---
+
+## The 74 codes, largest demand first
+
+```
+PW11        PW71        S4          A-464       A-465       S3
+PW72        A-565       A-365       A-765       PW61        A-469
+CH72F       PW12        PC22        PC24        PW78        A-569
+A-364       PW91        A-761       PW17        RL02        PW18
+A-368       A-467       CM32        PC25        A-768       A-369
+PW15        A-667       PW75        PW16        A-366       PW79
+PW13        PW77        A-767       PW19        PW20        CH80F
+A-770       PW73        RL03        CM26        PW62        PW80
+A-271       CH24        CH80QS      PW14        CM31        PW63
+A-471       A-669       CH22        CH78QS      CH72QS      A-672
+5143        PW93        PW97        PW31        U125        PW74
+U24T        RL04        C887        A-671       CH23        CH25
+CH26        PW33
+```
+
+**Two of these are nearly half the problem:**
+
+```
+PW11    SWR Pipe    35,028 pieces    28.9%
+PW71    SWR Pipe    22,572 pieces    18.6%
+                    ------
+                    57,599           47.5%
+```
+
+If you hold weights for only those two, that alone is worth the lookup.
+
+---
+
+## The questions
+
+```
+1  For each of the 74, does your BOM hold a positive weight?
+
+   Please return: item code · weight in kg per piece · present or absent.
+   A CSV or a table is ideal.
+
+2  How many of the 74 do you hold?
+   How many are absent from your BOM as well?
+
+3  For any you hold, what is the source and how confident is it?
+   Measured, supplier data, derived from a similar item, or unknown.
+
+4  Your normalisation rule strips spaces, hyphens and dots, keeps slashes, and never
+   strips trailing letters or leading zeros. Ours differs.
+
+   Please match under YOUR rule and tell us if any of the 74 matched only after
+   normalisation — for example if PW-11 in your BOM is our PW11. Those would be
+   codes we could recover immediately by fixing a spelling rather than measuring
+   anything.
+
+5  Is there a read-only way for us to query your BOM in future?
+
+   Our side found no read-only BOM endpoint — only POST /data-api/v1/schedule, which
+   submits a schedule request and was correctly not called for a catalogue lookup.
+
+   If a read-only endpoint exists, or could reasonably be added, this class of
+   question stops needing a conversation.
+```
+
+---
+
+## What happens with the answer
+
+```
+you hold most of them     the request to Prayag becomes "please copy these across"
+                          rather than "please weigh 74 products"
+
+you hold some             we split the list — copy what exists, weigh the rest
+
+you hold none             the manual exercise proceeds, and we know the two BOMs
+                          have genuinely diverged
+```
+
+**Any of those three is a useful answer.** The one we cannot act on is not knowing.
+
+---
+
+## Context you may find useful
+
+Three things from our side that bear on this, in case they are new to you:
+
+**The BOM gap is larger than the capacity shortfall.** September Plumbing cannot make
+201,187 pieces. Only 49,334 of that is machines being full — all 24 moulding machines
+run at 100% of two-shift capacity every week. The remaining 151,853 is missing weights.
+
+**58,017 pieces of it are already sold** across the full 149. Goods a customer is
+waiting for, outside the plan because of a blank cell.
+
+**It has probably been happening for months.** Until this week our plan only showed a
+total and never said why an item had been left out, so nothing looked wrong.
+
+---
+
+**Nothing on your side needs to change.** If the weights exist in any readable form — a
+table, a query result, an export — that is enough.
