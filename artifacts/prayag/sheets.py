@@ -157,27 +157,44 @@ def sync_status() -> dict:
     }
 
 
-def _fetch_token() -> Tuple[Optional[str], float]:
-    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+def _connector_xtokens() -> List[str]:
+    """Return connector credentials in the order appropriate for this runtime.
+
+    Published apps can expose both identities.  The deployment renewal token
+    must win there; the repl identity remains the development/fallback path.
+    """
     repl_identity = os.environ.get("REPL_IDENTITY")
     web_renewal = os.environ.get("WEB_REPL_RENEWAL")
+    tokens: List[str] = []
+    if web_renewal:
+        tokens.append("depl " + web_renewal)
     if repl_identity:
-        xtoken = "repl " + repl_identity
-    elif web_renewal:
-        xtoken = "depl " + web_renewal
-    else:
+        tokens.append("repl " + repl_identity)
+    return tokens
+
+
+def _fetch_token() -> Tuple[Optional[str], float]:
+    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+    xtokens = _connector_xtokens()
+    if not xtokens:
         return None, 0.0
     if not host:
         return None, 0.0
 
     url = f"https://{host}/api/v2/connection?include_secrets=true"
-    req = urllib.request.Request(
-        url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.load(r)
-    except (urllib.error.URLError, ValueError, OSError) as e:
+    last_error: Optional[BaseException] = None
+    data = None
+    for xtoken in xtokens:
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.load(r)
+            break
+        except (urllib.error.URLError, ValueError, OSError) as e:
+            last_error = e
+    if data is None:
         # URLError covers DNS/connect failures; ValueError covers a malformed
         # JSON body; the bare OSError catches a raw socket-level TimeoutError
         # (read timed out mid-response) which is NOT a URLError and would
@@ -185,7 +202,7 @@ def _fetch_token() -> Tuple[Optional[str], float]:
         raise SheetReadError(
             "Couldn't verify the Google Sheets connection. "
             "Please reconnect it and try again."
-        ) from e
+        ) from last_error
 
     items = data.get("items", [])
     # Pick the google-sheet connection by id prefix; the API has no reliable
@@ -309,25 +326,25 @@ def _fetch_drive_token() -> Tuple[Optional[str], float]:
     any failure returns ``(None, 0.0)`` and the caller keeps the pinned sources.
     """
     host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
-    repl_identity = os.environ.get("REPL_IDENTITY")
-    web_renewal = os.environ.get("WEB_REPL_RENEWAL")
-    if repl_identity:
-        xtoken = "repl " + repl_identity
-    elif web_renewal:
-        xtoken = "depl " + web_renewal
-    else:
+    xtokens = _connector_xtokens()
+    if not xtokens:
         return None, 0.0
     if not host:
         return None, 0.0
 
     url = f"https://{host}/api/v2/connection?include_secrets=true"
-    req = urllib.request.Request(
-        url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.load(r)
-    except (urllib.error.URLError, ValueError, OSError):
+    data = None
+    for xtoken in xtokens:
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/json", "X-Replit-Token": xtoken}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.load(r)
+            break
+        except (urllib.error.URLError, ValueError, OSError):
+            continue
+    if data is None:
         return None, 0.0
 
     items = data.get("items", [])
