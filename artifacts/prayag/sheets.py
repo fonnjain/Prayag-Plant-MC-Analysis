@@ -205,6 +205,7 @@ def _mint_deployment_identity() -> str:
             token = str(payload.get("identityToken", "")).strip()
             if not token:
                 raise ValueError("local identity endpoint returned an empty token")
+            logger.info("connector identity: deployment token minted")
             return token
         except urllib.error.HTTPError as exc:
             last_error = exc
@@ -218,6 +219,12 @@ def _mint_deployment_identity() -> str:
             break
         time.sleep(min(0.25, retry_budget))
 
+    status = getattr(last_error, "code", None)
+    logger.error(
+        "connector identity: deployment mint failed type=%s status=%s",
+        type(last_error).__name__ if last_error else "unknown",
+        status if status is not None else "n/a",
+    )
     raise RuntimeError(
         "Could not mint an audience-scoped deployment identity."
     ) from last_error
@@ -252,6 +259,12 @@ def _fetch_token() -> Tuple[Optional[str], float]:
             break
         except (urllib.error.URLError, ValueError, OSError) as e:
             last_error = e
+            logger.error(
+                "connector identity: connection lookup failed identity=%s type=%s status=%s",
+                xtoken.split(" ", 1)[0],
+                type(e).__name__,
+                getattr(e, "code", "n/a"),
+            )
     if data is None:
         # URLError covers DNS/connect failures; ValueError covers a malformed
         # JSON body; the bare OSError catches a raw socket-level TimeoutError
@@ -400,7 +413,13 @@ def _fetch_drive_token() -> Tuple[Optional[str], float]:
             with urllib.request.urlopen(req, timeout=15) as r:
                 data = json.load(r)
             break
-        except (urllib.error.URLError, ValueError, OSError):
+        except (urllib.error.URLError, ValueError, OSError) as exc:
+            logger.error(
+                "connector identity: Drive connection lookup failed identity=%s type=%s status=%s",
+                xtoken.split(" ", 1)[0],
+                type(exc).__name__,
+                getattr(exc, "code", "n/a"),
+            )
             continue
     if data is None:
         return None, 0.0
