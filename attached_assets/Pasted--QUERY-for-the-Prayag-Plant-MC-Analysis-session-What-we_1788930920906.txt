@@ -1,0 +1,266 @@
+# QUERY — for the Prayag-Plant-MC-Analysis session
+
+## What we need to fit the September Plumbing plan to machine capacity
+
+**Written 9 September 2026, from the production planning session.**
+
+Answer from that project's own record. **Where something is not recorded, say so
+plainly** — an unknown is a useful answer and a reconstruction is not.
+
+**No changes are being asked for.** This is a data and contract request. Nothing on
+your side should be modified, deployed or run beyond read-only queries and, where
+stated, one small probe.
+
+---
+
+## Where we are
+
+We have produced a **September Plumbing Temporary Plan**, generated independently
+from the source files rather than copied from Prayag's workbook. It reproduces
+Prayag's own plan to **42 pieces in 1,799,518** — 0.002%.
+
+```
+group              our plan      Prayag       diff
+CPVC FITTINGS       417,863     417,864         −0
+CPVC FITTING        160,381     160,381         −0
+CPVC PIPE           127,923     127,924         −0
+CPVC SOLVENT         21,874      21,874         +0
+UPVC FITTING        709,654     709,654         +0
+UPVC PIPE            85,328      85,328         −0
+UPVC SOLVENT            193         193         −0
+SWR FITTING         215,484     215,489         −4
+SWR PIPE             59,959      59,996        −38
+SWR SOLVENT             816         816         −0
+                  ---------   ---------      -----
+                  1,799,476   1,799,518        −42
+```
+
+**That is Pass 1 — demand-true, before capacity.** It says what is needed, not what
+can be made.
+
+**Pass 2 is what we cannot do.** The planning app has no local Plumbing capacity
+model at all:
+
+```
+category capacity rows      12 categories, ALL ZERO
+                            no observed mean, no p90, no suggested, no override
+machine / pool rows         33, with MC7 and MC8 locked out
+local fallback              none — the route returns PLUMBING_SCHEDULER_FAILED,
+                            HTTP 502
+```
+
+So the entire Plumbing capacity picture lives on your side. We are asking for it.
+
+---
+
+## The unresolved contract question, stated honestly
+
+Your earlier reply said `POST /data-api/v1/schedule` does not exist — six GET routes
+only, and no `remaining_pcs` field anywhere in your code.
+
+Our probe to that exact path returned **HTTP 200**, and run #44 (August 2026,
+finalized) has **7 scheduler batches and 14 pipe-and-fitting result rows persisted**
+from something.
+
+**We have not yet captured the response body**, so we cannot say who is right. Both
+sessions were reasoning honestly from what they could see.
+
+**This request does not depend on resolving that.** If the API works, we use it. If
+it does not, we would rather have the capacity figures as data and fit the plan
+ourselves than wait for an integration to be built.
+
+---
+
+## Part A — the capacity numbers, whatever form they exist in
+
+**This is the part we most need. Everything else is secondary.**
+
+```
+A1   For each Plumbing production line or machine pool, what is its capacity
+     per day, in pieces and/or kilograms? Report whatever unit you hold it in.
+
+A2   How is that capacity derived — observed maximum, p90 of observed output,
+     rated machine speed, standard cycle time, or something else? Name the
+     method for each figure.
+
+A3   Over what period was it observed? Which months of data support it?
+
+A4   Which machines or pools are shared between product groups? The planning
+     side has been told that where two categories run on the same machines they
+     must be modelled as one pool, never two rows, or a plan promises the same
+     machines twice. Which Plumbing groups share?
+
+A5   MC7 and MC8 are recorded on our side as locked out. What does that mean —
+     under maintenance, decommissioned, reserved for another segment? Are they
+     excluded from available capacity, and since when?
+
+A6   Is capacity held per machine, per pool, per product group, or per item? If
+     per item, we would need the mapping from item to machine.
+
+A7   What is the total Plumbing plant capacity per day, and per month at the
+     September working-day count?
+```
+
+**If A1 can be answered as a table — pool, capacity, unit, method — that alone
+would let us fit the plan.**
+
+---
+
+## Part B — the routing, if it exists
+
+```
+B1   Is there an item-to-machine routing table for Plumbing? How many of the
+     876 items on Prayag's September planning tabs have a route?
+
+B2   What happens to an item with no route — is it unschedulable, does it fall
+     to a default machine, or is it estimated from a similar item?
+
+B3   Are per-hour or per-shift run rates held per item, per machine, or per
+     item-machine pair?
+
+B4   How many items have a rate but no route, or a route but no rate?
+
+B5   Your earlier reply mentioned a normalisation fix moving 24 items from
+     unroutable to routable — 32,373 pieces and 25,123 kg, taking scheduled
+     items from 63 to 87. Is 87 the current routable count? Out of how many?
+```
+
+**B5 matters most.** If only 87 items are routable, and Prayag plans 876, then a
+machine-fitted plan would cover about 10% of the items by count — and we need to
+know what happens to the other 789 before we present anything.
+
+---
+
+## Part C — pieces and kilograms
+
+```
+C1   Do you work in pieces, kilograms, or both? Which is primary?
+
+C2   Prayag's own SWR planning tab carries BOTH a "PRODUCTION REQUIRED (PCS)"
+     and a "(KGS)" column, and their workbook has separate "DIFF. in Pcs" and
+     "DIFF. in Kgs" tabs. So they reconcile the two. Do you?
+
+C3   Your reply said no field named remaining_pcs exists, and that unfinished
+     items carry remaining_hours and remaining_kg. If we send pieces and you
+     work in kilograms, where does the conversion happen — your side, our side,
+     or not at all?
+
+C4   The planning side now has the "All Plumbing Material BOM" workbook loaded,
+     with a Weight / pcs column across roughly 2,100 rows. Is that the same BOM
+     you use? If we convert pieces to kilograms with it, would we get the same
+     numbers you would?
+```
+
+---
+
+## Part D — the working calendar
+
+```
+D1   week_days is a column on your planning settings record, default [6,6,6,7]
+     = 25 days. What is it set to for September 2026?
+
+D2   You reported that the corrective re-planner hardcodes its own Mon–Sat
+     calendar (weekday() < 6) and ignores week_days entirely, so your planner
+     and re-planner can already disagree about the length of a month. Is that
+     still the case?
+
+D3   September 2026 has 26 Mon–Sat days. Does the plant work Sundays? If any
+     Sunday is worked, is it counted in capacity, in monitoring, or in both?
+
+D4   What working-day count should we use for a September capacity fit?
+```
+
+**On D3:** the planning side carries a recorded incident where a worked Sunday was
+counted by monitoring and excluded from capacity, and 80,522 pieces were discarded
+as a result. We would rather ask than assume.
+
+---
+
+## Part E — the API, if it does work
+
+**Only if Part A cannot be answered as data. If we can have the numbers, we do not
+need the integration to work today.**
+
+```
+E1   Our probe to POST https://prayag-plant.com/data-api/v1/schedule returned
+     HTTP 200 with an X-API-Key header, for a single Plumbing line, item A465.
+
+     Can you check your access logs for that request? What did it hit, and what
+     did it return?
+
+E2   Run #44 (August 2026) has 7 scheduler batches and 14 result rows persisted
+     on our side. Do you have any record of serving those? What date?
+
+E3   Is the deployed prayag-plant.com running the same code as the repository
+     you inspected? Your reply noted you had not confirmed the deployment was
+     republished, and this estate has had that gap before.
+
+E4   If the endpoint does exist on the deployment, what is its request schema
+     and its response schema? Field names and types.
+
+E5   Does the response echo back every line it received, or only the lines it
+     could act on? A line sent and not returned would be a zero nobody claimed,
+     and that is the failure mode we most want to rule out.
+```
+
+---
+
+## Part F — what the August benchmark actually was
+
+The planning side's handover records this, and neither side can evidence it:
+
+```
+directly schedulable    112 lines   1,003,518 pcs   80.8%
+fallback-modelled        75 lines     233,014 pcs   18.8%
+data-limited              5 lines       5,143 pcs    0.4%
+capacity-limited          0 lines           0 pcs    0.0%
+```
+
+```
+F1   Does "fallback-modelled" mean anything in your app? You reported it does
+     not, and that your unscheduled reasons are: no routing row, routed but
+     missing BOM weight, subtotal row, and outside-Plumbing-scope.
+
+F2   Could those four numbers have come from your app under any earlier version?
+
+F3   If not, we will strike them from our handover as unevidenced. We would
+     rather do that than keep quoting a figure neither side can reproduce.
+```
+
+---
+
+## What we will do with the answers
+
+**If Part A comes back with usable capacity figures**, we fit the September
+Plumbing plan on our side and report:
+
+```
+production plan          what can be made
+cannot be made           per category
+weekly release           W1–W4 within each week's capacity
+five invariants          conservation, weekly capacity, weekly sum,
+                         dummy priority, temporary plan unchanged
+```
+
+**If Part A cannot be answered**, we will say so plainly to the business: the
+Plumbing Temporary Plan exists and is verified, and no machine-feasible plan can be
+produced until plant capacity is available in some form.
+
+**We will not estimate capacity.** A fitted plan built on a guessed constraint is
+worse than an honest demand plan, and this project has spent a week unwinding
+numbers that looked authoritative and were not.
+
+---
+
+## Priority, if you can only answer part of this
+
+```
+1   Part A — the capacity figures. This alone unblocks the fit.
+2   Part B5 — how many items are actually routable.
+3   Part D4 — the September working-day count.
+4   Part E1 and E2 — what our probe and run #44 actually hit.
+5   Everything else.
+```
+
+**Nothing on your side needs to change.** If the capacity figures exist in any
+form — a table, a sheet, a query result — that is enough.
