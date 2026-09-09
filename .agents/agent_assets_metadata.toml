@@ -262,3 +262,17 @@ mtime_ms = 1788950861236
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/223621be-4418-44ae-87f2-19a35a2edc63/3b7e0510-337b-49f4-9063-2d8a16252ed4"
 storage_version_token = "1788950870317442"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "gfVAbV68gpBZ0R61kZQml"
+uri = "file://.local/outputs/Prayag-BOM-Weight-Lookup-74-Item-Codes.docx"
+type = "word_document"
+title = "Prayag BOM Weight Lookup — 74 Item Codes"
+description = "Word report containing the complete present/absent BOM lookup, weights, normalization matches, source confidence, absent-code list, and future read-only access answer."
+logical_id = "a20acf11-3326-4bfe-841d-4b3da3073438"
+content_hash = "sha256:98077a0801b4970ecda01830ede2b0b446bcb34948779d2c37a3d73899962c78"
+size = 41628
+mtime_ms = 1788967071919
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a20acf11-3326-4bfe-841d-4b3da3073438/39cc05d2-66f1-45d5-b0a4-5ecbc6d34f25"
+storage_version_token = "1788967080110806"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
