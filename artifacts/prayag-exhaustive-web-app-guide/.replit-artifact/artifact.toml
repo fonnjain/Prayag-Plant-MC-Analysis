@@ -1,0 +1,28 @@
+kind = "slides"
+previewPath = "/prayag-exhaustive-web-app-guide/"
+title = "Prayag Production Analytics — Exhaustive Web App Guide"
+description = "A 45-slide exhaustive presentation documenting the Prayag Production Analytics web app for managers, planners, supervisors, operators, data owners, and administrators."
+version = "1.0.0"
+id = "artifacts/prayag-exhaustive-web-app-guide"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/prayag-exhaustive-web-app-guide/" ]
+localPort = 21895
+
+[services.development]
+run = "pnpm --filter @workspace/prayag-exhaustive-web-app-guide run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/prayag-exhaustive-web-app-guide", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/prayag-exhaustive-web-app-guide/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21895"
+BASE_PATH = "/prayag-exhaustive-web-app-guide/"

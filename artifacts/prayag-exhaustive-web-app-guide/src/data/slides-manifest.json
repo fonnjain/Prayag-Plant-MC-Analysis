@@ -1,0 +1,378 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "position": 1,
+    "filepath": "src/pages/slides/Slide01.tsx",
+    "title": "Prayag Production Analytics",
+    "description": "Exhaustive Web App Guide · Production intelligence · Machine planning · Data trust · Operational control",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "position": 2,
+    "filepath": "src/pages/slides/Slide02.tsx",
+    "title": "One operating system for production decisions",
+    "description": "Convert distributed plant workbooks into one decision surface · Connect performance, losses, planning, materials, labour and costing · Preserve source provenance while giving managers an actionable view · Separate deterministic calculations from AI-assisted narrative",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "position": 3,
+    "filepath": "src/pages/slides/Slide03.tsx",
+    "title": "What this guide covers",
+    "description": "Production analytics and drilldowns · Management and plant reporting · Machine-planning lifecycle · Operations, costing and capacity · Data verification, confirmation and sign-off · Administration, exports and operator workflows",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "position": 4,
+    "filepath": "src/pages/slides/Slide04.tsx",
+    "title": "Application map",
+    "description": "Analytics: Dashboard · Performance · Plant · Machine · Losses · Reporting: Reports · Management Reports · AI Reports · Planning: Release Plan · Customized Run · Schedule · Follow-Up · Operations: Materials · Maintenance · Manpower · Yield · Mixer · Toolroom · Wastage · Compound · Governance: Data Confirmation · Verification · Manifest · Source Check · Administration: Users · Activity · API Key · Inputs",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000005",
+    "position": 5,
+    "filepath": "src/pages/slides/Slide05.tsx",
+    "title": "The production-data journey",
+    "description": "Source workbooks remain the operational system of record · Parsers normalize daily, monthly and matrix layouts · Deterministic engines calculate production metrics and plans · Validation and reconciliation determine whether figures can be trusted · Dashboards, reports and exports reuse the same computed facts",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000006",
+    "position": 6,
+    "filepath": "src/pages/slides/Slide06.tsx",
+    "title": "Sign-in and role-aware access",
+    "description": "Protected application entry · Individual user accounts and role assignment · Admin-only account and API-key controls · Server-timed activity sessions · Safe audit labels record pages and actions—not request contents",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000007",
+    "position": 7,
+    "filepath": "src/pages/slides/Slide07.tsx",
+    "title": "Global navigation and period controls",
+    "description": "Consistent navigation across Analytics, Reports, Planning and Operations · Period choices: latest available day, month, financial year or custom range · Plant, segment and machine filters narrow the working context · Data-status indicators make scope and freshness visible",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000008",
+    "position": 8,
+    "filepath": "src/pages/slides/Slide08.tsx",
+    "title": "Dashboard: the daily management cockpit",
+    "description": "Headline production and efficiency indicators · Fast comparison across plants and segments · Exceptions surfaced before detailed analysis · Direct drilldown paths into performance, machines and losses · Latest meaningful production day selected instead of empty future dates",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000009",
+    "position": 9,
+    "filepath": "src/pages/slides/Slide09.tsx",
+    "title": "Performance: compare output and efficiency",
+    "description": "Production, rejection, efficiency and utilisation views · Trend analysis across the selected period · Plant and segment comparisons · Daily-first figures for operational truth · Clear handling of partial or missing daily data",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000010",
+    "position": 10,
+    "filepath": "src/pages/slides/Slide10.tsx",
+    "title": "Plant drilldown: from group to site",
+    "description": "One plant’s output, rejection and operating-hours context · Machine and mould contribution to plant performance · Period-aware units and production grain · Navigation into underlying machine and loss views",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000011",
+    "position": 11,
+    "filepath": "src/pages/slides/Slide11.tsx",
+    "title": "Machine drilldown: isolate the constraint",
+    "description": "Machine-level production and operating-hours evidence · Utilisation and efficiency with the correct capacity denominator · Item and mould contribution · Idle-machine visibility without fabricated production records · Direct link from plant result to root cause",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000012",
+    "position": 12,
+    "filepath": "src/pages/slides/Slide12.tsx",
+    "title": "Losses and downtime: explain the gap",
+    "description": "Downtime Pareto and reason concentration · Machine and period filters · Separate planned capacity from actual running time · Highlight the losses with the largest operational impact · Support maintenance and corrective-planning decisions",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000013",
+    "position": 13,
+    "filepath": "src/pages/slides/Slide13.tsx",
+    "title": "Reports hub: one catalogue, many audiences",
+    "description": "Registered report families exposed from a central catalogue · Production, OEE, utilisation, efficiency and rejection outputs · Plant, segment, tank, pipe, mould, compound and labour views · On-screen detail plus downloadable management formats · Report availability stays explicit when a source is absent",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000014",
+    "position": 14,
+    "filepath": "src/pages/slides/Slide14.tsx",
+    "title": "Management reports: board-ready output",
+    "description": "Individual report workbooks · Download-all ZIP bundle · Pipe, fittings, moulding, PTMT, tank, garden and HDPE coverage · Compound and labour summaries · Deterministic values exported—not live spreadsheet formulas",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000015",
+    "position": 15,
+    "filepath": "src/pages/slides/Slide15.tsx",
+    "title": "Specialized production reports",
+    "description": "GOM summary and plant-specific analysis · Pipe mould and moulding summaries · Tank VN, WB and KH location reports · Compound compilation · Segment labour reporting · Header-based parsing protects against shifting workbook columns",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000016",
+    "position": 16,
+    "filepath": "src/pages/slides/Slide16.tsx",
+    "title": "PDF and AI-assisted management narrative",
+    "description": "Standard PDF exports preserve deterministic report figures · AI narrative explains patterns and exceptions · AI does not calculate or replace source figures · Units and evidence remain visible · Model provenance identifies the model actually used",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000017",
+    "position": 17,
+    "filepath": "src/pages/slides/Slide17.tsx",
+    "title": "Operations workspace",
+    "description": "Materials availability · Maintenance records · Manpower and labour · Yield and wastage · Mixer and toolroom · Compound movement · Each page supports the same period and data-quality context",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000018",
+    "position": 18,
+    "filepath": "src/pages/slides/Slide18.tsx",
+    "title": "Materials: readiness before scheduling",
+    "description": "Material position by category and item · RM, bought-out and packing context · Plant-wide and machine-specific readiness signals · Input to feasibility and corrective planning · Visible gaps prevent silent assumptions",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000019",
+    "position": 19,
+    "filepath": "src/pages/slides/Slide19.tsx",
+    "title": "Maintenance and manpower",
+    "description": "Maintenance events explain lost machine capacity · Downtime records feed planning availability · Manpower views connect staffing to operating requirements · Overtime and support needs remain separate from machine load · Operational evidence feeds both review and planning",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000020",
+    "position": 20,
+    "filepath": "src/pages/slides/Slide20.tsx",
+    "title": "Yield, mixer, toolroom and wastage",
+    "description": "Yield compares usable output with loss · Mixer tracks compound preparation · Toolroom provides tooling readiness context · Wastage surfaces material loss · Secondary pages retain drift and freshness warnings · Users can move from metric to operational cause",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000021",
+    "position": 21,
+    "filepath": "src/pages/slides/Slide21.tsx",
+    "title": "Compound and labour",
+    "description": "Compound availability and consumption views · Labour figures sourced from the applicable payroll blocks · Header-based payable-column detection · Financial-year safeguards prevent inappropriate rewrites · Cost and operations views share verified production context",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000022",
+    "position": 22,
+    "filepath": "src/pages/slides/Slide22.tsx",
+    "title": "Costing: connect operations to economics",
+    "description": "Labour, raw material, power and employee/wage inputs · Automatic source loading where authoritative data exists · Separate costing analysis for management review · Gross production basis for ideal-cost calculations · Display flags expose mismatches instead of silently reconciling them",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000023",
+    "position": 23,
+    "filepath": "src/pages/slides/Slide23.tsx",
+    "title": "Management entries and segment inputs",
+    "description": "Editable management assumptions live in controlled app forms · Segment inputs support planning and reporting context · Workbook export enables review outside the app · Inputs remain distinct from source production facts · Changes are auditable and intentionally scoped",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000024",
+    "position": 24,
+    "filepath": "src/pages/slides/Slide24.tsx",
+    "title": "Capacity planning",
+    "description": "Translate demand and available time into capacity pressure · Machine-level capacity and bottleneck visibility · PTMT-specific capacity workflow · Feed, material and tooling gates · Corrective re-plan for demand that cannot follow the original schedule",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000025",
+    "position": 25,
+    "filepath": "src/pages/slides/Slide25.tsx",
+    "title": "Machine Planning hub",
+    "description": "Release Plan upload for normal planning · Customized Run for temporary category-specific demand · Plan Runs for stored and frozen scenarios · Shift Schedule and machine loading · Follow-Up for plan-versus-actual control · Data Setup for authoritative planning masters",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000026",
+    "position": 26,
+    "filepath": "src/pages/slides/Slide26.tsx",
+    "title": "Step 1 — Upload release demand",
+    "description": "Select planning month and segment · Upload the release-plan workbook · Parse item codes, quantities and requested timing · Normalize comparison keys while preserving original item-code spelling · Reject ambiguous normalized collisions loudly",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000027",
+    "position": 27,
+    "filepath": "src/pages/slides/Slide27.tsx",
+    "title": "Step 2 — Apply planning assumptions",
+    "description": "Rejection gross-up · Wastage allowance · BOM weight · Machine routing · Production rate or fitting cycle/cavity standard · Downtime and machine availability · Every assumption is shown through the resulting plan evidence",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000028",
+    "position": 28,
+    "filepath": "src/pages/slides/Slide28.tsx",
+    "title": "Step 3 — Optimize machine assignment",
+    "description": "Route demand only to capable machines · Balance work across available capacity · Use explicit fallback tiers when item-specific rates are unavailable · Keep unroutable and unweighted items outside the schedule · Never invent a route or weight to force completion",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000029",
+    "position": 29,
+    "filepath": "src/pages/slides/Slide29.tsx",
+    "title": "Step 4 — Build the shift schedule",
+    "description": "Day and NIGHT shift blocks · One item per 10-hour NIGHT block · Minimum-run blocks for light loads · Weekly fill by machine · Changeovers, excess hours and unfinished demand · Pipe and fitting schedules remain separately traceable",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000030",
+    "position": 30,
+    "filepath": "src/pages/slides/Slide30.tsx",
+    "title": "Step 5 — Review machine and item results",
+    "description": "Machine demand versus available capacity · Item-level material kg and required machine hours · Assignment provenance by machine · Coverage gaps: no BOM, no route, locked-out or idle machine · Completion date and unfinished-demand indicators",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000031",
+    "position": 31,
+    "filepath": "src/pages/slides/Slide31.tsx",
+    "title": "Operator Machine Plan workbook",
+    "description": "START HERE instructions · One tab per scheduled machine · Day Sheet for supervisor walk-round · Machine Loading for committed block hours · Item Plan, Not Scheduled, Plan Summary and Source Stock · Orange DAY rows and blue NIGHT rows · Whole block hours on every operator-facing tab",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000032",
+    "position": 32,
+    "filepath": "src/pages/slides/Slide32.tsx",
+    "title": "Customized Run: plan without persistence",
+    "description": "Choose category and planning month · Upload item codes with Required Quantity, Qty, Production Plan or Stock · Reuse live routing, BOM, rates, rejection, wastage and downtime · Display machine loads, item statuses and shift blocks · Download the operator workbook · Leave no Plan Run, Follow-Up or uploaded-file record",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000033",
+    "position": 33,
+    "filepath": "src/pages/slides/Slide33.tsx",
+    "title": "Freeze, re-freeze and finalize",
+    "description": "A pending run retains its uploaded demand · Freeze captures the engine result and schedule lines · Re-freeze regenerates a missing pending result from stored demand · Finalization marks the approved planning state · Frozen lines support later comparison and Follow-Up · Pipe-only and fitting-only runs remain valid scenarios",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000034",
+    "position": 34,
+    "filepath": "src/pages/slides/Slide34.tsx",
+    "title": "Follow-Up: plan versus actual",
+    "description": "Join frozen plan lines to actual production by normalized machine and item · Compare plan-to-date with elapsed plan days · Surface quantity, timing, machine and data warnings · Sort warnings by severity · Preserve runs that have actuals even when no plan lines were written · Export follow-up analysis as a specialist workbook",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000035",
+    "position": 35,
+    "filepath": "src/pages/slides/Slide35.tsx",
+    "title": "Planning reports and exports",
+    "description": "Report 11 and machine-group variants for pipe planning · Report 12 for fitting planning · Operator Machine Plan as the primary floor document · Capacity-feasible and revised-production reports · Machine-plan comparison and corrective re-plan · ZIP bundles isolate report failures instead of losing every successful file",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000036",
+    "position": 36,
+    "filepath": "src/pages/slides/Slide36.tsx",
+    "title": "Machine Planning Data Setup",
+    "description": "Planning parameters · BOM and item weights · Per-hour rates · Machine roster and availability · Pipe routing · Fitting routing and fitting standards · Source freshness and manual-edit provenance",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000037",
+    "position": 37,
+    "filepath": "src/pages/slides/Slide37.tsx",
+    "title": "Data Confirmation: should this figure be released?",
+    "description": "Four-tier issue classification · Full-financial-year master coverage · Grain-aware validation scope · Stable issue acknowledgement · Manager sign-off can release an error-gated figure · Sign-off binds to a data fingerprint and re-gates when data changes",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000038",
+    "position": 38,
+    "filepath": "src/pages/slides/Slide38.tsx",
+    "title": "Data Verification: does it reconcile?",
+    "description": "Read-only reconciliation layer · Display computed figures with provenance · Compare independent source paths within tolerance · Record the verification audit trail · Never alter a production fact to make a check pass · Keep verification separate from confirmation gating",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000039",
+    "position": 39,
+    "filepath": "src/pages/slides/Slide39.tsx",
+    "title": "Manifest, freshness and source health",
+    "description": "Expected-versus-fetched source coverage · Schema flags for malformed or incomplete layouts · Source-content fingerprints detect change · Last-synced visibility · Cache refresh and shared sheet cache · Honest partial-data banners instead of monthly fallback substitution",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000040",
+    "position": 40,
+    "filepath": "src/pages/slides/Slide40.tsx",
+    "title": "Reconciliation and precedence rules",
+    "description": "Daily tabs drive monthly and financial-year headlines · Summary grids are independent reconciliation references · Daily-first totals are never forced down to match an undercounting grid · Sub-monthly windows never borrow monthly values · Units remain plant-specific: kg, litres or pieces · Idle and unparseable sources are different states",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000041",
+    "position": 41,
+    "filepath": "src/pages/slides/Slide41.tsx",
+    "title": "Source provenance and audit trail",
+    "description": "Metric → plant → period → workbook → tab · Parse notes explain source-layout decisions · Acknowledgements and sign-offs remain traceable · User activity records safe route-derived labels · Planning runs preserve assumptions and frozen lines · Exports remain reproducible from the same computed facts",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000042",
+    "position": 42,
+    "filepath": "src/pages/slides/Slide42.tsx",
+    "title": "Failure handling by design",
+    "description": "Missing future sheets do not become a request storm · Per-source throttling does not erase unrelated data · Empty source templates are reported as idle where appropriate · Ambiguous routing collisions fail loudly · Partial report bundles retain successful files · Time-bounded external calls protect production response times",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000043",
+    "position": 43,
+    "filepath": "src/pages/slides/Slide43.tsx",
+    "title": "Three practical user journeys",
+    "description": "Plant manager: Dashboard → Performance → Plant → Losses → PDF · Planner: Upload → Results → Shift Schedule → Operator Plan → Freeze · Data owner: Manifest → Confirmation → Verification → Sign-Off · Supervisor: Day Sheet → Machine tab → Follow-Up · Administrator: Users → Activity → Data Setup → API controls",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000044",
+    "position": 44,
+    "filepath": "src/pages/slides/Slide44.tsx",
+    "title": "Operating rhythm",
+    "description": "Daily: review latest meaningful date, exceptions, losses and Day Sheet · Weekly: review machine fill, unfinished demand and Follow-Up warnings · Monthly: reconcile reports, confirm sources and freeze approved plans · Financial-year: review trend, costing and source completeness · On every refresh: preserve provenance and re-gate changed data",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000045",
+    "position": 45,
+    "filepath": "src/pages/slides/Slide45.tsx",
+    "title": "Metric and unit glossary",
+    "description": "Output: net or gross production as defined by the source · Rejection: rejected kg or pieces at the correct reporting grain · Efficiency: achieved output against running-time potential · Utilisation: actual run hours against valid ideal-hours capacity · Machine hours: productive requirement · Block hours: operator-committed shift time · Rates: kg/hr for pipe; pcs/hr or cycle/cavity for fittings",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000046",
+    "position": 46,
+    "filepath": "src/pages/slides/Slide46.tsx",
+    "title": "What the app guarantees",
+    "description": "Deterministic calculations · Explicit data gaps · Traceable planning assumptions · Separate operator and analytical exports · Fingerprint-bound approvals · Reproducible management outputs · No silent correction of authoritative source facts",
+    "speakerNotes": ""
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000047",
+    "position": 47,
+    "filepath": "src/pages/slides/Slide47.tsx",
+    "title": "From source workbook to shop-floor action",
+    "description": "Trust the source · Validate the structure · Reconcile the facts · Plan within real capacity · Communicate in operator blocks · Follow actual production · Improve the next cycle",
+    "speakerNotes": ""
+  }
+]

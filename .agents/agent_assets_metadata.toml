@@ -234,3 +234,17 @@ mtime_ms = 1788875160838
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4f7d30b9-c602-405c-a509-2d19d13673e5/42e471c1-bbb3-4574-bac8-8f9703a6c497"
 storage_version_token = "1788875253884215"
 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "dta5QRoymp_06Bk5CKoSv"
+uri = "file://.local/outputs/Prayag-Production-Analytics---Exhaustive-Web-App-Guide.pptx"
+type = "slides"
+title = "Prayag Production Analytics — Exhaustive Web App Guide (PPTX)"
+description = "Complete 47-slide PowerPoint covering analytics, reporting, operations, machine planning, data governance, exports, and user workflows."
+logical_id = "ad5d2731-d132-4793-8bf5-732d5e476cd7"
+content_hash = "sha256:ac0c8726cd4a65ac85746dea3eed605f64553b475c4af76ab7755c9ed3f421f4"
+size = 9330429
+mtime_ms = 1788928706585
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/ad5d2731-d132-4793-8bf5-732d5e476cd7/6fa6d58e-ddd8-4341-b05b-1b6436471cb5"
+storage_version_token = "1788928707434341"
+content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
