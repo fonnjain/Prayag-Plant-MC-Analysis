@@ -1,0 +1,101 @@
+# Run the September Plumbing Plan and Export Per-Machine Worksheets
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+Attached: **`Plumbing_Machine_Feasible_Plan_September_2026.xlsx`** — the September demand / production plan.
+
+**What I want:** run this through the app's own planner and export a workbook with **one worksheet per machine**, in the operator format we agreed (the `Machine_Plan_Aug2026_v2.xlsx` layout).
+
+---
+
+## Read this first — why the attached file alone is not enough
+
+The attached workbook is a **feasibility study**, not a machine schedule. Its own sheet 6, *"What only the app can produce"*, states:
+
+> *"Item-wise machine allocation — the cascade records the FIRST machine that handled an item and the weekly quantities, but not every machine an item used or how pieces split between them. A per-item machine sheet would be inventing that attribution."*
+
+So the per-machine item plan **must come from the app's scheduler**, not from reformatting the attachment. Use the attachment as **demand input**; let the planner produce the allocation.
+
+**Do not build machine sheets by splitting the attachment's weekly load figures.** That would be inventing which items ran where.
+
+---
+
+## STEP 1 — Check the blocker first (read-only)
+
+September daily sources may not be registered. From `sources.py`: **no plant has `2026-09` pinned**, and GARDEN, TANK, TANK_VN, TANK_WB have no `2026-08` either.
+
+Report before running anything:
+
+1. Can the planner run for September at all with the sources currently registered?
+2. Does the planner need daily production sources for a **forward** plan, or only the seeds (BOM, routing, rates, roster, wastage, rejection)? These are different questions — a forward plan may not need last month's actuals.
+3. Are the seven seeds fresh? Wastage and Rejection were last seeded 29 days ago. **Say so if stale** — a plan on stale assumptions is wrong in a way that will not be obvious.
+
+**If September can be planned without pinning sources, continue. If not, say what is missing and stop.**
+
+---
+
+## STEP 2 — Run the plan
+
+Feed the attached demand through the existing planner. Use the app's own logic throughout — routing, per-hour rates, BOM weights, wastage, rejection, block rules. **Do not write a new scheduler.**
+
+The planning rules must hold and be visible in the output:
+- **DAY blocks 2h or 8h; NIGHT one 10h block**
+- **An item never changes part-way through a night block**
+- **A block never runs shorter than its minimum**; where it does, the excess is recorded
+
+Report the run summary: items scheduled, items unscheduled with reasons, total pieces and kg.
+
+---
+
+## STEP 3 — Export in the operator format
+
+Produce a workbook matching the agreed layout:
+
+**One worksheet per machine**, named after the machine (`M/C-3` → `M-C-3`), each containing:
+
+- **Title bar** — `MACHINE <name>`, with pool/type, materials, plan period
+- **KPI strip** — Days scheduled · Different items · **Machine hours** · Total pieces · Total kg
+- **The plan table:**
+
+```
+Day | Date | Shift | Block (hours) | Item Code | Item Name | Target Pieces | kg | Note
+```
+
+- **`Block (hours)` = BLOCK HOURS as whole numbers (2, 8, 10) — never Productive Hours.** A machine cannot run 0.02 hours.
+- Date shown **once per day**, heavy top border starting each new day
+- **DAY rows shaded `FFF6EC`, NIGHT rows `E8EDF5`**
+- **Item Name populated** — look up from `Source Item Code` (not `Item Code`; that mistake produced blank names before)
+- **`Note`**: where `Excess Hours > 0.5`, write `min-run block (light load)`
+- TOTAL row; frozen header; **header repeated on every printed page**; landscape, fit-to-width
+
+**Plus the supporting tabs:**
+- `① START HERE` — plain-language guide + index of every machine with days, items, hours, kg
+- `② Day Sheet` — all machines by date, for the supervisor
+- `③ Machine Loading` — machines down, days across, committed block hours, shaded green ≥16h / amber ≥8h / light ≤8h / blank idle
+- `④ Item Plan` — one row per item: material, machines, days, pieces, kg
+- `⑤ Not Scheduled` — everything the planner could not place, **with its reason**
+
+---
+
+## Non-negotiable
+
+- **Nothing invented.** If the planner cannot allocate an item to a machine, it goes in `⑤ Not Scheduled` with a reason — never guessed onto a machine.
+- **No day/night split that the engine did not produce.** Sheet 6 of the attachment notes the cascade allocates against a machine's combined 20 hours and does not record shift. If the app's scheduler produces real shift blocks, use them; if it does not, say so and leave shift blank rather than inventing it.
+- **Block hours everywhere an operator reads.**
+- Items with no routing row or no BOM weight cannot be scheduled — list them, do not fabricate.
+
+## Also report
+
+Sheet 6 of the attachment raises an open question worth settling:
+
+> *"It is not yet confirmed whether the 49,334 capacity figure came from the local cascade or from the plant app's scheduler. Both produce machine plans, and a route exists that writes scheduler results back into the plan run."*
+
+**Which system produced the plan you just ran?** If two systems can both produce machine plans and one writes back into the other, that needs stating plainly — it decides which output is authoritative.
+
+## Constraints
+
+No Sheets writes (**R-21**). No cache clearing (**R-34**). Do not change the scheduler, routing, seeds or `norm_code()`. This is a run plus an export, not an engine change.
+
+## Report back
+
+Step 1 answers · the run summary · the tab list produced · one sample machine tab pasted as text · the unscheduled list with reasons · which system produced the plan.
