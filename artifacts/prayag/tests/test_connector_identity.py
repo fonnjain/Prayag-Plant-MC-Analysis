@@ -48,3 +48,51 @@ def test_connector_audience_preserves_full_url():
         clear=True,
     ):
         assert sheets._connector_audience() == "https://custom.example"
+
+
+def test_deployment_sheets_request_uses_connector_proxy():
+    response = _JsonResponse({"values": [["ok"]]})
+    env = {
+        "REPLIT_DEPLOYMENT_ID": "deployment-test",
+        "REPLIT_CONNECTORS_HOSTNAME": "connectors.example",
+    }
+    url = "https://sheets.googleapis.com/v4/spreadsheets/file/values/Tab%201"
+
+    with patch.dict(os.environ, env, clear=True):
+        with patch.object(
+            sheets, "_mint_deployment_identity", return_value="minted-test-token"
+        ):
+            with patch("urllib.request.urlopen", return_value=response) as urlopen:
+                assert sheets._api_get(url, sheets._PROXY_TOKEN) == {
+                    "values": [["ok"]]
+                }
+
+    request = urlopen.call_args.args[0]
+    headers = {key.lower(): value for key, value in request.header_items()}
+    assert request.full_url == (
+        "https://connectors.example/api/v2/proxy"
+        "/v4/spreadsheets/file/values/Tab%201"
+    )
+    assert headers["connector-name"] == "google-sheet"
+    assert headers["x-replit-token"] == "depl minted-test-token"
+    assert "authorization" not in headers
+
+
+def test_deployment_drive_request_uses_drive_connector():
+    env = {
+        "REPLIT_DEPLOYMENT_ID": "deployment-test",
+        "REPLIT_CONNECTORS_HOSTNAME": "https://connectors.example",
+    }
+    url = "https://www.googleapis.com/drive/v3/files?q=example"
+
+    with patch.dict(os.environ, env, clear=True):
+        with patch.object(
+            sheets, "_mint_deployment_identity", return_value="minted-test-token"
+        ):
+            request = sheets._google_api_request(url, sheets._PROXY_TOKEN)
+
+    headers = {key.lower(): value for key, value in request.header_items()}
+    assert request.full_url == (
+        "https://connectors.example/api/v2/proxy/drive/v3/files?q=example"
+    )
+    assert headers["connector-name"] == "google-drive"

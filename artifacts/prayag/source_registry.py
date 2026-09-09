@@ -201,11 +201,8 @@ def _drive_search(query: str, drive_token: str) -> List[dict]:
         )
         if page_token:
             url += "&pageToken=" + urllib.parse.quote(page_token)
-        req = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {drive_token}"}
-        )
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.load(r)
+        import sheets as _sh
+        data = _sh._api_get(url, drive_token, connector_name="google-drive")
         out.extend(data.get("files") or [])
         page_token = data.get("nextPageToken")
         if not page_token:

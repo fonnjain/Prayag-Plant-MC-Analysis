@@ -1,6 +1,6 @@
 - [Costing labour auto-sources](prayag-costing-auto-sources.md) — D-tab block finder: MUST fall-through on the first row (contains ADMIN); month cols are REVERSE (latest first); TOTAL PAYABLE col MUST be found by header text (shifts between files); threshold ≥1 month col in header is enough.
 - [Replit connector API filter bug](prayag-connector-api-filter.md) — connector_names= filter is silently ignored; fetch all then pick by id prefix; use X-Replit-Token (hyphens) not underscores.
-- [Production connector identity](prayag-production-connector-identity.md) — raw WEB_REPL_RENEWAL is rejected; mint an audience-scoped deployment identity through hostingpid1 before connector calls.
+- [Production connector proxy](prayag-production-connector-identity.md) — published apps cannot list raw OAuth secrets; mint deployment identity and route Google requests through /api/v2/proxy.
 - [Costing module design](prayag-costing-module.md) — costing_model/labour/rm.py; freeze rule (FY<2627 immutable); header-based dual-layout parser; FY2627 fittings mismatch is a display flag, never silently reconciled.
 - [Prayag daily-first figures](prayag-daily-first.md) — monthly/FY headline totals summed from daily tabs, not the summary grid; never reconcile down; daily read must survive per-file 429s.
 - [M/C Efficiency idle-machine denominator](prayag-mc-eff-idle-denominator.md) — TOTAL M/C Eff den must come from R5 directly (sheets.pipe_run5_parsed), not records accumulator; idle machines have no records but still count in denominator.

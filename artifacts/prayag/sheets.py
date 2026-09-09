@@ -37,6 +37,7 @@ import store as _store
 # Connection + token (cached within the process until near expiry)
 # ---------------------------------------------------------------------------
 _token_cache: dict = {"token": None, "exp": 0.0}
+_PROXY_TOKEN = "__replit_connector_proxy__"
 _data_cache: dict = {}          # months_key -> (ts, payload)
 _DATA_TTL = 1800.0              # seconds (30 min) on-demand fallback TTL. The
                                 # always-on background refresher (bottom of file)
@@ -179,6 +180,15 @@ def _connector_audience() -> str:
     return "https://" + audience
 
 
+def _connector_base_url() -> str:
+    host = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "").strip()
+    if not host:
+        return "https://connectors.replit.com"
+    if host.startswith(("http://", "https://")):
+        return host.rstrip("/")
+    return ("https://" + host).rstrip("/")
+
+
 def _mint_deployment_identity() -> str:
     """Mint the audience-scoped identity required by published connectors.
 
@@ -308,6 +318,10 @@ def _fetch_token() -> Tuple[Optional[str], float]:
 
 
 def _get_access_token() -> Optional[str]:
+    # Published apps cannot read raw OAuth secrets. Their Google requests go
+    # through the authenticated connector proxy instead.
+    if _is_deployment_environment():
+        return _PROXY_TOKEN
     now = time.time()
     if _token_cache["token"] and now < _token_cache["exp"] - 60:
         return _token_cache["token"]
@@ -455,6 +469,8 @@ def _fetch_drive_token() -> Tuple[Optional[str], float]:
 
 
 def _get_drive_token() -> Optional[str]:
+    if _is_deployment_environment():
+        return _PROXY_TOKEN
     now = time.time()
     if _drive_token_cache["token"] and now < _drive_token_cache["exp"] - 60:
         return _drive_token_cache["token"]
@@ -487,9 +503,7 @@ def _list_drive_folder(folder_id: str, token: str) -> List[dict]:
         )
         if page_token:
             url += "&pageToken=" + urllib.parse.quote(page_token)
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.load(r)
+        data = _api_get(url, token, connector_name="google-drive")
         out.extend(data.get("files", []) or [])
         page_token = data.get("nextPageToken")
         if not page_token:
@@ -530,7 +544,7 @@ def _probe_file_readable(file_id: str, drive_token: str) -> Optional[bool]:
         f"https://www.googleapis.com/drive/v3/files/{file_id}"
         f"?fields=id&supportsAllDrives=true"
     )
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {drive_token}"})
+    req = _google_api_request(url, drive_token, connector_name="google-drive")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             _ = json.load(r)
@@ -814,7 +828,45 @@ _API_REQUEST_TIMEOUT_SECONDS = 12
 _DAILY_READ_MAX_WORKERS = 3
 
 
-def _api_get(url: str, token: str) -> dict:
+def _connector_name_for_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc == "sheets.googleapis.com":
+        return "google-sheet"
+    if parsed.path.startswith("/drive/"):
+        return "google-drive"
+    return "google-sheet"
+
+
+def _google_api_request(
+    url: str,
+    token: str,
+    connector_name: Optional[str] = None,
+) -> urllib.request.Request:
+    if not _is_deployment_environment() and token != _PROXY_TOKEN:
+        return urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}"}
+        )
+
+    parsed = urllib.parse.urlparse(url)
+    target = _connector_base_url() + "/api/v2/proxy" + parsed.path
+    if parsed.query:
+        target += "?" + parsed.query
+    identity = "depl " + _mint_deployment_identity()
+    return urllib.request.Request(
+        target,
+        headers={
+            "Accept": "application/json",
+            "Connector-Name": connector_name or _connector_name_for_url(url),
+            "X-Replit-Token": identity,
+        },
+    )
+
+
+def _api_get(
+    url: str,
+    token: str,
+    connector_name: Optional[str] = None,
+) -> dict:
     """GET a Google Sheets API endpoint, retrying only 429s and timeouts.
 
     Daily workbook loading is paced below to avoid a quota burst. A 429 or a
@@ -823,14 +875,22 @@ def _api_get(url: str, token: str) -> dict:
     404, server, parser, and completeness failures surface immediately: retrying
     those would only delay an honest partial-result warning.
     """
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     for attempt in range(_API_MAX_RETRIES):
+        req = _google_api_request(url, token, connector_name=connector_name)
         try:
             with urllib.request.urlopen(req, timeout=_API_REQUEST_TIMEOUT_SECONDS) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise SheetReadError("Spreadsheet or tab not found (404).") from e
+            if (
+                e.code == 401
+                and _is_deployment_environment()
+                and attempt < _API_MAX_RETRIES - 1
+            ):
+                # Match the connector SDK: mint a fresh deployment identity and
+                # retry once when the proxy rejects an expired identity.
+                continue
             if e.code in (401, 403):
                 raise SheetReadError(
                     "The Google account doesn't have access to a configured "

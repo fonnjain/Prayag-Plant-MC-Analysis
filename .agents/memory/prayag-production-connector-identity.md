@@ -1,10 +1,10 @@
 ---
-name: Prayag production connector identity
-description: Credential precedence for Replit connector calls from published Prayag runtimes.
+name: Prayag production connector proxy
+description: Supported Google connector transport for published Prayag runtimes.
 ---
 
-When requesting Replit connector credentials from a published runtime, mint an audience-scoped deployment identity through the local hosting identity endpoint. Never send the raw deployment renewal credential to the connector service. Development can continue using the repl identity.
+Published runtimes must not request raw Google OAuth secrets through the connection-list endpoint. Mint an audience-scoped deployment identity through the local hosting identity endpoint, then route Google API paths through the connector proxy with the matching connector name. Development can continue using the direct OAuth-token path.
 
-**Why:** Raw deployment renewal credentials are explicitly rejected by the connector service. Sending one caused 401 responses for Google Sheets and Drive even though development reads and the connected-account status were healthy.
+**Why:** Raw deployment renewal credentials are rejected, and even a correctly minted deployment identity receives 401 when a published app asks for `include_secrets=true`. The supported connector SDK uses the proxy so OAuth tokens are injected and refreshed without exposure.
 
-**How to apply:** Detect deployment markers, mint against the connector audience through hostingpid1's loopback endpoint with a bounded startup retry, and send the resulting token as a deployment identity. Fail closed if minting fails.
+**How to apply:** Detect deployment markers, mint against the connector audience through hostingpid1 with a bounded startup retry, and call `/api/v2/proxy/<provider-path>` with `Connector-Name` plus the deployment identity. Retry once on proxy 401 with a freshly minted identity.
