@@ -1,0 +1,76 @@
+# Machine Plan Export — Operator Format
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+Attached is **`Machine_Plan_Aug2026_v2.xlsx`** — the format the app should now produce for every plan run. Open it before writing any code; it is the specification.
+
+**This changes the export only. No planning logic, no figures, no scheduler behaviour.** Every number in the new export must come from the existing plan result unchanged.
+
+---
+
+## Why the current export is not usable on the floor
+
+Today's `Daily Machine Plan` is one flat sheet of 202 rows with 15 columns. An operator on M/C-3 has to filter it to find their own machine. Worse, it shows **Productive Hours** — values like `0.02` and `6.919` — which nobody can run. A machine runs in blocks, not in fractions of an hour.
+
+The attached workbook fixes both.
+
+---
+
+## What to build
+
+### 1. One tab per machine — the main change
+
+A separate worksheet for each machine in the plan (25 in the reference file), named after the machine with `/` replaced by `-` (`M/C-3` → `M-C-3`).
+
+Each machine tab contains, in this order:
+
+- **Title bar** — `MACHINE  <name>`, with plan type, materials and the plan period beneath
+- **KPI strip** — Days scheduled · Different items · **Machine hours** · Total pieces · Total kg
+- **The plan table**, one row per block:
+
+```
+Day | Date | Shift | Block (hours) | Item Code | Item Name | Target Pieces | kg | Note
+```
+
+Rules for that table:
+- **`Block (hours)` must be BLOCK HOURS, never Productive Hours.** Show it as a whole number (2, 8, 10) in a wide bold column. This is what the machine is committed for.
+- The **date appears once per day**, with a heavy top border starting each new day so shifts group visually under their date.
+- **DAY rows shaded `FFF6EC` (orange), NIGHT rows `E8EDF5` (blue)** — the shift must be readable at a glance.
+- **Item Name** must be populated, not just the code. Look it up from `Source Item Code` — note the reference build initially failed here because the column is `Source Item Code`, not `Item Code`.
+- **`Note` column**: where `Excess Hours > 0.5`, write `min-run block (light load)`. This tells the operator a light block is deliberate, not an error.
+- A **TOTAL row** with total block hours, pieces and kg.
+- **Freeze the header. Repeat it on every printed page** (`print_title_rows`). Landscape, fit-to-width — these get printed and pinned at the machine.
+
+### 2. Supporting tabs
+
+- **`① START HERE`** — a plain-language front page: what the workbook is, where each role should go (operator / supervisor / planner), how shifts and blocks work, the night-changeover and minimum-run rules, and an index of every machine with its days, items, hours and kg.
+- **`② Day Sheet`** — every machine on one day, grouped by date with a coloured date banner. The supervisor's morning walk-round sheet.
+- **`③ Machine Loading`** — machines down, days across, **committed block hours** in the cells. Shade: green ≥16h (day+night), amber ≥8h (a full shift), light ≤8h, blank = idle. This makes spare capacity obvious.
+- **`④ Item Plan`** — one row per item: material, which machines run it, days, total pieces and kg. Filterable.
+- Carry the existing reference sheets to the back as **`⑤ Not Scheduled`**, **`⑥ Plan Summary`**, **`⑦ Source Stock`** — keep their content exactly as it is now.
+
+---
+
+## Non-negotiable
+
+- **Block Hours everywhere an operator or supervisor reads.** Productive Hours may stay in the reference tabs at the back, but must not appear on a machine tab, the Day Sheet or Machine Loading.
+- **No figure changes.** Pieces, kg, hours and the schedule itself must be byte-identical to the current plan result. This is a presentation layer over the existing output.
+- **Nothing invented.** If a machine has no name for an item, leave the name blank — do not guess.
+- Items that could not be scheduled stay in `⑤ Not Scheduled` with their reasons.
+
+## Validate
+
+- Every machine in the plan result has its own tab; the tab count matches the machine count.
+- No machine tab shows a fractional hour in the Block column.
+- Night rows on every machine tab show a single 10-hour block, one item — the night-changeover rule must be visibly true in the output.
+- `min-run block (light load)` appears exactly where `Excess Hours > 0.5`.
+- Totals per machine tab reconcile to the Machine Loading row and to the plan result.
+- Header row repeats on page 2 of a long machine tab when printed.
+
+## Do not touch
+
+The scheduler, the optimiser, `mp_engine.py`, `mp_scheduler.py`, routing, seeds, `norm_code()`, or any figure. No Sheets writes (**R-21**). No cache clearing (**R-34**).
+
+## Report back
+
+The tab list produced, one sample machine tab pasted as text, confirmation that block hours (not productive hours) are shown on all operator-facing tabs, and confirmation that no figure changed against the current plan result.

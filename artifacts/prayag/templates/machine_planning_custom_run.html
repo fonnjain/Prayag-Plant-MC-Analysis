@@ -77,6 +77,16 @@
   {% endif %}
 
   {% if summary %}
+  {% if operator_download %}
+  <div style="display:flex;justify-content:flex-end;margin-bottom:.7rem;">
+    <a download="Machine_Plan_{{ selected_month }}_{{ selected_category }}.xlsx"
+       href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{{ operator_download }}"
+       style="background:var(--navy);color:#fff;text-decoration:none;border-radius:.45rem;
+              padding:.55rem .85rem;font-size:.76rem;font-weight:800;">
+      Download Operator Machine Plan
+    </a>
+  </div>
+  {% endif %}
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:.55rem;margin-bottom:.9rem;">
     {% for label,value in [
       ('Uploaded items', summary.uploaded),

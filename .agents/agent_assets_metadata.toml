@@ -220,3 +220,17 @@ mtime_ms = 1788866789521
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/9e918437-9fd8-49d7-a971-02b2656eb0aa/9c07cce6-7aab-4b4a-95c1-0963c944a241"
 storage_version_token = "1788866843383353"
 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "3-M-omZ_QoOzPT845yXHP"
+uri = "file://.local/outputs/Spl-Sale-Day-Wise-Machine-Planning-Operator-Format.xlsx"
+type = "table"
+title = "Operator-Format Machine Plan"
+description = "Validated August 2026 machine plan with START HERE, 25 machine tabs, and six supporting tabs."
+logical_id = "4f7d30b9-c602-405c-a509-2d19d13673e5"
+content_hash = "sha256:ce06fa889b4adcc6d7448f0fa75cd3ded6fb07c8a2b07d2a5028457b01508a30"
+size = 81832
+mtime_ms = 1788875160838
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4f7d30b9-c602-405c-a509-2d19d13673e5/42e471c1-bbb3-4574-bac8-8f9703a6c497"
+storage_version_token = "1788875253884215"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

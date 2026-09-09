@@ -473,7 +473,7 @@ def test_consolidated_machine_load_scheduled_values_match_schedule_result():
     """
     import mp_reports as r
     from openpyxl import load_workbook
-    from mp_scheduler import ScheduleResult, WeekFillRow
+    from mp_scheduler import ScheduleResult, ShiftBlock, WeekFillRow
 
     # Two machines, two weeks of weekly_fill each
     # M/C-1: W1=120.0 + W2=130.0 = 250.0 total scheduled hrs
@@ -692,7 +692,7 @@ def _make_fitting_result(machines=None):
 
 def _make_fitting_schedule(machine="FM-1", scheduled_hrs=200.0, capacity_hrs=300.0):
     """Minimal fitting ScheduleResult with one WeekFillRow."""
-    from mp_scheduler import ScheduleResult, WeekFillRow
+    from mp_scheduler import ScheduleResult, ShiftBlock, WeekFillRow
     util = round(scheduled_hrs / capacity_hrs * 100, 1) if capacity_hrs > 0 else 0.0
     wf = WeekFillRow(
         week=1, machine=machine, capacity_hrs=capacity_hrs,
@@ -1076,7 +1076,7 @@ def _make_both_results():
         EngineResult, FittingEngineResult, FittingItemResult,
         FittingAssignedPortion, MachineLoad, CoverageGaps, PlanTotals,
     )
-    from mp_scheduler import ScheduleResult, WeekFillRow
+    from mp_scheduler import ScheduleResult, ShiftBlock, WeekFillRow
 
     # ── Pipe side ──
     pipe_ml = MachineLoad(
@@ -1110,7 +1110,12 @@ def _make_both_results():
     )
     pipe_schedule = ScheduleResult(
         segment="PIPE", effective_month="2026-07",
-        blocks=[], weekly_fill=[pipe_wf], unfinished=[],
+        blocks=[ShiftBlock(
+            week=1, day=1, machine="M/C-1", shift="DAY",
+            item_code=item.item_code, raw_code=item.raw_code, material=item.material,
+            planned_hours=8.0, excess_hours=8.0 - item.machine_hrs,
+            origin_week=1,
+        )], weekly_fill=[pipe_wf], unfinished=[],
         total_capacity_hrs=500.0, total_scheduled_hrs=250.0,
         total_idle_hrs=250.0, total_excess_kg=0.0, total_changeovers=0,
         week_days=[6, 6, 6, 7], params_used={},
@@ -1157,7 +1162,12 @@ def _make_both_results():
     )
     fitting_schedule = ScheduleResult(
         segment="FITTING", effective_month="2026-07",
-        blocks=[], weekly_fill=[fit_wf], unfinished=[],
+        blocks=[ShiftBlock(
+            week=1, day=1, machine="FM-ROUTE-1", shift="NIGHT",
+            item_code=fit_item.item_code, raw_code=fit_item.raw_code,
+            material=fit_item.material, planned_hours=10.0,
+            excess_hours=10.0 - fit_item.machine_hrs, origin_week=1,
+        )], weekly_fill=[fit_wf], unfinished=[],
         total_capacity_hrs=300.0, total_scheduled_hrs=180.0,
         total_idle_hrs=120.0, total_excess_kg=0.0, total_changeovers=0,
         week_days=[6, 6, 6, 7], params_used={},
@@ -1214,10 +1224,8 @@ def test_route_zip_no_plan_redirects():
     )
 
 
-def test_route_consolidated_with_both_schedules_returns_xlsx():
-    """GET /machine-planning/report/consolidated returns a valid .xlsx with 7 tabs
-    and the fitting machine row in tab '2. Machine Load' when both pipe and fitting
-    plans are present in the session."""
+def test_route_consolidated_with_both_schedules_returns_operator_xlsx():
+    """The consolidated route returns the operator workbook with both machine tabs."""
     import app as appmod
     from openpyxl import load_workbook
 
@@ -1239,23 +1247,15 @@ def test_route_consolidated_with_both_schedules_returns_xlsx():
     )
 
     wb = load_workbook(io.BytesIO(resp.data))
-    assert len(wb.sheetnames) == 7, f"Expected 7 tabs; got {wb.sheetnames}"
-    for prefix in ["1.", "2.", "3.", "4.", "5.", "6.", "7."]:
-        assert any(n.startswith(prefix) for n in wb.sheetnames), (
-            f"Tab starting with {prefix!r} missing; sheets={wb.sheetnames}"
-        )
-
-    # Tab '2. Machine Load' must show the fitting machine name
-    ws2 = wb["2. Machine Load"]
-    col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
-    assert "FM-ROUTE-1" in col1, (
-        f"Fitting machine 'FM-ROUTE-1' not found in tab '2. Machine Load' col-1; "
-        f"values: {[v for v in col1 if v]}"
-    )
-
-    # The section header must also be present
-    found_header = any("FITTING MACHINES" in str(v or "") for v in col1)
-    assert found_header, "Expected 'FITTING MACHINES' section header in tab '2. Machine Load'"
+    assert wb.sheetnames == [
+        "① START HERE", "FM-ROUTE-1", "M-C-1", "② Day Sheet",
+        "③ Machine Loading", "④ Item Plan", "⑤ Not Scheduled",
+        "⑥ Plan Summary", "⑦ Source Stock",
+    ]
+    assert wb["FM-ROUTE-1"]["D8"].value == 10
+    assert wb["FM-ROUTE-1"]["C8"].value == "NIGHT"
+    assert wb["M-C-1"].freeze_panes == "A8"
+    assert str(wb["M-C-1"].print_title_rows) == "$7:$7"
 
 
 def test_route_zip_partial_success_when_report_11_raises():
@@ -1291,7 +1291,7 @@ def test_route_zip_partial_success_when_report_11_raises():
         names = zf.namelist()
 
     # Consolidated plan must be present (built successfully)
-    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    consolidated_entries = [n for n in names if "Machine_Plan" in n]
     assert consolidated_entries, (
         f"ZIP must contain a Consolidated_Plan file even when report-11 fails; got: {names}"
     )
@@ -1330,7 +1330,7 @@ def test_route_zip_returns_500_when_all_generators_raise():
          patch.object(r, "report_11_bytes", side_effect=_boom), \
          patch.object(r, "report_11x_bytes", side_effect=_boom), \
          patch.object(r, "report_12_bytes", side_effect=_boom), \
-         patch.object(r, "consolidated_plan_bytes", side_effect=_boom):
+         patch("mp_operator_export.operator_plan_bytes", side_effect=_boom):
 
         client = appmod.app.test_client()
         resp = client.get("/machine-planning/report/zip")
@@ -1344,8 +1344,8 @@ def test_route_zip_returns_500_when_all_generators_raise():
     )
 
 
-def test_route_zip_partial_success_when_consolidated_plan_raises():
-    """ZIP route returns 200 with a valid ZIP even when consolidated_plan_bytes raises.
+def test_route_zip_partial_success_when_operator_plan_raises():
+    """ZIP route returns 200 with a valid ZIP even when operator_plan_bytes raises.
 
     Report-11 and Report-12 must still be present in the ZIP.
     The consolidated plan entry must be absent.
@@ -1362,7 +1362,7 @@ def test_route_zip_partial_success_when_consolidated_plan_raises():
          patch.object(appmod, "_mp3_fitting_result_from_session", return_value=fit_r), \
          patch.object(appmod, "_mp_schedule_from_session", return_value=pipe_s), \
          patch.object(appmod, "_mp_fitting_schedule_from_session", return_value=fit_s), \
-         patch.object(r, "consolidated_plan_bytes",
+         patch("mp_operator_export.operator_plan_bytes",
                       side_effect=RuntimeError("simulated consolidated plan failure")):
 
         client = appmod.app.test_client()
@@ -1391,7 +1391,7 @@ def test_route_zip_partial_success_when_consolidated_plan_raises():
     )
 
     # The failing consolidated plan must NOT be present
-    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    consolidated_entries = [n for n in names if "Machine_Plan" in n]
     assert not consolidated_entries, (
         f"Consolidated_Plan should be absent when consolidated_plan_bytes raises; got: {names}"
     )
@@ -1438,7 +1438,7 @@ def test_route_zip_partial_success_when_report_12_raises():
     )
 
     # Consolidated plan must be present
-    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    consolidated_entries = [n for n in names if "Machine_Plan" in n]
     assert consolidated_entries, (
         f"ZIP must contain a Consolidated_Plan file even when report-12 fails; got: {names}"
     )
@@ -1504,7 +1504,7 @@ def test_route_zip_partial_success_when_one_11x_subgroup_raises():
     )
 
     # Consolidated plan must be present
-    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    consolidated_entries = [n for n in names if "Machine_Plan" in n]
     assert consolidated_entries, (
         f"ZIP must contain Consolidated_Plan even when 11B fails; got: {names}"
     )
@@ -1645,7 +1645,7 @@ def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
         names = zf.namelist()
 
     # Must contain a consolidated plan entry
-    consolidated_entries = [n for n in names if "Consolidated_Plan" in n]
+    consolidated_entries = [n for n in names if "Machine_Plan" in n]
     assert consolidated_entries, (
         f"ZIP must contain a Consolidated_Plan file; got: {names}"
     )
@@ -1661,10 +1661,12 @@ def test_route_zip_with_both_schedules_returns_zip_with_consolidated():
     with _zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
         xlsx_bytes = zf.read(consolidated_entries[0])
     wb = load_workbook(io.BytesIO(xlsx_bytes))
-    assert len(wb.sheetnames) == 7, (
-        f"Consolidated sheet inside ZIP should have 7 tabs; got {wb.sheetnames}"
-    )
-    ws2 = wb["2. Machine Load"]
+    assert wb.sheetnames == [
+        "① START HERE", "FM-ROUTE-1", "M-C-1", "② Day Sheet",
+        "③ Machine Loading", "④ Item Plan", "⑤ Not Scheduled",
+        "⑥ Plan Summary", "⑦ Source Stock",
+    ]
+    ws2 = wb["③ Machine Loading"]
     col1 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
     assert "FM-ROUTE-1" in col1, (
         f"Fitting machine 'FM-ROUTE-1' not found in consolidated sheet inside ZIP; "

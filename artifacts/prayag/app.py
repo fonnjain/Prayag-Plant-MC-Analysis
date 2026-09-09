@@ -7656,6 +7656,7 @@ def mp_custom_run():
     item_rows: list[dict] = []
     machine_rows: list[dict] = []
     summary = None
+    operator_download = None
 
     try:
         from mp_model import _conn
@@ -7827,6 +7828,17 @@ def mp_custom_run():
                     "machines": len(machine_rows),
                     "completion": dates.get(max_day),
                 }
+                import base64
+                import mp_operator_export as _mp_operator
+                operator_bytes = _mp_operator.operator_plan_bytes(
+                    engine_result=plan.pipe_engine,
+                    fitting_result=plan.fitting_engine,
+                    schedule_result=plan.pipe_schedule,
+                    fitting_schedule=plan.fitting_schedule,
+                    source_rows=plan.source_rows,
+                    unscheduled_rows=plan.unscheduled,
+                )
+                operator_download = base64.b64encode(operator_bytes).decode("ascii")
             except Exception as exc:
                 app.logger.warning("customized machine run failed: %s", exc)
                 error = f"Customized run could not be completed: {exc}"
@@ -7844,6 +7856,7 @@ def mp_custom_run():
         blocks=blocks,
         item_rows=item_rows,
         machine_rows=machine_rows,
+        operator_download=operator_download,
     )
 
 
@@ -8016,7 +8029,7 @@ def mp_report_capacity_feasible_plan():
 
 @app.route("/machine-planning/report/consolidated")
 def mp_report_consolidated():
-    """Download the 7-tab consolidated plan workbook as .xlsx."""
+    """Download the shared floor-operator machine-plan workbook as .xlsx."""
     _ensure_session_run_id()
     from flask import send_file as _send_file
 
@@ -8032,14 +8045,21 @@ def mp_report_consolidated():
         return redirect(url_for("mp_upload"))
 
     try:
-        xlsx_bytes = _mp_reports.consolidated_plan_bytes(
+        import mp_operator_export as _mp_operator
+        try:
+            from mp_model import get_plan_run_by_id
+            _run_row = get_plan_run_by_id(int(session.get("mp2_run_id")))
+        except Exception:
+            _run_row = None
+        xlsx_bytes = _mp_operator.operator_plan_bytes(
             engine_result=result,
             fitting_result=fitting_result,
             schedule_result=schedule_result,
             fitting_schedule=fitting_schedule_result,
+            source_rows=_mp_operator.plan_run_source_rows(_run_row),
         )
         month = (result or fitting_result).effective_month
-        filename = f"Consolidated_Plan_{month}.xlsx"
+        filename = f"Machine_Plan_{month}.xlsx"
     except Exception as exc:
         app.logger.error("mp_report_consolidated failed: %s", exc)
         abort(500)
@@ -8097,12 +8117,19 @@ def mp_report_zip():
                 app.logger.error("zip: report 12 failed: %s", exc)
 
         try:
-            zf.writestr(f"Consolidated_Plan_{month}.xlsx",
-                        _mp_reports.consolidated_plan_bytes(
+            import mp_operator_export as _mp_operator
+            try:
+                from mp_model import get_plan_run_by_id
+                _run_row = get_plan_run_by_id(int(session.get("mp2_run_id")))
+            except Exception:
+                _run_row = None
+            zf.writestr(f"Machine_Plan_{month}.xlsx",
+                        _mp_operator.operator_plan_bytes(
                             engine_result=result,
                             fitting_result=fitting_result,
                             schedule_result=schedule_result,
                             fitting_schedule=fitting_schedule_result,
+                             source_rows=_mp_operator.plan_run_source_rows(_run_row),
                         ))
             built += 1
         except Exception as exc:
@@ -8627,15 +8654,17 @@ def mp_frozen_run_report(run_id: int, report_id: str):
     # ── Consolidated 7-tab workbook ────────────────────────────────────────
     if report_id == "consolidated":
         try:
+            import mp_operator_export as _mp_operator
             res   = _get_result()
             fres  = _get_fitting_result()
             sched = _get_schedule(res)
             fsched = _get_fitting_schedule(fres)
-            xlsx_b = _mp_reports.consolidated_plan_bytes(
+            xlsx_b = _mp_operator.operator_plan_bytes(
                 engine_result=res, fitting_result=fres,
                 schedule_result=sched, fitting_schedule=fsched,
+                source_rows=_mp_operator.plan_run_source_rows(row),
             )
-            fname = f"Consolidated_Plan_{month}.xlsx"
+            fname = f"Machine_Plan_{month}.xlsx"
         except Exception as exc:
             app.logger.error("mp_frozen_run_report consolidated: %s", exc)
             abort(500)
@@ -8756,10 +8785,12 @@ def mp_frozen_run_report(run_id: int, report_id: str):
                 except Exception as exc:
                     app.logger.error("run zip: report 12 failed: %s", exc)
             try:
-                zf.writestr(f"Consolidated_Plan_{month}.xlsx",
-                            _mp_reports.consolidated_plan_bytes(
+                import mp_operator_export as _mp_operator
+                zf.writestr(f"Machine_Plan_{month}.xlsx",
+                            _mp_operator.operator_plan_bytes(
                                 engine_result=res, fitting_result=fres,
-                                schedule_result=sched, fitting_schedule=fsched))
+                                schedule_result=sched, fitting_schedule=fsched,
+                                source_rows=_mp_operator.plan_run_source_rows(row)))
                 built += 1
             except Exception as exc:
                 app.logger.error("run zip: consolidated failed: %s", exc)
