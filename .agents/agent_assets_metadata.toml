@@ -290,3 +290,17 @@ mtime_ms = 1788970215668
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/a6697cdb-fbfc-434b-86d6-f239caa45f9f/1321eaac-2ade-4c22-9b35-d1135b0397d7"
 storage_version_token = "1788970225302434"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "3RZSpwN1kXTz6FaBB16Lf"
+uri = "file://.local/outputs/Prayag-Machine-Plan-September-2026-RN3.xlsx"
+type = "table"
+title = "Prayag Machine Plan — September 2026 RN3"
+description = "Genuine Prayag planner output from the 507 RN3 Temporary Demand rows, with 28 machine tabs, block-hour schedules, day sheet, machine loading, item plan, complete not-scheduled ledger, plan summary, and source demand."
+logical_id = "cc24b431-9ff3-4fd4-90fd-7b7bea256a87"
+content_hash = "sha256:89135b574e0b6e1033b5ded3e4e339bc43388b83c79c1826c928393f33e28fb1"
+size = 231364
+mtime_ms = 1788974564091
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/cc24b431-9ff3-4fd4-90fd-7b7bea256a87/9134c675-9b33-44c8-8ad6-e3e543780e0f"
+storage_version_token = "1788974575141212"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
