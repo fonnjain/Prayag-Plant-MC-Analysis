@@ -402,3 +402,17 @@ mtime_ms = 1789046269959
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/fd639752-4c75-415f-bd18-73c5c39039f4/707e8e1d-600f-48d1-afa0-62f0937fe240"
 storage_version_token = "1789046305030953"
 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "ocdM6Vq4goAUvAMCO_r4k"
+uri = "file://.local/outputs/Prayag-Freeze-a-Month-Daily-Production-Design-Report.docx"
+type = "word_document"
+title = "Prayag Freeze a Month — Design Report"
+description = "Formatted Word report covering the rule exception, recommended architecture, snapshot contents, guards, operator workflow, production behavior, speed expectations, and partial-read prevention."
+logical_id = "9ee8c4d6-914b-4e88-965d-ec076ea6716d"
+content_hash = "sha256:2254bd6ecf53a2f8c17886dd26c5e70fa8cb344649fd9eec3c33e550f2540f09"
+size = 43273
+mtime_ms = 1789050283035
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/9ee8c4d6-914b-4e88-965d-ec076ea6716d/1582d89f-fc04-4883-9310-04bb4bf07480"
+storage_version_token = "1789050296289419"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
