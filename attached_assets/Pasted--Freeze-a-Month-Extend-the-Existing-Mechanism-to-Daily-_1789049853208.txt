@@ -1,0 +1,84 @@
+# Freeze a Month — Extend the Existing Mechanism to Daily Data
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Design and report first. Do not build until the design is agreed** (**R-28**).
+
+---
+
+## What I want
+
+The ability to **freeze a month**: once frozen, its figures are stored in the database and **never fetched from Google Sheets again** until someone explicitly unfreezes it.
+
+Three reasons:
+
+1. **Speed** — frozen months skip Sheets entirely. Most of a report's build time is external reads.
+2. **Fewer Sheets calls** — the app runs on a shared user OAuth token with one quota. Closed months are re-read constantly for data that cannot change.
+3. **Protection — the real reason.** June and July 2026 were verified and correct. The source was later edited, the app re-read the changed state, and both months broke and stayed broken for weeks. **A frozen June could not have been affected.** Verified figures would have stayed as verified.
+
+---
+
+## Much of this already exists — extend it, do not reinvent
+
+**`costing_model.py` already implements exactly this pattern:**
+
+- `costing_labour_monthly` — the figures in Postgres
+- `costing_labour_meta` — carries `frozen BOOLEAN` per `(segment, fy)`
+- `is_frozen(fy)` — the gate
+- `app.py:5327` — *"Refresh only for non-frozen FYs"*, with `force=true` as the escape
+
+**And `sheets.py` already has a closed-month concept:** `_CLOSED_SOURCE_TTL` = 7 days for a closed month versus 30 minutes for an open one (`sheets.py:1456-1463`).
+
+**But a long cache is not a freeze.** It expires, it can be cleared, and it re-fetches — so it still depends on the source. A freeze must make the stored figures authoritative and stop fetching altogether.
+
+**Report first:** can the costing freeze pattern be extended to daily production records, or does the daily path differ enough to need its own design? I would rather extend one mechanism than run two.
+
+---
+
+## What to design
+
+### Scope
+Freeze at **`(plant, month)`** — the same grain as `DAILY_SOURCES` and the high-water store — not at FY level. June PIPE should be freezable while September stays live.
+
+### Storage
+Frozen months must store the **daily records themselves**, not just totals. Every screen recomputes from records — Machine View, rankings, the management reports — so totals alone would break them.
+
+Report what a frozen row must hold for a report to rebuild identically without touching Sheets.
+
+### Behaviour
+- Frozen `(plant, month)` → serve from the database. **No Sheets call at all.**
+- Not frozen → current behaviour, unchanged.
+- Freezing **captures the current parsed state** and marks it authoritative.
+- Unfreezing returns it to live reading. **Both actions must be explicit and logged** — who, when, plant, month.
+
+### Interaction with existing guards
+This is the part I most want thought through:
+
+- **The high-water guard** should not apply to a frozen month — there is nothing to compare against, because nothing is read. Confirm freezing bypasses it cleanly rather than tripping it.
+- **The Cardinal Rule** says every figure is recomputed from live source cells. A freeze is a deliberate, recorded exception — like **R-03** for closed years. Propose how to word it so a future reader understands a frozen month is *verified and pinned*, not *stale*.
+- Every screen showing a frozen month must **say so visibly**. A frozen figure and a live figure must never look identical.
+
+### Operator control
+Freeze/unfreeze must be an **authenticated admin action in the app**, not a database write — same conclusion we reached for the re-baseline. Show what will be frozen before confirming: plant, month, record count, key totals.
+
+---
+
+## Critically — production, not just the workspace
+
+We have just learned the hard way that **publishing deploys code and schema, but not data**. Production is `neondb`; the workspace is `heliumdb`. A month frozen in the workspace would leave production still reading Sheets.
+
+**Report how freeze state and frozen records reach production.** If freezing writes rows, that is a data operation and needs the same admin-action path.
+
+---
+
+## Report back — do not build yet
+
+1. Can the costing freeze pattern be extended, or is a separate design needed? Recommend one.
+2. What must a frozen record store so every report rebuilds identically with no Sheets call?
+3. How freeze interacts with the high-water guard, the closed-source cache, and the Cardinal Rule.
+4. How an operator freezes and unfreezes, and how it is logged.
+5. How frozen state reaches production given the dev/prod database split.
+6. The expected speed gain — how much of a typical report build is Sheets time today.
+7. What could go wrong. Specifically: if a month is frozen from a **partially read** state, the wrong figures become permanent. What prevents that?
+
+**Point 7 is the one that matters most.** Freezing a bad state would be worse than the problem it solves. The guard should refuse to freeze a month with any failed or incomplete pair.
