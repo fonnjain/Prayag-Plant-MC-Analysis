@@ -304,3 +304,17 @@ mtime_ms = 1788974564091
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/cc24b431-9ff3-4fd4-90fd-7b7bea256a87/9134c675-9b33-44c8-8ad6-e3e543780e0f"
 storage_version_token = "1788974575141212"
 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "cvJCVFXBcjFFlJAo88sci"
+uri = "file://.local/outputs/Prayag-Machine-View-June-July-Diagnostic.docx"
+type = "word_document"
+title = "Prayag Machine View — June & July Diagnostic"
+description = "Detailed read-only diagnostic explaining why PIPE and Injection Moulding disappear in June and July 2026, with exact record-count evidence, root cause, recovery guidance, and the supplied screenshots."
+logical_id = "0923d01a-2d88-43fe-b671-339aee6dbdf8"
+content_hash = "sha256:cf32db74e9d735363a3d6e11fa07d72098b488984128671d7fc0bc61d61b5517"
+size = 990149
+mtime_ms = 1789031825720
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/0923d01a-2d88-43fe-b671-339aee6dbdf8/fa66151e-9da1-4593-841d-9912a43abc4f"
+storage_version_token = "1789031841902749"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
