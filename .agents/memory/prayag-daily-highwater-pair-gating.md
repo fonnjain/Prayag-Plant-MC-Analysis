@@ -9,4 +9,4 @@ Daily completeness is enforced at the physical workbook/month pair even though r
 
 **How to apply:** When plants from one shared workbook vanish together, inspect current logical populations versus persisted high-water counts before debugging filters or chart rendering. Determine whether the source row was deleted/changed or the parser stopped recognizing it; do not reset a baseline until the lower population is verified as complete.
 
-The June/July 2026 PIPE investigation is closed in PRAYAG_RULES R-45. June reflects identified source edits; July's count decline is a removed zero-output day. The derived July residual is not evidence of missing production.
+The June/July 2026 PIPE investigation is closed in PRAYAG_RULES R-45. The plant confirmed the edits were deliberate corrections; current 70/176 PIPE populations supersede the stale 71/177 high-waters. The derived July residual has no standing.

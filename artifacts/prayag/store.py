@@ -1333,6 +1333,36 @@ def remember_daily_read_count(plant: str, ym: str, record_count: int) -> None:
         pass
 
 
+def rebaseline_daily_read_count(plant: str, ym: str, record_count: int) -> None:
+    """Replace one daily logical-emitter baseline after an approved correction.
+
+    Unlike ``remember_daily_read_count``, this operation may lower a count. It is
+    intentionally narrow and raises on failure so callers cannot report a
+    successful re-baseline when persistence did not occur.
+    """
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    if not plant or not ym or record_count <= 0:
+        raise StoreError("Plant, month and a positive record count are required.")
+    try:
+        _init_daily_read_counts()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_DRC_TABLE} (plant, ym, record_count, observed_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (plant, ym) DO UPDATE
+                    SET record_count = EXCLUDED.record_count,
+                        observed_at = now()
+                """,
+                (plant, ym, int(record_count)),
+            )
+    except StoreError:
+        raise
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # API key store — single-row table that holds the active API key for the
 # /data-api/v1 endpoints.  Managed from the /settings/api-key UI page.

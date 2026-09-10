@@ -3550,14 +3550,13 @@ def build_state():
                  False, "-", f"ERROR: {_e5}", "reports registry import/build failed")
 
         # #20  PIPE June reconciled output and rejection ground truth (live sheets).
-        # This is the R5+R11 date-wise MAX figure (170,216 kg), measured from the
-        # fully-backfilled live June workbook.  The offline June oracle test pins
-        # 168,738 kg — that is the R5-only figure from the frozen mid-month fixture
-        # captured before the R11 backfill completed.  The two numbers are
-        # intentionally different: this gate checks the live sheets, the oracle
-        # guards the offline parser/generator logic from a structurally frozen state.
-        PIPE_JUN_EXP     = 170_216   # live R5+R11 date-wise max; measured 2026-07-20
-        PIPE_JUN_REJ_EXP = 15_354
+        # The plant deliberately corrected five keys on 25 July and removed
+        # M/C-7 20 June on 3 September. The current lower result supersedes the
+        # pre-correction 170,216 / 15,354 acceptance state (PRAYAG_RULES R-45).
+        # The offline June oracle remains a structural fixture captured earlier;
+        # this gate checks the corrected live source.
+        PIPE_JUN_EXP     = 164_008
+        PIPE_JUN_REJ_EXP = 14_774
         _jun_pipe_partial = False
         try:
             _rows_jun, _reps_jun, _ = get_daily_records(["2026-06"])

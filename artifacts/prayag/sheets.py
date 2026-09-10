@@ -1725,6 +1725,64 @@ def _remember_complete_daily_pair(plant: str, ym: str, results) -> None:
         _store.remember_daily_read_count(_daily_count_scope(emit), ym, count)
 
 
+def rebaseline_daily_logical_population(
+    emit: str,
+    ym: str,
+    expected_count: int,
+) -> dict:
+    """Re-measure and replace one approved logical-emitter high-water.
+
+    The live workbook is parsed through the normal application loader, but the
+    old high-water gate is deliberately bypassed so a confirmed corrective
+    reduction can be measured. The write is refused unless the requested
+    logical emitter is expected from exactly one registered physical source and
+    its live count exactly matches ``expected_count``.
+    """
+    emit = str(emit or "").strip().upper()
+    expected_count = int(expected_count)
+    physical_sources = [
+        plant
+        for plant, specs in _DAILY_LAYOUTS.items()
+        if any(str(spec.get("emit", "")).upper() == emit for spec in specs)
+        and ym in (sources.DAILY_SOURCES.get(plant, {}).get("files") or {})
+    ]
+    if len(physical_sources) != 1:
+        raise SheetReadError(
+            f"Expected exactly one registered physical source for {emit} {ym}; "
+            f"found {len(physical_sources)}."
+        )
+    token = _get_access_token()
+    if not token:
+        raise SheetReadError("The Google Sheets connection is not authorized.")
+    physical = physical_sources[0]
+    with _daily_key_lock((physical, ym)):
+        results = _load_daily(physical, ym, token)
+        population = _daily_logical_populations(results).get(emit)
+        observed = int((population or {}).get("count", 0))
+        if observed != expected_count:
+            raise SheetReadError(
+                f"Refusing to re-baseline {emit} {ym}: live parse returned "
+                f"{observed:,} records, expected {expected_count:,}."
+            )
+        if observed <= 0:
+            raise SheetReadError(
+                f"Refusing to re-baseline {emit} {ym} to a non-positive count."
+            )
+        scope = _daily_count_scope(emit)
+        previous = _store.daily_read_count(scope, ym)
+        _store.rebaseline_daily_read_count(scope, ym, observed)
+        _daily_highwater_counts[(emit, ym)] = observed
+        _daily_cache.pop((physical, ym), None)
+        _store.pg_cache_clear(f"daily_v3_{physical}_{ym}")
+    return {
+        "emit": emit,
+        "ym": ym,
+        "physical_source": physical,
+        "previous_count": previous,
+        "record_count": observed,
+    }
+
+
 def _load_daily_cached(plant: str, ym: str, token: str):
   """Return cached results for one (plant, ym), fetching once under a per-key
   lock on a cold miss. Safe to call from many threads concurrently.

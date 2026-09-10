@@ -143,7 +143,7 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 | Segment | APR | MAY | JUN | JUL | Total |
 |---|---|---|---|---|---|
 | **PIPE** (Report-5 verification) | 190,494 | 344,000 | 178,782 | 564,695 | 1,277,971 kg / 6,507 h — verification-only; superseded for the headline by Report-5↔Report-11 reconciliation |
-| **PIPE** (daily Report-5↔Report-11, authoritative) | — | — | — | — | **1,283,300.15 kg / 6,507 h** — monthly columns are deliberately blank; only the four-month total was accepted |
+| **PIPE** (daily Report-5↔Report-11, authoritative) | 175,669 | 313,637 | **164,008** | **520,455.15** | **1,173,769.15 kg** — restated after deliberate plant corrections made July–September 2026 |
 | **MOULDING** (daily Report-12 + Report-5 hours, authoritative) | 89,152 | 75,771 | 97,007 | 104,086 | **366,015.39 kg / 35,972 h** |
 | **PTMT** Nett — *annual basis* | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / 6.14% |
 | **PTMT** Nett — *daily/Report-5 basis* | 99,262 | 104,729 | **147,835** | 172,639 | **524,465** kg |
@@ -168,10 +168,11 @@ June diverges between the two chains (R-24). Label which basis is in use wheneve
 **Production basis:** all production pages use **net**; the costing module uses **gross**, matching the workbook note *"Production in KG has Rejection included."*
 
 **R-45 · CLOSED — June/July 2026 PIPE disappearance forensics. Do not reopen without new source evidence.**
-- **June is explained and actionable.** A 25 July five-key source edit reduced output by **6,208 kg** and rejection by **580 kg**. On 3 September, `PIPE M/C-7 — 20 June` was removed. These are real source changes with identified rows; recovery belongs to the plant.
-- **July record-count decline is explained.** On 3 September, the zero-output/zero-rejection machine-day `PIPE M/C-2 — 20 July` was removed. That one-record decline triggers workbook withholding but costs no production.
-- **July tonnage is not an established source loss.** The **623,778.15 kg** figure was derived by subtracting accepted April, May and June figures from the accepted April–July total. It was never observed or independently verified: there is no July acceptance gate, oracle, retained parse or retained revision snapshot at that value. The apparent **86,727 kg** residual may originate anywhere in the chain — July, the four-month total, or April/May/June. Never describe it as missing production without new direct evidence.
-- Part 4's authoritative PIPE row intentionally has blank monthly columns and accepts only the four-month total. That missing standalone July acceptance is precisely why July cannot be checked against **623,778.15 kg**.
+- **The plant confirmed the identified edits were deliberate corrective changes.** The current lower source state is correct; the prior high-waters represented superseded populations.
+- **June is corrected.** A 25 July five-key source edit reduced output by **6,208 kg** and rejection by **580 kg**. On 3 September, `PIPE M/C-7 — 20 June` was removed. The corrected accepted result is **164,008 kg output / 14,774 kg rejection across 70 source records**.
+- **July record-count decline is corrected.** On 3 September, the zero-output/zero-rejection machine-day `PIPE M/C-2 — 20 July` was removed. The corrected accepted result is **520,455.15 kg output / 44,716 kg rejection across 176 source records**.
+- The previous derived July residual has no standing and must not be restated. It was never observed or independently verified; it existed only as subtraction from the superseded four-month total.
+- Part 4 now records the directly parsed corrected monthly results and a recomputed April–July total of **1,173,769.15 kg**. These are intentional restatements after plant corrections made July–September 2026, not unexplained drift.
 
 **R-44 · Output basis is a `Record` contract, never an inferred arithmetic shortcut.**
 - `Garden`, `Garden_WB`, `HDPE`, `Pipe`, `Moulding`, and Tank variants default to **net** `total_count`; `PTMT` defaults to **gross**. An unknown plant stays unknown rather than receiving a silent transform.
