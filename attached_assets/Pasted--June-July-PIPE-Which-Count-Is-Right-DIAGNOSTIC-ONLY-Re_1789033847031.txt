@@ -1,0 +1,86 @@
+# June / July PIPE — Which Count Is Right? (DIAGNOSTIC ONLY)
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**No code changes. No seeding. No re-baselining. No source edits. Diagnostics only** (**R-28**, **R-30**). Report and stop.
+
+Your diagnostic is well-built and I accept its mechanism. This is not a challenge to it — it is one question it did not ask.
+
+---
+
+## Two pieces of context you did not have
+
+1. **June and July were verified against source earlier in this project and matched perfectly.** Both months were reconciled figure by figure and accepted.
+2. **The Replit platform had a connection problem during that period. It is now resolved.**
+
+Those two facts open a second explanation that your report did not consider.
+
+---
+
+## The competing hypotheses
+
+Your report assumes the stored high-water (June 71, July 177) is correct and the source has since lost a record. That is **Hypothesis A**.
+
+**Hypothesis B: the high-water is one too high, and the current count is correct.**
+
+If a connection retry caused a single row to be parsed twice, the read would have produced **71 records instead of 70**, with inflated output — and that inflated count would have been persisted as the high-water. Every honest read since would then fail by exactly one.
+
+Note what makes B plausible rather than speculative:
+
+- The shortfall is **exactly one record** in both months — not a variable gap
+- The output difference is **6,208 kg with 580 kg rejection** in June — the size of a single plausible machine-day, not a rounding artefact
+- A partial or failed read produces **fewer** records and **less** output. The 71-record read had **more**. Corruption by omission cannot explain a higher count; **duplication can**
+- The stored high-water records only the maximum count, **not the identity of the accepted rows** — your own report says so. So it cannot distinguish a genuine 71 from a double-counted 70
+
+**A and B require opposite fixes.** A means restoring a deleted source row. B means correcting a phantom high-water. Doing the wrong one would either fabricate production or permanently lose a real record.
+
+---
+
+## The decisive test
+
+**Does the current 70-record parse reproduce the figures that were verified and accepted earlier?**
+
+- If the verified June PIPE figure equals the **current** parse (164,008 kg) → the high-water is phantom → **Hypothesis B**
+- If the verified June PIPE figure equals the **benchmark** (170,216 kg) → the source has genuinely lost a row → **Hypothesis A**
+
+Report both, side by side, for June and July.
+
+---
+
+## What to check
+
+**1. Look for the duplicate directly.**
+In the current June PIPE parse, is there a single machine-day record with output ≈ **6,208 kg** and rejection ≈ **580 kg**? If such a record exists and appears **once** now, it is very likely the row that was counted **twice** when the high-water was set. Do the same for July's one-record difference.
+
+**2. When was each high-water written?**
+Report the timestamp on the stored high-water for `(PIPE, 2026-06)` and `(PIPE, 2026-07)`. **Does it fall inside the connection-problem window?** If the high-water was written during the period of unreliable connections, that is strong support for B.
+
+**3. How many distinct machine-days should each month have?**
+Count distinct `(machine, date)` pairs in the current parse. If June has 70 records across 70 distinct machine-days, there is no duplication now. If the high-water period would have produced 71 records across only 70 distinct machine-days, that is the duplicate.
+
+**4. Check the reconciliation path specifically.**
+PIPE records come from `pipe_reconcile.reconcile()` — the date-wise maximum over the Report-5 / Report-11 union. A retry during that union could plausibly emit a Report-11-only row twice. Report whether the reconciliation is idempotent under a repeated read, and whether any record in the current parse is Report-11-only.
+
+**5. Confirm the source is unchanged.**
+Check the Google Sheets revision history for both June and July Pipe & Fitting workbooks. **Has either been edited since the period when the numbers were verified?** If neither has been touched, Hypothesis A has no mechanism and B becomes the only explanation standing.
+
+---
+
+## Also worth reporting
+
+Your section 3 identifies a genuine design point: **counts are evaluated per logical plant, but publication is decided per physical workbook**. So a one-record PIPE shortfall discards a complete 568-record MOULDING population.
+
+Do not change it now — but report what it would take to publish logical emitters independently, so a complete MOULDING result survives a PIPE rejection. That is worth deciding properly, separately from this incident.
+
+---
+
+## Report back
+
+1. The verified-versus-current comparison for both months — the decisive test.
+2. Whether a candidate duplicate record exists (≈6,208 kg / 580 kg in June).
+3. The high-water timestamps, and whether they fall in the connection-problem window.
+4. Distinct machine-day counts versus record counts.
+5. Whether either source workbook has been edited since verification.
+6. **Your conclusion: A or B**, with the evidence that decides it.
+
+**Change nothing.** If the answer is B, the correction is a re-baseline and I want to authorise it explicitly. If it is A, the correction is in the source workbook and belongs to the plant, not to us.

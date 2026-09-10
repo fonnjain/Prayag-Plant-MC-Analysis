@@ -332,3 +332,17 @@ mtime_ms = 1789032509852
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/94303a99-f9c8-4c37-8d32-3ac0ff556e05/4fc489c7-98de-48fa-8153-f9907423f8e9"
 storage_version_token = "1789032519020344"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "K2FXW6SqOkhvUCQ78HPLh"
+uri = "file://.local/outputs/June-July-PIPE-Hypothesis-A-vs-B-Decisive-Diagnostic.docx"
+type = "word_document"
+title = "June/July PIPE — A vs B Decisive Diagnostic"
+description = "Read-only diagnostic deciding whether the source lost data or the high-water was inflated by duplication. Includes verified-versus-current figures, duplicate search, timestamps, distinct machine-day counts, reconciliation idempotence, Google revision evidence, and final conclusion."
+logical_id = "3ee9b0ac-be4a-4e6b-9e77-09cc5c095575"
+content_hash = "sha256:6180b373df6285311a4eec574ca9f1f01b22a603ffe8a394a57c8ee4c4c40ad0"
+size = 41164
+mtime_ms = 1789034172707
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/3ee9b0ac-be4a-4e6b-9e77-09cc5c095575/92388de2-d018-4bc8-88d5-b22c348afd76"
+storage_version_token = "1789034184823515"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
