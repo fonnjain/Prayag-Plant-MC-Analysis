@@ -1,0 +1,77 @@
+# Production Verification — prayag-plant.com
+
+Read `PRAYAG_RULES.md`. **Read-only. Verify only — change nothing.**
+
+Deployment `3dbf76f` is live and healthy. What has not been confirmed is whether the **authenticated pages actually render the data** the recent work was supposed to restore.
+
+**On authentication:** you reported the bootstrap password returns 401 and correctly did not reset it. Do not reset, alter or create any account. If you can authenticate with a credential already available to you, verify directly. **If you cannot, say so plainly and instead verify everything reachable without a session** — then list exactly what a human needs to check by eye. An honest "could not verify" is the right answer; a guessed one is not.
+
+---
+
+## 1 · June and July — did the re-baseline hold in production?
+
+This is the most important check. These months were withheld for weeks.
+
+For **`/machine?period=2026-06`** and **`/machine?period=2026-07`**, confirm:
+
+- **PIPE and MOULDING both appear** in the plant dropdown
+- Both appear in the **Output Efficiency ranking**
+- **No partial-source or incomplete-pair banner** for either month
+- Figures match the re-baselined state:
+
+| Month | PIPE | MOULDING |
+|---|---|---|
+| June | 70 records · 164,008 kg · 14,774 kg rej | 568 records · 97,006.92 kg |
+| July | 176 records · 520,455.15 kg · 44,716 kg rej | 612 records · 104,085.58 kg |
+
+**If a partial banner still shows for either month, the re-baseline did not take effect in production** — report that immediately with the banner text.
+
+## 2 · August — do the newly pinned plants render?
+
+For **`/machine?period=2026-08`** and **`/plant?period=2026-08`**, confirm these now appear, having just been pinned:
+
+- **GARDEN** (27 records)
+- **TANK** (104), **TANK_VN** (86), **TANK_WB** (148)
+
+And that the previously pinned plants still render: PIPE, GARDEN_WB, HDPE, PTMT.
+
+## 3 · September — the current month
+
+For **`/machine?period=2026-09`** and **`/plant?period=2026-09`**, confirm:
+
+- **PIPE** (37 records) and **MOULDING** (142) — both from the PIPE workbook
+- **PTMT** (487)
+- **TANK** (16), **TANK_VN** (19), **TANK_WB** (20)
+
+And confirm the four unpinned plants are **absent or clearly marked**, not showing a misleading zero: GARDEN, HDPE, GARDEN_WB, CP.
+
+**A plant with no pinned source must not render as 0 kg** — it must be absent or carry a note. Report exactly how each of the four presents.
+
+## 4 · Management Reports
+
+Open the Management Reports index and confirm reports build for **June, July, August and September**. For each month report: renders with data · renders with a partial banner · or fails.
+
+Check **Pipe M/C Summary** for June and July specifically — those are the months that were broken.
+
+## 5 · The Costing and Planning surfaces
+
+- **Costing Overview** and **Costing Analysis** — do they render for the current period?
+- **Planning Hub** — with September seeds now loaded (519 pipe routing, 312 fitting routing, 1,426 BOM), does it show seeds present for 2026-09 rather than the "Tables empty" banner?
+
+## 6 · Anything that looks wrong
+
+Report any page returning **5xx**, any raw traceback, and any figure that contradicts the tables above.
+
+---
+
+## Report back
+
+A single table: page · period · HTTP status · renders with data / partial / empty / error · plants present.
+
+Then, plainly:
+1. Did June and July recover in production? **Yes or no.**
+2. Did the newly pinned August and September sources render?
+3. Do the four unpinned September plants present honestly, or as a misleading zero?
+4. Anything you could **not** verify, and what a human should check by eye.
+
+**Change nothing.** No pinning, no re-baselining, no cache clearing, no credential changes, no code edits. This is verification only.
