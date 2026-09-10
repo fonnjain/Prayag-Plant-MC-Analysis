@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Daily Source Re-baseline — Prayag Analytics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --navy:#1F3864; --terra:#C55A11; }
+    body { background:#f3f4f6; font-family:system-ui,sans-serif; }
+    .card { background:#fff; border-radius:14px; box-shadow:0 1px 6px rgba(0,0,0,.08); }
+    input { font-size:16px; }
+  </style>
+</head>
+<body>
+  <header style="background:var(--navy)" class="shadow-lg">
+    <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+      <a href="/" class="text-white font-bold text-sm">Prayag Analytics</a>
+      <div class="flex items-center gap-3">
+        <span class="text-blue-100 text-xs">{{ auth_user }}</span>
+        <a href="/logout" class="text-white text-xs font-semibold">Sign out</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 py-6">
+    <a href="/settings/users" class="inline-flex text-xs text-gray-500 mb-4">← Back to administration</a>
+    <h1 class="text-xl font-bold" style="color:var(--navy)">Daily Source Re-baseline</h1>
+    <p class="text-sm text-gray-500 mt-1 mb-5">One logical emitter and month per action. The final action parses the live source again and refuses unless its count exactly matches the requested value.</p>
+
+    {% if message %}
+    <div class="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+    <div role="alert" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{{ error }}</div>
+    {% endif %}
+
+    {% if preview %}
+    <section class="card p-5 mb-5 border-2 border-amber-300">
+      <h2 class="font-bold text-base text-amber-900">Confirm this single change</h2>
+      <p class="text-xs text-amber-800 mt-1 mb-4">Review every value. Confirmation invokes the guarded re-baseline function, which performs another live parse.</p>
+      <dl class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+        <div><dt class="text-[11px] text-gray-500">Emitter</dt><dd class="font-bold">{{ preview.emit }}</dd></div>
+        <div><dt class="text-[11px] text-gray-500">Month</dt><dd class="font-bold">{{ preview.month }}</dd></div>
+        <div><dt class="text-[11px] text-gray-500">Stored value</dt><dd class="font-bold">{{ preview.stored_count if preview.stored_count is not none else "—" }}</dd></div>
+        <div><dt class="text-[11px] text-gray-500">Live parsed count</dt><dd class="font-bold">{{ preview.live_count }}</dd></div>
+        <div><dt class="text-[11px] text-gray-500">Requested new value</dt><dd class="font-bold text-orange-800">{{ preview.new_count }}</dd></div>
+      </dl>
+      <form method="post" action="/settings/daily-rebaseline/confirm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+        <input type="hidden" name="nonce" value="{{ preview.nonce }}"/>
+        <input type="hidden" name="emitter" value="{{ preview.emit }}"/>
+        <input type="hidden" name="month" value="{{ preview.month }}"/>
+        <input type="hidden" name="new_count" value="{{ preview.new_count }}"/>
+        <label class="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+          <input required type="checkbox" name="confirm" value="yes" class="mt-1"/>
+          <span>I confirm this exact emitter, month, and requested count. I understand the action is audited.</span>
+        </label>
+        <div class="mt-4 flex gap-3">
+          <button type="submit" class="rounded-lg px-4 py-2 text-sm font-bold text-white" style="background:var(--terra)">Apply guarded re-baseline</button>
+          <a href="/settings/daily-rebaseline" class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold text-gray-700">Cancel</a>
+        </div>
+      </form>
+    </section>
+    {% else %}
+    <section class="card p-5 mb-5">
+      <h2 class="font-bold text-sm mb-1" style="color:var(--navy)">Preview one change</h2>
+      <p class="text-xs text-gray-500 mb-4">Previewing reads the registered live workbook and does not change a high-water or cache.</p>
+      <form method="post" action="/settings/daily-rebaseline/preview" class="grid gap-3 md:grid-cols-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
+        <label><span class="block text-xs font-semibold text-gray-600 mb-1">Logical emitter</span>
+          <input required name="emitter" placeholder="PIPE" class="w-full rounded-lg border border-gray-300 px-3 py-2 uppercase"/>
+        </label>
+        <label><span class="block text-xs font-semibold text-gray-600 mb-1">Month</span>
+          <input required type="month" name="month" class="w-full rounded-lg border border-gray-300 px-3 py-2"/>
+        </label>
+        <label><span class="block text-xs font-semibold text-gray-600 mb-1">Requested new value</span>
+          <input required type="number" min="1" max="1000000" step="1" name="new_count" class="w-full rounded-lg border border-gray-300 px-3 py-2"/>
+        </label>
+        <button type="submit" class="md:col-span-3 rounded-lg px-4 py-2 text-sm font-bold text-white" style="background:var(--navy)">Read live count and preview</button>
+      </form>
+    </section>
+    {% endif %}
+
+    <section class="card overflow-hidden">
+      <div class="px-5 py-4 border-b"><h2 class="font-bold text-sm" style="color:var(--navy)">Invocation audit</h2></div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 text-gray-500"><tr>
+            <th class="p-3 text-left">When</th><th class="p-3 text-left">Who</th>
+            <th class="p-3 text-left">Emitter / month</th><th class="p-3 text-right">Old</th>
+            <th class="p-3 text-right">Live</th><th class="p-3 text-right">New</th>
+            <th class="p-3 text-left">Status</th>
+          </tr></thead>
+          <tbody class="divide-y">
+          {% for row in history %}
+            <tr>
+              <td class="p-3 whitespace-nowrap">{{ row.invoked_at }}</td>
+              <td class="p-3">{{ row.user_email }}</td>
+              <td class="p-3 font-semibold">{{ row.emitter }} / {{ row.ym }}</td>
+              <td class="p-3 text-right">{{ row.old_count if row.old_count is not none else "—" }}</td>
+              <td class="p-3 text-right">{{ row.live_count }}</td>
+              <td class="p-3 text-right">{{ row.new_count }}</td>
+              <td class="p-3"><span class="font-bold">{{ row.status }}</span>{% if row.error %}<div class="text-red-700 mt-1">{{ row.error }}</div>{% endif %}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="p-5 text-gray-500">No re-baseline has been invoked.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  {% include "_activity_heartbeat.html" %}
+</body>
+</html>

@@ -1725,6 +1725,42 @@ def _remember_complete_daily_pair(plant: str, ym: str, results) -> None:
         _store.remember_daily_read_count(_daily_count_scope(emit), ym, count)
 
 
+def inspect_daily_logical_population(emit: str, ym: str) -> dict:
+    """Parse one registered source for an operator preview without changing data.
+
+    This intentionally measures through the same ungated live parser used by the
+    guarded re-baseline function. It does not update caches or high-water rows.
+    The actual write still re-parses and enforces the exact-count guard.
+    """
+    emit = str(emit or "").strip().upper()
+    physical_sources = [
+        plant
+        for plant, specs in _DAILY_LAYOUTS.items()
+        if any(str(spec.get("emit", "")).upper() == emit for spec in specs)
+        and ym in (sources.DAILY_SOURCES.get(plant, {}).get("files") or {})
+    ]
+    if len(physical_sources) != 1:
+        raise SheetReadError(
+            f"Expected exactly one registered physical source for {emit} {ym}; "
+            f"found {len(physical_sources)}."
+        )
+    token = _get_access_token()
+    if not token:
+        raise SheetReadError("The Google Sheets connection is not authorized.")
+    physical = physical_sources[0]
+    with _daily_key_lock((physical, ym)):
+        results = _load_daily(physical, ym, token)
+        population = _daily_logical_populations(results).get(emit)
+        observed = int((population or {}).get("count", 0))
+    return {
+        "emit": emit,
+        "month": ym,
+        "physical_source": physical,
+        "stored_count": _store.daily_read_count(_daily_count_scope(emit), ym),
+        "live_count": observed,
+    }
+
+
 def rebaseline_daily_logical_population(
     emit: str,
     ym: str,

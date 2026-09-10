@@ -388,3 +388,17 @@ mtime_ms = 1789044776207
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/8181fbac-b0a2-46ac-9fe8-aaf28df95c26/c15f832a-8bf8-4103-9f5b-9765e051db13"
 storage_version_token = "1789044784048637"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "p7LvZiqQJEOPCaN8wv0sJ"
+uri = "file://.local/outputs/Prayag-Production-Pre-State-and-Dev-Prod-Data-Gaps-2026-09-10.xlsx"
+type = "table"
+title = "Prayag Production Pre-State and Data Gaps"
+description = "Complete 68-row production daily_read_counts snapshot plus exact September development-versus-production planning data differences and provenance."
+logical_id = "fd639752-4c75-415f-bd18-73c5c39039f4"
+content_hash = "sha256:cda3bfe2bcd90496b4b9c2389f8cd915ee00191711297267646f8200146d388d"
+size = 23688
+mtime_ms = 1789046269959
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/fd639752-4c75-415f-bd18-73c5c39039f4/707e8e1d-600f-48d1-afa0-62f0937fe240"
+storage_version_token = "1789046305030953"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

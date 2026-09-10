@@ -403,6 +403,9 @@
     <a href="/settings/users" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/users') else '' }}">
       <span class="nd-icon">👤</span> User Management
     </a>
+    <a href="/settings/daily-rebaseline" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/daily-rebaseline') else '' }}">
+      <span>Daily re-baseline</span>
+    </a>
     {% endif %}
     {% if auth_is_admin %}
     <a href="/settings/api-key" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/api-key') else '' }}">

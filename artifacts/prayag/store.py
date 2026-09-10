@@ -21,6 +21,8 @@ import json
 import math
 import pickle
 import datetime
+import secrets
+from contextlib import contextmanager
 from typing import List, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
 
@@ -1181,6 +1183,10 @@ _sc_initialised = False
 # below a previously observed population without being treated as incomplete.
 _DRC_TABLE = "daily_read_counts"
 _drc_initialised = False
+_DRA_TABLE = "daily_rebaseline_audit"
+_dra_initialised = False
+_DRC_CONFIRM_TABLE = "daily_rebaseline_confirmations"
+_drc_confirm_initialised = False
 
 
 def _init_sheet_cache() -> None:
@@ -1361,6 +1367,219 @@ def rebaseline_daily_read_count(plant: str, ym: str, record_count: int) -> None:
         raise
     except Exception as exc:
         raise StoreError(str(exc)) from exc
+
+
+def _init_daily_rebaseline_audit() -> None:
+    """Create the append-only operator audit table when Postgres is available."""
+    global _dra_initialised
+    if _dra_initialised or not AVAILABLE:
+        return
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_DRA_TABLE} (
+                    id BIGSERIAL PRIMARY KEY,
+                    invoked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    user_id BIGINT,
+                    user_email TEXT NOT NULL,
+                    emitter TEXT NOT NULL,
+                    ym TEXT NOT NULL,
+                    old_count INTEGER,
+                    live_count INTEGER NOT NULL,
+                    new_count INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'attempted'
+                        CHECK (status IN ('attempted', 'succeeded', 'refused', 'failed')),
+                    error TEXT NOT NULL DEFAULT ''
+                )
+            """)
+        _dra_initialised = True
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def start_daily_rebaseline_audit(
+    *,
+    user_id,
+    user_email: str,
+    emitter: str,
+    ym: str,
+    old_count,
+    live_count: int,
+    new_count: int,
+) -> int:
+    """Durably record an invocation before the guarded write is attempted."""
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_rebaseline_audit()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_DRA_TABLE}
+                       (user_id, user_email, emitter, ym, old_count, live_count,
+                        new_count, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'attempted')
+                    RETURNING id""",
+                (
+                    user_id, user_email.strip(), emitter, ym, old_count,
+                    int(live_count), int(new_count),
+                ),
+            )
+            row = cur.fetchone()
+        return int(row[0])
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def finish_daily_rebaseline_audit(
+    audit_id: int,
+    *,
+    status: str,
+    error: str = "",
+) -> None:
+    """Attach the guarded invocation outcome; the attempt remains if this fails."""
+    if status not in ("succeeded", "refused", "failed"):
+        raise StoreError("Invalid re-baseline audit status.")
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE {_DRA_TABLE}
+                       SET status = %s, error = %s
+                     WHERE id = %s""",
+                (status, (error or "")[:1000], int(audit_id)),
+            )
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def daily_rebaseline_audit_history(limit: int = 100) -> list[dict]:
+    """Return recent operator invocations without exposing unrelated activity."""
+    if not AVAILABLE:
+        return []
+    _init_daily_rebaseline_audit()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT id, invoked_at, user_email, emitter, ym, old_count,
+                           live_count, new_count, status, error
+                      FROM {_DRA_TABLE}
+                     ORDER BY invoked_at DESC, id DESC
+                     LIMIT %s""",
+                (max(1, min(int(limit), 500)),),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def _init_daily_rebaseline_confirmations() -> None:
+    """Create the short-lived server-side confirmation store."""
+    global _drc_confirm_initialised
+    if _drc_confirm_initialised or not AVAILABLE:
+        return
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_DRC_CONFIRM_TABLE} (
+                    nonce TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    emitter TEXT NOT NULL,
+                    ym TEXT NOT NULL,
+                    stored_count INTEGER,
+                    live_count INTEGER NOT NULL,
+                    new_count INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    consumed_at TIMESTAMPTZ
+                )
+            """)
+        _drc_confirm_initialised = True
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def create_daily_rebaseline_confirmation(
+    *,
+    user_id: int,
+    emitter: str,
+    ym: str,
+    stored_count,
+    live_count: int,
+    new_count: int,
+) -> str:
+    """Persist an expiring, single-use confirmation and return its opaque nonce."""
+    _init_daily_rebaseline_confirmations()
+    nonce = secrets.token_urlsafe(32)
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_DRC_CONFIRM_TABLE}
+                       (nonce, user_id, emitter, ym, stored_count, live_count,
+                        new_count, expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s,
+                            now() + interval '10 minutes')""",
+                (
+                    nonce, int(user_id), emitter, ym, stored_count,
+                    int(live_count), int(new_count),
+                ),
+            )
+        return nonce
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+def consume_daily_rebaseline_confirmation(nonce: str, user_id: int):
+    """Atomically consume one unexpired confirmation for its creating admin."""
+    _init_daily_rebaseline_confirmations()
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE {_DRC_CONFIRM_TABLE}
+                       SET consumed_at = now()
+                     WHERE nonce = %s
+                       AND user_id = %s
+                       AND consumed_at IS NULL
+                       AND expires_at > now()
+                 RETURNING emitter, ym, stored_count, live_count, new_count""",
+                (nonce, int(user_id)),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "emitter": row[0],
+            "month": row[1],
+            "stored_count": row[2],
+            "live_count": row[3],
+            "new_count": row[4],
+        }
+    except Exception as exc:
+        raise StoreError(str(exc)) from exc
+
+
+@contextmanager
+def daily_rebaseline_lock(emitter: str, ym: str):
+    """Serialize operator re-baselines for one emitter/month across workers."""
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    conn = None
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"daily-rebaseline:{emitter}:{ym}",),
+            )
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        raise StoreError(str(exc)) from exc
+    try:
+        yield
+    finally:
+        # End the lock-owning transaction without changing application data.
+        conn.rollback()
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

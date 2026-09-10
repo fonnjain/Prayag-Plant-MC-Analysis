@@ -1,0 +1,179 @@
+# QUERY — for Replit · fix the factor source, capture provenance, then PW.2
+
+**Written 10 September 2026.**
+
+**EF.1 and EF.2 are changes and need approval. PW.2 follows only after both verify.**
+
+**Do not publish or deploy. Do not change any multiplier or override. Do not create a
+production plan until PW.2. Do not alter run #34 beyond its existing annotation. Do not
+touch runs #28, #30 or #32.**
+
+**Report values, not verdicts.**
+
+---
+
+## Your AR investigation turned the residual into two findings, and they are different
+
+**Most of it was a labelling defect:**
+
+```
+report            frozen rows built at    factorsJson says
+Accessorise               ~1.14                 1.5
+Faucets                    ~1.2                 1.5
+Cistern                   ~1.82                 1.2
+```
+
+MD.1 compared rows built at 1.14 against Prayag at 1.5, while both columns said 1.5.
+Once aligned, the input differences nearly vanish:
+
+```
+Accessorise    −697 aligned, of which item 186 WHITE is 659
+Faucets          −1
+Cistern          −1
+```
+
+**Faucets and Cistern reconcile to a single piece.** That is the app and Prayag agreeing
+exactly.
+
+**And the environments are identical** — same row counts, same raw-row hashes on all
+three uploads, same resolved workbook. Recomputing #2697 at 1.0 gives Accessorise
+25,251.66 against production's 25,252, and Cocks Standard ≈389,048 against production's
+389,048.
+
+**So my "development is the outlier" reading was wrong.** The data is the same; only the
+effective multiplier state differs.
+
+---
+
+## Block EF.1 — MD.1 must use the effective multiplier
+
+```markdown
+--- THE DEFECT ---
+
+MD.1 reads `factorsJson` as the app multiplier. **factorsJson is not the effective
+multiplier** — it records an older base category value, while the frozen rows were
+computed with the month-scoped suggested multiplier.
+
+So the decomposition attributes a real multiplier difference to residual, which is
+exactly what happened on three reports.
+
+--- WHAT ---
+
+  a) Derive the effective multiplier per category from the FROZEN ROWS —
+     buffer requirement ÷ three-month average — rather than reading factorsJson.
+  b) Where they differ, show BOTH: "effective 1.14 · recorded 1.5" with the
+     discrepancy flagged.
+  c) The multiplier effect is then computed at the effective value, and the residual
+     becomes the genuine input difference.
+
+--- WHY BOTH, NOT JUST THE EFFECTIVE ONE ---
+
+A run whose recorded factor does not match the rows it produced is itself a finding.
+Silently using the effective value would hide it.
+
+  d) Add a check: does the recorded factor match the effective one? Report PASS or
+     the discrepancy per category.
+
+--- WHAT IT SHOULD PRODUCE ---
+
+On #2697, after the fix:
+
+  Accessorise    residual near −697, not −9,757
+  Faucets        residual near −166, not −14,796
+  Cistern        residual near −1, not +15,048
+  Cocks Standard residual near +20,703, unchanged — that one is real
+
+**REPORT 1's residual should NOT move.** It is a genuine pending-input difference and
+the fix must not absorb it.
+```
+
+---
+
+## Block EF.2 — freeze the provenance the run is missing
+
+```markdown
+Your finding:
+
+  "Run #2697 records pending upload provenance but does not freeze the PTMT roster
+   workbook ID or the sales-history workbook ID used for three-month averages. The
+   exported workbook has no RUN TRACE sheet."
+
+**So the sales-workbook identity cannot be proven retrospectively.** For a run whose
+three-month averages drive every buffer figure, that is a real gap.
+
+--- WHAT TO CAPTURE ON EVERY RUN ---
+
+  the PTMT roster workbook ID resolved
+  the sales-history workbook ID used for three-month averages
+  rosterSource — REPORT_1_9 or FALLBACK
+  roster row count
+  the EFFECTIVE multiplier per category, alongside the recorded factor
+  the three upload ids and their row counts
+
+--- AND PUT IT IN THE EXPORT ---
+
+The Temporary Plan export has no RUN TRACE sheet. The Pass 2 export does.
+
+  a) Add RUN TRACE to the Temporary Plan export, same shape.
+  b) A comparison document without provenance cannot be defended a month later, and
+     this investigation needed exactly those fields.
+```
+
+---
+
+## Block PW.2 — the production run, after EF.1 and EF.2
+
+```markdown
+Only once both verify.
+
+--- PW.2.1. CREATE IT ---
+
+One September PTMT Temporary Plan on PRODUCTION. Leave it a DRAFT.
+
+Production is pinned to 14luWIcM… and holds the same three uploads by content hash.
+
+--- PW.2.2. CONFIRM BEFORE REPORTING ---
+
+  rosterSource REPORT_1_9 · workbook 14luWIcM… · 3,426 rows
+  the three uploads selected, with row counts 2,535 / 3,749 / 380
+  a current_stock input snapshot captured — run #34 had none, task #352
+  effective multipliers per category, and whether they match the recorded factors
+
+--- PW.2.3. THE COMPARISON ---
+
+Report per report against Prayag's targets, with the corrected decomposition:
+
+  REPORT 1  368,345   REPORT 4  38,420   REPORT 7  58,498
+  REPORT 2   20,866   REPORT 5  38,813   Reports 1-7  597,023
+  REPORT 3   70,756   REPORT 6   1,325
+
+  Reports 8 and 9 with "no Prayag comparison".
+
+**Expect residuals near zero everywhere except REPORT 1**, which should carry roughly
++20,703 — the dummy difference on 120-WS WHITE and two smaller codes.
+
+**A residual anywhere else is a finding worth reporting rather than explaining.**
+
+--- PW.2.4. THEN STOP ---
+
+Pass 2 and finalization are separate decisions. Run #34 stays annotated as history.
+```
+
+---
+
+## Notes
+
+**EF.1(d) is the check worth keeping.** A run whose recorded factor does not match the
+rows it produced should say so on its own face, not require a forensic comparison to
+discover.
+
+**REPORT 1's +20,703 is now confirmed three ways** — MD.1's residual, your item-level
+analysis showing 120-WS WHITE at +17,204, and production's independent +20,703. That is
+the dummy question with Prayag, and it is the only real difference across seven reports.
+
+**AR.1's aligned Accessorise gap of −697, of which item 186 WHITE is 659**, is small
+enough to leave but specific enough to mention if Prayag asks. Item 186 also appears in
+the 984 ambiguous-match rows, so the two may share a cause.
+
+**#2697 stays as the development record.** The Prayag-facing comparison comes from the
+production run.

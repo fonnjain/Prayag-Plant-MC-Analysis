@@ -155,6 +155,27 @@ def admin_required(view):
     return wrapped
 
 
+def database_admin_required(view):
+    """Require a live database-backed administrator and a strong session key."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not os.environ.get("SESSION_SECRET"):
+            abort(503, "This sensitive operation requires SESSION_SECRET.")
+        if not store.AVAILABLE:
+            abort(503, "This sensitive operation requires the configured Postgres database.")
+        user_id = current_user_id()
+        user = store.get_user_by_id(user_id) if user_id is not None else None
+        if (
+            not user
+            or not user.get("is_active")
+            or user.get("role") != "admin"
+            or user.get("email") != current_user()
+        ):
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
 # ---------------------------------------------------------------------------
 # Exempt paths (listed explicitly per spec)
 # ---------------------------------------------------------------------------

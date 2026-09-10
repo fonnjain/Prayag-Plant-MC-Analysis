@@ -29,6 +29,7 @@ from sheets import (
     _get_drive_token,
     daily_failed_pair_details,
     _get_drive_token,
+    inspect_daily_logical_population, rebaseline_daily_logical_population,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
     load_material_records, load_maintenance_records, load_manpower_records,
     load_yield_records, load_mixer_records, load_toolroom_records,
@@ -92,6 +93,9 @@ _AUDIT_PAGE_LABELS = {
     "/": "Dashboard home",
     "/settings/users": "User management",
     "/settings/users/audit": "User activity audit",
+    "/settings/daily-rebaseline": "Daily source re-baseline",
+    "/settings/daily-rebaseline/preview": "Preview daily source re-baseline",
+    "/settings/daily-rebaseline/confirm": "Confirm daily source re-baseline",
 }
 
 
@@ -9121,6 +9125,189 @@ def user_delete(user_id: int):
     except store.StoreError as exc:
         return _users_redirect(error=str(exc))
     return _users_redirect(message=f"Removed {target['email']}.")
+
+
+# ---------------------------------------------------------------------------
+# Daily source re-baseline — one admin-confirmed logical emitter/month at a time.
+# ---------------------------------------------------------------------------
+
+_REBASELINE_EMITTER_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,39}$")
+_REBASELINE_MONTH_RE = re.compile(r"^20\d{2}-(0[1-9]|1[0-2])$")
+
+
+def _daily_rebaseline_render(
+    *,
+    preview: Optional[dict] = None,
+    message: str = "",
+    error: str = "",
+):
+    try:
+        history = store.daily_rebaseline_audit_history()
+    except store.StoreError:
+        history = []
+    return render_template(
+        "daily_rebaseline.html",
+        preview=preview,
+        history=history,
+        csrf_token=auth.csrf_token(),
+        message=message,
+        error=error,
+    )
+
+
+def _daily_rebaseline_input(form) -> tuple[str, str, int]:
+    emitter = str(form.get("emitter", "") or "").strip().upper()
+    ym = str(form.get("month", "") or "").strip()
+    raw_count = str(form.get("new_count", "") or "").strip()
+    if not _REBASELINE_EMITTER_RE.fullmatch(emitter):
+        raise ValueError("Enter a valid logical emitter.")
+    if not _REBASELINE_MONTH_RE.fullmatch(ym):
+        raise ValueError("Enter a valid month in YYYY-MM format.")
+    try:
+        new_count = int(raw_count)
+    except ValueError as exc:
+        raise ValueError("The requested new value must be a whole number.") from exc
+    if new_count <= 0 or new_count > 1_000_000:
+        raise ValueError("The requested new value must be between 1 and 1,000,000.")
+    return emitter, ym, new_count
+
+
+@app.route("/settings/daily-rebaseline")
+@auth.database_admin_required
+def daily_rebaseline():
+    """Render the admin-only single-emitter re-baseline control."""
+    return _daily_rebaseline_render()
+
+
+@app.route("/settings/daily-rebaseline/preview", methods=["POST"])
+@auth.database_admin_required
+def daily_rebaseline_preview():
+    """Show stored and freshly parsed counts without changing any data."""
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    try:
+        emitter, ym, new_count = _daily_rebaseline_input(request.form)
+        preview = inspect_daily_logical_population(emitter, ym)
+    except (ValueError, SheetReadError) as exc:
+        return _daily_rebaseline_render(error=str(exc)), 400
+    preview["new_count"] = new_count
+    try:
+        preview["nonce"] = store.create_daily_rebaseline_confirmation(
+            user_id=auth.current_user_id(),
+            emitter=emitter,
+            ym=ym,
+            stored_count=preview["stored_count"],
+            live_count=preview["live_count"],
+            new_count=new_count,
+        )
+    except store.StoreError as exc:
+        return _daily_rebaseline_render(
+            error=f"Could not create a secure confirmation: {exc}"
+        ), 503
+    return _daily_rebaseline_render(preview=preview)
+
+
+@app.route("/settings/daily-rebaseline/confirm", methods=["POST"])
+@auth.database_admin_required
+def daily_rebaseline_confirm():
+    """Invoke the unchanged guarded function after an exact explicit preview."""
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    if request.form.get("confirm") != "yes":
+        return _daily_rebaseline_render(error="Explicit confirmation is required."), 400
+    try:
+        pending = store.consume_daily_rebaseline_confirmation(
+            str(request.form.get("nonce", "") or ""),
+            auth.current_user_id(),
+        )
+    except store.StoreError as exc:
+        return _daily_rebaseline_render(
+            error=f"Could not validate the confirmation: {exc}"
+        ), 503
+    if not pending:
+        return _daily_rebaseline_render(
+            error="The preview has expired or was already used. Preview again."
+        ), 400
+    try:
+        emitter, ym, new_count = _daily_rebaseline_input(request.form)
+    except ValueError as exc:
+        return _daily_rebaseline_render(error=str(exc)), 400
+    submitted = {
+        "emitter": emitter,
+        "month": ym,
+        "stored_count": pending.get("stored_count"),
+        "live_count": pending.get("live_count"),
+        "new_count": new_count,
+    }
+    if submitted != pending:
+        return _daily_rebaseline_render(
+            error="The confirmation does not match the preview. Preview again."
+        ), 400
+
+    try:
+        with store.daily_rebaseline_lock(emitter, ym):
+            current_stored = store.daily_read_count(f"emit:{emitter}", ym)
+            audit_id = store.start_daily_rebaseline_audit(
+                user_id=auth.current_user_id(),
+                user_email=auth.current_user() or "",
+                emitter=emitter,
+                ym=ym,
+                old_count=current_stored,
+                live_count=int(pending.get("live_count") or 0),
+                new_count=new_count,
+            )
+            if current_stored != pending.get("stored_count"):
+                error = (
+                    f"Stored value changed from {pending.get('stored_count')} to "
+                    f"{current_stored} after preview. Preview again."
+                )
+                store.finish_daily_rebaseline_audit(
+                    audit_id, status="refused", error=error
+                )
+                return _daily_rebaseline_render(error=error), 409
+            result = rebaseline_daily_logical_population(emitter, ym, new_count)
+    except store.StoreError as exc:
+        return _daily_rebaseline_render(
+            error=f"Audit or locking is unavailable; no re-baseline was attempted: {exc}"
+        ), 503
+    except SheetReadError as exc:
+        try:
+            store.finish_daily_rebaseline_audit(
+                audit_id, status="refused", error=str(exc)
+            )
+        except store.StoreError:
+            app.logger.exception("daily re-baseline: could not record refusal outcome")
+        return _daily_rebaseline_render(
+            error=f"Re-baseline refused; no high-water was changed: {exc}"
+        ), 409
+    except Exception as exc:
+        try:
+            store.finish_daily_rebaseline_audit(
+                audit_id, status="failed", error=str(exc)
+            )
+        except store.StoreError:
+            app.logger.exception("daily re-baseline: could not record failure outcome")
+        app.logger.exception("daily re-baseline: unexpected failure")
+        return _daily_rebaseline_render(
+            error="Re-baseline failed. The invocation is recorded in the audit trail."
+        ), 500
+
+    try:
+        store.finish_daily_rebaseline_audit(audit_id, status="succeeded")
+    except store.StoreError as exc:
+        app.logger.exception("daily re-baseline: could not record success outcome")
+        return _daily_rebaseline_render(
+            error=(
+                "The high-water changed, but the audit outcome could not be "
+                f"finalized. Do not retry; contact an administrator. {exc}"
+            )
+        ), 500
+    return _daily_rebaseline_render(
+        message=(
+            f"Re-baselined {result['emit']} {result['ym']} from "
+            f"{result['previous_count']} to {result['record_count']}."
+        )
+    )
 
 
 # ===========================================================================
