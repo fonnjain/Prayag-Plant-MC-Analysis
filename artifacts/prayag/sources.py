@@ -246,6 +246,7 @@ DAILY_SOURCES: dict[str, dict] = {
           # Aug-2026 owned by preeti.chauhan@prayagindia.com.
           # Title: "5. Pipe & Fitting Plant Date Sheet & Monthly Report - AUG ' 2026"
           "2026-08": "1Crlyfg8EpBRwR5sylgqCxF7r1boeD3UjSDQwLB10g7E",
+           "2026-09": "1AKKd2ybJ4X9xr1UH-QtIcOqEevX3nvKoWgIEV3mgBPw",
           # FY2025-26 (prior year). The header-based Report-5/Report-11/Report-12
           # readers parse the older FY2025-26 layout with no code change, so these
           # feed PIPE (Report-5 ↔ Report-11 reconciliation) AND MOULDING (Report-12)
@@ -275,6 +276,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-06": "1nEDFjrVu6pnNkzZ9tJhvGvBDMUHjLStcc0RP2uHig4g",
           "2026-07": "1AjMLfcBkI0rGY8JdYP3MO8Ocn8lO-HIpol1tHgvK9O8",
            "2026-08": "1Dom4NFnlVbmA1cWFSmZtRw13IKGsqOJbO-rx2s0FLv8",
+           "2026-09": "1dYZ_wdGAZ1ZCcuXQ04mQsy5DN0wkHj9TfFYQRpAnBkk",
       },
   },
   "GARDEN": {
@@ -284,6 +286,7 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-05": "1qmTMCWZWLsuA4kCzaAFC4fjG46Zf3rGz5VjOknv_Sy0",
           "2026-06": "1fIpsiS5De9xzyK5We0r9_kdIVrwXC09UIQpe4lWmATA",
           "2026-07": "1e-JqC-_htMWp6jPYze2uJx3qHEJEd_qoAZybwbdmuQg",
+           "2026-08": "1BCwJdykPeomnWQLXCeFAAWKfKtpnXviHqAAlxQ8maIM",
       },
   },
   "HDPE": {
@@ -305,6 +308,8 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-04": "1osCJ1ZF2okCdHXbhkBthvJ7T7x21warW1-NMGm-5xbc",
           "2026-05": "1Zl8dvEZkQKGAkyWDTgLznC_yISNVznPf3pgUodHttm8",
           "2026-06": "1xl-k9i4BteCWtHmVcdjEIUXEiZnWzlTpkJuqPPHFLQo",
+           "2026-08": "1AZ9FDCX079eUsMCvYBZSQhDdY1MbeAH6quvWJhEX84Q",
+           "2026-09": "1N5WjeYBjwen3QCVxbQxtkpIX5KYpJFkFQS56IX14zKo",
       },
   },
   # Tank VN — Vasna stream (Tank (PRV) workbooks, one per month).
@@ -317,6 +322,8 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-05": "19ePrvfsHIFoJuy1wvjL0DcukYh6-UkOFW3AueqToRNE",
           "2026-06": "1Vsba-WDcYwSstEZsX37ntm_N05yPn0T5DzSkls9zRUw",
           "2026-07": "1lUSTSM_m2yywxGeeE7oemRbBMNsyM37ICv1lKBClGtQ",
+           "2026-08": "1xIzilvTqJbkVI4ng8ADZTCguUV_bD7XgmS2h9U__Uis",
+           "2026-09": "1dXCdOA00BaAD-7y77EuXx3u2MKsppOpboxqNIxQO6y0",
       },
   },
   # Tank WB — West Bengal / Durgapur stream (Tank (PDWB) workbooks, one per month).
@@ -331,6 +338,8 @@ DAILY_SOURCES: dict[str, dict] = {
           "2026-05": "1BHc-RaGE4sICnXhBr7xR-pmwcfkVUE2ZfxicYZnNVOM",
           "2026-06": "1wKR7bABQUuyfaOcqNuMIVt-CttxZx8Iiu9DCe6n0MmU",
           "2026-07": "1-JVeDFTnFfoMjDMhvkOV5BE1rKjjO00chRKtUpO5iqQ",
+           "2026-08": "1-ZQUOGhYO_bht77iBy7sfeglE2EaAd8mb0KG_ojrG5U",
+           "2026-09": "160--dfTnWuA1xPFFQla9VPeVUlG7MRlEaCYRL8d8B7o",
       },
   },
   # Garden WB — West Bengal (PDWB) garden pipe plant. Layout: long / PRODUCTION tab.

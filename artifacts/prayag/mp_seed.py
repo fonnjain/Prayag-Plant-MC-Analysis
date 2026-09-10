@@ -3,7 +3,7 @@ Machine Planning seeders — Phase MP-0.
 
 Loads source data from five Google Drive files and populates segment='PLUMBING'
 tables via mp_model.  All parsers are HEADER-BASED; item codes are normalised
-(strip + uppercase + remove spaces and hyphens) so demand codes like "PW11"
+(strip + uppercase + remove spaces, hyphens, and dots) so demand codes like "PW11"
 resolve to the same key as the BOM entry "PW 11".
 
 DRIVE ACCESS POLICY: ``seed_all`` confirms Drive access for every source file
