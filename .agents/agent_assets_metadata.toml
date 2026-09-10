@@ -360,3 +360,17 @@ mtime_ms = 1789036264067
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/095dc137-8e5f-4890-a6d0-025e9e31088c/bc9ec313-cd45-49c6-94ff-27227b336dcf"
 storage_version_token = "1789036271846367"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "kOiYXHqKwuqmcptQuf8t2"
+uri = "file://.local/outputs/Prayag-Independent-Logical-Emitter-Publication-Design-Report.docx"
+type = "word_document"
+title = "Independent Logical-Emitter Publication — Design Report"
+description = "Read-only design assessment for publishing complete PIPE/MOULDING logical emitters independently from a shared workbook, including cache, sentinel, consumer, banner, risk, and test requirements."
+logical_id = "c1cd53d2-1974-4cdf-90c7-f59dd490f5b1"
+content_hash = "sha256:a104aa083d62d19f1323791ba19136b259a43b35c958de95ef9ab38dbcd1d270"
+size = 42282
+mtime_ms = 1789037212902
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/c1cd53d2-1974-4cdf-90c7-f59dd490f5b1/afd13282-fcc4-485a-8b5a-7c95fca3971d"
+storage_version_token = "1789037233240692"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
