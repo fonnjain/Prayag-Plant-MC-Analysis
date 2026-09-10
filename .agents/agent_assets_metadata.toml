@@ -318,3 +318,17 @@ mtime_ms = 1789031825720
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/0923d01a-2d88-43fe-b671-339aee6dbdf8/fa66151e-9da1-4593-841d-9912a43abc4f"
 storage_version_token = "1789031841902749"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "W3N-GsFMl7NprUV07z7Z4"
+uri = "file://.local/outputs/Replit-Support-Diagnostic-Prayag-June-July-Machine-View.docx"
+type = "word_document"
+title = "Replit Support Diagnostic — Prayag June/July Machine View"
+description = "Support-ready read-only incident report proving June and July previously matched and were accepted, documenting current lower PIPE populations, valid Moulding populations, connector evidence, and the exact investigation requested from Replit."
+logical_id = "94303a99-f9c8-4c37-8d32-3ac0ff556e05"
+content_hash = "sha256:11a00ad11cbad147ab961d438e0b6a0c30269e96a9f916f0795ff8936c40643f"
+size = 989873
+mtime_ms = 1789032509852
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/94303a99-f9c8-4c37-8d32-3ac0ff556e05/4fc489c7-98de-48fa-8153-f9907423f8e9"
+storage_version_token = "1789032519020344"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
