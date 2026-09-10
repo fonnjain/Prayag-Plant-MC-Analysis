@@ -1,0 +1,104 @@
+# QUERY — for Replit · three gaps in the PTMT capacity-fitted export
+
+**Written 10 September 2026.**
+
+**Small. The plan itself is complete — this is presentation, not calculation.**
+
+**Do not publish or deploy. Do not finalize any plan. Do not change any multiplier,
+capacity or plan value. Do not touch runs #28, #30 or #32.**
+
+**Report values, not verdicts.**
+
+---
+
+## #2697 already IS the PTMT machine-feasible plan
+
+Checked the workbook. It carries everything the Plumbing equivalent does:
+
+```
+WHAT CAN BE ACHIEVED    750 item rows · item code · colour · category
+                        demand · achievable · dummy / orders / buffer · W1-W4
+UNFEASIBLE FOR MONTH    with REASON, CAPACITY POOL and POOL EXHAUSTED WEEK
+UNCLASSIFIED            179 rows, itemised, with the reason stated
+CAPACITY BY WEEK        per category and pool, W1-W4 available / used / utilisation
+P2 Report + RUN TRACE   component breakdown, cause split, all invariants PASS
+```
+
+**The capacity pool and exhaustion week on the unfeasible sheet were the PTMT-specific
+requirement, and they are there.** Nothing about the plan is missing.
+
+Three gaps remain, and all three are presentation.
+
+---
+
+## Block PE.1 — the three gaps
+
+```markdown
+--- PE.1.1. THE TEMPORARY PLAN HAS NOT BEEN EXPORTED ---
+
+Plumbing produced TWO workbooks — the Temporary Plan and the machine-feasible plan.
+PTMT has only the Pass 2 export.
+
+  a) Export the #2697 Temporary Plan in the same shape as the Plumbing Temporary
+     Plan export.
+  b) Report per report and category against Prayag's targets, read 9 September:
+
+       REPORT 1  368,345   REPORT 4  38,420   REPORT 7  58,498
+       REPORT 2   20,866   REPORT 5  38,813   Reports 1-7  597,023
+       REPORT 3   70,756   REPORT 6   1,325
+
+     Reports 8 and 9 with "no Prayag comparison", not a target of zero.
+
+  c) Stamp the multiplier basis on it as the Pass 2 export does.
+
+**Expect a large gap** — the app is on July values, Prayag on 1.0. That is the
+recorded difference, not an error.
+
+--- PE.1.2. NO CONSERVATION CHECK SHEET ---
+
+Plumbing's machine-feasible export has a CONSERVATION CHECK sheet showing the
+identity per category.
+
+PTMT's RUN TRACE reports the invariants as PASS, but there is no per-category
+breakdown a reader can verify.
+
+  a) Add a CONSERVATION CHECK sheet: per category, achievable + unfeasible = demand,
+     with the difference column.
+  b) Same shape as Plumbing's.
+
+--- PE.1.3. NO WEEKLY TOTALS ROW ---
+
+The item sheet has W1-W4 per item but no total, so a reader cannot check that the
+weekly columns sum to achievable without doing it themselves.
+
+  a) Add a totals row: demand, achievable, dummy, orders, buffer, W1, W2, W3, W4.
+  b) Confirm W1+W2+W3+W4 equals achievable, and show it.
+
+--- PE.1.4. ONE THING TO VERIFY WHILE THERE ---
+
+The unfeasible sheet reports "Pool Exhausted Week" as `1` for the Cistern rows.
+
+  a) Is that week 1, or an index? It should read W1 or 1 consistently with the rest
+     of the workbook.
+  b) The Cistern pool ran at 100% in ALL FOUR weeks. If it exhausted in W1 and stayed
+     exhausted, "1" is correct but potentially misleading — worth showing the first
+     week it exhausted and whether it recovered.
+```
+
+---
+
+## Notes
+
+**Nothing here changes a number.** The plan is complete and correct: 875,223 demand,
+834,120 achievable, 95.3%, all invariants PASS.
+
+**PE.1.1 is the real gap.** Plumbing has both workbooks; PTMT has one. The Temporary Plan
+export is what shows the demand side against Prayag's targets, and it is the document
+someone would compare with their own sheet.
+
+**Both segments after this:**
+
+```
+Plumbing  #2656   Temporary Plan + machine-feasible, both exported
+PTMT      #2697   Temporary Plan + capacity-fitted, both exported
+```
