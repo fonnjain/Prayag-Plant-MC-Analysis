@@ -374,3 +374,17 @@ mtime_ms = 1789037212902
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/c1cd53d2-1974-4cdf-90c7-f59dd490f5b1/afd13282-fcc4-485a-8b5a-7c95fca3971d"
 storage_version_token = "1789037233240692"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "BlMXlPnGxc-ySUxh98Ow2"
+uri = "file://.local/outputs/Prayag-Production-June-July-Read-Only-Diagnosis.docx"
+type = "word_document"
+title = "Prayag Production June–July Diagnosis"
+description = "Shareable Word document covering the production database mismatch, high-water behavior, shared PIPE/MOULDING withholding, and missing partial-source warning."
+logical_id = "8181fbac-b0a2-46ac-9fe8-aaf28df95c26"
+content_hash = "sha256:66266ea3aa593184f5a2c1d7df22eb01f69ab79da1816e15192e84515e35a29a"
+size = 38579
+mtime_ms = 1789044776207
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/8181fbac-b0a2-46ac-9fe8-aaf28df95c26/c15f832a-8bf8-4103-9f5b-9765e051db13"
+storage_version_token = "1789044784048637"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
