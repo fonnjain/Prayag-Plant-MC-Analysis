@@ -346,3 +346,17 @@ mtime_ms = 1789034172707
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/3ee9b0ac-be4a-4e6b-9e77-09cc5c095575/92388de2-d018-4bc8-88d5-b22c348afd76"
 storage_version_token = "1789034184823515"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "hfXiac_nCydH5Hv1BYvjJ"
+uri = "file://.local/outputs/Prayag-June-July-Google-Revision-Forensics.docx"
+type = "word_document"
+title = "Prayag June/July Google Revision Forensics"
+description = "Read-only revision report with exact machine/date changes, before/after output and rejection, revision editors, unresolved July history boundary, and August/September post-acceptance checks."
+logical_id = "095dc137-8e5f-4890-a6d0-025e9e31088c"
+content_hash = "sha256:c10273febddba4f634fac5a668d5a6b85f7f78db0a4a6b578126f784b32d4664"
+size = 42727
+mtime_ms = 1789036264067
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/095dc137-8e5f-4890-a6d0-025e9e31088c/bc9ec313-cd45-49c6-94ff-27227b336dcf"
+storage_version_token = "1789036271846367"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
