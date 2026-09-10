@@ -19,6 +19,16 @@ Those sources exist for **verification only**. They may raise a question; they m
 
 **One narrow exception — R-03.** FY2025-26 and earlier are closed. Those annuals may be read as-is for history and year-on-year, because no live source remains to recompute from. This does not dilute the rule for FY2026-27.
 
+**Second narrow exception — R-46.** An administrator may freeze a closed calendar
+month's canonical daily `Record` population after two uncached live parses with
+identical canonical fingerprints and a high-water/completeness gate. The
+immutable, versioned snapshot is the sole source while active; derived figures
+are recomputed from its stored Records. Every action is audited, no Sheets call
+is permitted while active, and missing/corrupt/mismatched snapshots fail closed.
+This exception applies only to canonical daily production records and loader
+report metadata; it does not apply to wages, manual entries, annual comparisons,
+specialized Compound or PIPE mould-working readers, or ideal-standards policy.
+
 **Corollary.** A conclusion drawn from an annual inherits whatever gap fed that annual.
 
 ## THIS RULE IS PROTECTED

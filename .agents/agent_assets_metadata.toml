@@ -416,3 +416,17 @@ mtime_ms = 1789050283035
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/9ee8c4d6-914b-4e88-965d-ec076ea6716d/1582d89f-fc04-4883-9310-04bb4bf07480"
 storage_version_token = "1789050296289419"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "rHx7m9dLnRpW9_oCRI4Dd"
+uri = "file://.local/outputs/Prayag-Daily-Production-Freeze---Phase-2-Scope-and-Decision-Report.docx"
+type = "word_document"
+title = "Prayag Daily Production Freeze — Phase 2 Scope & Decision Report"
+description = "Phase 1 proof summary and recommended Phase 2 scope for specialized readers, late-data amendments, wages/manual inputs, annual comparisons, and ideal-standard policy."
+logical_id = "4a7d214f-4a5c-48dc-9283-ae3bfdd124ce"
+content_hash = "sha256:982d42f4f5dfd06dfe7d36104de4cb691726cf8134dee4ea03a74ab8da410ae1"
+size = 41139
+mtime_ms = 1789052311878
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4a7d214f-4a5c-48dc-9283-ae3bfdd124ce/c57febb9-33f9-4f8a-a647-46677806a32e"
+storage_version_token = "1789052724854112"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

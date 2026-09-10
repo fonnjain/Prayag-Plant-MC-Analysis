@@ -30,6 +30,7 @@ from sheets import (
     daily_failed_pair_details,
     _get_drive_token,
     inspect_daily_logical_population, rebaseline_daily_logical_population,
+    parse_daily_physical_uncached,
     load_planning, load_ptmt_pieces, load_ptmt_master, load_moulding_capacity,
     load_material_records, load_maintenance_records, load_manpower_records,
     load_yield_records, load_mixer_records, load_toolroom_records,
@@ -186,6 +187,22 @@ def _inject_period_menu():
     to EVERY template (the period selector lives in base.html, which report pages
     render without going through _common_ctx)."""
     return {"period_menu": _period_menu(), "today_iso": _today().isoformat()}
+
+
+@app.context_processor
+def _inject_daily_freeze_banner():
+    """Expose freeze metadata to the shared chrome without changing routes."""
+    ym = request.args.get("month") or request.args.get("period", "")
+    if not re.fullmatch(r"\d{4}-\d{2}", str(ym)):
+        ym = ""
+    import sheets as _sht
+    emitters = tuple(dict.fromkeys(
+        str(spec.get("emit", "")).upper()
+        for specs in _sht._DAILY_LAYOUTS.values() for spec in specs
+        if spec.get("emit")
+    ))
+    frozen = [e for e in emitters if ym and store.daily_freeze_active(e, ym)]
+    return {"daily_frozen_month": ym if frozen else "", "daily_frozen_emitters": frozen}
 
 # In-process store: (fingerprint, resolved model) → Claude review text.
 # Keyed by data fingerprint so a changed sheet invalidates the prior review, AND
@@ -9170,6 +9187,256 @@ def _daily_rebaseline_input(form) -> tuple[str, str, int]:
     if new_count <= 0 or new_count > 1_000_000:
         raise ValueError("The requested new value must be between 1 and 1,000,000.")
     return emitter, ym, new_count
+
+
+@app.route("/settings/daily-freeze", methods=["GET"])
+@auth.database_admin_required
+def daily_freeze_settings():
+    return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                           message=request.args.get("message", ""), error="",
+                           freeze_history=store.daily_freeze_history(),
+                           freeze_audit=store.daily_freeze_audit_history())
+
+
+def _daily_freeze_physical(emitter, ym):
+    import sheets as _sht
+    emitter = emitter.upper()
+    found = [p for p, specs in _sht._DAILY_LAYOUTS.items()
+             if any(str(s.get("emit", "")).upper() == emitter for s in specs)
+             and ym in (DAILY_SOURCES.get(p, {}).get("files") or {})]
+    if len(found) != 1:
+        raise ValueError("Emitter must map to exactly one registered physical source.")
+    return found[0]
+
+
+def _daily_freeze_fingerprint(results):
+    import store as _st
+    records = [r for rs, _ in results for r in rs]
+    reports = [rp for _, rp in results]
+    return _st._freeze_fingerprint(records, reports), records, reports
+
+
+def _daily_freeze_capture(results, emitter: str) -> dict:
+    """Build the exact logical capture and operator-facing verification summary."""
+    physical_fp, physical_records, _ = _daily_freeze_fingerprint(results)
+    selected = next(
+        (
+            (records, report)
+            for records, report in results
+            if isinstance(report, dict)
+            and str(report.get("emit", report.get("plant", ""))).upper() == emitter
+        ),
+        None,
+    )
+    if not selected or not selected[0]:
+        raise ValueError("Requested logical emitter has no complete production records.")
+    records, report = selected
+    logical_fp = store._freeze_fingerprint(records, [report])
+    units: dict[str, dict[str, float]] = {}
+    for row in records:
+        unit = str(row.unit or "units")
+        bucket = units.setdefault(unit, {"output": 0.0, "rejection": 0.0})
+        bucket["output"] += float(row.total_count or 0)
+        if not row.reject_unit or row.reject_unit == row.unit:
+            bucket["rejection"] += float(row.reject_count or 0)
+        elif row.reject_count:
+            reject_bucket = units.setdefault(
+                str(row.reject_unit), {"output": 0.0, "rejection": 0.0}
+            )
+            reject_bucket["rejection"] += float(row.reject_count or 0)
+    dates = sorted({str(row.date or row.period) for row in records if row.date or row.period})
+    return {
+        "physical_fingerprint": physical_fp,
+        "logical_fingerprint": logical_fp,
+        "physical_count": len(physical_records),
+        "logical_count": len(records),
+        "date_from": dates[0] if dates else "",
+        "date_to": dates[-1] if dates else "",
+        "machine_count": len({row.machine for row in records if row.machine}),
+        "actual_hours": round(sum(float(row.actual_hours or 0) for row in records), 6),
+        "units": {
+            unit: {name: round(value, 6) for name, value in values.items()}
+            for unit, values in sorted(units.items())
+        },
+        "records": records,
+        "reports": [report],
+    }
+
+
+@app.route("/settings/daily-freeze/preview", methods=["POST"])
+@auth.database_admin_required
+def daily_freeze_preview():
+    if not _user_post_allowed():
+        abort(400, "Invalid form token. Refresh the page and try again.")
+    emitter = str(request.form.get("emitter", "")).strip().upper()
+    ym = str(request.form.get("month", "")).strip()
+    if not re.fullmatch(r"[A-Z0-9_]+", emitter) or not re.fullmatch(r"\d{4}-\d{2}", ym):
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               error="Enter a valid emitter and month."), 400
+    if ym >= _today().strftime("%Y-%m"):
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               error="Only closed months may be frozen."), 400
+    try:
+        physical = _daily_freeze_physical(emitter, ym)
+        import sheets as _sht
+        results = _sht.parse_daily_physical_uncached(physical, ym)
+        capture = _daily_freeze_capture(results, emitter)
+        source_id = DAILY_SOURCES[physical]["files"][ym]
+        high_water = store.daily_read_count(f"emit:{emitter}", ym)
+        payload = {
+            key: value for key, value in capture.items()
+            if key not in ("records", "reports")
+        }
+        payload.update({
+            "physical": physical, "source_id": source_id,
+            "high_water": high_water,
+        })
+        nonce = store.daily_freeze_confirmation_create(
+            user_id=auth.current_user_id(), emitter=emitter, ym=ym,
+            fingerprint=capture["physical_fingerprint"], payload=payload,
+            action="freeze")
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               preview={**payload, "emitter": emitter, "month": ym, "nonce": nonce})
+    except Exception as exc:
+        try:
+            store.daily_freeze_audit(emitter=emitter, ym=ym, action="refused",
+                                     user_id=auth.current_user_id(), user_email=auth.current_user() or "",
+                                     detail={"error": str(exc)})
+        except Exception:
+            pass
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               error=f"Freeze refused: {exc}"), 409
+
+
+@app.route("/settings/daily-freeze/confirm", methods=["POST"])
+@auth.database_admin_required
+def daily_freeze_confirm():
+    if not _user_post_allowed() or request.form.get("confirm") != "yes":
+        abort(400, "CSRF or explicit confirmation failed.")
+    emitter = str(request.form.get("emitter", "")).strip().upper()
+    ym = str(request.form.get("month", "")).strip()
+    try:
+        pending = store.daily_freeze_confirmation_consume(
+            request.form.get("nonce", ""), user_id=auth.current_user_id())
+        if not pending or pending["emitter"] != emitter or pending["ym"] != ym:
+            raise ValueError("Confirmation expired, replayed, or does not match.")
+        physical = _daily_freeze_physical(emitter, ym)
+        import sheets as _sht
+        with store.daily_freeze_lock(physical, ym) as freeze_transaction:
+            second = _sht.parse_daily_physical_uncached(physical, ym)
+            capture = _daily_freeze_capture(second, emitter)
+            source_id = DAILY_SOURCES[physical]["files"][ym]
+            if pending.get("action") != "freeze":
+                raise ValueError("Confirmation action does not match freeze.")
+            if (
+                capture["physical_fingerprint"] != pending["fingerprint"]
+                or physical != pending["payload"].get("physical")
+                or source_id != pending["payload"].get("source_id")
+            ):
+                raise ValueError("Source changed between uncached parses; no snapshot was written.")
+            current_summary = {
+                key: value for key, value in capture.items()
+                if key not in ("records", "reports")
+            }
+            expected_summary = {
+                key: pending["payload"].get(key) for key in current_summary
+            }
+            if current_summary != expected_summary:
+                raise ValueError("Logical records or verification totals changed; no snapshot was written.")
+            current_high_water = store.daily_read_count(f"emit:{emitter}", ym)
+            if current_high_water != pending["payload"].get("high_water"):
+                raise ValueError("The high-water changed after preview; preview again.")
+            result = store.daily_freeze_write(
+                emitter, ym, capture["records"], capture["reports"],
+                user_id=auth.current_user_id(),
+                user_email=auth.current_user() or "", physical_key=physical,
+                source_file_id=source_id,
+                preview_count=pending["payload"].get("logical_count"),
+                live_count=capture["logical_count"],
+                high_water=current_high_water,
+                verification=current_summary,
+                transaction=freeze_transaction)
+        return redirect(url_for("daily_freeze_settings", message=f"Frozen {emitter} {ym} v{result['version']}."))
+    except Exception as exc:
+        try:
+            store.daily_freeze_audit(emitter=emitter, ym=ym, action="failed",
+                user_id=auth.current_user_id(), user_email=auth.current_user() or "",
+                detail={"error": str(exc)})
+        except Exception:
+            pass
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               error=f"Freeze failed safely: {exc}"), 409
+
+
+@app.route("/settings/daily-freeze/unfreeze/preview", methods=["POST"])
+@auth.database_admin_required
+def daily_freeze_unfreeze_preview():
+    if not _user_post_allowed():
+        abort(400, "Invalid form token.")
+    emitter = str(request.form.get("emitter", "")).strip().upper()
+    ym = str(request.form.get("month", "")).strip()
+    if not re.fullmatch(r"[A-Z0-9_]+", emitter) or not re.fullmatch(r"\d{4}-\d{2}", ym):
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(), error="Valid emitter and month required."), 400
+    try:
+        active = store.daily_freeze_active_snapshot(emitter, ym)
+        if not active:
+            raise ValueError("No active freeze exists.")
+        payload = {
+            "action": "unfreeze",
+            "snapshot_id": active["id"],
+            "version": active["version"],
+            "physical_key": active["physical_key"],
+            "source_file_id": active["source_file_id"],
+            "record_count": active["record_count"],
+        }
+        nonce = store.daily_freeze_confirmation_create(
+            user_id=auth.current_user_id(), emitter=emitter, ym=ym,
+            fingerprint=active["fingerprint"], payload=payload,
+            action="unfreeze")
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(),
+                               unfreeze_preview={
+                                   "emitter": emitter, "month": ym, "nonce": nonce,
+                                   **payload, "fingerprint": active["fingerprint"],
+                               })
+    except Exception as exc:
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(), error=str(exc)), 409
+
+
+@app.route("/settings/daily-freeze/unfreeze/confirm", methods=["POST"])
+@auth.database_admin_required
+def daily_freeze_unfreeze_confirm():
+    if not _user_post_allowed() or request.form.get("confirm") != "yes":
+        abort(400, "CSRF or explicit confirmation failed.")
+    emitter = str(request.form.get("emitter", "")).strip().upper()
+    ym = str(request.form.get("month", "")).strip()
+    if not re.fullmatch(r"[A-Z0-9_]+", emitter) or not re.fullmatch(r"\d{4}-\d{2}", ym):
+        abort(400, "Valid emitter and month required.")
+    try:
+        pending = store.daily_freeze_confirmation_consume(request.form.get("nonce", ""),
+                                                            user_id=auth.current_user_id())
+        if (
+            not pending or pending["emitter"] != emitter
+            or pending["ym"] != ym
+            or pending.get("action") != "unfreeze"
+        ):
+            raise ValueError("Confirmation expired, replayed, or mismatched.")
+        payload = pending.get("payload") or {}
+        if payload.get("action") != "unfreeze":
+            raise ValueError("Confirmation action is not an unfreeze.")
+        store.daily_freeze_unfreeze(
+            emitter, ym, user_id=auth.current_user_id(),
+            user_email=auth.current_user() or "",
+            expected_snapshot_id=payload.get("snapshot_id"),
+            expected_version=payload.get("version"),
+            expected_fingerprint=pending["fingerprint"],
+            expected_physical_key=payload.get("physical_key"),
+        )
+        # Invalidate this worker's physical cache; other workers use the state
+        # change timestamp/token in the durable state on their next lookup.
+        clear_caches()
+        return redirect(url_for("daily_freeze_settings", message=f"Unfroze {emitter} {ym}; history retained."))
+    except Exception as exc:
+        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(), error=str(exc)), 409
 
 
 @app.route("/settings/daily-rebaseline")

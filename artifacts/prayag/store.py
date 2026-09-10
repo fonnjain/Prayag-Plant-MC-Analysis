@@ -20,8 +20,10 @@ import os
 import json
 import math
 import pickle
+import dataclasses
 import datetime
 import secrets
+import hashlib
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
@@ -40,6 +42,353 @@ _initialised = False
 
 class StoreError(Exception):
     """Raised when a write cannot be persisted."""
+
+
+class FrozenSnapshotError(StoreError):
+    """A daily freeze is missing, corrupt, or failed integrity validation."""
+
+
+_FREEZE_HEADER = "daily_freeze_snapshots"
+_FREEZE_RECORDS = "daily_freeze_records"
+_FREEZE_AUDIT = "daily_freeze_audit"
+_FREEZE_CONFIRM = "daily_freeze_confirmations"
+_daily_freezes_initialised = False
+
+
+def _init_daily_freezes() -> None:
+    global _daily_freezes_initialised
+    if _daily_freezes_initialised:
+        return
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS {_FREEZE_HEADER} (
+            id BIGSERIAL PRIMARY KEY, emitter TEXT NOT NULL, ym TEXT NOT NULL,
+            version INTEGER NOT NULL, fingerprint TEXT NOT NULL,
+            report_payload JSONB NOT NULL, record_count INTEGER NOT NULL,
+            physical_key TEXT NOT NULL DEFAULT '', source_file_id TEXT NOT NULL DEFAULT '',
+            schema_version TEXT NOT NULL DEFAULT 'R46-1',
+            preview_count INTEGER, live_count INTEGER, high_water INTEGER,
+            verification JSONB NOT NULL DEFAULT '{{}}',
+            integrity_checksum TEXT NOT NULL DEFAULT '',
+            active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE(emitter, ym, version))""")
+        for col, typ in (
+            ("physical_key", "TEXT NOT NULL DEFAULT ''"), ("source_file_id", "TEXT NOT NULL DEFAULT ''"),
+            ("schema_version", "TEXT NOT NULL DEFAULT 'R46-1'"), ("preview_count", "INTEGER"),
+            ("live_count", "INTEGER"), ("high_water", "INTEGER"),
+            ("verification", "JSONB NOT NULL DEFAULT '{}'"), ("integrity_checksum", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            cur.execute(f"ALTER TABLE {_FREEZE_HEADER} ADD COLUMN IF NOT EXISTS {col} {typ}")
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS {_FREEZE_RECORDS} (
+            snapshot_id BIGINT REFERENCES {_FREEZE_HEADER}(id) ON DELETE RESTRICT,
+            ordinal INTEGER NOT NULL, record_payload JSONB NOT NULL,
+            PRIMARY KEY(snapshot_id, ordinal))""")
+        cur.execute(f"""CREATE UNIQUE INDEX IF NOT EXISTS {_FREEZE_HEADER}_one_active
+            ON {_FREEZE_HEADER}(emitter, ym) WHERE active""")
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS {_FREEZE_AUDIT} (
+            id BIGSERIAL PRIMARY KEY, emitter TEXT NOT NULL, ym TEXT NOT NULL,
+            action TEXT NOT NULL, user_id BIGINT, user_email TEXT NOT NULL DEFAULT '',
+            snapshot_id BIGINT, detail JSONB NOT NULL DEFAULT '{{}}', created_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS {_FREEZE_CONFIRM} (
+            nonce TEXT PRIMARY KEY, user_id BIGINT NOT NULL, emitter TEXT NOT NULL,
+            ym TEXT NOT NULL, fingerprint TEXT NOT NULL, payload JSONB NOT NULL,
+            action TEXT NOT NULL DEFAULT 'freeze',
+            expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ)""")
+        cur.execute(
+            f"ALTER TABLE {_FREEZE_CONFIRM} "
+            "ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'freeze'"
+        )
+    _daily_freezes_initialised = True
+
+
+def daily_freeze_confirmation_create(
+    *, user_id, emitter, ym, fingerprint, payload, action="freeze", ttl=600
+):
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_freezes()
+    nonce = secrets.token_urlsafe(32)
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""INSERT INTO {_FREEZE_CONFIRM}
+          (nonce,user_id,emitter,ym,fingerprint,payload,action,expires_at)
+          VALUES (%s,%s,%s,%s,%s,%s,%s,now()+make_interval(secs=>%s))""",
+          (nonce, user_id, emitter, ym, fingerprint,
+           json.dumps(payload, default=str), action, int(ttl)))
+    return nonce
+
+
+def daily_freeze_confirmation_consume(nonce, *, user_id):
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_freezes()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""UPDATE {_FREEZE_CONFIRM} SET used_at=now()
+          WHERE nonce=%s AND user_id=%s AND used_at IS NULL AND expires_at>now()
+          RETURNING emitter,ym,fingerprint,payload,action""", (nonce, user_id))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "emitter": row[0], "ym": row[1], "fingerprint": row[2],
+        "payload": row[3], "action": row[4],
+    }
+
+
+def daily_freeze_audit(*, emitter, ym, action, user_id=None, user_email="", detail=None,
+                       snapshot_id=None):
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_freezes()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""INSERT INTO {_FREEZE_AUDIT}
+          (emitter,ym,action,user_id,user_email,snapshot_id,detail)
+          VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+          (emitter, ym, action, user_id, user_email or "", snapshot_id,
+           json.dumps(detail or {}, default=str)))
+        return cur.fetchone()[0]
+
+
+def _freeze_fingerprint(records, reports) -> str:
+    payload = {"records": [dataclasses.asdict(r) if dataclasses.is_dataclass(r) else r
+                           for r in records], "reports": reports}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def daily_freeze_lock(emitter: str, ym: str):
+    """Transaction advisory lock for one logical emitter/month."""
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    @contextmanager
+    def locked():
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"daily-freeze:{emitter}:{ym}",))
+            yield conn, cur
+    return locked()
+
+
+def daily_freeze_active(emitter: str, ym: str) -> bool:
+    if not AVAILABLE:
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: durable store is not configured for {emitter} {ym}"
+        )
+    try:
+        _init_daily_freezes()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT 1 FROM {_FREEZE_HEADER} WHERE emitter=%s AND ym=%s AND active ORDER BY version DESC LIMIT 1", (emitter, ym))
+            return cur.fetchone() is not None
+    except StoreError:
+        raise
+    except Exception as exc:
+        # An active freeze must never degrade to a live Sheets read.
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: cannot establish freeze state for {emitter} {ym}: {exc}"
+        ) from exc
+
+
+def daily_freeze_active_snapshot(emitter: str, ym: str):
+    """Return the exact active snapshot identity used by guarded unfreeze."""
+    if not AVAILABLE:
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: durable store is not configured for {emitter} {ym}"
+        )
+    _init_daily_freezes()
+    try:
+        with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT id, emitter, ym, version, fingerprint, physical_key, "
+                f"source_file_id, record_count, created_at FROM {_FREEZE_HEADER} "
+                "WHERE emitter=%s AND ym=%s AND active LIMIT 1",
+                (emitter, ym),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    except Exception as exc:
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: cannot read active snapshot for "
+            f"{emitter} {ym}: {exc}"
+        ) from exc
+
+
+def daily_freeze_read(emitter: str, ym: str):
+    """Return validated frozen (Record list, report list), or None if inactive."""
+    if not AVAILABLE:
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: durable store is not configured for {emitter} {ym}"
+        )
+    try:
+        _init_daily_freezes()
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT id, fingerprint, integrity_checksum, schema_version, record_count, report_payload, version, physical_key, source_file_id FROM {_FREEZE_HEADER} WHERE emitter=%s AND ym=%s AND active ORDER BY version DESC LIMIT 1", (emitter, ym))
+            header = cur.fetchone()
+            if not header:
+                return None
+            cur.execute(f"SELECT record_payload FROM {_FREEZE_RECORDS} WHERE snapshot_id=%s ORDER BY ordinal", (header[0],))
+            rows = [r[0] for r in cur.fetchall()]
+        from metrics import Record
+        records = [Record(**r) for r in rows]
+        if header[3] != "R46-1" or len(records) != int(header[4]):
+            raise FrozenSnapshotError(f"DAILY_FREEZE_CORRUPT: invalid schema/count for {emitter} {ym}")
+        reports = header[5] if isinstance(header[5], list) else [header[5]]
+        fingerprint = _freeze_fingerprint(records, reports)
+        if fingerprint != header[1] or fingerprint != header[2]:
+            raise FrozenSnapshotError(f"DAILY_FREEZE_CORRUPT: checksum mismatch for {emitter} {ym}")
+        reports = [
+            dict(
+                r,
+                frozen=True,
+                freeze_emitter=emitter,
+                freeze_month=ym,
+                freeze_version=header[6],
+                freeze_fingerprint=header[1],
+                freeze_physical_key=header[7],
+                freeze_source_file_id=header[8],
+            )
+            if isinstance(r, dict) else r
+            for r in reports
+        ]
+        return records, reports
+    except FrozenSnapshotError:
+        raise
+    except Exception as exc:
+        raise FrozenSnapshotError(f"DAILY_FREEZE_CORRUPT: unable to read {emitter} {ym}: {exc}") from exc
+
+
+def daily_freeze_write(emitter, ym, records, reports, *, user_id=None, user_email="",
+                       physical_key="", source_file_id="", preview_count=None,
+                       live_count=None, high_water=None, verification=None,
+                       transaction=None):
+    """Append immutable version and make it active; audit failure aborts all writes."""
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_freezes()
+    fingerprint = _freeze_fingerprint(records, reports)
+    record_payload = [dataclasses.asdict(r) if dataclasses.is_dataclass(r) else r for r in records]
+    def _write(cur):
+        cur.execute(f"SELECT COALESCE(MAX(version),0)+1 FROM {_FREEZE_HEADER} WHERE emitter=%s AND ym=%s", (emitter, ym))
+        version = int(cur.fetchone()[0])
+        cur.execute(f"UPDATE {_FREEZE_HEADER} SET active=FALSE WHERE emitter=%s AND ym=%s", (emitter, ym))
+        cur.execute(f"""INSERT INTO {_FREEZE_HEADER}
+            (emitter,ym,version,fingerprint,report_payload,record_count,physical_key,
+             source_file_id,schema_version,preview_count,live_count,high_water,verification,
+             integrity_checksum)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'R46-1',%s,%s,%s,%s,%s) RETURNING id""",
+            (emitter, ym, version, fingerprint, json.dumps(reports, default=str), len(record_payload),
+             physical_key, source_file_id, preview_count, live_count, high_water,
+             json.dumps(verification or {}, default=str), fingerprint))
+        sid = cur.fetchone()[0]
+        for i, payload in enumerate(record_payload):
+            cur.execute(f"INSERT INTO {_FREEZE_RECORDS} VALUES (%s,%s,%s)", (sid, i, json.dumps(payload, default=str)))
+        cur.execute(
+            f"SELECT record_payload FROM {_FREEZE_RECORDS} "
+            "WHERE snapshot_id=%s ORDER BY ordinal",
+            (sid,),
+        )
+        stored_payload = [row[0] for row in cur.fetchall()]
+        if len(stored_payload) != len(record_payload):
+            raise FrozenSnapshotError(
+                f"DAILY_FREEZE_WRITE_VERIFY_FAILED: row count mismatch for {emitter} {ym}"
+            )
+        if _freeze_fingerprint(stored_payload, reports) != fingerprint:
+            raise FrozenSnapshotError(
+                f"DAILY_FREEZE_WRITE_VERIFY_FAILED: checksum mismatch for {emitter} {ym}"
+            )
+        cur.execute(f"""INSERT INTO {_FREEZE_AUDIT}(emitter,ym,action,user_id,user_email,snapshot_id,detail)
+            VALUES (%s,%s,'freeze',%s,%s,%s,%s)""",
+            (emitter, ym, user_id, user_email or "", sid, json.dumps({"fingerprint": fingerprint, "count": len(record_payload)})))
+        return sid, version
+    if transaction is not None:
+        _conn_in_use, cur_in_use = transaction
+        sid, version = _write(cur_in_use)
+    else:
+        with daily_freeze_lock(physical_key or emitter, ym) as (_conn_in_use, cur_in_use):
+            sid, version = _write(cur_in_use)
+    return {"snapshot_id": sid, "version": version, "fingerprint": fingerprint}
+
+
+def daily_freeze_unfreeze(
+    emitter,
+    ym,
+    *,
+    user_id=None,
+    user_email="",
+    expected_snapshot_id=None,
+    expected_version=None,
+    expected_fingerprint=None,
+    expected_physical_key=None,
+):
+    if not AVAILABLE:
+        raise StoreError("No durable store configured (DATABASE_URL missing).")
+    _init_daily_freezes()
+    if expected_snapshot_id is not None:
+        lock_key = expected_physical_key or emitter
+    else:
+        active = daily_freeze_active_snapshot(emitter, ym)
+        if not active:
+            raise StoreError(f"No active daily freeze exists for {emitter} {ym}.")
+        lock_key = active["physical_key"] or emitter
+    with daily_freeze_lock(lock_key, ym) as (conn, cur):
+        if expected_snapshot_id is not None:
+            cur.execute(
+                f"UPDATE {_FREEZE_HEADER} SET active=FALSE "
+                "WHERE id=%s AND emitter=%s AND ym=%s AND version=%s "
+                "AND fingerprint=%s AND physical_key=%s AND active RETURNING id",
+                (
+                    expected_snapshot_id, emitter, ym, expected_version,
+                    expected_fingerprint, expected_physical_key or "",
+                ),
+            )
+        else:
+            cur.execute(
+                f"UPDATE {_FREEZE_HEADER} SET active=FALSE "
+                "WHERE emitter=%s AND ym=%s AND active RETURNING id",
+                (emitter, ym),
+            )
+        snapshot = cur.fetchone()
+        if not snapshot:
+            raise StoreError(
+                f"The active daily freeze for {emitter} {ym} changed after "
+                "preview. Preview the unfreeze again."
+            )
+        cur.execute(f"""INSERT INTO {_FREEZE_AUDIT}(emitter,ym,action,user_id,user_email,detail)
+            VALUES (%s,%s,'unfreeze',%s,%s,%s)""",
+            (emitter, ym, user_id, user_email or "",
+             json.dumps({"snapshot_id": snapshot[0]})))
+
+
+def daily_freeze_history(limit=100):
+    if not AVAILABLE:
+        return []
+    _init_daily_freezes()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"""SELECT emitter,ym,version,active,record_count,created_at
+                        FROM {_FREEZE_HEADER} ORDER BY created_at DESC LIMIT %s""", (int(limit),))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def daily_freeze_audit_history(limit=100):
+    if not AVAILABLE:
+        return []
+    _init_daily_freezes()
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"""SELECT emitter,ym,action,user_email,detail,created_at
+                        FROM {_FREEZE_AUDIT} ORDER BY created_at DESC LIMIT %s""", (int(limit),))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def daily_freeze_state_token(emitter, ym):
+    """Monotonic durable token used by readers to invalidate old caches."""
+    if not AVAILABLE:
+        raise FrozenSnapshotError(
+            f"DAILY_FREEZE_STATE_UNAVAILABLE: durable store is not configured for {emitter} {ym}"
+        )
+    _init_daily_freezes()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""SELECT COALESCE(MAX(created_at), 'epoch'::timestamptz)
+                        FROM {_FREEZE_AUDIT} WHERE emitter=%s AND ym=%s""", (emitter, ym))
+        row = cur.fetchone()
+    return row[0].isoformat() if row and row[0] else None
 
 
 def _conn():

@@ -10,6 +10,7 @@ REST API directly, reading each workbook by its pinned file ID (see sources.py).
 from __future__ import annotations
 import os
 import re
+import hashlib
 import json
 import dataclasses
 import time
@@ -109,6 +110,7 @@ def clear_caches() -> None:
     """
     _data_cache.clear()
     _daily_cache.clear()
+    _daily_cache_state_tokens.clear()
     _report_cache.clear()
     _compound_cache.clear()
     _seg_labour_cache.clear()
@@ -1624,6 +1626,7 @@ _daily_locks_guard = threading.Lock()
 # L1 fallback for completeness baselines. Postgres makes the mark durable across
 # workers, but the classifier must remain safe during a database outage too.
 _daily_highwater_counts: dict[tuple[str, str], int] = {}
+_daily_cache_state_tokens: dict[tuple[str, str], object] = {}
 
 
 def _daily_key_lock(key) -> threading.Lock:
@@ -1761,6 +1764,53 @@ def inspect_daily_logical_population(emit: str, ym: str) -> dict:
     }
 
 
+def parse_daily_physical_uncached(plant: str, ym: str):
+    """Parse a registered physical pair exactly once, bypassing all caches."""
+    token = _get_access_token()
+    if not token:
+        raise SheetReadError("The Google Sheets connection is not authorized.")
+    with _daily_key_lock((plant, ym)):
+        results = _load_daily(plant, ym, token)
+        reason = _daily_pair_incomplete_reason(plant, ym, results)
+        if reason:
+            raise DailyReadIncompleteError(
+                f"{plant} daily ({ym}) is incomplete: {reason}"
+            )
+        if not results:
+            raise DailyReadIncompleteError(f"{plant} daily ({ym}) has no physical pair.")
+        for recs, report in results:
+            if not isinstance(report, dict) or report.get("empty_source") or report.get("awaiting_data"):
+                raise DailyReadIncompleteError(f"{plant} daily ({ym}) is awaiting data.")
+            if report.get("vanished_source") or report.get("_failed_pairs") or report.get("incomplete"):
+                raise DailyReadIncompleteError(f"{plant} daily ({ym}) has an incomplete/vanished pair.")
+        expected = {str(s.get("emit", "")).upper() for s in _DAILY_LAYOUTS.get(plant, [])}
+        observed = {str((rp or {}).get("emit", (rp or {}).get("plant", ""))).upper()
+                    for _, rp in results if isinstance(rp, dict)}
+        missing = expected - observed
+        if missing:
+            raise DailyReadIncompleteError(
+                f"{plant} daily ({ym}) is incomplete: missing logical emitters {sorted(missing)}"
+            )
+        if any(len(rs) <= 0 for rs, rp in results):
+            raise DailyReadIncompleteError(f"{plant} daily ({ym}) has zero target logical records.")
+        populations = _daily_logical_populations(results)
+        for emit in expected:
+            high_water = _store.daily_read_count(_daily_count_scope(emit), ym)
+            if high_water is None or int(high_water) <= 0:
+                raise DailyReadIncompleteError(
+                    f"{plant} daily ({ym}) cannot be frozen: {emit} has no "
+                    "established durable high-water."
+                )
+            count = int((populations.get(emit) or {}).get("count", 0))
+            if count < int(high_water):
+                raise DailyReadIncompleteError(
+                    f"{plant} daily ({ym}) is incomplete: {emit} returned "
+                    f"{count:,} records, below its durable high-water of "
+                    f"{int(high_water):,}."
+                )
+        return results
+
+
 def rebaseline_daily_logical_population(
     emit: str,
     ym: str,
@@ -1820,6 +1870,12 @@ def rebaseline_daily_logical_population(
 
 
 def _load_daily_cached(plant: str, ym: str, token: str):
+  """Linearize one physical-month read with freeze and unfreeze transitions."""
+  with _store.daily_freeze_lock(plant, ym):
+      return _load_daily_cached_locked(plant, ym, token)
+
+
+def _load_daily_cached_locked(plant: str, ym: str, token: str):
   """Return cached results for one (plant, ym), fetching once under a per-key
   lock on a cold miss. Safe to call from many threads concurrently.
 
@@ -1829,26 +1885,55 @@ def _load_daily_cached(plant: str, ym: str, token: str):
     L3 – Google Sheets live read  (slow, 5-30 s per workbook)
   """
   key = (plant, ym)
+  # R-46: frozen logical emitters are resolved before OAuth, caches, or Sheets.
+  # A physical workbook may emit PIPE and MOULDING, so replace only the frozen
+  # emitter and leave its sibling on the normal live path.
+  frozen = {}
+  for spec in _DAILY_LAYOUTS.get(plant, []):
+      emit = str(spec.get("emit", "")).upper()
+      if _store.daily_freeze_active(emit, ym):
+          payload = _store.daily_freeze_read(emit, ym)
+          if payload is None:
+              raise SheetReadError(f"DAILY_FREEZE_MISSING: {emit} {ym}")
+          records, reports = payload
+          if len(reports) != 1 or not isinstance(reports[0], dict):
+              raise SheetReadError(
+                  f"DAILY_FREEZE_CORRUPT: expected one report for {emit} {ym}"
+              )
+          frozen[emit] = (records, reports[0])
+  # A freeze/unfreeze action in another worker invalidates older physical cache
+  # entries.  Overlays themselves are never written to these caches.
+  state_token = tuple(_store.daily_freeze_state_token(str(s.get("emit", plant)).upper(), ym)
+                      for s in _DAILY_LAYOUTS.get(plant, []))
+  if not frozen and key in _daily_cache_state_tokens and _daily_cache_state_tokens[key] != state_token:
+      _daily_cache.pop(key, None)
+  if frozen and len(frozen) == len(_DAILY_LAYOUTS.get(plant, [])):
+      return [(list(records), dict(report)) for records, report in frozen.values()]
   ttl = _daily_cache_ttl(ym)
   cached = _daily_cache.get(key)
-  if cached and time.time() - cached[0] < ttl:
+  if not frozen and cached and time.time() - cached[0] < ttl:
       if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
           return cached[1]
       _daily_cache.pop(key, None)
   # v3 deliberately ignores pre-logical-emitter cache payloads. Those values have
   # no verified population baseline and could be the very partial data this
   # guard is intended to prevent from being published.
-  pg_key = f"daily_v3_{plant}_{ym}"
+  state_key = hashlib.sha256(
+      json.dumps(state_token, sort_keys=True, default=str).encode()
+  ).hexdigest()[:16]
+  pg_key = f"daily_v4_{plant}_{ym}_{state_key}"
   with _daily_key_lock(key):
       # Re-check L1 — another thread may have filled it while we waited.
       cached = _daily_cache.get(key)
-      if cached and time.time() - cached[0] < ttl:
+      if not frozen and cached and time.time() - cached[0] < ttl:
           if not _daily_pair_incomplete_reason(plant, ym, cached[1]):
               return cached[1]
           _daily_cache.pop(key, None)
       # L2: shared Postgres cache — avoids re-fetching across workers.
       try:
-          pg_hit = _store.pg_cache_read(pg_key, ttl)
+          # The durable state token in the key prevents a pre-freeze or
+          # pre-unfreeze physical payload from crossing the state transition.
+          pg_hit = None if frozen else _store.pg_cache_read(pg_key, ttl)
           if pg_hit is not None:
               if not _daily_pair_incomplete_reason(plant, ym, pg_hit):
                   _daily_cache[key] = (time.time(), pg_hit)
@@ -1860,19 +1945,63 @@ def _load_daily_cached(plant: str, ym: str, token: str):
       except Exception:
           pass
       # L3: live Sheets read.
-      results = _load_daily(plant, ym, token)
+      live_emitters = {
+          str(spec.get("emit", "")).upper()
+          for spec in _DAILY_LAYOUTS.get(plant, [])
+          if str(spec.get("emit", "")).upper() not in frozen
+      }
+      if live_emitters and not token:
+          token = _get_access_token()
+          if not token:
+              raise SheetReadError(
+                  "The Google Sheets connection isn't authorized."
+              )
+      live_results = _load_daily(plant, ym, token, emits=live_emitters)
+      results = live_results
+      if frozen:
+          live_by_emit = {
+              str(report.get("emit") or report.get("plant")).upper():
+                  (records, report)
+              for records, report in live_results
+              if isinstance(report, dict)
+          }
+          results = []
+          for spec in _DAILY_LAYOUTS.get(plant, []):
+              emit = str(spec.get("emit", "")).upper()
+              pair = frozen.get(emit) or live_by_emit.get(emit)
+              if pair is not None:
+                  results.append(pair)
       reason = _daily_pair_incomplete_reason(plant, ym, results)
+      expected_emitters = {
+          str(spec.get("emit", "")).upper()
+          for spec in _DAILY_LAYOUTS.get(plant, [])
+      }
+      observed_emitters = {
+          str(report.get("emit") or report.get("plant")).upper()
+          for _records, report in results
+          if isinstance(report, dict)
+      }
+      missing_emitters = expected_emitters - observed_emitters
+      if missing_emitters:
+          reason = (
+              (reason + "; " if reason else "")
+              + f"missing logical emitters {sorted(missing_emitters)}"
+          )
       if reason:
           raise DailyReadIncompleteError(
               f"{sources.PLANT_NAMES.get(plant, plant)} daily ({ym}) is incomplete: "
               f"{reason}. Its figures are withheld and will be retried."
           )
-      _daily_cache[key] = (time.time(), results)
+      # Never persist a mixed frozen/live overlay.  The physical cache remains
+      # the unmodified live pair so unfreeze cannot leak old frozen records.
+      _daily_cache[key] = (time.time(), live_results)
+      _daily_cache_state_tokens[key] = state_token
       _mark_synced()
       _remember_complete_daily_pair(plant, ym, results)
       # Populate Postgres so sibling workers skip the Sheets trip.
       try:
-          _store.pg_cache_write(pg_key, results)
+          if not frozen:
+              _store.pg_cache_write(pg_key, live_results)
       except Exception:
           pass
       return results
@@ -3106,7 +3235,13 @@ def _emit_daily(emit: str, ym: str, file_id: str, spec: dict,
   return raw, report
 
 
-def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dict]]:
+def _load_daily(
+    plant: str,
+    ym: str,
+    token: str,
+    *,
+    emits: Optional[set[str]] = None,
+) -> List[Tuple[List[Record], dict]]:
   """Read one workbook plant's daily file for month ``ym``.
 
   Returns a list of (records, report) — one per logical plant the workbook
@@ -3119,7 +3254,13 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
       #   3. had a discovered file, now unreadable → new vanished warning
       vanished_fid = _get_vanished_file_id(plant, ym)
       if vanished_fid:
-          return _vanished_reports(plant, ym, vanished_fid)
+          reports = _vanished_reports(plant, ym, vanished_fid)
+          if emits is None:
+              return reports
+          return [
+              pair for pair in reports
+              if str((pair[1] or {}).get("emit", "")).upper() in emits
+          ]
       return []
   # Known-empty template (e.g. a prior-year month whose workbook is all zeros):
   # do NOT read it as a real zero-output month — return an "awaiting source"
@@ -3133,9 +3274,12 @@ def _load_daily(plant: str, ym: str, token: str) -> List[Tuple[List[Record], dic
                         "(awaiting data) — not a real zero-output month."],
           })
           for spec in _DAILY_LAYOUTS.get(plant, [])
+          if emits is None or str(spec.get("emit", "")).upper() in emits
       ]
   out: List[Tuple[List[Record], dict]] = []
   for spec in _DAILY_LAYOUTS.get(plant, []):
+      if emits is not None and str(spec.get("emit", "")).upper() not in emits:
+          continue
       recs, report = _emit_daily(spec["emit"], ym, file_id, spec, token)
       out.append((recs, report))
   return out
@@ -3218,13 +3362,6 @@ def get_daily_records(
       recs = _demo_records_for_months(months)
       return recs, _demo_reports(), []
 
-  token = _get_access_token()
-  if not token:
-      raise SheetReadError(
-          "The Google Sheets connection isn't authorized. "
-          "Reconnect it from the integrations panel and try again."
-      )
-
   all_recs: List[Record] = []
   reports: List[dict] = []
   warnings: List[str] = []
@@ -3244,6 +3381,10 @@ def get_daily_records(
       for ym in months
       if ym in sources.DAILY_SOURCES[plant]["files"]
   ]
+  # OAuth is resolved only inside the physical-month advisory lock, after the
+  # loader has established that at least one logical emitter is live. This
+  # prevents a concurrent freeze from causing even an unnecessary token call.
+  token = None
   by_pair: dict = {}
   failed_pairs: List[Tuple[str, str]] = []
   failed_reasons: dict[Tuple[str, str], str] = {}

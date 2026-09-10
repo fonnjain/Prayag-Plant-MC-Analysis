@@ -406,6 +406,9 @@
     <a href="/settings/daily-rebaseline" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/daily-rebaseline') else '' }}">
       <span>Daily re-baseline</span>
     </a>
+    <a href="/settings/daily-freeze" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/daily-freeze') else '' }}">
+      <span class="nd-icon">🔒</span> Daily freeze
+    </a>
     {% endif %}
     {% if auth_is_admin %}
     <a href="/settings/api-key" class="nd-item nd-sub {{ 'nd-active' if _p.startswith('/settings/api-key') else '' }}">
@@ -604,6 +607,16 @@
 
 <!-- ===== MAIN CONTENT ===== -->
 <main class="main-content max-w-2xl mx-auto px-3 pt-4">
+  {% if daily_frozen_month %}
+  <div class="mb-3 rounded-xl p-3 bg-indigo-50 border border-indigo-200 flex items-start gap-2" role="status">
+    <span class="text-indigo-700 text-base" aria-hidden="true">🔒</span>
+    <div class="text-xs text-indigo-900">
+      <strong>Audited daily production freeze — {{ daily_frozen_month }}</strong>
+      <div class="mt-0.5">This month is served from immutable canonical daily Records
+        ({{ daily_frozen_emitters|join(', ') }}). Those emitters are recomputed from stored Records; any unfrozen emitters in the view remain live.</div>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- Access control not configured banner (shown when PRAYAG_APP_PASSWORD is unset) -->
   {% if not auth_configured %}

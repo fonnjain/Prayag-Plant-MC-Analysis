@@ -68,3 +68,4 @@
 - [Zero-run-hours scheduler blocker](prayag-zero-hours-scheduler-capacity.md) — positive PIPE output with zero run hours can understate live schedule capacity; reconcile source/parser or gate it explicitly.
 - [Operator machine-plan exports](prayag-operator-plan-export.md) — primary machine-plan downloads use one shared floor format; specialist analytical reports remain separate and must not be replaced.
 - [Daily high-water pair gating](prayag-daily-highwater-pair-gating.md) — one logical emitter shrinking can withhold every logical plant emitted by the same physical workbook; retries cannot recover a permanent source edit.
+- [Daily production month freeze](prayag-daily-month-freeze.md) — R-46 snapshots canonical logical emitters only; freeze/read/unfreeze share a physical-month lock and fail closed.
