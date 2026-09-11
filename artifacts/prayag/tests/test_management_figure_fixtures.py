@@ -23,7 +23,7 @@ import pipe_reconcile
 import sheets
 
 
-PIPE_HOURS_BY_MACHINE = (1_982, 855, 1_117, 863, 1_107, 22, 0, 561)
+PIPE_HOURS_BY_MACHINE = (1_085, 886, 870, 1_117, 872, 1_126, 0, 0, 561)
 PIPE_REPORT5_KG = 1_277_974.20
 PIPE_REPORT11_ONLY_KG = 858.00
 PIPE_REPORT11_MATCHED_MAXIMA_KG = 4_467.95
@@ -74,9 +74,10 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
         150_000.00,
         120_000.00,
         107_974.20,
+        0.00,
     )
     assert sum(r5_values) == PIPE_REPORT5_KG
-    assert sum(PIPE_HOURS_BY_MACHINE) == 6_507
+    assert sum(PIPE_HOURS_BY_MACHINE) == 6_517
 
     r5 = {
         (machine, "2026-04-01"): {"out": output, "rej": 0.0}
@@ -111,7 +112,7 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
             "2026-04", machine, PIPE_HOURS_BY_MACHINE[machine - 1],
             reconciled[(machine, "2026-04-01")]["out"],
         )
-        for machine in range(1, 9)
+        for machine in range(1, 10)
     ]
     records.append(
         _pipe_record(
@@ -127,7 +128,7 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
         pipe_summary._cache.clear()
 
     total = result["section2"]["fy2627"][-1]
-    assert total["actual_hrs"] == 6_507
+    assert total["actual_hrs"] == 6_517
     assert total["actual_out_kg"] == PIPE_RECONCILED_KG
 
 

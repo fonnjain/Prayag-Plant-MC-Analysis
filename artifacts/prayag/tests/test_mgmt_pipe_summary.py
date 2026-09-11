@@ -61,7 +61,7 @@ def test_july_pipeline_payroll_is_registered_parsed_and_included(monkeypatch):
         "2627",
         [
             _pipe_record("2026-04", 833, 190_494),
-            _pipe_record("2026-07", 2_834, 564_695),
+            _pipe_record("2026-07", 2_838, 564_695),
         ],
         {
             "APR": {"labour": 25, "paid_hrs": 7_502.5},
@@ -102,7 +102,7 @@ def test_unregistered_future_wage_source_stays_awaiting(monkeypatch):
 
     summary = pipe_summary._build_section1(
         "2627",
-        [_pipe_record("2026-07", 2_834, 564_695)],
+        [_pipe_record("2026-07", 2_838, 564_695)],
         {"JUL": {"labour": 38, "paid_hrs": 10_732.0}},
         token="test",
     )
@@ -127,7 +127,7 @@ def test_registered_wage_source_must_parse_before_it_enters_total(monkeypatch):
 
     summary = pipe_summary._build_section1(
         "2627",
-        [_pipe_record("2026-07", 2_834, 564_695)],
+        [_pipe_record("2026-07", 2_838, 564_695)],
         {"JUL": {"labour": 38, "paid_hrs": 10_732.0}},
         token="test",
     )

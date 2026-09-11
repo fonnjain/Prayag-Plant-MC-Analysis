@@ -20,7 +20,7 @@ def _machine_row(*, is_total: bool = False) -> NS:
         machine="TOTAL" if is_total else "M/C-1",
         pipe_type="",
         ideal_hrs=22_500 if is_total else 2_000,
-        actual_hrs=7_754 if is_total else 833,
+        actual_hrs=7_764 if is_total else 833,
         actual_out_kg=1_523_241 if is_total else 190_494,
         ideal_rate=120,
         avg_hr=228.7,
@@ -58,7 +58,7 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
             wages_source=source,
         )
     total_row = NS(
-        run_hrs=7_754,
+        run_hrs=7_764,
         gross_output_kg=1_523_241,
         labour=128,
         paid_hrs=37_619,
@@ -80,9 +80,9 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
             total_row=total_row,
             month_rows=[
                 month_row("APR'26", 833, 190_494),
-                month_row("MAY'26", 1_832, 344_000, awaiting=True),
+                month_row("MAY'26", 1_838, 344_000, awaiting=True),
                 month_row("JUN'26", 1_008, 183_635),
-                month_row("JUL'26", 2_834, 565_171, awaiting=True),
+                month_row("JUL'26", 2_838, 565_171, awaiting=True),
                 month_row("AUG'26", 1_247, 239_941, source=None, awaiting=True),
                 NS(
                     month_disp="SEP'26",
@@ -134,9 +134,9 @@ def test_pipe_summary_keeps_payroll_provenance_non_clickable_and_tables_full_wid
     assert "<span class=\"text-[10px] font-medium text-gray-500\">(partial)</span>" in html
     assert "Partial payroll through APR&#39;26, MAY&#39;26, JUN&#39;26, JUL&#39;26" in html
     for figure in (
-        "7,754", "1,523,241", "128", "37,619",
-        "833", "190,494", "1,832", "344,000", "1,008", "183,635",
-        "2,834", "565,171", "1,247", "239,941", "22,500",
+        "7,764", "1,523,241", "128", "37,619",
+        "833", "190,494", "1,838", "344,000", "1,008", "183,635",
+        "2,838", "565,171", "1,247", "239,941", "22,500",
     ):
         assert figure in html
     assert html.count("table-layout:fixed") >= 2

@@ -32,10 +32,11 @@ then re-read the oracle TOTAL rows. `gen_pipe` renders TWO sheets (main +
 Type-wise); match each expected key against the first total row that carries it,
 never `rows[-1]`.
 
-PIPE May's accepted 313,637 kg is the authoritative primary-machine daily
-population. The management export's 344,000 kg May row is the broader Report-5
-verification layer; their 30,363 kg difference is population/basis scope, not a
-gross/net conversion.
+PIPE May's accepted 313,516 kg is the authoritative primary-machine daily
+population after the confirmed July–September plant corrections. With 30,484 kg
+rejection, the current May Report-5 gross basis is 344,000 kg. The freeze preview
+adds 116,200 kg of finishing output and therefore captures 429,716 kg across all
+125 logical PIPE records while normal headline metrics remain 313,516 kg.
 
 **June 2026 second month (`test_report_export_june_oracle.py`, fixtures
 `daily_2026_06.json` + `pipe_report12_2026_06.json`).** Adds a
