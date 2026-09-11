@@ -9441,8 +9441,18 @@ def daily_freeze_unfreeze_preview():
         abort(400, "Invalid form token.")
     emitter = str(request.form.get("emitter", "")).strip().upper()
     ym = str(request.form.get("month", "")).strip()
-    if not re.fullmatch(r"[A-Z0-9_]+", emitter) or not re.fullmatch(r"\d{4}-\d{2}", ym):
-        return render_template("daily_freeze.html", csrf_token=auth.csrf_token(), error="Valid emitter and month required."), 400
+    reason = str(request.form.get("reason", "")).strip()
+    if (
+        not re.fullmatch(r"[A-Z0-9_]+", emitter)
+        or not re.fullmatch(r"\d{4}-\d{2}", ym)
+        or not reason
+        or len(reason) > 500
+    ):
+        return render_template(
+            "daily_freeze.html",
+            csrf_token=auth.csrf_token(),
+            error="Valid emitter, month, and a supersession reason (up to 500 characters) are required.",
+        ), 400
     try:
         active = store.daily_freeze_active_snapshot(emitter, ym)
         if not active:
@@ -9454,6 +9464,7 @@ def daily_freeze_unfreeze_preview():
             "physical_key": active["physical_key"],
             "source_file_id": active["source_file_id"],
             "record_count": active["record_count"],
+            "reason": reason,
         }
         nonce = store.daily_freeze_confirmation_create(
             user_id=auth.current_user_id(), emitter=emitter, ym=ym,
@@ -9487,7 +9498,8 @@ def daily_freeze_unfreeze_confirm():
         ):
             raise ValueError("Confirmation expired, replayed, or mismatched.")
         payload = pending.get("payload") or {}
-        if payload.get("action") != "unfreeze":
+        reason = str(payload.get("reason", "")).strip()
+        if payload.get("action") != "unfreeze" or not reason:
             raise ValueError("Confirmation action is not an unfreeze.")
         store.daily_freeze_unfreeze(
             emitter, ym, user_id=auth.current_user_id(),
@@ -9496,6 +9508,7 @@ def daily_freeze_unfreeze_confirm():
             expected_version=payload.get("version"),
             expected_fingerprint=pending["fingerprint"],
             expected_physical_key=payload.get("physical_key"),
+            reason=reason,
         )
         # Invalidate this worker's physical cache; other workers use the state
         # change timestamp/token in the durable state on their next lookup.

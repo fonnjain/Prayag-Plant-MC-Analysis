@@ -317,6 +317,7 @@ def daily_freeze_unfreeze(
     expected_version=None,
     expected_fingerprint=None,
     expected_physical_key=None,
+    reason="",
 ):
     if not AVAILABLE:
         raise StoreError("No durable store configured (DATABASE_URL missing).")
@@ -354,7 +355,10 @@ def daily_freeze_unfreeze(
         cur.execute(f"""INSERT INTO {_FREEZE_AUDIT}(emitter,ym,action,user_id,user_email,detail)
             VALUES (%s,%s,'unfreeze',%s,%s,%s)""",
             (emitter, ym, user_id, user_email or "",
-             json.dumps({"snapshot_id": snapshot[0]})))
+             json.dumps({
+                 "snapshot_id": snapshot[0],
+                 "reason": str(reason or "").strip(),
+             })))
 
 
 def daily_freeze_history(limit=100):

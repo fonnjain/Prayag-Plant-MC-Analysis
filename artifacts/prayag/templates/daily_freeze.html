@@ -53,6 +53,9 @@
     <h2 class="font-bold text-sm">Explicit unfreeze (history retained)</h2>
     <input required name="emitter" placeholder="PIPE" class="border rounded p-2"/>
     <input required type="month" name="month" class="border rounded p-2"/>
+    <label class="text-sm">Why is this snapshot being superseded?
+      <input required maxlength="500" name="reason" placeholder="For example: source correction or transport precision correction" class="mt-1 block w-full border rounded p-2"/>
+    </label>
     <button class="rounded-lg border border-red-300 text-red-700 px-4 py-2 text-sm font-bold">Unfreeze</button>
   </form>
   {% endif %}
@@ -61,6 +64,7 @@
     <h2 class="font-bold text-red-900">Confirm unfreeze</h2>
     <p class="text-xs">History is retained; the month will return to live loading.</p>
     <p class="text-[10px] text-gray-600 mt-2 break-all">Exact snapshot: v{{ unfreeze_preview.version }} · {{ unfreeze_preview.record_count }} records · {{ unfreeze_preview.fingerprint }}</p>
+    <p class="text-xs text-gray-700 mt-2"><b>Supersession reason:</b> {{ unfreeze_preview.reason }}</p>
     <form method="post" action="/settings/daily-freeze/unfreeze/confirm" class="mt-3">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>
       <input type="hidden" name="nonce" value="{{ unfreeze_preview.nonce }}"/>

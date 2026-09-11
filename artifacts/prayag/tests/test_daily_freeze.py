@@ -120,6 +120,7 @@ def test_preview_is_uncached_read_only_and_shows_verification(monkeypatch):
             "csrf_token": "freeze-csrf",
             "emitter": "PIPE",
             "month": "2026-06",
+            "reason": "The source revision was reviewed.",
         },
     )
 
@@ -464,6 +465,7 @@ def test_unfreeze_requires_single_use_matching_confirmation(monkeypatch):
             "csrf_token": "freeze-csrf",
             "emitter": "PIPE",
             "month": "2026-06",
+            "reason": "The source revision was reviewed.",
         },
     )
     assert preview.status_code == 200
@@ -482,6 +484,7 @@ def test_unfreeze_requires_single_use_matching_confirmation(monkeypatch):
                 "snapshot_id": 55,
                 "version": 3,
                 "physical_key": "PIPE",
+                "reason": "The source revision was reviewed.",
             },
             "action": "unfreeze",
         }
@@ -507,6 +510,7 @@ def test_unfreeze_requires_single_use_matching_confirmation(monkeypatch):
     assert unfreezes[0][1]["expected_snapshot_id"] == 55
     assert unfreezes[0][1]["expected_version"] == 3
     assert unfreezes[0][1]["expected_fingerprint"] == "snapshot-fingerprint"
+    assert unfreezes[0][1]["reason"] == "The source revision was reviewed."
 
 
 def test_direct_unfreeze_bypass_does_not_exist(monkeypatch):
@@ -611,14 +615,17 @@ def test_real_store_round_trip_integrity_nonce_and_audit():
             ym,
             user_id=9000001,
             user_email="r46-test@example.invalid",
+            reason="Test supersession reason.",
         )
         assert store.daily_freeze_active(emitter, ym) is False
         with store._conn() as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT action FROM {store._FREEZE_AUDIT} "
+                f"SELECT action, detail FROM {store._FREEZE_AUDIT} "
                 "WHERE emitter=%s AND ym=%s ORDER BY id",
                 (emitter, ym),
             )
-            assert [row[0] for row in cur.fetchall()] == ["freeze", "unfreeze"]
+            audit_rows = cur.fetchall()
+            assert [row[0] for row in audit_rows] == ["freeze", "unfreeze"]
+            assert audit_rows[1][1]["reason"] == "Test supersession reason."
     finally:
         cleanup()
