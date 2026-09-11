@@ -1,0 +1,95 @@
+# Freeze Through July — Scale Up and Extend Scope
+
+Read `PRAYAG_RULES.md`. Repo: `fonnjain/Prayag-Plant-MC-Analysis`.
+
+**Design and report first for Part B. Part A can proceed now.**
+
+---
+
+## What I want
+
+**Every month up to and including July 2026 frozen**, so nothing before August can change unless someone deliberately unfreezes it.
+
+**And freeze must be user-driven both ways** — an administrator freezes, and an administrator unfreezes, at which point the app **re-syncs from live source**. My understanding is that this already exists. Confirm it, then scale it.
+
+---
+
+## PART A — proceed now
+
+### A1 · Confirm the unfreeze/re-sync behaviour that already exists
+
+`/settings/daily-freeze` has unfreeze preview and confirm routes (`app.py:9431`, `9465`). Report precisely what unfreeze does today:
+
+- Does it deactivate the snapshot and resume live reads on the next request?
+- Does it evict the L1 and L2 caches, so the next read genuinely comes from Sheets rather than a stale copy?
+- Does the high-water guard resume protecting the live read immediately?
+- Is the snapshot retained as history, or deleted?
+- Can the same emitter-month be re-frozen afterwards as a new version?
+
+**If all of that is already true, no new build is needed for re-sync** — say so plainly and we move on.
+
+### A2 · Complete May, in your recommended order
+
+One emitter at a time, each with two uncached previews and a stop for review before confirming:
+
+**HDPE (1) → MOULDING (455) → TANK_WB (166) → TANK_VN (94) → TANK (76) → GARDEN (44) → PTMT (1,286)**
+
+Carry your own findings forward as acceptance criteria:
+
+- **TANK_VN** — the preview must show the reconciled **196 hours**. Anything else means R-39 did not run: **do not proceed.**
+- **GARDEN** — May rows were still being added through August. Re-check revision history **immediately before** the preview, not relying on the earlier audit.
+- **PTMT** — derived cells moved while core totals held. Report **which** derived cells, and whether any feed a figure the snapshot stores, before previewing.
+
+### A3 · Then April, June and July — all eight emitters each
+
+**Before each month, check revision history for plant corrections.** June, July and May were all corrected by the plant, not damaged — that has been the cause every time. A count or total difference is a question for the plant before it is a defect.
+
+**June and July need particular care:** their PIPE high-water marks were re-baselined after corrections. Confirm the current live parse matches the re-baselined counts (June PIPE 70, July PIPE 176) before freezing.
+
+**Do not batch.** One emitter, one month, one confirmation at a time. Report after each.
+
+---
+
+## PART B — report before building
+
+Phase 1 freezes **daily production records only**. So a "frozen" month can still change in cost, because these remain live:
+
+- wages, headcount, paid and actual hours (Segment Cost workbook)
+- power, solar, tariff, contractor (Management Manual Entries)
+- annual comparison figures
+- whatever the Compound and PIPE mould-working reports read, since they bypass `get_daily_records()`
+
+**A month is not really frozen until those are too.** Report what it would take.
+
+### The problem that must be solved first
+
+**Late-arriving data.** August wages still are not entered. Pipe's July wages arrived weeks after July closed. Power and contractor bills come later still.
+
+So a month can be **complete in production and genuinely incomplete in cost**. Freezing it early would lock out figures that had not arrived.
+
+Recommend one approach:
+
+- **Two-stage freeze** — production freezes when output is complete; costs freeze separately once wages and bills land. Fully frozen only when both are done.
+- **Readiness gate** — refuse to freeze until every expected component is present, naming what is missing.
+- **Amendment path** — a frozen month can be reopened for one named component through an admin action, logged.
+
+**State plainly what happens when a bill arrives for an already-frozen month. "It is lost" is not acceptable.**
+
+### Also report
+
+- **Ideal rates and business standards** are policy, not month-data. If a rate is corrected, should closed months pick it up? My instinct is yes — which would mean they must **not** be frozen. Recommend.
+- The **specialised readers** that bypass `get_daily_records()` — snapshot them, or exclude them explicitly and document that those reports still call Sheets for a frozen month?
+
+---
+
+## Constraints
+
+- **Never freeze a partial or failed read.** The existing gates stay as they are.
+- **Every freeze is an authenticated admin action in the published app**, writing to production. Workspace freezes do not reach `neondb`.
+- No figure changes. No Sheets writes (**R-21**). No cache clearing outside what the mechanism does itself (**R-34**).
+- **Do not batch freezes.** Each is a deliberate, reviewed action.
+
+## Report back
+
+**Part A:** the unfreeze/re-sync answers, then each freeze as it completes with its preview values.
+**Part B:** the full scope list, the late-arriving-data recommendation, and the ideal-rates decision — **design only, no build.**
