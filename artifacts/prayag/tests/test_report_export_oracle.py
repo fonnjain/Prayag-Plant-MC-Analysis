@@ -27,6 +27,7 @@ Run: cd artifacts/prayag && python3 -m pytest tests/test_report_export_oracle.py
 import json
 import os
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,7 +60,7 @@ _TOL = 0.005   # ±0.5%, matching the live /build-state acceptance gate.
 # are intentionally omitted.
 _REF = {
     # (A) Pipe M/C Summary — TOTAL row (out / rej / run-hours all reconcile)
-    "pipe":        {"out": 313_637, "rej": 30_484, "hrs": 1_832},
+    "pipe":        {"out": 313_516, "rej": 30_484, "hrs": 1_838},
     # (B) Moulding M/C Summary — TOTAL row (out & rej reconcile)
     "moulding":    {"out": 75_771.1, "rej": 752.24},
     # (C) Group of Moulding — TOTAL row (ties to the (B) output)
@@ -84,9 +85,31 @@ _REF = {
 # ---------------------------------------------------------------------------
 # Offline fixture wiring: replace the live sheet readers with committed data.
 # ---------------------------------------------------------------------------
-def _install_fixtures():
+def _current_may_records():
     with open(os.path.join(_FIX, "daily_2026_05.json")) as f:
         recs = [Record(**d) for d in json.load(f)]
+    # The fixture was captured 1 July 2026. Retained workbook revisions prove
+    # these three subsequent plant corrections: two 7 May output restatements
+    # were present by 24 July, and 9 May M/C-5 hours changed on 3 September.
+    current = []
+    for record in recs:
+        if record.plant == "PIPE" and record.date == "2026-05-07":
+            if record.machine == "PIPE Pipe M/C-5":
+                record = replace(record, total_count=4153.0)
+            elif record.machine == "PIPE Pipe M/C-9":
+                record = replace(record, total_count=1155.0)
+        elif (
+            record.plant == "PIPE"
+            and record.date == "2026-05-09"
+            and record.machine == "PIPE Pipe M/C-5"
+        ):
+            record = replace(record, actual_hours=19.0)
+        current.append(record)
+    return current
+
+
+def _install_fixtures():
+    recs = _current_may_records()
     with open(os.path.join(_FIX, "pipe_report12_2026_05.json")) as f:
         report12 = json.load(f)
 
@@ -155,8 +178,7 @@ def _close(actual, expected):
 
 def test_build_state_may_totals_use_canonical_daily_basis():
     """Check #19 uses one-month canonical Records, not an FY export TOTAL."""
-    with open(os.path.join(_FIX, "daily_2026_05.json")) as f:
-        recs = [Record(**d) for d in json.load(f)]
+    recs = _current_may_records()
     totals = app._authoritative_daily_export_totals(recs)
     for rid in ("pipe", "moulding", "gom", "garden", "hdpe"):
         assert _close(totals[rid], _REF[rid]["out"]), (

@@ -3306,7 +3306,7 @@ def build_state():
     # adopting these numbers. MOULDING May is stable. When #1/#17 fail again with
     # a COHERENT audit it is fresh backfill — re-measure and re-baseline; an
     # INCOHERENT audit means a real reconciliation regression, not a baseline drift.
-    PIPE_MAY_EXP  = 313_637   # reconciled May output (date-wise max Report-5 ↔ Report-11); re-baselined 2026-07-01 vs the attached May reference report (fresh backfill, audit coherent — #17/#17b PASS)
+    PIPE_MAY_EXP  = 313_516   # reconciled May output (date-wise max Report-5 ↔ Report-11); restated after confirmed Jul–Sep 2026 plant corrections
     PIPE_APR_EXP  = 175_669   # reconciled April output
     PIPE_APR_REJ  = 14_825    # reconciled April rejection
     MOULD_MAY_EXP = 75_771
@@ -3566,7 +3566,7 @@ def build_state():
             from reports import registry as _rreg
 
             _EXP = {
-                "pipe": 313_637,
+                "pipe": 313_516,
                 "moulding": 75_771.2,
                 "gom": 75_771.2,
                 "garden": 53_235,
@@ -3590,7 +3590,7 @@ def build_state():
                 _rp_acts.append(f"{_rid}={_val:,.0f}" if _val is not None else f"{_rid}=∅")
             _chk(19,
                  "Canonical May-only outputs match report acceptance totals "
-                 "(Pipe 313,637 / Mould 75,771 / GOM 75,771 / Garden 53,235 / HDPE 1,370)",
+                 "(Pipe 313,516 / Mould 75,771 / GOM 75,771 / Garden 53,235 / HDPE 1,370)",
                  _rp_ok, "each TOTAL ±0.5%", "  ".join(_rp_acts),
                  "canonical daily source or output-basis drift")
 
