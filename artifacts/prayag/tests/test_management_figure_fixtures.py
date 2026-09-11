@@ -23,6 +23,8 @@ import pipe_reconcile
 import sheets
 
 
+# Current Apr–Jul hours, fully traced through retained source revisions:
+# April unchanged; May +6; June machine reallocations net 0; July net +4.
 PIPE_HOURS_BY_MACHINE = (1_085, 886, 870, 1_117, 872, 1_126, 0, 0, 561)
 # Current Apr–Jul 2026 source aggregates, recomputed 11 September 2026.
 # The rows below distribute the R5 aggregate synthetically across machines to
