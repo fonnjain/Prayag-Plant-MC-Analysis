@@ -49,3 +49,16 @@ post-close plant corrections caused the May, June, and July source drift.
 **How to apply:** never infer completion from a closed calendar month. Re-run the
 candidate-specific source audit at the stated point, then require two matching
 uncached parses and the established durable high-water.
+
+Phase 2 is approved for implementation only after April–July production freezes
+are complete. Use two stages: production first, then monthly costs/actuals.
+Classify inputs as monthly actual fact → snapshot; policy or standard → stay
+live; derived output → recompute from frozen facts plus current policy.
+
+**Why:** late wages and bills must not be lost, while corrected ideal rates
+should still update closed-month derived figures.
+
+**How to apply:** the Stage 2 readiness refusal must name every missing component
+in actionable terms (for example, “July contractor invoice not entered”);
+never return only “incomplete.” A late actual after cost freeze requires an
+audited cost-stage unfreeze, live re-sync, review, and new immutable version.
