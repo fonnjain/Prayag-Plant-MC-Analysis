@@ -43,6 +43,18 @@ revision total, but a double-subtraction. A hypothetical 344,121 kg reverses onl
 the output correction while holding post-correction rejection fixed; no retained
 revision produces that total either.
 
+The accepted April–July Report-5 hours are final at 6,517:
+833 + 1,838 + 1,008 + 2,838. The former 6,507 total used an eight-value
+handover that paired M/C-1+M/C-2. Retained revisions fully trace the +10:
+May M/C-5 +6; June M/C-5 +3, M/C-6 +19, M/C-7 −22 (net 0); July M/C-2
+−11 and M/C-3 +15 (net +4); April unchanged.
+
+**Why:** the user confirmed this revision trace closes the final open question,
+so 6,517 is a final accepted Part 4 value rather than a provisional assertion.
+
+**How to apply:** keep the month breakdown beside 6,517 whenever it is restated;
+only move it after another retained-source revision audit accounts for the delta.
+
 **June 2026 second month (`test_report_export_june_oracle.py`, fixtures
 `daily_2026_06.json` + `pipe_report12_2026_06.json`).** Adds a
 structurally-different month: PTMT ships as a SEPARATE workbook and there is a
