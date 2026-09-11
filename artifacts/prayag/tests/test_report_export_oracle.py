@@ -31,8 +31,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sheets
+import app
 from metrics import Record
 from reports import registry
+from reports.model import Flag, ReportModel
 
 _FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 _YM = "2026-05"
@@ -149,6 +151,36 @@ def _first_with(rows, key):
 
 def _close(actual, expected):
     return actual is not None and abs(actual - expected) / expected <= _TOL
+
+
+def test_build_state_may_totals_use_canonical_daily_basis():
+    """Check #19 uses one-month canonical Records, not an FY export TOTAL."""
+    with open(os.path.join(_FIX, "daily_2026_05.json")) as f:
+        recs = [Record(**d) for d in json.load(f)]
+    totals = app._authoritative_daily_export_totals(recs)
+    for rid in ("pipe", "moulding", "gom", "garden", "hdpe"):
+        assert _close(totals[rid], _REF[rid]["out"]), (
+            rid, totals[rid], _REF[rid]["out"]
+        )
+
+
+def test_build_state_exposes_unavailable_model_failure():
+    model = ReportModel(
+        rid="pipe",
+        label="Pipe",
+        plant="PIPE",
+        ym=_YM,
+        month_disp="May 2026",
+        available=False,
+        headline="BUILD FAILED",
+        flags=[Flag(
+            rule="BUILD FAILURE",
+            note="SheetReadError: Report-11 could not be read",
+        )],
+    )
+    assert app._report_model_failure(model) == (
+        "SheetReadError: Report-11 could not be read"
+    )
 
 
 # ---------------------------------------------------------------------------

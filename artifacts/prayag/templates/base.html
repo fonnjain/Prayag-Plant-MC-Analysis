@@ -647,6 +647,28 @@
   </div>
   {% endif %}
 
+  <!-- Daily completeness-guard banner. This is intentionally separate from
+       fetch_status.failed_plants: a readable workbook may still be withheld
+       when its logical population is below the durable high-water mark. -->
+  {% if partial_daily_pairs %}
+  <div data-testid="partial-daily-pair-banner" class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-300 flex items-start gap-2">
+    <svg width="16" height="16" class="mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#b45309" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <div class="flex-1 min-w-0">
+      <div class="text-amber-800 text-xs font-semibold">Incomplete daily source — figures withheld</div>
+      {% for detail in partial_daily_details %}
+      <div class="text-amber-700 text-[11px] mt-1">
+        <b>{{ detail.emitters|join(', ') }}</b> · {{ detail.ym }} ·
+        {{ detail.workbook }} · {{ detail.reason }}.
+        {{ detail.tooltip }}
+      </div>
+      {% endfor %}
+      <div class="text-amber-600 text-[11px] mt-1">Affected figures are excluded from this view. The source will be retried on the next request.</div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Partial-plant failure banner (some plants could not be fetched this request) -->
   {% if fetch_status and not fetch_status.stale and fetch_status.failed_plants %}
   <div class="mb-3 rounded-xl p-3 bg-amber-50 border border-amber-300 flex items-start gap-2">

@@ -377,6 +377,47 @@ def _daily_failed_details(reports) -> list[dict]:
     return daily_failed_pair_details(reports)
 
 
+def _authoritative_daily_export_totals(records) -> dict[str, float]:
+    """May-oracle output basis, computed from canonical daily Records.
+
+    The management-report models are FY/through-month documents. Their TOTAL
+    rows are not single-month assertions, so build-state must not compare those
+    totals with one-month acceptance values. PIPE also excludes finishing and
+    auxiliary rows from its authoritative primary-machine headline.
+    """
+    pipe = sum(
+        float(r.total_count or 0)
+        for r in records
+        if r.plant == "PIPE" and not r.is_finishing
+    )
+    moulding = sum(
+        float(r.total_count or 0)
+        for r in records
+        if r.plant == "MOULDING" and not r.is_finishing
+    )
+    return {
+        "pipe": pipe,
+        "moulding": moulding,
+        "gom": moulding,
+        "garden": sum(
+            float(r.total_count or 0) for r in records if r.plant == "GARDEN"
+        ),
+        "hdpe": sum(
+            float(r.total_count or 0) for r in records if r.plant == "HDPE"
+        ),
+    }
+
+
+def _report_model_failure(model) -> str:
+    """Return the named generator failure carried by an unavailable model."""
+    if getattr(model, "available", True):
+        return ""
+    for flag in getattr(model, "flags", []) or []:
+        if getattr(flag, "rule", "") == "BUILD FAILURE" and getattr(flag, "note", ""):
+            return str(flag.note)
+    return str(getattr(model, "headline", "") or "report model unavailable")
+
+
 def _partial_daily_disp(pairs) -> str:
     """Human-readable 'Plant Mon YYYY' list for a set of failed daily pairs."""
     return ", ".join(
@@ -1000,6 +1041,7 @@ def get_data(args):
         "grain_banner": banner,
         "daily_used": daily_used,
         "partial_daily_pairs": list(partial_daily_pairs),
+        "partial_daily_details": list(partial_daily_details),
         "source_reports": source_reports,
         "plant_filter": plant_filter,
         "segment_filter": segment_filter,
@@ -3516,59 +3558,75 @@ def build_state():
             _chk(18, "(D) June Pipe Moulds recomputed kg ties reference & sheet TOTAL",
                  False, "-", f"ERROR: {_e4}", "Report-17..20 read failed")
 
-        # #19  Management-report EXPORTS (registry) recompute the reference
-        #      totals for May 2026 — the standalone .xlsx download set matches
-        #      the acceptance oracle. One TOTAL per report is checked.
+        # #19  Canonical May-only outputs match the management-report acceptance
+        #      oracle. Report models are FY/through-month documents, so their
+        #      TOTAL rows must not be compared with a single-month oracle.
+        #      #19b separately verifies that every export renders to real XLSX.
         try:
             from reports import registry as _rreg
 
-            def _total_of(_rid, _key):
-                _m = _rreg.build_report(_rid, "2026-05")
-                for _sh in _m.sheets:
-                    for _sec in _sh.sections:
-                        if _sec.total_row and _key in _sec.total_row:
-                            return _sec.total_row[_key]
-                return None
-
             _EXP = {
-                "pipe":     ("out", 313_637),
-                "moulding": ("out", 75_771.2),
-                "gom":      ("out", 75_771.2),
-                "garden":   ("out", 53_235),
-                "hdpe":     ("out", 1_370),
+                "pipe": 313_637,
+                "moulding": 75_771.2,
+                "gom": 75_771.2,
+                "garden": 53_235,
+                "hdpe": 1_370,
             }
+            _may_rows, _may_reports, _ = get_daily_records(["2026-05"])
+            _may_failed = _daily_failed_pairs(_may_reports)
+            if _may_failed:
+                raise SheetReadError(
+                    "May canonical source is partial: "
+                    + _partial_daily_disp(_may_failed)
+                )
+            _may_outputs = _authoritative_daily_export_totals(_may_rows)
             _rp_ok = True
             _rp_acts = []
-            for _rid, (_k, _exp) in _EXP.items():
-                _val = _total_of(_rid, _k)
+            for _rid, _exp in _EXP.items():
+                _val = _may_outputs.get(_rid)
                 _ok = _val is not None and abs(_val - _exp) / _exp <= TOL
                 if not _ok:
                     _rp_ok = False
                 _rp_acts.append(f"{_rid}={_val:,.0f}" if _val is not None else f"{_rid}=∅")
             _chk(19,
-                 "Report exports (registry) recompute May reference totals "
+                 "Canonical May-only outputs match report acceptance totals "
                  "(Pipe 313,637 / Mould 75,771 / GOM 75,771 / Garden 53,235 / HDPE 1,370)",
                  _rp_ok, "each TOTAL ±0.5%", "  ".join(_rp_acts),
-                 "generator drift vs reference layout")
+                 "canonical daily source or output-basis drift")
 
             # #19b  Every enabled report renders to a non-trivial .xlsx (the ZIP
             #       bundle can be built) — guards against a silently-empty export.
             _n_built = 0
             _n_rep = len(_rreg.enabled_reports())
+            _export_failures = []
             for _rd in _rreg.enabled_reports():
                 try:
-                    if len(_rreg.report_bytes(_rd.id, "2026-05")) > 512:
+                    _model = _rreg.build_report(_rd.id, "2026-05")
+                    _failure = _report_model_failure(_model)
+                    if _failure:
+                        _export_failures.append(f"{_rd.id}: {_failure}")
+                        continue
+                    if len(_rreg.report_model_bytes(_model)) > 512:
                         _n_built += 1
-                except Exception:
-                    pass
+                    else:
+                        _export_failures.append(
+                            f"{_rd.id}: rendered workbook was empty"
+                        )
+                except Exception as _export_exc:
+                    _export_failures.append(
+                        f"{_rd.id}: {type(_export_exc).__name__}: {_export_exc}"
+                    )
+            _export_actual = f"{_n_built}/{_n_rep} built"
+            if _export_failures:
+                _export_actual += " · " + " | ".join(_export_failures)
             _chk("19b",
                  "All enabled management reports render to a real .xlsx (ZIP-able)",
                  _n_built == _n_rep, f"{_n_rep}/{_n_rep} built",
-                 f"{_n_built}/{_n_rep} built",
+                 _export_actual,
                  "a generator raised or produced an empty workbook")
         except Exception as _e5:
-            _chk(19, "Report exports (registry) recompute May reference totals",
-                 False, "-", f"ERROR: {_e5}", "reports registry import/build failed")
+            _chk(19, "Canonical May-only outputs match report acceptance totals",
+                 False, "-", f"ERROR: {_e5}", "canonical May source read failed")
 
         # #20  PIPE June reconciled output and rejection ground truth (live sheets).
         # The plant deliberately corrected five keys on 25 July and removed

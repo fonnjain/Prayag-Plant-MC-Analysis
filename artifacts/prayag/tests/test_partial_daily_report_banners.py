@@ -23,6 +23,10 @@ def test_gom_banner_marks_withheld_daily_month():
         "report_mgmt_gom_summary.html",
         {
             "fy_label": "FY 2026-27", "failed_months": ["2026-06"],
+            "failed_month_details": [{
+                "ym": "2026-06", "reason": "temporarily unavailable",
+                "tooltip": "Retried on the next request.",
+            }],
             "warnings": [], "build_time_s": None, "band_order": [],
             "section1": {
                 "fy2627_label": "", "fy2627": [],
@@ -42,6 +46,10 @@ def test_ptmt_banner_marks_withheld_daily_month():
         "report_mgmt_ptmt_summary.html",
         {
             "fy_label": "FY 2026-27", "failed_months": ["2026-06"],
+            "failed_month_details": [{
+                "ym": "2026-06", "reason": "temporarily unavailable",
+                "tooltip": "Retried on the next request.",
+            }],
             "rows": [], "sheet_total_bugs": [], "r24_notes": {},
         },
     )
@@ -88,6 +96,10 @@ def test_pipe_banner_marks_withheld_daily_month():
         {
             "fy_label": "FY 2026-27",
             "failed_months": ["2026-06"],
+            "failed_month_details": [{
+                "ym": "2026-06", "reason": "temporarily unavailable",
+                "tooltip": "Retried on the next request.",
+            }],
             "error": "Source unavailable",
         },
     )

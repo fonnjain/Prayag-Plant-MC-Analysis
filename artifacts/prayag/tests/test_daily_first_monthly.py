@@ -176,9 +176,57 @@ def test_partial_daily_pair_is_exposed_to_dashboard_context():
         _restore(saved)
 
 
+def test_shared_pipe_failure_excludes_pipe_and_moulding_and_renders_amber_banner():
+    """A withheld shared PIPE workbook is explicit and excludes both emitters."""
+    def daily(_months):
+        return (
+            [_daily("GARDEN", "GARDEN M/C - 1", "2026-06", 8, 250.0)],
+            [{
+                "_failed_pairs": [("PIPE", "2026-06")],
+                "_failed_pair_reasons": {
+                    "PIPE:2026-06": (
+                        "PIPE 2026-06 is incomplete: parsed 70 records, "
+                        "below high-water 71"
+                    ),
+                },
+            }],
+            ["PIPE daily (2026-06) is incomplete."],
+        )
+
+    saved = _install_stubs(daily, lambda _months: ([], [], []))
+    app.DAILY_SOURCES = {
+        "PIPE": {"files": {"2026-06": "fid-pipe-june"}},
+        "GARDEN": {"files": {"2026-06": "fid-garden-june"}},
+    }
+    try:
+        data = app.get_data({"period": "6"})
+        plants = {row.plant for row in data["all_rows"]}
+        assert "PIPE" not in plants
+        assert "MOULDING" not in plants
+        assert plants == {"GARDEN"}, plants
+        assert data["partial_daily_pairs"] == [("PIPE", "2026-06")]
+        assert data["partial_daily_details"][0]["emitters"] == ["MOULDING", "PIPE"]
+
+        with app.app.test_request_context("/plant?period=2026-06"):
+            context = app._common_ctx(data)
+            app.app.update_template_context(context)
+            html = app.app.jinja_env.from_string(
+                '{% extends "base.html" %}{% block content %}{% endblock %}'
+            ).render(**context)
+        assert 'data-testid="partial-daily-pair-banner"' in html
+        assert "MOULDING, PIPE" in html
+        assert "2026-06" in html
+        assert "PIPE daily production workbook" in html
+        assert "source population is below its high-water mark" in html
+        assert "retried on the next request" in html
+    finally:
+        _restore(saved)
+
+
 if __name__ == "__main__":
     test_monthly_view_sums_daily_not_grid()
     test_total_daily_outage_shows_nothing_not_grid()
     test_mixed_month_availability_uses_only_daily_months()
     test_partial_daily_pair_is_exposed_to_dashboard_context()
+    test_shared_pipe_failure_excludes_pipe_and_moulding_and_renders_amber_banner()
     print("\nAll daily-first monthly/FY regression tests passed.")

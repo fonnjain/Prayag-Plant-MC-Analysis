@@ -87,8 +87,13 @@ def report_filename(rid: str, ym: str) -> str:
     return f"Prayag_{(rd.plant if rd else 'ALL')}_{label}_{month_slug(ym)}_{ts}.xlsx"
 
 
+def report_model_bytes(model: ReportModel) -> bytes:
+    """Render an already-built model without invoking its generator again."""
+    return xlsx.workbook_bytes(xlsx.render_workbook(model))
+
+
 def report_bytes(rid: str, ym: str) -> bytes:
-    return xlsx.workbook_bytes(report_workbook(rid, ym))
+    return report_model_bytes(build_report(rid, ym))
 
 
 @dataclass

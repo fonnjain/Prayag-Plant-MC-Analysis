@@ -3314,10 +3314,17 @@ def _daily_failure_detail(plant: str, ym: str, raw_reason: str) -> dict:
       reason = "temporarily unavailable"
       tooltip = "This daily source could not be read this time; it will be retried on the next request."
       category = "transient"
+  emitters = sorted({
+      str(spec.get("emit", "")).upper()
+      for spec in _DAILY_LAYOUTS.get(plant, [])
+      if spec.get("emit")
+  }) or [plant]
   return {
       "plant": plant,
       "ym": ym,
       "label": f"{sources.PLANT_NAMES.get(plant, plant)} {ym}",
+      "emitters": emitters,
+      "workbook": f"{plant} daily production workbook",
       "reason": reason,
       "tooltip": tooltip,
       "category": category,
