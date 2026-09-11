@@ -37,8 +37,9 @@ population after the confirmed July–September plant corrections. With 30,484 k
 rejection, the current May Report-5 gross basis is 344,000 kg. The freeze preview
 adds 116,200 kg of finishing output and therefore captures 429,716 kg across all
 125 logical PIPE records while normal headline metrics remain 313,516 kg. The
-313,516 kg figure already incorporates the confirmed 121 kg correction; never
-subtract that correction again from 344,000 or 429,716.
+313,516 kg figure already incorporates the confirmed 121 kg correction. Revisions
+12221 and 12438 both pair it with 30,484 kg rejection; 343,879 kg is not a revision
+total, but a hybrid of corrected output and the retired 30,363 kg rejection.
 
 **June 2026 second month (`test_report_export_june_oracle.py`, fixtures
 `daily_2026_06.json` + `pipe_report12_2026_06.json`).** Adds a

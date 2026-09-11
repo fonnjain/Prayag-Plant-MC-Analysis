@@ -276,6 +276,23 @@ def test_uncached_capture_refuses_awaiting_and_highwater_failures(monkeypatch):
         sheets.parse_daily_physical_uncached("PIPE", "2026-06")
 
 
+def test_one_record_month_passes_when_it_matches_positive_highwater(monkeypatch):
+    """A legitimate one-record month is complete when its durable baseline is one."""
+    result = [
+        ([_record("HDPE", "HDPE M/C-1", 1_369.2)], {
+            "emit": "HDPE",
+            "ym": "2026-05",
+            "record_count": 1,
+        }),
+    ]
+    monkeypatch.setattr(sheets, "_get_access_token", lambda: "token")
+    monkeypatch.setattr(sheets, "_daily_key_lock", lambda key: nullcontext())
+    monkeypatch.setattr(sheets, "_load_daily", lambda *args: result)
+    monkeypatch.setattr(store, "daily_read_count", lambda scope, ym: 1)
+
+    assert sheets.parse_daily_physical_uncached("HDPE", "2026-05") == result
+
+
 def test_fully_frozen_pair_never_calls_live_or_oauth(monkeypatch):
     monkeypatch.setattr(store, "daily_freeze_active", lambda emit, ym: True)
     monkeypatch.setattr(store, "daily_freeze_state_token",
