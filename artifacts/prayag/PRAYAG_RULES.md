@@ -254,6 +254,22 @@ Label it as derived, retain the complete subtraction chain, and require direct
 source evidence or a standalone acceptance check before describing a difference
 as missing production.
 
+### Failure Mode #21 — A blank rendered as a label can turn a summary row into data
+
+**Symptom:** an offline export or adapter represents a blank label cell as
+`None`, then stringifies it to the non-empty text `"None"`. TOTAL, PART, or
+subtotal rows whose real machine/item label is blank then pass the ordinary
+non-blank-label guard and are emitted as data rows. Their stored aggregate is
+counted alongside the underlying detail rows.
+
+**Rule:** normalize source blanks to `""` before label parsing, and reject blank
+labels before converting them to text. Offline harnesses must reproduce the
+Google Sheets value shape: blank cells are empty strings and Excel date objects
+are converted to the date-label format consumed by the production parser.
+Acceptance requires the offline and live parsers to match on record population
+and unchanged totals. This is the same class as the `Spl_Sale` subtotal-row trap
+(22 rows / 102,941 kg): summary structure must never become an item or machine.
+
 1. **Silent column fallback** — bank account as wages, pieces as kg, headcount as wages, kg as litres.
 2. **Annual-vs-daily layer confusion** — reading a derived roll-up as source.
 3. **Tab-name string matching** — `"MC" in "Month Wise M/C"` is False.
@@ -272,6 +288,7 @@ as missing production.
 16. **The same field named differently across tabs** (`PRODUCTION HOURS` / `RUN HOURS`), and a label column that is not column 0. Both silently returned zero for months.
 17. **Removing a suppression flag can switch on a fabricated figure.** Closing R-25 was right about hours, but `APP_DEFAULT_IDEAL_HOURS` then supplied a 500-hour denominator nobody authorised. **When a metric is unblocked, check what its denominator resolves to before shipping.**
 18. **Internally consistent bad data.** Both KH June errors survive every arithmetic check because the sheet's formulas propagate them. Only comparison against an **independent quantity** — the cycle count, the row's own production — exposes them.
+19. **Blank label coercion.** `None` stringified as `"None"` turns blank-labelled TOTAL/PART/subtotal rows into apparent machines or items (Failure Mode #21).
 
 ---
 
