@@ -170,7 +170,7 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 | **MOULDING** (daily Report-12 + Report-5 hours, authoritative) | 89,152 | 75,771 | 97,007 | 104,086 | **366,015.39 kg / 35,972 h** |
 | **PTMT** Nett — *annual basis* | 99,262 | 104,729 | 160,478 | 172,639 | 537,109 kg / 75,083 h / 1,105 moulds / 6.14% |
 | **PTMT** Nett — *daily/Report-5 basis* | 99,262 | 104,729 | **147,835** | 172,639 | **524,465** kg |
-| **GARDEN KH** (block tabs) | 42,736 | 53,235 | 70,520 | 68,390 in-sheet | 232,528 kg — **KH only** |
+| **GARDEN KH** (block tabs) | 42,736 | 53,234.48† | 70,520 | 68,390 in-sheet | 232,528 kg — **KH only** |
 | **GARDEN KH** (Daily Report) | 38,950 | 0 | 66,911 | 32,191 | 138,052 kg / 1,553 h — **KH only** |
 | **GARDEN KH rejection** | 1,191 | n/a | 2,215 | 1,853.50 | 5,259.50 kg / **3.81%** |
 | **GARDEN_WB** | — | — | 22,152.8 | 6,457.4 | plant started June |
@@ -179,6 +179,11 @@ Each of these is correct, deliberate, and has been "fixed" into a regression at 
 | **TANK** (annual) | 636,250 | 1,582,500 | 2,596,600 | 1,995,500 | 6,810,850 Ltr |
 | **TANK daily** | | KH 846,600 | VN 533,500 · KH 1,419,500 | VN 565,500 · WB 1,702,000 | VN 1,854,250 · WB 4,595,500 · KH 3,619,600 |
 | **TANK VN hours** (R-39 union) | 76 | 196 | 208 | 232 | WB Apr 100 |
+
+† **May 2026 transport correction:** 53,234.48 kg is the raw numeric value
+from the GARDEN block tabs. The earlier 53,235 kg figure was produced by
+display-formatted Google Sheets values and is superseded; this is not a source
+workbook correction.
 
 **R-22 · PTMT output basis = Nett Output; grinding/regrind excluded.** Two accepted bases exist — they are different sources, not a discrepancy to be resolved:
 - **Annual basis** (mould chain): APR 99,262 · MAY 104,729 · JUN 160,478 · JUL 172,639 · total **537,109 kg**

@@ -17,6 +17,7 @@
       <div><span class="text-gray-500">Date coverage</span><br><b>{{ preview.date_from }} – {{ preview.date_to }}</b></div>
       <div><span class="text-gray-500">Machines</span><br><b>{{ preview.machine_count }}</b></div>
       <div><span class="text-gray-500">Run hours</span><br><b>{{ preview.actual_hours }}</b></div>
+       <div><span class="text-gray-500">Run-hour coverage</span><br><b>{{ preview.runhours_tracked_count }} tracked · {{ preview.runhours_untracked_count }} untracked</b></div>
       <div><span class="text-gray-500">Physical source</span><br><b>{{ preview.physical }}</b></div>
     </div>
     <div class="mt-3 text-xs">
@@ -24,6 +25,12 @@
       <span class="inline-block mr-4"><b>{{ unit }}</b>: output {{ totals.output }}, rejection {{ totals.rejection }}</span>
       {% endfor %}
     </div>
+    {% if preview.notes %}
+    <div class="mt-3 rounded border border-amber-200 bg-white/60 p-2 text-xs text-gray-700">
+      <b>Parser notes</b>
+      <ul class="mt-1 list-disc pl-4">{% for note in preview.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
     <p class="text-[10px] text-gray-500 mt-3 break-all">Source {{ preview.source_id }} · logical fingerprint {{ preview.logical_fingerprint }} · physical fingerprint {{ preview.physical_fingerprint }}</p>
     <form method="post" action="/settings/daily-freeze/confirm" class="mt-4">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"/>

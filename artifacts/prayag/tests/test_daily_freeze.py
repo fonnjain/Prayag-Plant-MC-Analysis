@@ -37,6 +37,29 @@ def _physical_results(pipe_output=100):
     ]
 
 
+def test_freeze_capture_exposes_runhour_coverage_and_parser_notes():
+    first = _record("GARDEN", "GARDEN M/C - 1", 30000)
+    second = _record("GARDEN", "GARDEN M/C - 2", 23234.48)
+    for row in (first, second):
+        row.actual_hours = 0.0
+        row.runhours_tracked = False
+    note = (
+        "GARDEN 2026-05: rejection % is measured against the Daily Report "
+        "output basis (0 kg), which differs from the displayed block-tab "
+        "output (53,234.48 kg)."
+    )
+
+    capture = appmod._daily_freeze_capture(
+        [([first, second], {"emit": "GARDEN", "notes": [note]})],
+        "GARDEN",
+    )
+
+    assert capture["runhours_tracked_count"] == 0
+    assert capture["runhours_untracked_count"] == 2
+    assert capture["notes"] == [note]
+    assert capture["units"]["kg"]["output"] == 53234.48
+
+
 def _client(monkeypatch, *, role="admin"):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     monkeypatch.setattr(store, "AVAILABLE", True)
@@ -318,7 +341,7 @@ def test_fully_frozen_pair_never_calls_live_or_oauth(monkeypatch):
 
 
 def test_frozen_garden_preserves_untracked_hours_and_r23_note(monkeypatch):
-    garden = _record("GARDEN", "GARDEN M/C - 2", 53235)
+    garden = _record("GARDEN", "GARDEN M/C - 2", 53234.48)
     garden.actual_hours = 0.0
     garden.runhours_tracked = False
     garden.ideal_hours = 0.0
@@ -327,7 +350,7 @@ def test_frozen_garden_preserves_untracked_hours_and_r23_note(monkeypatch):
     r23_note = (
         "GARDEN 2026-05: rejection % is measured against the Daily Report "
         "output basis (0 kg), which differs from the displayed block-tab "
-        "output (53,235 kg)."
+        "output (53,234.48 kg)."
     )
     monkeypatch.setattr(store, "daily_freeze_active", lambda emit, ym: True)
     monkeypatch.setattr(store, "daily_freeze_state_token",

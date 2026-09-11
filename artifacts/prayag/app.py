@@ -3569,7 +3569,7 @@ def build_state():
                 "pipe": 313_516,
                 "moulding": 75_771.2,
                 "gom": 75_771.2,
-                "garden": 53_235,
+                "garden": 53_234.48,
                 "hdpe": 1_370,
             }
             _may_rows, _may_reports, _ = get_daily_records(["2026-05"])
@@ -3587,10 +3587,13 @@ def build_state():
                 _ok = _val is not None and abs(_val - _exp) / _exp <= TOL
                 if not _ok:
                     _rp_ok = False
-                _rp_acts.append(f"{_rid}={_val:,.0f}" if _val is not None else f"{_rid}=∅")
+                _rp_acts.append(
+                    f"{_rid}={_val:,.6f}".rstrip("0").rstrip(".")
+                    if _val is not None else f"{_rid}=∅"
+                )
             _chk(19,
                  "Canonical May-only outputs match report acceptance totals "
-                 "(Pipe 313,516 / Mould 75,771 / GOM 75,771 / Garden 53,235 / HDPE 1,370)",
+                 "(Pipe 313,516 / Mould 75,771 / GOM 75,771 / Garden 53,234.48 / HDPE 1,370)",
                  _rp_ok, "each TOTAL ±0.5%", "  ".join(_rp_acts),
                  "canonical daily source or output-basis drift")
 
@@ -9291,7 +9294,9 @@ def _daily_freeze_capture(results, emitter: str) -> dict:
     records, report = selected
     logical_fp = store._freeze_fingerprint(records, [report])
     units: dict[str, dict[str, float]] = {}
+    runhours_tracked_count = 0
     for row in records:
+        runhours_tracked_count += int(bool(row.runhours_tracked))
         unit = str(row.unit or "units")
         bucket = units.setdefault(unit, {"output": 0.0, "rejection": 0.0})
         bucket["output"] += float(row.total_count or 0)
@@ -9312,6 +9317,9 @@ def _daily_freeze_capture(results, emitter: str) -> dict:
         "date_to": dates[-1] if dates else "",
         "machine_count": len({row.machine for row in records if row.machine}),
         "actual_hours": round(sum(float(row.actual_hours or 0) for row in records), 6),
+        "runhours_tracked_count": runhours_tracked_count,
+        "runhours_untracked_count": len(records) - runhours_tracked_count,
+        "notes": list(report.get("notes") or []) if isinstance(report, dict) else [],
         "units": {
             unit: {name: round(value, 6) for name, value in values.items()}
             for unit, values in sorted(units.items())

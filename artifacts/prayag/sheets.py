@@ -2471,11 +2471,16 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
               if max(abs(_dr_total), abs(_blk_total)) > 0:
                   _gap = abs(_blk_total - _dr_total) / max(_blk_total, _dr_total)
                   if _gap > 0.02:
+                      # Retain source precision in a fact-bearing note. Sheets
+                      # previously supplied display values, so whole-kg rendering
+                      # could hide a legitimate fractional block-tab total.
+                      _dr_display = f"{_dr_total:,.6f}".rstrip("0").rstrip(".")
+                      _blk_display = f"{_blk_total:,.6f}".rstrip("0").rstrip(".")
                       _basis_note = (
                           f"{emit} {ym}: rejection % is measured against the "
                           f"Daily Report output basis "
-                          f"({_dr_total:,.0f} kg), which differs from the "
-                          f"displayed block-tab output ({_blk_total:,.0f} kg)."
+                          f"({_dr_display} kg), which differs from the "
+                          f"displayed block-tab output ({_blk_display} kg)."
                       )
                       report.setdefault("notes", []).append(_basis_note)
 

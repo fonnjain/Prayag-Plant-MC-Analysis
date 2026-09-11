@@ -245,10 +245,10 @@ class TestMayRejection:
         assert compute_metrics(raw).util_available is False
 
     def test_zero_sided_r23_divergence_names_both_figures(self):
-        """53,235 block-tab kg versus a reported DR zero must be visible."""
+        """A fractional block-tab kg fact versus a reported DR zero is visible."""
         bm = _full_block_map(self.YM, {
             "MACHINE 1": _block_values(self.YM, [(10, 30000)]),
-            "MACHINE 2": _block_values(self.YM, [(10, 23235)]),
+            "MACHINE 2": _block_values(self.YM, [(10, 23234.48)]),
         })
         dr = _dr_values(self.YM, [10, 11], {
             "MACHINE-1": [],
@@ -260,7 +260,7 @@ class TestMayRejection:
                  if "Daily Report output basis" in n]
         assert len(notes) == 1
         assert "(0 kg)" in notes[0]
-        assert "(53,235 kg)" in notes[0]
+        assert "(53,234.48 kg)" in notes[0]
 
 
 class TestAprilRejection:
