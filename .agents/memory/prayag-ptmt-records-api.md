@@ -20,6 +20,20 @@ records = [
 
 `is_finishing=True` marks the grinding/regrind group (excluded from plant output — R-22).
 
+**May 2026 freeze fact:** the immutable May snapshot has 1,286 raw records,
+of which 66—not 118—are finishing/regrind rows. They are the three grinder
+machines: GRINDER-1 (28 rows), GRINDER-2 (12), and GRINDER-3 (26). The raw
+snapshot total is 150,216.783 kg; excluding those regrind rows yields
+111,991.783 kg for a mixed PTMT production rollup.
+
+**Why:** Both the live parser and frozen production payload agree on 66. A
+claim of 118 finishing records must be treated as an incorrect expectation,
+not a snapshot serialisation or source-edit defect.
+
+**How to apply:** Preserve the flag from the record payload and derive the
+mixed-rollup output by excluding only rows whose `is_finishing` flag is true.
+Do not reclassify other PTMT process groups to make a historical count match.
+
 **`total_count` is GROSS for PTMT (mgmt_labour_power.py:1075).**  
 Nett output = `total_count − reject_count`.  
 If you display `total_count` as "Nett Output" you will overstate by the full rejection tonnage.

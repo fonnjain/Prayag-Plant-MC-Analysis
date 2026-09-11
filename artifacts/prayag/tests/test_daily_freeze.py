@@ -5,7 +5,7 @@ import pytest
 
 import app as appmod
 import auth
-from metrics import Record
+from metrics import Record, compute_metrics
 import sheets
 import store
 
@@ -338,6 +338,56 @@ def test_fully_frozen_pair_never_calls_live_or_oauth(monkeypatch):
         ["2026-06"], source_plants=["PIPE"]
     )
     assert {row.machine for row in rows} == {"FROZEN PIPE", "FROZEN MOULD"}
+    assert all(report["frozen"] for report in reports)
+
+
+def test_frozen_ptmt_keeps_full_precision_and_finishing_exclusion(monkeypatch):
+    """A frozen PTMT month never re-reads Sheets and keeps its raw record facts."""
+    production = _record("PTMT", "PTMT 80-1", 111991.783)
+    production.reject_count = 7262.3104
+    production.actual_hours = 17021.0
+    ordinary = [_record("PTMT", f"PTMT injection {i}", 0.0) for i in range(1219)]
+    for row in ordinary:
+        row.actual_hours = 0.0
+        row.reject_count = 0.0
+
+    grinder = _record("PTMT", "PTMT GRINDER-1 (M)", 38225.0)
+    grinder.is_finishing = True
+    grinder.actual_hours = 0.0
+    grinder.reject_count = 0.0
+    finishing = [grinder]
+    for i in range(65):
+        row = _record("PTMT", f"PTMT GRINDER-frozen-{i}", 0.0)
+        row.is_finishing = True
+        row.actual_hours = 0.0
+        row.reject_count = 0.0
+        finishing.append(row)
+    frozen_rows = [production, *ordinary, *finishing]
+
+    monkeypatch.setattr(store, "daily_freeze_active",
+                        lambda emit, ym: emit == "PTMT" and ym == "2026-05")
+    monkeypatch.setattr(store, "daily_freeze_state_token",
+                        lambda emit, ym: "PTMT-frozen")
+    monkeypatch.setattr(
+        store,
+        "daily_freeze_read",
+        lambda emit, ym: (frozen_rows, [{"emit": "PTMT", "frozen": True}]),
+    )
+    monkeypatch.setattr(sheets, "_get_access_token",
+                        lambda: pytest.fail("OAuth must not be requested"))
+    monkeypatch.setattr(sheets, "_load_daily",
+                        lambda *args: pytest.fail("Sheets must not be read"))
+    monkeypatch.setattr(sheets, "_daily_plants", lambda: ["PTMT"])
+
+    rows, reports, _ = sheets.get_daily_records(
+        ["2026-05"], source_plants=["PTMT"]
+    )
+
+    assert len(rows) == 1286
+    assert sum(row.reject_count for row in rows) == pytest.approx(7262.3104)
+    assert sum(row.total_count for row in rows) == pytest.approx(150216.783)
+    assert sum(row.is_finishing for row in rows) == 66
+    assert compute_metrics(rows).total_count == pytest.approx(111991.783)
     assert all(report["frozen"] for report in reports)
 
 
