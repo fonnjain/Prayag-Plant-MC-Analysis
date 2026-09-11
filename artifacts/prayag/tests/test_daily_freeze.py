@@ -317,6 +317,46 @@ def test_fully_frozen_pair_never_calls_live_or_oauth(monkeypatch):
     assert all(report["frozen"] for report in reports)
 
 
+def test_frozen_garden_preserves_untracked_hours_and_r23_note(monkeypatch):
+    garden = _record("GARDEN", "GARDEN M/C - 2", 53235)
+    garden.actual_hours = 0.0
+    garden.runhours_tracked = False
+    garden.ideal_hours = 0.0
+    garden.ideal_source = "none"
+    garden.source_tab = "MACHINE 2"
+    r23_note = (
+        "GARDEN 2026-05: rejection % is measured against the Daily Report "
+        "output basis (0 kg), which differs from the displayed block-tab "
+        "output (53,235 kg)."
+    )
+    monkeypatch.setattr(store, "daily_freeze_active", lambda emit, ym: True)
+    monkeypatch.setattr(store, "daily_freeze_state_token",
+                        lambda emit, ym: f"{emit}-frozen")
+    monkeypatch.setattr(
+        store,
+        "daily_freeze_read",
+        lambda emit, ym: (
+            [garden],
+            [{"emit": "GARDEN", "frozen": True, "notes": [r23_note]}],
+        ),
+    )
+    monkeypatch.setattr(sheets, "_get_access_token",
+                        lambda: pytest.fail("OAuth must not be requested"))
+    monkeypatch.setattr(sheets, "_load_daily",
+                        lambda *args: pytest.fail("Sheets must not be read"))
+    monkeypatch.setattr(sheets, "_daily_plants", lambda: ["GARDEN"])
+
+    rows, reports, warnings = sheets.get_daily_records(
+        ["2026-05"], source_plants=["GARDEN"]
+    )
+
+    assert len(rows) == 1
+    assert rows[0].runhours_tracked is False
+    assert rows[0].source_tab == "MACHINE 2"
+    assert reports[0]["notes"] == [r23_note]
+    assert r23_note in warnings
+
+
 def test_mixed_pipe_freeze_keeps_moulding_live_without_caching_overlay(monkeypatch):
     sheets._daily_cache.clear()
     sheets._daily_cache_state_tokens.clear()

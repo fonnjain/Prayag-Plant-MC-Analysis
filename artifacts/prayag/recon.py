@@ -72,7 +72,9 @@ def reconcile(recomputed_total, final_total, *, rows=None, unit="",
                           "status": "match" if ok else "flag", "ok": ok})
 
     total_delta = _delta_pct(recomputed_total, final_total)
-    has_final = final_total is not None and final_total != 0
+    # A reported zero is a real comparison value. Only None means that the
+    # summary source is unavailable or not wired.
+    has_final = final_total is not None
 
     if not has_final and n_aligned == 0:
         return {

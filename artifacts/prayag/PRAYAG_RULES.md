@@ -34,6 +34,14 @@ specialized Compound or PIPE mould-working readers, or ideal-standards policy.
 - `GARDEN / 2026-05` had rows added through August. Re-check retained revisions for newer rows before preview and repeat that check immediately before confirmation; do not treat calendar closure as evidence that entry is complete.
 - Before previewing `PTMT / 2026-05`, identify every derived cell changed after the core totals stabilized and determine whether it feeds any stored snapshot field. Resolve any such dependency before freezing its 1,286-record population.
 
+**R-46 two-pass review benefit.** The uncached preview and human review are a
+data-quality gate, not merely a snapshot-consistency check. The GARDEN May review
+was the first case where this gate caught pre-existing live-data defects before
+they became immutable: missing run hours had been encoded as tracked zero, and a
+zero-sided block-tab-versus-Daily-Report divergence was suppressed. A matching
+fingerprint is necessary but not sufficient; review must also validate the
+meaning and provenance of the stored fields and open divergence notes.
+
 **Corollary.** A conclusion drawn from an annual inherits whatever gap fed that annual.
 
 ## THIS RULE IS PROTECTED

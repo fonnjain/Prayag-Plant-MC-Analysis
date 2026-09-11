@@ -2313,6 +2313,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
   rh_parsed = 0
   rh_layout_ok = False   # True when parse_daily_matrix found the date-row header
   runhours_found = False
+  runhour_machines: set = set()
   if rh_tab:
       rh_actual = next(
           (t for t in list_tabs(file_id, token)
@@ -2349,6 +2350,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
               # Rejection and DR-output: unconditional (Trap 1 fix)
               rej_map[_k] = rej_map.get(_k, 0.0) + rr.reject_count
               dr_out_map[_k] = dr_out_map.get(_k, 0.0) + rr.total_count
+          runhour_machines = {machine for machine, _date in rh_map}
 
           for r in raw:
               _m = re.search(r"(\d+)", r.machine)
@@ -2364,10 +2366,13 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
                       # False only where the DR has no row at all for this
                       # machine-date (e.g. entire month empty → May → n/a).
                       _blk_rej = r.reject_count          # save block-tab value
+                      _blk_rej_tracked = r.rejection_tracked
                       _dr_rej  = rej_map.get(key, 0.0)
-                      # (e) R-35: when BOTH sources carry non-zero, differing
-                      # values, surface a note rather than silently picking one.
-                      if _blk_rej > 0 and _dr_rej > 0 and abs(_blk_rej - _dr_rej) > 0.5:
+                      # (e) R-35: when both sources carry a known value and they
+                      # differ, surface a note rather than silently picking one.
+                      # Numeric zero is a real value, not an absent source.
+                      if (_blk_rej_tracked
+                              and abs(_blk_rej - _dr_rej) > 0.5):
                           report.setdefault("notes", []).append(
                               f"{emit} {ym}: M/C-{key[0]} {key[1]} rejection "
                               f"differs between block-tab ({_blk_rej:.2f} kg) "
@@ -2415,6 +2420,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
                           unit=unit,
                           machine=f"{prefix}{_mc_num}",
                           actual_hours=0.0,
+                          runhours_tracked=_mc_num in runhour_machines,
                           total_count=0.0,
                           reject_count=_rej_kg,
                           reject_denominator=_dr_out_kg,
@@ -2448,10 +2454,10 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
           # they come from different data sources.  Surface this when the gap
           # exceeds 2% so a reader cannot accidentally multiply displayed output
           # by the rejection % and arrive at the correct rejection kg.
-          if rej_map:
+          if rh_layout_ok:
               _dr_total = sum(dr_out_map.values())
               _blk_total = sum(r.total_count for r in raw)
-              if _dr_total > 0 and _blk_total > 0:
+              if max(abs(_dr_total), abs(_blk_total)) > 0:
                   _gap = abs(_blk_total - _dr_total) / max(_blk_total, _dr_total)
                   if _gap > 0.02:
                       _basis_note = (
@@ -2473,7 +2479,7 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
   # (runhours_tracked=False, e.g. TANK) spread across every active day and rely
   # on the metrics gate to stay suppressed.
   app_default = ideal_hours.APP_DEFAULT_IDEAL_HOURS.get(emit)
-  tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
+  plant_tracks_hours = emit not in ideal_hours.PLANTS_WITHOUT_RUNHOURS
   rh_days: dict = {}      # machine -> {dates with run hours} (tracked plants)
   out_days: dict = {}     # machine -> {all active dates} (output-only plants)
   for r in raw:
@@ -2481,12 +2487,17 @@ def _emit_blocks(emit: str, ym: str, file_id: str, spec: dict, token: str,
       if r.actual_hours > 0:
           rh_days.setdefault(r.machine, set()).add(r.date)
   for r in raw:
-      r.runhours_tracked = tracks_hours
+      _machine_num = re.search(r"(\d+)", r.machine)
+      r.runhours_tracked = bool(
+          plant_tracks_hours
+          and _machine_num
+          and _machine_num.group(1) in runhour_machines
+      )
       r.ideal_output = 0.0     # no in-sheet output rate → efficiency hidden
       give = False
       days = 1
       if app_default and app_default > 0:
-          if tracks_hours:
+          if plant_tracks_hours:
               # Only days WITH run hours carry the denominator → no per-day fake 0%.
               if r.actual_hours > 0:
                   give = True

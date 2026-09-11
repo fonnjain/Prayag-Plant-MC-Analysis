@@ -230,6 +230,38 @@ class TestMayRejection:
         metrics = compute_metrics(raw)
         assert not metrics.rejection_available, "May: rejection_available must be False"
 
+    def test_recognised_zero_matrix_marks_machine_month_hours_untracked(self):
+        """A present but unfilled matrix is missing data, not a tracked 0 h."""
+        dr = _dr_values(self.YM, [10, 11], {
+            "MACHINE-1": [],
+            "MACHINE-2": [],
+        })
+        raw, report = _run_emit_blocks(self.YM, self._block_map(), dr)
+
+        assert raw
+        assert all(r.actual_hours == 0 for r in raw)
+        assert all(r.runhours_tracked is False for r in raw)
+        assert "no run hours entered" in report["warning"]
+        assert compute_metrics(raw).util_available is False
+
+    def test_zero_sided_r23_divergence_names_both_figures(self):
+        """53,235 block-tab kg versus a reported DR zero must be visible."""
+        bm = _full_block_map(self.YM, {
+            "MACHINE 1": _block_values(self.YM, [(10, 30000)]),
+            "MACHINE 2": _block_values(self.YM, [(10, 23235)]),
+        })
+        dr = _dr_values(self.YM, [10, 11], {
+            "MACHINE-1": [],
+            "MACHINE-2": [],
+        })
+        _, report = _run_emit_blocks(self.YM, bm, dr)
+
+        notes = [n for n in report.get("notes", [])
+                 if "Daily Report output basis" in n]
+        assert len(notes) == 1
+        assert "(0 kg)" in notes[0]
+        assert "(53,235 kg)" in notes[0]
+
 
 class TestAprilRejection:
     """April 2026: 1,191 kg rejection, DR output 38,950 kg → 3.06%."""
@@ -362,6 +394,38 @@ class TestRejectionTrackedGating:
         assert r.rejection_tracked is True
         assert r.reject_count == 0.0
         assert r.reject_denominator == pytest.approx(8500.0)
+
+    def test_machine_month_tracking_is_independent_per_machine(self):
+        """One machine's entered hours must not mark another machine tracked."""
+        bm = _full_block_map("2026-04", {
+            "MACHINE 1": _block_values("2026-04", [(1, 9000)]),
+            "MACHINE 2": _block_values("2026-04", [(1, 8000)]),
+        })
+        dr = _dr_values("2026-04", [1, 2], {
+            "MACHINE-1": [(1, 8, 8500, 0.0)],
+            "MACHINE-2": [(1, 0, 7500, 0.0)],
+        })
+        raw, _ = _run_emit_blocks("2026-04", bm, dr)
+        idx = _by_machine_date(raw)
+
+        assert idx[("1", "2026-04-01")].runhours_tracked is True
+        assert idx[("2", "2026-04-01")].runhours_tracked is False
+
+    def test_known_zero_rejection_still_flags_positive_block_value(self):
+        """A known 25 kg versus 0 kg rejection conflict must not be silent."""
+        bm = _full_block_map("2026-04", {
+            "MACHINE 1": [
+                ["DATE", "KG", "REJECTION (KG)"],
+                ["Apr 1, 2026", "9000", "25"],
+            ],
+        })
+        dr = _dr_values("2026-04", [1, 2], {
+            "MACHINE-1": [(1, 8, 8500, 0.0)],
+        })
+        _, report = _run_emit_blocks("2026-04", bm, dr)
+        notes = report.get("notes", [])
+        assert any("block-tab (25.00 kg)" in n
+                   and "Daily Report (0.00 kg)" in n for n in notes)
 
 
 class TestJulyPerMachineKg:

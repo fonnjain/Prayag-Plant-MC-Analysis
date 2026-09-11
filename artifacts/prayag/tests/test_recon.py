@@ -77,6 +77,14 @@ def test_genuine_shortfall_total_without_expect_is_fail():
     assert b["status"] == "fail"
 
 
+def test_reported_zero_summary_is_reconciled_not_treated_as_missing():
+    b = recon.reconcile(53235.0, 0.0, unit="kg", expect_exceeds=False)
+    assert b["available"] is True
+    assert b["status"] == "fail"
+    assert b["final_total"] == 0.0
+    assert b["total_delta_pct"] == 100.0
+
+
 if __name__ == "__main__":
     test_expected_undercount_total_is_info_not_fail()
     test_shortfall_cell_not_downgraded_to_info()
