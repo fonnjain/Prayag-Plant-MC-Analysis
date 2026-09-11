@@ -41,3 +41,17 @@ When `rh_parsed == 0`:
 ## Utilisation display
 
 `m.util_available = util_ideal > 0` (metrics.py). Since no ideal_hours are assigned when `actual_hours == 0` (sheets.py gate), util_ideal=0 → `util_available=False` → template shows "n/a". The display was already correct; only the warning message needed fixing.
+
+That visual suppression is not enough for an immutable freeze. When the matrix
+layout is recognised but the month has no entered run hours, block-tab output
+records must carry `runhours_tracked=False`; a tracked literal zero encodes the
+wrong fact even if the current denominator gate happens to render n/a.
+
+**Why:** frozen records must preserve “not recorded” independently of current
+metric logic so later policy or denominator changes cannot turn missing hours
+into 0 h and 0% utilisation.
+
+**How to apply:** before freezing an all-zero matrix month, round-trip the records
+and assert every affected row remains untracked. Also preserve an explicit
+block-tab-versus-Daily-Report output-basis divergence when the Daily Report basis
+is zero; do not gate that note on both totals being positive.
