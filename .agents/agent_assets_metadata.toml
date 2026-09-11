@@ -458,3 +458,17 @@ mtime_ms = 1789109816921
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/d7f9b9f6-23f5-48b2-97e6-818402a3fd4a/42e8c493-89bf-4635-99af-4a853b9c82c6"
 storage_version_token = "1789109823482539"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "JqfsMERA7HGMtsKMnxBOk"
+uri = "file://attached_assets/audit/ptmt-retained-revisions-full-cell-diff.csv"
+type = "table"
+title = "PTMT retained revisions — full cell diff"
+description = "Workbook-wide audit of every formula, literal, and cached-value difference between retained revisions 15842 and 16355."
+logical_id = "5d560b9a-d57f-47d8-b9e1-083b5c897a87"
+content_hash = "sha256:7cb1e7177e254d097ef99eeb5c060716251705e50972aa9be8689605d39be826"
+size = 2746829
+mtime_ms = 1789115779360
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/5d560b9a-d57f-47d8-b9e1-083b5c897a87/ca8ad34b-f299-462f-ad3a-462448b65f22"
+storage_version_token = "1789115799338852"
+content_type = "text/csv"

@@ -70,3 +70,4 @@
 - [Daily high-water pair gating](prayag-daily-highwater-pair-gating.md) — one logical emitter shrinking can withhold every logical plant emitted by the same physical workbook; retries cannot recover a permanent source edit.
 - [Daily production month freeze](prayag-daily-month-freeze.md) — R-46 snapshots canonical logical emitters only; freeze/read/unfreeze share a physical-month lock and fail closed.
 - [Plant-correction precheck](prayag-plant-correction-precheck.md) — before treating monthly count/total drift as a defect, compare retained source revisions; May, June, and July drift all came from plant corrections.
+- [Offline XLSX parser parity](prayag-offline-xlsx-parity.md) — normalize XLSX blank cells and dates to Google Sheets shapes before parser audits, or blank summary rows can be counted as machines.
