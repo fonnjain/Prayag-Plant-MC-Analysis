@@ -1,0 +1,36 @@
+Documentation and test-label changes only. No logic changes. No Cardinal Rule changes.
+
+ITEM 1 — PRAYAG_RULES Part 4 (May PIPE). Keep 344,000 and the existing guard unchanged. Add:
+  "Report-5 May gross 344,000 = output 313,516 + rejection 30,484, independently summed from
+   115 daily machine-day cells (11 Sep). 343,879 is RETIRED — it is 344,000 − 121, a
+   double-subtraction, and matches no source state (pre-correction gross would have been
+   344,121). Retired alongside 429,595."
+
+ITEM 2 — PRAYAG_RULES. Record:
+  "The per-machine hours list in the 11 Sep handover (1,982 / 855 / 1,117 / 863 / 1,107 / 22 /
+   0 / 561) was unsourced when stated, but is consistent with the recompute under an
+   M/C-1+M/C-2 pairing — M/C-4 1,117 and M/C-9 561 match exactly only under that pairing.
+   Superseded by the 9-machine recompute.
+   6,517 h is NOT restated in GOLDEN. Deltas M/C-1+2 −11, M/C-3 +15, M/C-5 +9 (only +6 traced
+   to the 9 May fix), M/C-6 +19, M/C-7 −22 are untraced. M/C-7 recorded 0 h in May, so its
+   22 h lies in April, June or July."
+
+ITEM 3 — REPORT BEFORE CHANGING. After the freeze you audited
+tests/test_management_figure_fixtures.py, found the constants were NOT synthetic in origin,
+recomputed them (R5 base 1,173,640.20, uplift 7.95, total 1,173,648.15, hours 6,517) and
+renamed them PIPE_APR_JUL_*.
+
+So report the fixture's CURRENT state first:
+ a. Does it still contain 1,283,300.15, 6,507 and 1,277,974.20, or were they replaced?
+ b. If replaced, relabelling retired constants is moot — instead confirm the recomputed
+    constants are documented as derived-from-current-sources and must move when the accepted
+    total moves.
+ c. CONFLICT: that round put 6,517 into the fixture, but Item 2 says 6,517 must NOT be
+    restated until the deltas are traced. Is the fixture now asserting an untraced figure?
+    If so, either trace the deltas or mark the constant provisional. Do not leave an untraced
+    number asserted in a passing test.
+ d. Record the fixture's 1,277,974.20 against RETIRED 1,277,971 as a known unexplained
+    3.20 kg difference.
+
+Apply Items 1 and 2, plus whichever form of Item 3 the current state requires.
+Push to origin/main and report the commit hash.
