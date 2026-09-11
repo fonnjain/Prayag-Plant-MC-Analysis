@@ -20,3 +20,18 @@ overlay. Bind unfreeze confirmation to the exact snapshot identity. Missing,
 corrupt, or unavailable durable state fails closed. Specialized readers, wages,
 manual entries, annual comparisons, and ideal-standard policy remain outside
 the Phase 1 exception.
+
+The first production freeze must be a deliberate, watched action and must not
+use June or July 2026 because those months have a recovery and re-baseline
+history. Prefer a clean closed month such as May 2026, subject to the production
+preview proving matching uncached parses, expected high-water, and reviewed
+verification totals.
+
+**Why:** A technically eligible recovered month is a poor first operational
+proof because recovery uncertainty and freeze behavior would be tested at the
+same time.
+
+**How to apply:** Verify the selected candidate through the published admin UI,
+have an administrator review the exact preview, and perform the confirmed
+second parse while the action is observed. Never create the first production
+snapshot through a script or direct database write.
