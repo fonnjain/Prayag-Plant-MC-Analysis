@@ -430,3 +430,17 @@ mtime_ms = 1789052311878
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4a7d214f-4a5c-48dc-9283-ae3bfdd124ce/c57febb9-33f9-4f8a-a647-46677806a32e"
 storage_version_token = "1789052724854112"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "XpEuISlruP8FeGe2gPO8Z"
+uri = "file://.local/outputs/Prayag-Before-First-Production-Freeze-Read-Only-Findings.docx"
+type = "word_document"
+title = "Before the First Production Freeze — Read-Only Findings"
+description = "Production verification report covering June PIPE rendering, the missing partial-source banner path, May export-generator input, and the gated first-freeze recommendation."
+logical_id = "4e984819-9dba-40e2-aa73-9a81f8556b60"
+content_hash = "sha256:42614710a4ebfa23816e363de82ee2923e0f32ec4804a1928a276e4d0daeec78"
+size = 40336
+mtime_ms = 1789100635616
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4e984819-9dba-40e2-aa73-9a81f8556b60/cfb89e92-594b-47b8-84e1-ff05e4a491ea"
+storage_version_token = "1789100642047583"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

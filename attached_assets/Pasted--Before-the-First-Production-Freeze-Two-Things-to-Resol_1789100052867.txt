@@ -1,0 +1,72 @@
+# Before the First Production Freeze — Two Things to Resolve
+
+Read `PRAYAG_RULES.md`. **Read-only. Report before changing anything** (**R-28**). Do not freeze, re-baseline or clear any cache in this pass.
+
+Thank you for the correction on production holding 70/176 — my "publishing moves code, not data" conclusion was wrong for the re-baseline, and it was right to check rather than accept it.
+
+But that correction **deepens one problem and leaves another open**. Both need resolving before the first production freeze, because a frozen month is immutable and anything wrong in it becomes permanent.
+
+---
+
+## 1 · June still did not render, and the count guard cannot explain it
+
+The June Plant View on `prayag-plant.com` (10 September) showed:
+
+- six plants only — GARDEN, GARDEN_WB, PTMT, TANK, TANK_VN, TANK_WB
+- **PIPE and MOULDING absent**
+- flag banner reading **`6/8 files`**
+- **no partial-source banner at all**
+
+If production already holds the corrected high-water of **70**, the count guard is **not** the cause. Something else is withholding that workbook.
+
+Report:
+
+**a.** Load `/plant?period=2026-06` on `prayag-plant.com` now, as an authenticated admin. **Does PIPE render today?** If it does, the screenshot may have caught a stale worker — confirm that and we can close it.
+
+**b.** If PIPE is still absent, report the actual failure: does the PIPE workbook resolve, does it parse, what record count does it return, and which sentinel (if any) is set? Give the real reason, not the symptom.
+
+**c.** Why is **no partial-source banner** shown when a workbook is withheld? The earlier diagnosis traced this to the failed-pair sentinel going into the blue period banner while the amber warning is driven by a different mechanism — so a workbook can vanish with **no visible notice**. That is the silent-failure class Task #174 was built to remove, reappearing on an uncovered path. Confirm the code path and **propose a fix — do not implement it yet**.
+
+---
+
+## 2 · The May export-oracle failure must be eliminated, not reasoned past
+
+You have assessed the May failure as a report-export generator issue and not evidence of an incomplete source. That is plausible — but it is an inference, and **all five expected totals returned empty**. Empty is the shape of a read returning nothing, not of a formatting fault.
+
+Since a freeze is **immutable**, this must be settled rather than assumed.
+
+Report:
+
+**d.** What did the export generator actually **receive as input** for May? Did it get records and fail to format them, or did it get nothing?
+
+- **Received records** → a generator fault. May is safe to freeze.
+- **Received nothing** → a source or loading problem. **May is not a safe first freeze** and we choose another month.
+
+---
+
+## 3 · The first freeze itself — approved in principle, gated on the above
+
+**PIPE May 2026** is the right first candidate: closed, no recovery history, positive high-waters across all eight emitters (PIPE 125, MOULDING 455, GARDEN 44, HDPE 1, PTMT 1,286, TANK 76, TANK_VN 94, TANK_WB 166).
+
+**Do not freeze June or July** — not because the counts are wrong, but because of their recovery history and item 1 above.
+
+When items 1 and 2 are resolved, the watched freeze of **PIPE May 2026** may proceed. During it, confirm the UI preview shows:
+
+- PIPE May high-water **125**
+- two matching uncached **physical** fingerprints
+- two matching **logical** fingerprints and counts
+- expected date coverage, machine count, hours, output and rejection totals
+
+**One emitter only.** The other May emitters follow as separate deliberate actions, each watched.
+
+---
+
+## Report back
+
+1. Does June PIPE render in production today — yes or no?
+2. If not, the real cause.
+3. The missing-banner code path, with a proposed fix (not implemented).
+4. What the May export generator received — records or nothing.
+5. Your recommendation: is PIPE May 2026 safe as the first freeze, or do we choose another month?
+
+**Change nothing.** No freeze, no re-baseline, no cache clearing, no code edits. The current state is the evidence.
