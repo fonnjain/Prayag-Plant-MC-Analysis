@@ -973,7 +973,13 @@ def list_tabs(file_id: str, token: str) -> List[str]:
 
 def read_values(file_id: str, tab: str, token: str) -> List[list]:
     rng = urllib.parse.quote(tab, safe="")
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values/{rng}"
+    # Numeric source facts must retain the precision held by Sheets until after
+    # aggregation.  Keep dates as strings so the existing header/date parsers
+    # receive their documented Google Sheets shape rather than serial numbers.
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values/{rng}"
+        "?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING"
+    )
     return _api_get(url, token).get("values", []) or []
 
 
@@ -1021,7 +1027,12 @@ def batch_get(file_id: str, tabs: List[str], token: str) -> dict:
     if not tabs:
         return {}
     q = "&".join("ranges=" + urllib.parse.quote(t, safe="") for t in tabs)
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values:batchGet?{q}"
+    # Match read_values(): full numeric precision for computation, formatted
+    # strings for dates so parser input remains stable.
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}/values:batchGet?{q}"
+        "&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING"
+    )
     data = _api_get(url, token)
     out = {}
     for tab, vr in zip(tabs, data.get("valueRanges", [])):
