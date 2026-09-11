@@ -35,3 +35,17 @@ same time.
 have an administrator review the exact preview, and perform the confirmed
 second parse while the action is observed. Never create the first production
 snapshot through a script or direct database write.
+
+For the remaining May 2026 emitters, freeze one emitter at a time and stop for
+review after its uncached preview. `TANK_VN` must retain exactly 196 reconciled
+hours or the R-39 union did not run. `GARDEN` requires a fresh retained-revision
+check both before preview and immediately before confirmation because rows were
+added through August. Before `PTMT`, identify the changed derived cells and prove
+whether any feed fields stored in the snapshot; resolve dependencies first.
+
+**Why:** the user explicitly accepted these as freeze-blocking criteria after
+post-close plant corrections caused the May, June, and July source drift.
+
+**How to apply:** never infer completion from a closed calendar month. Re-run the
+candidate-specific source audit at the stated point, then require two matching
+uncached parses and the established durable high-water.

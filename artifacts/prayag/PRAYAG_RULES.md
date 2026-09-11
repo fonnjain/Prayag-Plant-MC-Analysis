@@ -29,6 +29,11 @@ This exception applies only to canonical daily production records and loader
 report metadata; it does not apply to wages, manual entries, annual comparisons,
 specialized Compound or PIPE mould-working readers, or ideal-standards policy.
 
+**R-46 candidate-specific acceptance checks.**
+- `TANK_VN / 2026-05` must preview exactly **196 reconciled run hours**. Any other value means the R-39 two-source reconciliation did not run; refuse the freeze.
+- `GARDEN / 2026-05` had rows added through August. Re-check retained revisions for newer rows before preview and repeat that check immediately before confirmation; do not treat calendar closure as evidence that entry is complete.
+- Before previewing `PTMT / 2026-05`, identify every derived cell changed after the core totals stabilized and determine whether it feeds any stored snapshot field. Resolve any such dependency before freezing its 1,286-record population.
+
 **Corollary.** A conclusion drawn from an annual inherits whatever gap fed that annual.
 
 ## THIS RULE IS PROTECTED
