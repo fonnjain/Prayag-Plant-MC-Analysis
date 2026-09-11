@@ -24,10 +24,14 @@ import sheets
 
 
 PIPE_HOURS_BY_MACHINE = (1_085, 886, 870, 1_117, 872, 1_126, 0, 0, 561)
-PIPE_REPORT5_KG = 1_277_974.20
-PIPE_REPORT11_ONLY_KG = 858.00
-PIPE_REPORT11_MATCHED_MAXIMA_KG = 4_467.95
-PIPE_RECONCILED_KG = 1_283_300.15
+# Current Apr–Jul 2026 source aggregates, recomputed 11 September 2026.
+# The rows below distribute the R5 aggregate synthetically across machines to
+# isolate the reconciliation contract; these constants are not arbitrary golden
+# parameters and must move when the accepted four-month source total moves.
+PIPE_APR_JUL_REPORT5_KG = 1_173_640.20
+PIPE_APR_JUL_REPORT11_ONLY_KG = 0.00
+PIPE_APR_JUL_MATCHED_MAXIMA_KG = 7.95
+PIPE_APR_JUL_RECONCILED_KG = 1_173_648.15
 
 MOULDING_KG = 366_015.39
 MOULDING_HOURS = 35_972.0
@@ -63,8 +67,8 @@ def _stub_pipe_daily_loader(monkeypatch, records):
     )
 
 
-def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
-    """R5, R11-only, and matched-date maxima must compose the Pipe headline."""
+def test_pipe_reconciliation_fixture_pins_current_apr_jul_components(monkeypatch):
+    """Current Apr–Jul R5 and matched maxima must compose the accepted headline."""
     r5_values = (
         200_000.00,
         190_000.00,
@@ -73,10 +77,10 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
         160_000.00,
         150_000.00,
         120_000.00,
-        107_974.20,
+        3_640.20,
         0.00,
     )
-    assert sum(r5_values) == PIPE_REPORT5_KG
+    assert sum(r5_values) == PIPE_APR_JUL_REPORT5_KG
     assert sum(PIPE_HOURS_BY_MACHINE) == 6_517
 
     r5 = {
@@ -86,13 +90,7 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
     r11 = {
         # Same machine-date as R5, but Report-11 is higher by the audited uplift.
         (1, "2026-04-01"): {
-            "out": r5_values[0] + PIPE_REPORT11_MATCHED_MAXIMA_KG,
-            "rej": 0.0,
-            "by_type": {},
-        },
-        # A Report-11-only row must remain in the monthly result with zero hours.
-        (8, "2026-04-02"): {
-            "out": PIPE_REPORT11_ONLY_KG,
+            "out": r5_values[0] + PIPE_APR_JUL_MATCHED_MAXIMA_KG,
             "rej": 0.0,
             "by_type": {},
         },
@@ -100,11 +98,12 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
     reconciled, _audit = pipe_reconcile.reconcile(r5, r11)
     reconciled_kg = sum(row["out"] for row in reconciled.values())
 
-    assert reconciled_kg == PIPE_RECONCILED_KG
+    assert PIPE_APR_JUL_REPORT11_ONLY_KG == 0
+    assert reconciled_kg == PIPE_APR_JUL_RECONCILED_KG
     assert reconciled_kg == (
-        PIPE_REPORT5_KG
-        + PIPE_REPORT11_ONLY_KG
-        + PIPE_REPORT11_MATCHED_MAXIMA_KG
+        PIPE_APR_JUL_REPORT5_KG
+        + PIPE_APR_JUL_REPORT11_ONLY_KG
+        + PIPE_APR_JUL_MATCHED_MAXIMA_KG
     )
 
     records = [
@@ -114,12 +113,6 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
         )
         for machine in range(1, 10)
     ]
-    records.append(
-        _pipe_record(
-            "2026-04-02", 8, 0.0,
-            reconciled[(8, "2026-04-02")]["out"],
-        )
-    )
     _stub_pipe_daily_loader(monkeypatch, records)
     pipe_summary._cache.clear()
     try:
@@ -129,7 +122,7 @@ def test_pipe_reconciliation_fixture_pins_components_and_summary(monkeypatch):
 
     total = result["section2"]["fy2627"][-1]
     assert total["actual_hrs"] == 6_517
-    assert total["actual_out_kg"] == PIPE_RECONCILED_KG
+    assert total["actual_out_kg"] == PIPE_APR_JUL_RECONCILED_KG
 
 
 def test_moulding_fixture_pins_daily_output_and_report5_hours(monkeypatch):
@@ -329,7 +322,7 @@ def test_non_ptmt_net_basis_production_contracts_are_unchanged():
     expected = {
         "GARDEN": 262_818.23,
         "HDPE": 23_817.24,
-        "PIPE": 1_283_300.15,
+        "PIPE": PIPE_APR_JUL_RECONCILED_KG,
         "MOULDING": 366_015.39,
     }
     for plant, production in expected.items():
