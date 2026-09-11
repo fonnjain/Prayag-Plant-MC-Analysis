@@ -444,3 +444,17 @@ mtime_ms = 1789100635616
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/4e984819-9dba-40e2-aa73-9a81f8556b60/cfb89e92-594b-47b8-84e1-ff05e4a491ea"
 storage_version_token = "1789100642047583"
 content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "lDqqaG4zoZhQxVBpB3cer"
+uri = "file://exports/prayag-freeze-through-july-report.docx"
+type = "word_document"
+title = "Prayag Freeze Through July Report"
+description = "Word document covering the HDPE May production preview, existing unfreeze/re-sync behavior, and the proposed two-stage production and cost freeze design."
+logical_id = "d7f9b9f6-23f5-48b2-97e6-818402a3fd4a"
+content_hash = "sha256:716cb7da92a5ba5aa31ad4ed5c1d1c061b84d91aaa79ce1eb65631afd094e360"
+size = 39254
+mtime_ms = 1789109816921
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:624a7b90-7453-42ba-a06a-651870841fc4/d7f9b9f6-23f5-48b2-97e6-818402a3fd4a/42e8c493-89bf-4635-99af-4a853b9c82c6"
+storage_version_token = "1789109823482539"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
